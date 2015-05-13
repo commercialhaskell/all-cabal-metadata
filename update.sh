@@ -11,7 +11,7 @@ mv all-cabal-metadata-tool /tmp
 if [ -n "$(git status --porcelain)" ]
 then
     git add -A
-    git commit -m "Update from Hackage at $(date --utc --iso=sec)" --gpg-sign=D6CF60FD
+    git commit -m "Update from Hackage at $(date --utc --iso=sec)"
     git push git@github.com:commercialhaskell/all-cabal-metadataHEAD:master
 else
     echo No changes present
