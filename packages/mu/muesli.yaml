@@ -1,10 +1,42 @@
 homepage: https://github.com/clnx/muesli
 changelog-type: markdown
-hash: d98c1dc58d7d69dd7827c099cf1f09a4fa1f784dfef0444e2b2c48e0beac447b
+hash: f61807f182e60f58bbaed87bada69b22f82c7d9db4e976c6df531c97b6d58fbc
 test-bench-deps: {}
 maintainer: Călin Ardelean <calinucs@gmail.com>
 synopsis: A simple document-oriented database
-changelog: ! '### 0.1
+changelog: ! '### 0.1.1.0
+
+
+  * fixed index update bug: new references were added, but the ones from the
+
+  previous version of the document were not removed
+
+  * added sort order argument to range queries
+
+  * `lookup` returns just `Maybe a`
+
+  * renamed `lookupUnique` to `unique''`
+
+  * renamed `filter` to `filterRange`
+
+  * renamed `rangeK` to `range''`
+
+  * changed argument order in `range`, `range''`, `filterRange` to match SQL
+
+  * added `unique`
+
+  * added `filter`
+
+  * added `filterRange''`, `filter''`
+
+
+  ### 0.1.0.1
+
+
+  * fixed a GC bug: `swapDb` failed to swap
+
+
+  ### 0.1
 
 
   * initial release
@@ -24,8 +56,9 @@ basic-deps:
 all-versions:
 - '0.1.0.0'
 - '0.1.0.1'
+- '0.1.1.0'
 author: Călin Ardelean
-latest: '0.1.0.1'
+latest: '0.1.1.0'
 description-type: markdown
 description: ! "muesli\n======\n\nA simple [document-oriented database][nosql] engine
   for Haskell.\n\nUse cases\n---------\n* backing store for p2p / cloud nodes, mobile
@@ -34,22 +67,27 @@ description: ! "muesli\n======\n\nA simple [document-oriented database][nosql] e
   *CouchDB* and the like.\n\nFeatures\n--------\n* **ACID transactions** implemented
   on the [MVCC][] model.\n* **automatic index management** based on tags prepended
   to fields' types\n(see example below).\n* **minimal boilerplate**: instead of *TemplateHaskell*
-  we use\n[`GHC.Generics`][gen] and [`deriving`][der].\n* **simple monad for writing
-  queries**, with standard primitive operations like:\n`lookup`, `insert`, `update`,
-  `delete`, `range`, `filter`.\n* range queries (`filter` and `range`) afford efficient
-  **cursor-like\nnavigation** (paging) through large datasets. For example this is
-  the\nequivalent SQL for `filter`:\n```SQL\nSELECT TOP page * FROM table\nWHERE (filterFld
-  = filterVal) AND\n      (sortVal = NULL OR sortFld < sortVal) AND\n      (sortKey
-  = NULL OR ID < sortKey)\nORDER BY field, ID DESC\n```\n* **easy to reason about
-  performance**: all primitive queries run in **O(log n)**.\n* **type safety**: impossible
-  to attempt deserializing a record at a wrong type\n(or address), and risk getting
-  bogus data with no error thrown.\nReferences are tagged with a phantom type and
-  created only by the database.\nThere are also `Num`/`Integral` instances to support
-  more generic apps,\nbut normally those are not needed.\n* **multiple backends**
-  supported: currently *file*, and soon (:tm:)\n*in-memory*, *remote*.\n* **portability**:
-  it should work on all platforms, including mobile.\n* **replication**: soon (:tm:)\n\n*Note:
-  some of these features become misfeatures for certain scenarios which\nwould make
-  either a pure in-memory cache, or a real database more appropriate.*\n\nExample
+  we use\n[`GHC.Generics`][gen] and [`deriving`][der].\n* **monadic queries**, with
+  standard primitive operations like:\n`lookup`, `insert`, `update`, `delete`, `filter`,
+  `range`, and `filterRange`.\n* range queries afford efficient **cursor-like navigation**
+  (paging) through\nlarge datasets. For example this is the equivalent SQL for `filterRange`:\n```SQL\nSELECT
+  TOP page * FROM table\nWHERE (filterFld = filterVal) AND\n      (sortVal = NULL
+  OR sortFld < sortVal) AND\n      (sortKey = NULL OR ID < sortKey)\nORDER BY sortFld,
+  ID DESC\n```\n* **easy to reason about performance**: all primitive queries run
+  in **O(p*log(n))**.\n* **type safety**: impossible to attempt deserializing a record
+  at a wrong type\n(or address), and risk getting bogus data with no error thrown.\nReferences
+  are tagged with a phantom type and created only by the database.\nThere are also
+  `Num`/`Integral` instances to support more generic apps,\nbut normally those are
+  not needed.\n* **multiple backends** supported: currently *file*, and soon (:tm:)\n*in-memory*,
+  *remote*.\n* **portability**: it should work on all platforms, including mobile.\n*
+  p2p **replication**: soon (:tm:)\n\n*Note: Some of these features become misfeatures
+  for certain scenarios which\nwould make either a pure in-memory cache, or a real
+  database more appropriate.*\n\n*In particular the query language is very basic at
+  the current stage. Sure, you\ncan use the customary `Functor` / `Applicative` /
+  `Monad` interface, but you will\nhave to write all kinds of wrapper queries to make
+  things manageable.*\n\n*The design principle is to only upgrade the query language
+  in tandem with the indexes.\nRight now the indexes are not very smart, so the query
+  language will not lie\nabout it with some nice but poorly implemented abstraction.*\n\nExample
   use\n-----------\nFirst, mark up your types. You must use the record syntax to name
   the\naccessors so they'll be queryable. You can filter on `Reference` fields, sort
   and\nrange on `Sortable`s, and reverse lookup `Unique`s. The database will extract\nthese
@@ -70,32 +108,32 @@ description: ! "muesli\n======\n\nA simple [document-oriented database][nosql] e
   Person, Person)\nupdatePerson name email = do\n  let name' = Sortable name\n  let
   p = Person name' email\n  pid <- updateUnique \"personName\" (Unique name') p\n
   \ return (pid, p)\n\npostsByContrib :: Reference Person -> Transaction l m [(Reference
-  BlogPost, BlogPost)]\npostsByContrib pid =\n  filter (Just pid) Nothing Nothing
-  \"postContributors\" \"postTitle\" 1000\n\nflagContributor :: Reference Person ->
-  Transaction l m ()\nflagContributor pid = do\n  is <- postsByContributor pid\n  forM_
-  is $ \\(bpid, bp) ->\n    update bpid bp { postTags = postTags bp ++ Sortable \"stolen\"
-  }\n```\n\nThen you can run these transactions with `runQuery` inside some `MonadIO`
-  context.\nNote that `Transaction` itself is an instance of `MonadIO`, so you can
-  do\narbitrary IO inside.\nThe `l` parameter specifies which storage backend you
-  use.\nCurrently only a portable binary file backend is implemented, used with\n`Handle
-  FileLogState`.\n\n```Haskell\nimport Database.Muesli.Query\nimport Database.Muesli.Handle\n\nflagIt
-  :: (MonadIO m, LogState l) => Handle l -> String -> String ->\n           m (Either
-  TransactionAbort ())\nflagIt h name email = runQuery h $ do\n  (pid, _) <- updatePerson
-  name email\n  flagContributor pid\n\nmain :: IO ()\nmain = bracket\n  (putStrLn
-  \"opening DB...\" >>\n   open (Just \"blog.log\") (Just \"blog.dat\") Nothing Nothing)\n
-  \ (\\(h :: Handle FileLogState) -> putStrLn \"closing DB...\" >> close h)\n  (\\h
-  -> flagIt h \"Bender Bending Rodríguez\" \"bender@ilovebender.com\")\n\n```\n\nTODO\n----\n-
-  [ ] expose the inverted index\n- [x] queries that only return keys (no data file
-  IO)\n- [ ] blocking version of `runQuery`\n- [ ] testing it on mobile devices\n-
-  [ ] in-memory backend compatible with `mmap`; also, a remote backend\n- [ ] static
-  property names, but no ugly `Proxy :: Proxy \"FieldName\"` stuff\n- [ ] support
-  for extensible records (\"lax\" `Serialize` instance),\nlive up to the \"document-oriented\"
-  label, but this should be optional\n- [ ] better migration story\n- [ ] radix tree
-  / PATRICIA implementation for proper full-text search\n(currently indexing strings
-  just takes first 4/8 chars and turnes them into an int,\nwhich is good enough for
-  simple sorting)\n- [ ] replication\n- [ ] more advanced & flexible index system
-  supporting complex indexes, joins, etc.\n- [ ] fancy query language\n- [ ] optimize
-  reads: faster cache, mainIdx (hashtable maybe?)\n- [x] waiting for [`OverloadedRecordFields`][orf]\n\nImplementation\n--------------\n*
+  BlogPost, BlogPost)]\npostsByContrib pid = filter \"postContributors\" (Just pid)
+  \"postTitle\"\n\nflagContributor :: Reference Person -> Transaction l m ()\nflagContributor
+  pid = do\n  is <- postsByContributor pid\n  forM_ is $ \\(bpid, bp) ->\n    update
+  bpid bp { postTags = postTags bp ++ Sortable \"stolen\" }\n```\n\nThen you can run
+  these transactions with `runQuery` inside some `MonadIO` context.\nNote that `Transaction`
+  itself is an instance of `MonadIO`, so you can do\narbitrary IO inside.\nThe `l`
+  parameter specifies which storage backend you use.\nCurrently only a portable binary
+  file backend is implemented, used with\n`Handle FileLogState`.\n\n```Haskell\nimport
+  Database.Muesli.Query\nimport Database.Muesli.Handle\n\nflagIt :: (MonadIO m, LogState
+  l) => Handle l -> String -> String ->\n           m (Either TransactionAbort ())\nflagIt
+  h name email = runQuery h $ do\n  (pid, _) <- updatePerson name email\n  flagContributor
+  pid\n\nmain :: IO ()\nmain = bracket\n  (putStrLn \"opening DB...\" >>\n   open
+  (Just \"blog.log\") (Just \"blog.dat\") Nothing Nothing)\n  (\\(h :: Handle FileLogState)
+  -> putStrLn \"closing DB...\" >> close h)\n  (\\h -> flagIt h \"Bender Bending Rodríguez\"
+  \"bender@ilovebender.com\")\n\n```\n\nTODO\n----\n- [ ] expose the inverted index\n-
+  [x] queries that only return keys (no data file IO)\n- [ ] blocking version of `runQuery`\n-
+  [ ] testing it on mobile devices\n- [ ] in-memory backend compatible with `mmap`;
+  also, a remote backend\n- [ ] static property names, but no ugly `Proxy :: Proxy
+  \"FieldName\"` stuff\n- [ ] support for extensible records (\"lax\" `Serialize`
+  instance),\nlive up to the \"document-oriented\" label, but this should be optional\n-
+  [ ] better migration story\n- [ ] radix tree / PATRICIA implementation for proper
+  full-text search\n(currently indexing strings just takes first 4/8 chars and turns
+  them into an int,\nwhich is good enough for basic sorting)\n- [ ] replication\n-
+  [ ] more advanced & flexible index system supporting complex indexes, joins, etc.\n-
+  [ ] fancy query language\n- [ ] optimize reads: faster cache, mainIdx (hashtable
+  maybe?)\n- [x] waiting for [`OverloadedRecordFields`][orf]\n\nImplementation\n--------------\n*
   2 files, one for transactions/indexes, and another for serialized data\n* same file
   format for transactions and indexes, loading indexes is\nthe same as replaying transactions\n*
   transaction file only contains int keys extracted from tagged fields\n* processing
@@ -104,7 +142,7 @@ description: ! "muesli\n======\n\nA simple [document-oriented database][nosql] e
   then *acid-state*, which serializes entire records, including\npotentially very
   large string fields, typical in \"document-oriented\" scenarios.\nIt was suggested
   that in such cases you should store this data in external files.\nBut then, if you
-  want to regain the ACID property, and already have some indexes\nlaying aroung,
+  want to regain the ACID property, and already have some indexes\nlaying around,
   you are well on your way of creating *muesli*.\n* data file only contains serialized
   records and gaps, no metadata\n* LRU cache holds deserialized objects wrapped in
   `Data.Dynamic`.\nOn SSDs deserialization is far more costly than file IO,\nso having
