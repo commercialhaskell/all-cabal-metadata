@@ -1,6 +1,6 @@
 homepage: https://github.com/xenog/json-rpc
 changelog-type: ''
-hash: 6036fab9f7dbf575a837a9a1e68a9db34761960c54f110c4a7112e84f7eb1a99
+hash: 6240f8db8dbfaf358ef22f5b71bf40680a94861f281777a6a1b5e598b581ef59
 test-bench-deps:
   bytestring: ! '>=0.10 && <0.11'
   test-framework: ! '>=0.8 && <0.9'
@@ -60,8 +60,9 @@ all-versions:
 - '0.3.0.2'
 - '0.4.0.0'
 - '0.5.0.0'
+- '0.6.0.0'
 author: Jean-Pierre Rupp
-latest: '0.5.0.0'
+latest: '0.6.0.0'
 description-type: markdown
 description: ! "json-rpc\n========\n\nFully-featured JSON-RPC 2.0 library for Haskell
   programs.\n\nThis JSON-RPC library is fully-compatible with JSON-RPC 2.0 and 1.0.
@@ -72,30 +73,42 @@ description: ! "json-rpc\n========\n\nFully-featured JSON-RPC 2.0 library for Ha
   to be\npeer-to-peer, as it can send and receive all types of JSON-RPC message\nindependent
   of whether it originated the connection.\n\n[Hackage documentation](http://hackage.haskell.org/package/json-rpc)\n\n\nServer
   Example\n--------------\n\nThis JSON-RPC server returns the current time.\n\n```
-  haskell\n{-# LANGUAGE OverloadedStrings #-}\nimport Control.Applicative\nimport
+  haskell\n{-# LANGUAGE OverloadedStrings #-}\n{-# LANGUAGE TemplateHaskell #-}\nimport
   Control.Monad.Trans\nimport Control.Monad.Logger\nimport Data.Aeson.Types hiding
   (Error)\nimport Data.Conduit.Network\nimport Data.Time.Clock\nimport Data.Time.Format\nimport
   Network.JsonRpc\nimport System.Locale\n\ndata TimeReq = TimeReq\ndata TimeRes =
   TimeRes { timeRes :: UTCTime }\n\ninstance FromRequest TimeReq where\n    parseParams
-  \"time\" = Just $ const $ return TimeReq \n    parseParams _ = Nothing\n\ninstance
+  \"time\" = Just $ const $ return TimeReq \n    parseParams _      = Nothing\n\ninstance
   ToJSON TimeRes where\n    toJSON (TimeRes t) = toJSON $ formatTime defaultTimeLocale
-  \"%c\" t\n\nrespond :: (Functor m, MonadLoggerIO m) => Respond TimeReq m TimeRes\nrespond
-  TimeReq = Right . TimeRes <$> liftIO getCurrentTime\n\nmain :: IO ()\nmain = runStderrLoggingT
-  $\n    jsonRpcTcpServer V2 (serverSettings 31337 \"::1\") respond dummySrv\n```\n\nClient
-  Example\n--------------\n\nCorresponding TCP client to get time from server.\n\n```
-  haskell\n{-# LANGUAGE OverloadedStrings #-}\nimport Control.Concurrent\nimport Control.Monad\nimport
+  \"%c\" t\n\nrespond :: MonadLoggerIO m => Respond TimeReq m TimeRes\nrespond TimeReq
+  = do\n    t <- liftIO getCurrentTime\n    return . Right $ TimeRes t\n\nmain ::
+  IO ()\nmain = runStderrLoggingT $ do\n    let ss = serverSettings 31337 \"::1\"\n
+  \   jsonRpcTcpServer V2 False ss srv\n\nsrv :: MonadLoggerIO m => JsonRpcT m ()\nsrv
+  = do\n    $(logDebug) \"listening for new request\"\n    qM <- receiveRequest\n
+  \   case qM of\n        Nothing -> do\n            $(logDebug) \"closed request
+  channel, exting\"\n            return ()\n        Just q -> do\n            $(logDebug)
+  \"got request\"\n            rM <- buildResponse respond q\n            case rM
+  of\n                Nothing -> do\n                    $(logDebug) \"no response
+  for this request\"\n                    srv\n                Just r -> do\n                    $(logDebug)
+  \"sending response\"\n                    sendResponse r >> srv\n```\n\nClient Example\n--------------\n\nCorresponding
+  TCP client to get time from server.\n\n``` haskell\n{-# LANGUAGE TemplateHaskell
+  #-}\n{-# LANGUAGE OverloadedStrings #-}\nimport Control.Concurrent\nimport Control.Monad\nimport
   Control.Monad.Trans\nimport Control.Monad.Logger\nimport Data.Aeson\nimport Data.Aeson.Types
   hiding (Error)\nimport Data.Conduit.Network\nimport qualified Data.Text as T\nimport
   Data.Time.Clock\nimport Data.Time.Format\nimport Network.JsonRpc\nimport System.Locale\n\ndata
-  TimeReq = TimeReq\ndata TimeRes = TimeRes { timeRes :: UTCTime }\n\ninstance ToRequest
-  TimeReq where\n    requestMethod TimeReq = \"time\"\n\ninstance ToJSON TimeReq where\n
-  \   toJSON TimeReq = emptyArray\n\ninstance FromResponse TimeRes where\n    parseResult
-  \"time\" = Just $ withText \"time\" $ \\t -> case f t of\n        Just t' -> return
-  $ TimeRes t'\n        Nothing -> mzero\n      where\n        f t = parseTime defaultTimeLocale
-  \"%c\" (T.unpack t)\n    parseResult _ = Nothing\n\nreq :: MonadLoggerIO m => JsonRpcT
-  m UTCTime\nreq = sendRequest TimeReq >>= \\ts -> case ts of\n    Left e -> error
-  $ fromError e\n    Right (Just (TimeRes r)) -> return r\n    _ -> error \"Could
-  not parse response\"\n\nmain :: IO ()\nmain = runStderrLoggingT $\n    jsonRpcTcpClient
-  V2 (clientSettings 31337 \"::1\") dummyRespond .\n        replicateM_ 4 $ req >>=
-  liftIO . print >> liftIO (threadDelay 1000000)\n```\n"
+  TimeReq = TimeReq\ndata TimeRes = TimeRes { timeRes :: UTCTime } deriving Show\n\ninstance
+  ToRequest TimeReq where\n    requestMethod TimeReq = \"time\"\n    requestIsNotif
+  = const False\n\ninstance ToJSON TimeReq where\n    toJSON TimeReq = emptyArray\n\ninstance
+  FromResponse TimeRes where\n    parseResult \"time\" = Just $ withText \"time\"
+  $ \\t -> case f t of\n        Just t' -> return $ TimeRes t'\n        Nothing ->
+  mzero\n      where\n        f t = parseTime defaultTimeLocale \"%c\" (T.unpack t)\n
+  \   parseResult _ = Nothing\n\nreq :: MonadLoggerIO m => JsonRpcT m (Either String
+  UTCTime)\nreq = do\n    $(logDebug) \"sending time request\"\n    ts <- sendRequest
+  TimeReq\n    $(logDebug) \"received response\"\n    case ts of\n        Nothing
+  -> return $ Left \"could not parse response\"\n        Just (Left e) -> return .
+  Left $ fromError e\n        Just (Right (TimeRes r)) -> return $ Right r\n\nmain
+  :: IO ()\nmain = runStderrLoggingT $\n    jsonRpcTcpClient V2 True (clientSettings
+  31337 \"::1\") $ do\n        $(logDebug) \"sending four time requests one second
+  apart\"\n        replicateM_ 4 $ do\n            req >>= liftIO . print\n            liftIO
+  (threadDelay 1000000)\n```\n"
 license-name: PublicDomain
