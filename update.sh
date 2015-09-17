@@ -6,7 +6,7 @@ wget https://s3.amazonaws.com/stackage-travis/all-cabal-metadata-tool/all-cabal-
 bunzip2 all-cabal-metadata-tool.bz2
 chmod +x all-cabal-metadata-tool
 mv all-cabal-metadata-tool /tmp
-/tmp/all-cabal-metadata-tool
+/tmp/all-cabal-metadata-tool 50
 
 if [ -n "$(git status --porcelain)" ]
 then
