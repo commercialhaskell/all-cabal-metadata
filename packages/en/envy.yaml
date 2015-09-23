@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: ''
-hash: f5032cea2f0a77cebdbd39c42825b2d272b108eb4a574ba8b83e588e01e7b723
+hash: 29155077dd7085dec0311aa7a128746880d5f90467c25306d7e1946434b47795
 test-bench-deps:
   envy: ==0.3.*
   bytestring: ==0.10.*
@@ -29,9 +29,72 @@ all-versions:
 - '0.2.0.0'
 - '0.3.0.0'
 - '0.3.0.1'
+- '0.3.0.2'
 author: David Johnson, Tim Adams
-latest: '0.3.0.1'
-description-type: haddock
-description: For package use information see the <https://github.com/dmjio/envy/blob/master/README.md
-  README.md>
+latest: '0.3.0.2'
+description-type: markdown
+description: ! "envy \n===================\n![Hackage](https://img.shields.io/hackage/v/envy.svg)\n![Hackage
+  Dependencies](https://img.shields.io/hackage-deps/v/envy.svg)\n![Haskell Programming
+  Language](https://img.shields.io/badge/language-Haskell-blue.svg)\n![BSD3 License](http://img.shields.io/badge/license-BSD3-brightgreen.svg)\n![Build
+  Status](https://img.shields.io/circleci/project/dmjio/envy.svg)\n\nLet's face it,
+  dealing with environment variables in Haskell isn't that satisfying.\n\n```haskell\nimport
+  System.Environment\nimport Data.Text (pack)\nimport Text.Read (readMaybe)\n\ndata
+  PGConfig = PGConfig {\n  pgPort :: Int\n  pgURL  :: Text\n} deriving (Show, Eq)\n\ngetPGPort
+  :: IO PGConfig\ngetPGPort = do\n  portResult <- lookupEnv \"PG_PORT\"\n  urlResult
+  \ <- lookupEnv \"PG_URL\"\n  case (portResult, urlResult) of\n    (Just port, Just
+  url) ->\n      case readMaybe port :: Maybe Int of\n        Nothing -> error \"PG_PORT
+  isn't a number\"\n        Just portNum -> return $ PGConfig portNum (pack url)\n
+  \   (Nothing, _) -> error \"Couldn't find PG_PORT\"    \n    (_, Nothing) -> error
+  \"Couldn't find PG_URL\"    \n    -- Pretty gross right...\n```\n\nAnother attempt
+  to remedy the lookup madness is with a `MaybeT IO a`. See below.\n```haskell\n{-#
+  LANGUAGE GeneralizedNewtypeDeriving #-}\n\nimport Control.Applicative\nimport Control.Monad.Trans.Maybe\nimport
+  Control.Monad.IO.Class\nimport System.Environment\n\nnewtype Env a = Env { unEnv
+  :: MaybeT IO a }\n    deriving (Functor, Applicative, Monad, MonadIO, Alternative,
+  MonadPlus)\n\ngetEnv :: Env a -> IO (Maybe a)\ngetEnv env = runMaybeT (unEnv env)\n\nenv
+  :: String -> Env a\nenv key = Env (MaybeT (lookupEnv key))\n\nconnectInfo :: Env
+  ConnectInfo\nconnectInfo = ConnectInfo\n   <$> env \"PG_HOST\"\n   <*> env \"PG_PORT\"\n
+  \  <*> env \"PG_USER\"\n   <*> env \"PG_PASS\"\n   <*> env \"PG_DB\"\n```\nThis
+  abstraction falls short in two areas:\n  - Lookups don't return any information
+  when a variable doesn't exist (just a `Nothing`)\n  - Lookups don't attempt to parse
+  the returned type into something meaningful (everything is returned as a `String`)\n\nWhat
+  if we could apply aeson's `FromJSON` / `ToJSON` pattern to give us variable lookups
+  that provide both key-lookup and parse failure information?\nArmed with the `GeneralizedNewTypeDeriving`
+  extension we can derive instances of `Var` that will parse to and from an environment.
+  The `Var` typeclass is simply:\n```haskell\nclass (Read a, Show a) => Var a where\n
+  \ toVar   :: a -> String\n  fromVar :: String -> Maybe a\n```\nWith instances for
+  most primitive types supported (`Word8` - `Word64`, `Int`, `Integer`, `String`,
+  `Text`, etc.) the `Var` class is easily deriveable. The `FromEnv` typeclass provides
+  a parser type that is an instance of `MonadError String` and `MonadIO`. This allows
+  for connection pool initialization inside of our environment parser and custom error
+  handling. The `ToEnv` class allows us to create an environment configuration given
+  any `a`. See below for an example.\n\n```haskell\n{-# LANGUAGE ScopedTypeVariables
+  \       #-}\n{-# LANGUAGE RecordWildCards            #-}\n{-# LANGUAGE GeneralizedNewtypeDeriving
+  #-}\n{-# LANGUAGE OverloadedStrings          #-}\n{-# LANGUAGE DeriveDataTypeable
+  \        #-}\n------------------------------------------------------------------------------\nmodule
+  Main ( main ) where\n------------------------------------------------------------------------------\nimport
+  \          Control.Applicative\nimport           Control.Exception\nimport           Control.Monad\nimport
+  \          Data.Either\nimport           Data.Word\nimport           System.Environment\nimport
+  \          System.Envy\n------------------------------------------------------------------------------\ndata
+  ConnectInfo = ConnectInfo {\n      pgHost :: String\n    , pgPort :: Word16\n    ,
+  pgUser :: String\n    , pgPass :: String\n    , pgDB   :: String\n  } deriving (Show)\n\n------------------------------------------------------------------------------\n--
+  | Posgtres config\ndata PGConfig = PGConfig {\n    pgConnectInfo :: ConnectInfo
+  -- ^ Connnection Info\n  } deriving Show\n\n------------------------------------------------------------------------------\n--
+  | FromEnv instances support popular aeson combinators *and* IO\n-- for dealing with
+  connection pools. `env` is equivalent to (.:) in `aeson`\n-- and `envMaybe` is equivalent
+  to (.:?), except here the lookups are impure.\ninstance FromEnv PGConfig where\n
+  \ fromEnv = PGConfig <$> (ConnectInfo <$> envMaybe \"PG_HOST\" .!= \"localhost\"\n
+  \                                     <*> env \"PG_PORT\"\n                                      <*>
+  env \"PG_USER\" \n                                      <*> env \"PG_PASS\" \n                                      <*>
+  env \"PG_DB\")\n\n------------------------------------------------------------------------------\n--
+  | To Environment Instances\n-- (.=) is a smart constructor for producing types of
+  `EnvVar` (which ensures\n-- that Strings are set properly in an environment so they
+  can be parsed properly\ninstance ToEnv PGConfig where\n  toEnv PGConfig {..} = makeEnv
+  \n       [ \"PG_HOST\" .= pgHost\n       , \"PG_PORT\" .= pgPort\n       , \"PG_USER\"
+  .= pgUser\n       , \"PG_PASS\" .= pgPass\n       , \"PG_DB\"   .= pgDB  \n       ]\n\n------------------------------------------------------------------------------\n--
+  | Example\nmain :: IO ()\nmain = do\n   setEnvironment (toEnv :: EnvList PGConfig)\n
+  \  print =<< do decodeEnv :: IO (Either String PGConfig)\n   -- unsetEnvironment
+  (toEnv :: EnvList PGConfig)  -- remove when done\n```\n\n*Note*: As of base 4.7
+  `setEnv` and `getEnv` throw an `IOException` if a `=` is present in an environment.
+  `envy` catches these synchronous exceptions and delivers them\npurely to the end
+  user.\n"
 license-name: BSD3
