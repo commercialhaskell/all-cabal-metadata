@@ -1,6 +1,6 @@
 homepage: https://github.com/ondrap/json-stream
 changelog-type: markdown
-hash: d19f1e7e502c72aba72221fc37d0b5a3e23a3fd8a71214b8707975e16f734978
+hash: 5908cb5edf90b9af9a0175151e7c1025c471ac86eb5a050c3a4bc29a421ebed3
 test-bench-deps:
   bytestring: -any
   base: ! '>=4.7 && <4.9'
@@ -15,7 +15,24 @@ test-bench-deps:
   directory: -any
 maintainer: palkovsky.ondrej@gmail.com
 synopsis: Incremental applicative JSON parser
-changelog: ! '# 0.3.2.3
+changelog: ! '# 0.4.0.0
+
+  Breaking changes (this could *really* break your code):
+
+  - Changed `<|>` to `<>` (`Monoid` is better for ''appending'' than `Alternative`)
+
+  - Changed `>^>` to `<|>` - (`Alternative` now really means alternative)
+
+  - Changed `toList` to `many` (Use existing `Alternative` function instead of a custom
+  one)
+
+  - Added `some` function (Alternative, default implementation won''t work)
+
+  - C-lexer now supports parsing numbers up to 18 digits (E-notation is not optimized
+  yet)
+
+
+  # 0.3.2.3
 
   - Completely rewritten text unescapes based on text decodeUtf8; fixes some surprising
   crashes, speed improvements.
@@ -63,22 +80,96 @@ all-versions:
 - '0.3.2.1'
 - '0.3.2.2'
 - '0.3.2.3'
+- '0.4.0.0'
 author: Ondrej Palkovsky
-latest: '0.3.2.3'
-description-type: haddock
-description: ! 'Easy to use JSON parser fully supporting incremental parsing.
-
-  Parsing grammar in applicative form.
-
-  The parser is compatibile with aeson and its FromJSON class.
-
-  It is possible to use aeson monadic parsing when appropriate.
-
-  The parser supports constant-space safe incremental parsing regardless
-
-  of the input data. In addition to performance-critical parts written in C,
-
-  a lot of performance is gained by being less memory intensive especially
-
-  when used for stream parsing.'
+latest: '0.4.0.0'
+description-type: markdown
+description: ! "# json-stream - Applicative incremental JSON parser for Haskell\n\n[![Build
+  Status](https://travis-ci.org/ondrap/json-stream.svg?branch=master)](https://travis-ci.org/ondrap/json-stream)
+  [![Hackage](https://img.shields.io/hackage/v/json-stream.svg)]()\n\nMost haskellers
+  use the excellent [aeson](https://hackage.haskell.org/package/aeson) library\nto
+  decode and encode JSON structures. Unfortunately, although very fast, this parser\nmust
+  read the whole structure into memory. At a first sight it seemed that creating\nan
+  incremental JSON parser would be very hard thing to do; it turned out to be\nremarkable
+  easy. Just wondering, why nobody came with this earlier...\n\n> Parsing performance
+  is generally better than aeson, sometimes significantly better.\n> Json-stream uses
+  a small and fast C lexer to parse the JSON into tokens. This results\n> in quite
+  significant performance gain. Ideal scenario is parsing large files\n> where not
+  all information is required; json-stream parses only what is really needed.\n\nStandard
+  aeson library reads the whole input, creates an object in memory representing\nthe
+  JSON structure which is then converted into proper values using FromJSON instances.\nThis
+  library is compatibile with aeson - you can immediately use FromJSON instances almost
+  without\nany change in code and enjoy incremental parsing. The real strength is
+  in the applicative interface\nwhich allows to parse only those parts of JSON that
+  are of interest while skipping what is not needed.\n\nThe parsing process uses the
+  least amount of memory possible and is completely lazy. It does not perfectly\ncheck
+  for JSON syntax and the behaviour on incorrect JSON input is undefined (it cheats
+  quite a lot;\nbut this is needed for constant-space parsing). **The result on badly
+  formed input is undefined,\nthe parser does not guarantee failing on bad input.**\n\n-
+  The parser generally does not fail. If the data does not match, the parser silently
+  ignores it.\n  The failures should be only syntax errors in JSON.\n- The ',' and
+  ':' characters in the lexer are treated as white-space.\n- When a value is not needed
+  to be parsed, it is parsed by a parser counting braces and brackets.\n  Anything
+  can happen, the parser just waits for the sum of openings to equal sum of closings.\n-
+  The length of an object key is limited to ~64K, records with longer keys are ignored.\n\n##
+  Motivation\n\nResult of ElasticSearch bulk operations is a large JSON with this
+  structure:\n```json\n{\n  \"took\":42,\n  \"errors\":true,\n  \"items\": [\n    {\"index\":
+  {\"_index\":\"test\",\"_type\":\"type1\",\"_id\":\"3\",\"status\":400,\"error\":\"Some
+  error \"}},\n    {\"index\":{\"_index\":\"test\",\"_type\":\"type1\",\"_id\":\"4\",\"_version\":2,\"status\":200}}\n
+  \ ]\n}\n```\n\nWe want the parser to return an empty list immediately when it encounters
+  the *errors* key\nand the value is *false*. If the value is *true*, we want the
+  parser to return a list of\n`_id` keys with an error status.\n\n\n```haskell\n--
+  | Result of bulk operation\nresultParser :: Parser [(Text, Text)]\nresultParser
+  =    const [] <$> filterI not (\"errors\" .: bool)\n              <|> many (\"items\"
+  .: arrayOf bulkItemError)\n\nbulkItemError :: Parser (Text, Text)\nbulkItemError
+  = objectWithKey \"index\" $\n    (,) <$> \"_id\"   .: string\n        <*> \"error\"
+  .: string\n        <*  filterI statusError (\"status\" .: integer)\n  where\n    statusError
+  s = s < 200 || s > (299 :: Int)\n\n```\n## Performance\n\nJson-stream is fast. The
+  crude lexing is done by a C-optimized code in batches, the\nlexed pieces are then
+  parsed using the user-specified parser. Compared to aeson, parsing\ncan be easily
+  twice as fast, especially on larger structures.\nJson-stream is in streaming mode
+  much friendlier to the GC,\nwhich makes the performance difference even bigger;
+  however even when json-stream is used\nas an aeson replacement (`value` parser),
+  there can be a performance gain (running aeson benchmarks\nhas shown that json-stream
+  is generally about twice as fast).\n\nUsing json-stream parser instead of aeson
+  `value` evades the need to build the structure\nusing aeson `Value` and then converting
+  it to the user-requested structure. Instead\nthe structure is built on the fly directly
+  during the parsing phase.\n\nJson-stream can optimize certain scenarios. If not
+  all data from the input stream is\nrequired, it is skipped by the parsers. Using
+  `integer` parser\nwith bounded integer types (not `Integer`) avoids converting all
+  numbers to\n`Scientific` type.\n\n## Constant space parsing\n\nIf the matching parser
+  follows certain rules and the input chunks have limited size,\nthe parsing should
+  run in constant space. If you have a large JSON structure but need\nonly small pieces,
+  the parsing can be very fast - when the data does not match what\nis expected, it
+  is parsed only by the lexical parser and ignored. The object key\nlength is limited
+  to 64K, maximum length of a string can be limited with `safeString`\nparser. The
+  number of digits in a number is limited to 200.000, longer number will\nmake the
+  parser fail.\n\n## Examples\n\n```haskell\n-- The parseByteString function always
+  returns a list of 'things'.\n-- Other functions are available.\n>>> :t parseByteString\nparseByteString
+  :: Parser a -> ByteString -> [a]\n\n-- 'value' stands for FromJSON instance that
+  will be yielded;\n-- most normal types work by default\n>>> parseByteString value
+  \"[1,2,3]\" :: [[Int]]\n[[1,2,3]]\n\n-- the parser says we have an 'array of values';
+  i.e. return each value in array\n>>> parseByteString (arrayOf value) \"[1,2,3]\"
+  :: [Int]\n[1,2,3]\n\n-- Use <*> for parallel parsing. Order is not important.\n>>>
+  let test = \"[{\\\"name\\\": \\\"John\\\", \\\"age\\\": 20}, {\\\"age\\\": 30, \\\"name\\\":
+  \\\"Frank\\\"} ]\"\n>>> let parser = arrayOf $ (,) <$> \"name\" .: value\n                               <*>
+  \"age\" .: value\n>>> parseByteString  parser test :: [(Text,Int)]\n[(\"John\",20),(\"Frank\",30)]\n\n--
+  If you have more results returned from each branch, all are combined.\n>>> let test
+  = \"[{\\\"key1\\\": [1,2], \\\"key2\\\": [5,6], \\\"key3\\\": [8,9]}]\"\n>>> let
+  parser = arrayOf $ (,) <$> \"key2\" .: (arrayOf value)\n                               <*>
+  \"key1\" .: (arrayOf value)\n>>> parse parser test :: [(Int, Int)]\n[(6,2),(6,1),(5,2),(5,1)]\n\n--
+  Use <> to return both branches\nlet test = \"[{\\\"key1\\\": [1,2], \\\"key2\\\":
+  [5,6], \\\"key3\\\": [8,9]}]\"\n>>> let parser = arrayOf $    \"key1\" .: (arrayOf
+  value)\n                           <> \"key2\" .: (arrayOf value)\n>>> parse parser
+  test :: [Int]\n[1,2,5,6]\n\n-- objectItems function enriches value with object key\n>>>
+  let test = \"[{\\\"key1\\\": [1,2,3], \\\"key2\\\": [5,6,7]}]\"\n>>> parseByteString
+  (arrayOf $ objectItems value) test :: [(Text, [Int])]\n[(\"key1\",[1,2,3]),(\"key2\",[5,6,7])]\n>>>
+  parseByteString (arrayOf $ objectItems $ arrayOf value) test :: [(Text, Int)]\n[(\"key1\",1),(\"key1\",2),(\"key1\",3),(\"key2\",5),(\"key2\",6),(\"key2\",7)]\n\n--
+  .:? produces a maybe value; Nothing if match is not found or is null.\n-- .!= converts
+  Maybe back with a default\n>>> let test = \"[{\\\"name\\\":\\\"John\\\", \\\"value\\\":
+  12}, {\\\"name\\\":\\\"name2\\\"}]\"\n>>> let parser = arrayOf $ (,) <$> \"name\"
+  \ .: string\n                               <*> \"value\" .:? integer .!= 0\n>>>
+  parseByteString parser test :: [(String,Int)]\n[(\"John\",12),(\"name2\",0)]\n\n```\n\nSee
+  [haddocks](https://hackage.haskell.org/package/json-stream) documentation for more
+  details.\n"
 license-name: BSD3
