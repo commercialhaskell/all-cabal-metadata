@@ -12,8 +12,9 @@ if [ -n "$(git status --porcelain)" ]
 then
     git add -A
     git commit -m "Update from Hackage at $(date --utc --iso=sec)"
-    git pull --rebase
-    git push git@github.com:commercialhaskell/all-cabal-metadata
+    git fetch
+    git rebase origin/master
+    git push git@github.com:commercialhaskell/all-cabal-metadata HEAD:master
 else
     echo No changes present
 fi
