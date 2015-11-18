@@ -1,8 +1,8 @@
 homepage: ''
 changelog-type: ''
-hash: 4bb5699450c78c66dbd04ead7c5aee9865f52c52b9063d4a65ed58657ac56347
+hash: 87800a47909dae86bf56618458fc895f8f58a40cf3102ff5b0eda690e54f2cb0
 test-bench-deps:
-  envy: ==0.3.*
+  envy: ==1.0.*
   bytestring: ==0.10.*
   base: ! '>=4.7 && <5'
   time: ==1.5.*
@@ -31,24 +31,25 @@ all-versions:
 - '0.3.0.1'
 - '0.3.0.2'
 - '0.3.1.2'
+- '1.0.0.0'
 author: David Johnson, Tim Adams
-latest: '0.3.1.2'
+latest: '1.0.0.0'
 description-type: markdown
-description: ! "envy \n===================\n![Hackage](https://img.shields.io/hackage/v/envy.svg)\n![Hackage
+description: ! "envy\n===================\n![Hackage](https://img.shields.io/hackage/v/envy.svg)\n![Hackage
   Dependencies](https://img.shields.io/hackage-deps/v/envy.svg)\n![Haskell Programming
   Language](https://img.shields.io/badge/language-Haskell-blue.svg)\n![BSD3 License](http://img.shields.io/badge/license-BSD3-brightgreen.svg)\n![Build
   Status](https://img.shields.io/circleci/project/dmjio/envy.svg)\n\nLet's face it,
   dealing with environment variables in Haskell isn't that satisfying.\n\n```haskell\nimport
   System.Environment\nimport Data.Text (pack)\nimport Text.Read (readMaybe)\n\ndata
-  PGConfig = PGConfig {\n  pgPort :: Int\n  pgURL  :: Text\n} deriving (Show, Eq)\n\ngetPGPort
-  :: IO PGConfig\ngetPGPort = do\n  portResult <- lookupEnv \"PG_PORT\"\n  urlResult
-  \ <- lookupEnv \"PG_URL\"\n  case (portResult, urlResult) of\n    (Just port, Just
-  url) ->\n      case readMaybe port :: Maybe Int of\n        Nothing -> error \"PG_PORT
-  isn't a number\"\n        Just portNum -> return $ PGConfig portNum (pack url)\n
-  \   (Nothing, _) -> error \"Couldn't find PG_PORT\"    \n    (_, Nothing) -> error
-  \"Couldn't find PG_URL\"    \n    -- Pretty gross right...\n```\n\nAnother attempt
-  to remedy the lookup madness is with a `MaybeT IO a`. See below.\n```haskell\n{-#
-  LANGUAGE GeneralizedNewtypeDeriving #-}\n\nimport Control.Applicative\nimport Control.Monad.Trans.Maybe\nimport
+  ConnectInfo = ConnectInfo {\n  pgPort :: Int\n  pgURL  :: Text\n} deriving (Show,
+  Eq)\n\ngetPGPort :: IO ConnectInfo\ngetPGPort = do\n  portResult <- lookupEnv \"PG_PORT\"\n
+  \ urlResult  <- lookupEnv \"PG_URL\"\n  case (portResult, urlResult) of\n    (Just
+  port, Just url) ->\n      case readMaybe port :: Maybe Int of\n\tNothing -> error
+  \"PG_PORT isn't a number\"\n\tJust portNum -> return $ ConnectInfo portNum (pack
+  url)\n    (Nothing, _) -> error \"Couldn't find PG_PORT\"\n    (_, Nothing) -> error
+  \"Couldn't find PG_URL\"\n    -- Pretty gross right...\n```\n\nAnother attempt to
+  remedy the lookup madness is with a `MaybeT IO a`. See below.\n```haskell\n{-# LANGUAGE
+  GeneralizedNewtypeDeriving #-}\n\nimport Control.Applicative\nimport Control.Monad.Trans.Maybe\nimport
   Control.Monad.IO.Class\nimport System.Environment\n\nnewtype Env a = Env { unEnv
   :: MaybeT IO a }\n    deriving (Functor, Applicative, Monad, MonadIO, Alternative,
   MonadPlus)\n\ngetEnv :: Env a -> IO (Maybe a)\ngetEnv env = runMaybeT (unEnv env)\n\nenv
@@ -62,10 +63,10 @@ description: ! "envy \n===================\n![Hackage](https://img.shields.io/ha
   that provide both key-lookup and parse failure information?\nArmed with the `GeneralizedNewTypeDeriving`
   extension we can derive instances of `Var` that will parse to and from an environment.
   The `Var` typeclass is simply:\n```haskell\nclass Var a where\n  toVar   :: a ->
-  String\n  fromVar :: String -> Maybe a\n```\nWith instances for most primitive types
-  supported (`Word8` - `Word64`, `Int`, `Integer`, `String`, `Text`, etc.) the `Var`
-  class is easily deriveable. The `FromEnv` typeclass provides a parser type that
-  is an instance of `MonadError String` and `MonadIO`. This allows for connection
+  String\n  fromVar :: String -> Maybe a\n```\nWith instances for most concrete and
+  primitive types supported (`Word8` - `Word64`, `Int`, `Integer`, `String`, `Text`,
+  etc.) the `Var` class is easily deriveable. The `FromEnv` typeclass provides a parser
+  type that is an instance of `MonadError String` and `MonadIO`. This allows for connection
   pool initialization inside of our environment parser and custom error handling.
   The `ToEnv` class allows us to create an environment configuration given any `a`.
   See below for an example.\n\n```haskell\n{-# LANGUAGE ScopedTypeVariables        #-}\n{-#
@@ -78,24 +79,42 @@ description: ! "envy \n===================\n![Hackage](https://img.shields.io/ha
   \          System.Envy\n------------------------------------------------------------------------------\ndata
   ConnectInfo = ConnectInfo {\n      pgHost :: String\n    , pgPort :: Word16\n    ,
   pgUser :: String\n    , pgPass :: String\n    , pgDB   :: String\n  } deriving (Show)\n\n------------------------------------------------------------------------------\n--
-  | Posgtres config\ndata PGConfig = PGConfig {\n    pgConnectInfo :: ConnectInfo
-  -- ^ Connnection Info\n  } deriving Show\n\n------------------------------------------------------------------------------\n--
   | FromEnv instances support popular aeson combinators *and* IO\n-- for dealing with
-  connection pools. `env` is equivalent to (.:) in `aeson`\n-- and `envMaybe` is equivalent
-  to (.:?), except here the lookups are impure.\ninstance FromEnv PGConfig where\n
-  \ fromEnv = PGConfig <$> (ConnectInfo <$> envMaybe \"PG_HOST\" .!= \"localhost\"\n
-  \                                     <*> env \"PG_PORT\"\n                                      <*>
-  env \"PG_USER\" \n                                      <*> env \"PG_PASS\" \n                                      <*>
-  env \"PG_DB\")\n\n------------------------------------------------------------------------------\n--
+  connection pool initialization. `env` is equivalent to (.:) in `aeson`\n-- and `envMaybe`
+  is equivalent to (.:?), except here the lookups are impure.\ninstance FromEnv ConnectInfo
+  where\n  fromEnv =\n    ConnectInfo <$> envMaybe \"PG_HOST\" .!= \"localhost\"\n\t\t<*>
+  env \"PG_PORT\"\n\t\t<*> env \"PG_USER\"\n\t\t<*> env \"PG_PASS\"\n\t\t<*> env \"PG_DB\")\n\n------------------------------------------------------------------------------\n--
   | To Environment Instances\n-- (.=) is a smart constructor for producing types of
   `EnvVar` (which ensures\n-- that Strings are set properly in an environment so they
-  can be parsed properly\ninstance ToEnv PGConfig where\n  toEnv PGConfig {..} = makeEnv
-  \n       [ \"PG_HOST\" .= pgHost\n       , \"PG_PORT\" .= pgPort\n       , \"PG_USER\"
-  .= pgUser\n       , \"PG_PASS\" .= pgPass\n       , \"PG_DB\"   .= pgDB  \n       ]\n\n------------------------------------------------------------------------------\n--
-  | Example\nmain :: IO ()\nmain = do\n   setEnvironment (toEnv :: EnvList PGConfig)\n
-  \  print =<< do decodeEnv :: IO (Either String PGConfig)\n   -- unsetEnvironment
-  (toEnv :: EnvList PGConfig)  -- remove when done\n```\n\n*Note*: As of base 4.7
+  can be parsed properly\ninstance ToEnv ConnectInfo where\n  toEnv ConnectInfo {..}
+  = makeEnv\n       [ \"PG_HOST\" .= pgHost\n       , \"PG_PORT\" .= pgPort\n       ,
+  \"PG_USER\" .= pgUser\n       , \"PG_PASS\" .= pgPass\n       , \"PG_DB\"   .= pgDB\n
+  \      ]\n\n------------------------------------------------------------------------------\n--
+  | Example\nmain :: IO ()\nmain = do\n   setEnvironment (toEnv :: EnvList ConnectInfo)\n
+  \  print =<< do decodeEnv :: IO (Either String ConnectInfo)\n   -- unsetEnvironment
+  (toEnv :: EnvList ConnectInfo)  -- remove when done\n```\n\n*Note*: As of base 4.7
   `setEnv` and `getEnv` throw an `IOException` if a `=` is present in an environment.
   `envy` catches these synchronous exceptions and delivers them\npurely to the end
-  user.\n"
+  user.\n\nGenerics\n===================\n\nAs of version `1.0`, all `FromEnv` instance
+  boilerplate can be completely removed thanks to `GHC.Generics`! Below is an example.\n\n```haskell\n{-#
+  LANGUAGE DeriveGeneric #-}\nmodule Main where\n\nimport System.Envy\nimport GHC.Generics\n\n--
+  This record corresponds to our environment, where the field names become the variable
+  names, and the values the environment variable value\ndata PGConfig = PGConfig {\n
+  \   pgHost :: String -- \"PG_HOST\"\n  , pgHost :: Int    -- \"PG_PORT\"\n  } deriving
+  (Generic, Show)\n\n-- Default configuration will be used for fields that could not
+  be retrieved from the environment\ninstance DefConfig PGConfig where\n  defConfig
+  = PGConfig \"localhost\" 5432\n\ninstance FromEnv PGConfig \n-- Generically creates
+  instance for retrieving environment variables (PG_HOST, PG_PORT)\n\nmain :: IO ()\nmain
+  =\n  print =<< decodeEnv :: IO (Either String PGConfig)\n -- > PGConfig { pgHost
+  = \"customURL\", pgPort = 5432 }\n```\n\nSuppose you'd like to customize the field
+  name (i.e. add your own prefix, or drop the existing record prefix). This too is
+  possible. See below.\n\n```haskell\n{-# LANGUAGE DeriveGeneric #-}\nmodule Main
+  where\n\nimport System.Envy\nimport GHC.Generics\n\ndata PGConfig = PGConfig {\n
+  \   connectHost :: String -- \"PG_HOST\"\n  , connectPort :: Int    -- \"PG_PORT\"\n
+  \ } deriving (Generic, Show)\n\ninstance DefConfig PGConfig where\n  defConfig =
+  PGConfig \"localhost\" 5432\n\n-- All fields will be converted to uppercase\ninstance
+  FromEnv PGConfig where\n  fromEnv = fromEnvCustom Option {\n                    dropPrefixCount
+  = 7\n                  , customPrefix = \"PG\"\n\t\t  }\n\nmain :: IO ()\nmain =\n
+  \ print =<< decodeEnv :: IO (Either String PGConfig)\n -- PGConfig { pgHost = \"customUrl\",
+  pgPort = 5432 }\n```\n"
 license-name: BSD3
