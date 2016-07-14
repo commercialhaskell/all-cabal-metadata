@@ -1,10 +1,10 @@
 homepage: https://github.com/schell/varying
 changelog-type: markdown
-hash: e928cad76ceb783618eaadb4f2da59330ef20c319d787363d731630c69c58da5
+hash: f99bfddbd8c951715c7ae71a440e22800940e758b616bdff30f6b74b10095ca5
 test-bench-deps:
   varying: -any
-  base: ! '>=4.7 && <4.9'
-  time: ==1.5.*
+  base: ! '>=4.6 && <5.0'
+  time: ! '>=1.4'
   hspec: -any
   criterion: -any
   transformers: -any
@@ -17,12 +17,14 @@ changelog: ! "change log\n==========\n\n0.1.5.0 - added Control.Varying.Spline\n
   added stepMany, eitherE\n\n0.4.0.0 - Var and Spline are now parameterized with Identity,
   removed mix, changed\n          the behavior of race, added untilEvent variants,
   added tests\n\n0.5.0.0 - changed stepMany to remove Monoid requirement, added raceMany,
-  added \n          anyE, more tests and SplineT obeys Applicative and Monad laws\n"
+  added\n          anyE, more tests and SplineT obeys Applicative and Monad laws\n\n0.5.0.1
+  - removed time as dependency\n\n0.5.0.2 - separated tweening time and value, added
+  runSplineE, builds on all GHC\n          since 7.6\n"
 basic-deps:
   varying: -any
-  base: ! '>=4.7 && <4.9'
-  time: ==1.5.*
-  transformers: ==0.4.*
+  base: ! '>=4.6 && <5.0'
+  time: ! '>=1.4'
+  transformers: ! '>=0.3'
 all-versions:
 - '0.1.1.2'
 - '0.1.2.0'
@@ -34,17 +36,18 @@ all-versions:
 - '0.3.0.1'
 - '0.4.0.0'
 - '0.5.0.0'
+- '0.5.0.2'
 author: Schell Scivally
-latest: '0.5.0.0'
+latest: '0.5.0.2'
 description-type: markdown
 description: ! "# varying\n[![Hackage](https://img.shields.io/hackage/v/varying.svg)](http://hackage.haskell.org/package/varying)\n[![Build
   Status](https://travis-ci.org/schell/varying.svg)](https://travis-ci.org/schell/varying)\n\nThis
   library provides automaton based value streams useful for both functional\nreactive
-  programming (FRP) and locally stateful programming (LSP). It is \ninfluenced by
-  the [netwire](http://hackage.haskell.org/package/netwire) and \n[auto](http://hackage.haskell.org/package/auto)
-  packages. Unlike netwire the \nconcepts of inhibition and time are explicit (through
-  `Control.Varying.Event` \nand `Control.Varying.Time`). The library aims at being
-  minimal and well \ndocumented with a small API.\n\n## Getting started\n\n```haskell\nmodule
+  programming (FRP) and locally stateful programming (LSP). It is\ninfluenced by the
+  [netwire](http://hackage.haskell.org/package/netwire) and\n[auto](http://hackage.haskell.org/package/auto)
+  packages. Unlike netwire the\nconcepts of inhibition and time are explicit (through
+  `Control.Varying.Event`\nand `Control.Varying.Time`). The library aims at being
+  minimal and well\ndocumented with a small API.\n\n## Getting started\n\n```haskell\nmodule
   Main where\n\nimport Control.Varying\nimport Control.Applicative\nimport Text.Printf\nimport
   Data.Functor.Identity\n\n-- | A simple 2d point type.\ndata Point = Point { px ::
   Float\n                   , py :: Float\n                   } deriving (Show, Eq)\n\n--
@@ -72,5 +75,34 @@ description: ! "# varying\n[![Hackage](https://img.shields.io/hackage/v/varying.
   continue, quit with ctrl+c\"\n    _ <- getLine\n\n    loop backAndForth\n        where
   loop :: VarT IO () Point -> IO ()\n              loop v = do (point, vNext) <- runVarT
   v ()\n                          printf \"\\nPoint %03.1f %03.1f\" (px point) (py
-  point)\n                          loop vNext\n\n```\n"
+  point)\n                          loop vNext\n\n```\n\n## Caveats\nWith tweening,
+  if your input time delta is greater than the duration of the\nfirst spline, that
+  spline immediately concludes and returns its result value -\nthe stream then continues
+  on to the next spline in the sequence, *applying the\nsame unmodified input* as
+  the previous spline. This is because splines\nimmediately conclude and trigger the
+  next spline, and there is no machinery for\naltering input after the splines conclusion.
+  What's worse is if you have a\ncyclical (infinite) sequence of spline tweens, each
+  with a duration less than\nthe given delta - the stream will never produce an output.
+  The input will\nconclude every spline prematurely and the stream will loop infinitely,
+  hanging\nthe current thread.\n\n### Here is an example\n\n```haskell\nlet dv ::
+  Monad m => SplineT Float (V2 Float) m ()\n    dv = do tween_ easeInExpo 10          (V2
+  100 10) 0.25\n            tween_ easeInExpo (V2 100 10) 100         0.25\n            tween_
+  easeInExpo 100         (V2 10 100) 0.25\n            tween_ easeInExpo (V2 10 100)
+  10          0.25\n            dv\n    v :: Monad m => VarT m Float (V2 Float)\n
+  \   v = (deltaTime ~> outputStream dv 0)\n(vec2, v1) <- runVarT v 0.5 -- hangs indefinitely\n```\n\nSurprisingly
+  enough, this is expected behavior (inputs that conclude the\ncurrent spline should
+  be passed downstream immediately), but the behavior isn't\neasily spotted. If you
+  encounter your program hanging check to see that your\ncyclical splines aren't receiving
+  an input that is bigger than they expect.\n\n### A very easy fix\nThere is a very
+  simple fix for this scenario - produce exactly one duplicate\noutput just before
+  recursing:\n\n```haskell\nlet dv :: Monad m => SplineT Float (V2 Float) m ()\n    dv
+  = do tween_ easeInExpo 10          (V2 100 10) 0.25\n            tween_ easeInExpo
+  (V2 100 10) 100         0.25\n            tween_ easeInExpo 100         (V2 10 100)
+  0.25\n            vec <- tween easeInExpo (V2 10 100) 10 0.25\n            step
+  vec -- <----------------------------\\\n            dv                                    --
+  |\n    v :: Monad m => VarT m Float (V2 Float)       -- |\n    v = (deltaTime ~>
+  outputStream dv 0)          -- |\n(vec, v1) <- runVarT v 0.5  -- will produce 'vec'
+  ---/\n```\n\nThe downside is that this is not mathematically accurate - the delta
+  will be\ncompletely consumed and the stream will output the last position even though\nthe
+  delta was not necessarily an amount great enough to warrant that output.\n"
 license-name: MIT
