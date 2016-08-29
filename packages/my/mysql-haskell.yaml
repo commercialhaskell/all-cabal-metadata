@@ -1,6 +1,6 @@
 homepage: https://github.com/winterland1989/mysql-haskell
 changelog-type: markdown
-hash: c606722e757e7aa85d4ea8c28d65f3acafb4c592731a48cbe840e335ca7bfda0
+hash: 803d890a1abda64740ca6834239e147faa87a040983acdfabadca0cfa1ad7a00
 test-bench-deps:
   bytestring: -any
   base: -any
@@ -76,8 +76,9 @@ all-versions:
 - '0.2.0.0'
 - '0.3.0.0'
 - '0.4.0.0'
+- '0.4.1.0'
 author: winterland1989
-latest: '0.4.0.0'
+latest: '0.4.1.0'
 description-type: markdown
 description: ! "mysql-haskell\n=============\n\n[![Hackage](https://img.shields.io/hackage/v/mysql-haskell.svg?style=flat)](http://hackage.haskell.org/package/mysql-haskell)\n[![Build
   Status](https://travis-ci.org/winterland1989/mysql-haskell.svg)](https://travis-ci.org/winterland1989/mysql-haskell)\n\n`mysql-haskell`
@@ -86,9 +87,9 @@ description: ! "mysql-haskell\n=============\n\n[![Hackage](https://img.shields.
   old java based MySQL middlewares.\n\nThis project is still in experimental stage
   and lack of produciton tests, use on your own risk, any form of contributions are
   welcomed!\n\nIs it fast?\n----------\n\nIn short, `select`(decode) is about 2 times
-  slower than pure c/c++, `insert` (encode) is about 1.5 times slower than pure c/c++,
-  there're many factors involved(tls, prepared statment, batch using multiple statement):\n\n<img
-  src=\"https://github.com/winterland1989/mysql-haskell/blob/master/benchmark/result.png?raw=true\"
+  slower than pure c/c++ but 5 times faster than `mysql-simple`, `insert` (encode)
+  is about 1.5 times slower than pure c/c++, there're many factors involved(tls, prepared
+  statment, batch using multiple statement):\n\n<img src=\"https://github.com/winterland1989/mysql-haskell/blob/master/benchmark/result.png?raw=true\"
   width=\"100%\">\n\nAbove figures showed the time to:\n\n* perform a \"select * from
   employees\" from a [sample table](https://github.com/datacharmer/test_db)\n* insert
   1000 rows into a 29-columns table per thread with auto-commit off.\n\nThe benchmarks
@@ -100,12 +101,35 @@ description: ! "mysql-haskell\n=============\n\n[![Hackage](https://img.shields.
   statment and binary protocol support.\n\n+ limited concurrency due to FFI.\n\n+
   no replication protocol support.\n\n`mysql-haskell` is intended to solve these problems,
   and provide foundation for higher level libraries such as groundhog and persistent,
-  so that accessing MySQL is both fast and easy in haskell.\n\nBuild Test Benchmark\n--------------------\n\nJust
-  use the old way:\n\n```bash\ngit clone https://github.com/winterland1989/mysql-haskell.git\ncd
-  mysql-haskell\ncabal install --only-dependencies\ncabal build\n```\n\nRunning tests
-  require:\n\n* A local MySQL server, a user `testMySQLHaskell` and a database `testMySQLHaskell`,
-  you can do it use following script:\n\n```bash\nmysql -u root -e \"CREATE DATABASE
-  IF NOT EXISTS testMySQLHaskell;\"\nmysql -u root -e \"CREATE USER 'testMySQLHaskell'@'localhost'
+  so that accessing MySQL is both fast and easy in haskell.\n\nGuide\n-----\n\nThe
+  `Database.MySQL.Base` module provides everything you need to start making queries:\n\n```haskell\n{-#
+  LANGUAGE OverloadedStrings #-}\n\nmodule Main where\n\nimport Database.MySQL.Base\nimport
+  qualified System.IO.Streams as Streams\n\nmain :: IO () \nmain = do\n    conn <-
+  connect\n        defaultConnectInfo {ciUser = \"username\", ciPassword = \"password\",
+  ciDatabase = \"dbname\"}\n    (defs, is) <- query_ conn \"SELECT * FROM some_table\"\n
+  \   print =<< Streams.toList is\n```\n\n`query/query_` will return a column definition
+  list, and an `InputStream` of rows, you should consume this stream completely before
+  start new queries.\n\nIt's recommanded to use prepared statement to improve query
+  speed:\n\n```haskell\n    ...\n    s <- prepareStmt conn \"SELECT * FROM some_table
+  where person_age > ?\"\n    ...\n    (defs, is) <- queryStmt s [MySQLInt32U 18]\n
+  \   ...\n```\n\nIf you want to do batch inserting/deleting/updating, you can use
+  `executeMany` to save considerable time.\n\nThe `Database.MySQL.BinLog` module provides
+  binlog listenning functions and row-based event decoder, following program will
+  automatically get last binlog position, and print every row event it receives:\n\n```haskell\n{-#
+  LANGUAGE LambdaCase #-}\nmodule Main where\n\nimport           Control.Monad         (forever)\nimport
+  qualified Database.MySQL.BinLog as MySQL\nimport qualified System.IO.Streams     as
+  Streams\n\nmain :: IO () \nmain = do\n    conn <- MySQL.connect \n        MySQL.defaultConnectInfo
+  {ciUser = \"username\", ciPassword = \"password\", ciDatabase = \"dbname\"}\n    MySQL.getLastBinLogTracker
+  conn >>= \\ case\n        Just tracker -> do\n            es <- MySQL.decodeRowBinLogEvent
+  =<< MySQL.dumpBinLog conn 1024 tracker False\n            forever $ do\n                Streams.read
+  es >>= \\ case\n                    Just v  -> print v\n                    Nothing
+  -> return ()\n        Nothing -> error \"can't get latest binlog position\"\n```\n\nBuild
+  Test Benchmark\n--------------------\n\nJust use the old way:\n\n```bash\ngit clone
+  https://github.com/winterland1989/mysql-haskell.git\ncd mysql-haskell\ncabal install
+  --only-dependencies\ncabal build\n```\n\nRunning tests require:\n\n* A local MySQL
+  server, a user `testMySQLHaskell` and a database `testMySQLHaskell`, you can do
+  it use following script:\n\n```bash\nmysql -u root -e \"CREATE DATABASE IF NOT EXISTS
+  testMySQLHaskell;\"\nmysql -u root -e \"CREATE USER 'testMySQLHaskell'@'localhost'
   IDENTIFIED BY ''\"\nmysql -u root -e \"GRANT ALL PRIVILEGES ON testMySQLHaskell.*
   TO 'testMySQLHaskell'@'localhost'\"\nmysql -u root -e \"FLUSH PRIVILEGES\"\n```\n\n*
   Enable binlog by adding `log_bin = filename` to `my.cnf` or add `--log-bin=filename`
