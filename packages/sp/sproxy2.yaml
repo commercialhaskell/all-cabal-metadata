@@ -1,10 +1,14 @@
 homepage: ''
 changelog-type: markdown
-hash: f5ed22866e4876188ed54f63d14c26b3308705400b903f9141d9a9fc3b92d5bd
+hash: dbb4c378d4c59e926c585b85c4b0ac6ec32eb245841143c64e8ce9b50e416cf0
 test-bench-deps: {}
 maintainer: Igor Pashev <pashev.igor@gmail.com>
 synopsis: Secure HTTP proxy for authenticating users via OAuth2
-changelog: ! "For differences with the original Sproxy scroll down.\n\n\n1.90.2\n======\n\n
+changelog: ! "For differences with the original Sproxy scroll down.\n\n1.91.0\n======\n\n
+  \ * In addition to good old PostgreSQL data source, made it possible\n    to import
+  permission data from a YAML file. This means that Sproxy2\n    can work without
+  any PostgreSQL database, just using file-only configuration.\n    Useful for development
+  or trivial deployments. Added new `datafile` option\n    in configuration file.\n\n\n1.90.2\n======\n\n
   \ * Make sure all Sproxy-specific HTTP headers are UTF8-encoded.\n\n  * `/.sproxy/logout`
   just redirects if no cookie. Previously\n    it was returning HTTP 404 to unauthenticated
   users, and redirecting\n    authenticated users with removal of the cookie. The
@@ -75,8 +79,9 @@ all-versions:
 - '1.90.0'
 - '1.90.1'
 - '1.90.2'
+- '1.91.0'
 author: Igor Pashev <pashev.igor@gmail.com>
-latest: '1.90.2'
+latest: '1.91.0'
 description-type: markdown
 description: ! "# Sproxy2\n\nHTTP proxy for authenticating users via OAuth2.\n\n\n##
   Motivation\n\nThis is overhaul of original [Sproxy](https://hackage.haskell.org/package/sproxy).\nSee
@@ -105,26 +110,36 @@ description: ! "# Sproxy2\n\nHTTP proxy for authenticating users via OAuth2.\n\n
   JavaScript from reading it), and set it for secure (since we don't\nwant it traveling
   over plaintext HTTP connections).\n\nFrom that point on, when sproxy detects a valid
   session cookie it extracts the\nemail, checks it against the access rules, and relays
-  the request to the\nback-end server (if allowed).\n\n\nPermissions system\n------------------\n\nPermissions
-  are stored in a PostgreSQL database. See sproxy.sql for details.\nHere are the main
-  concepts:\n\n- A `group` is identified by a name. Every group has\n  - members (identified
-  by email address, through `group_member`) and\n  - associated privileges (through
-  `group_privilege`).\n- A `privilege` is identified by a name _and_ a domain. It
-  has associated rules\n  (through `privilege_rule`) that define what the privilege
-  gives access to.\n- A `rule` is a combination of sql patterns for a `domain`, a
-  `path` and an\n  HTTP `method`. A rule matches an HTTP request, if all of these
-  components\n  match the respective attributes of the request. However of all the
-  matching\n  rules only the rule with the longest `path` pattern will be used to
-  determine\n  whether a user is allowed to perform a request. This is often a bit\n
-  \ surprising, please see the following example:\n\n\nDo note that Sproxy2 fetches
-  only `group_member`, `group_privilege` and `privilege_rule`\ntables, because only
-  these tables are used for authorization. The other tables\nserve for data integrity.\n\nKeep
-  in mind that:\n\n- Domains are converted into lower case (coming from PostgreSQL
-  or HTTP requests).\n- Emails are converted into lower case (coming from PostgreSQL
-  or OAuth2 providers).\n- Groups are case-sensitive and treated as is.\n- HTTP methods
-  are *case-sensitive*.\n- HTTP query parameters are ignored when matching a request
-  against the rules.\n- Privileges are case-sensitive and treated as is.\n- SQL wildcards
-  (`_` and `%`) are supported for emails, domains, paths.\n\n\nPrivileges example\n------------------\n\nConsider
+  the request to the\nback-end server (if allowed).\n\n\nPermissions system\n------------------\nPermissions
+  are stored in internal SQLite3 database and imported\nfrom data sources, which can
+  be a PostgreSQL database or a file.  See\n[sproxy.sql](./sproxy.sql) and [datafile.yml.example](./datafile.yml.example)\nfor
+  details.\n\nDo note that Sproxy2 fetches only `group_member`, `group_privilege`\nand
+  `privilege_rule` tables, because only these tables are used for\nauthorization.
+  The other tables in PostgreSQL schema serve for data\nintegrity. Data integrity
+  of the data file is not verfied, though import\nmay fail due to primary key restrictions.\n\nOnly
+  one data source can be used. The data in internal database, if any,\nis fully overwritten
+  by the data from a data source. If no data source is\nspecified, the data in internal
+  database remains unchanged, even between\nrestarts.  Broken data source is _not_
+  fatal. Sproxy will keep using existing\ninternal database, or create a new empty
+  one if missed. Broken data source\nmeans inability to connect to PostgreSQL database,
+  missed datafile, etc.\n\nThe data from a PostgreSQL database are periodically fetched
+  into the internal\ndatabase, while the data file is read once at startup.\n\nHere
+  are the main concepts:\n\n- A `group` is identified by a name. Every group has\n
+  \ - members (identified by email address, through `group_member`) and\n  - associated
+  privileges (through `group_privilege`).\n- A `privilege` is identified by a name
+  _and_ a domain. It has associated rules\n  (through `privilege_rule`) that define
+  what the privilege gives access to.\n- A `rule` is a combination of sql patterns
+  for a `domain`, a `path` and an\n  HTTP `method`. A rule matches an HTTP request,
+  if all of these components\n  match the respective attributes of the request. However
+  of all the matching\n  rules only the rule with the longest `path` pattern will
+  be used to determine\n  whether a user is allowed to perform a request. This is
+  often a bit\n  surprising, please see the following example:\n\n\nKeep in mind that:\n\n-
+  Domains are converted into lower case (coming from a data source or HTTP requests).\n-
+  Emails are converted into lower case (coming from a data source or OAuth2 providers).\n-
+  Groups are case-sensitive and treated as is.\n- HTTP methods are *case-sensitive*.\n-
+  HTTP query parameters are ignored when matching a request against the rules.\n-
+  Privileges are case-sensitive and treated as is.\n- SQL wildcards (`_` and `%`)
+  are supported for emails, domains, paths.\n\n\nPrivileges example\n------------------\n\nConsider
   this `group_privilege` and `privilege_rule` relations:\n\ngroup            | privilege
   | domain\n---------------- | --------- | -----------------\n`readers`        | `basic`
   \  | `wiki.example.com`\n`readers`        | `read`    | `wiki.example.com`\n`editors`
@@ -163,9 +178,8 @@ description: ! "# Sproxy2\n\nHTTP proxy for authenticating users via OAuth2.\n\n
   `/robots.txt`:\n\n```\nUser-agent: *\nDisallow: /\n```\n\n\nRequirements\n============\nSproxy2
   is written in Haskell with [GHC](http://www.haskell.org/ghc/).\nAll required Haskell
   libraries are listed in [sproxy2.cabal](sproxy2.cabal).\nUse [cabal-install](http://www.haskell.org/haskellwiki/Cabal-Install)\nto
-  fetch and build all pre-requisites automatically.\n\n\nInstallation\n============\n
-  \   $ git clone https://github.com/zalora/sproxy2.git\n    $ cd sproxy2\n    $ cabal
-  install\n\n\nConfiguration\n=============\n\nBy default `sproxy2` will read its
-  configuration from `sproxy.yml`.  There is\nexample file with documentation [sproxy.yml.example](sproxy.yml.example).
-  You\ncan specify a custom path with:\n\n```\nsproxy2 --config /path/to/sproxy.yml\n```\n\n"
+  fetch and build all pre-requisites automatically.\n\n\nConfiguration\n=============\n\nBy
+  default `sproxy2` will read its configuration from `sproxy.yml`.  There is\nexample
+  file with documentation [sproxy.yml.example](sproxy.yml.example). You\ncan specify
+  a custom path with:\n\n```\nsproxy2 --config /path/to/sproxy.yml\n```\n\n"
 license-name: MIT
