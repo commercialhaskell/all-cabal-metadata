@@ -1,6 +1,6 @@
 homepage: https://github.com/k0001/exinst
 changelog-type: markdown
-hash: 5aa68432eff17708996d187db06b56dab307723d7cafb7623984adcb7fc0ad4e
+hash: 64ff5d831da74ce2f140aee24f7488dd5f5a1cbbb0666c6185efafc31b7ec220
 test-bench-deps:
   cereal: -any
   bytestring: -any
@@ -9,7 +9,6 @@ test-bench-deps:
   singletons: -any
   binary: -any
   tasty-quickcheck: -any
-  exinst: -any
   hashable: -any
   tasty-hunit: -any
   tasty: -any
@@ -19,8 +18,13 @@ test-bench-deps:
   profunctors: -any
   bytes: -any
 maintainer: renzoλcarbonara.com.ar
-synopsis: Recover instances for your existential types.
-changelog: ! "# Version 0.3.0.1\n\n* Removed dependency on `generic-random`.\n\n*
+synopsis: Recover type indexes and instances for your existentialized types.
+changelog: ! "# Version 0.4\n\n* BREAKING: Decouple `binary` and `cereal` instances
+  from `bytes`. This\n  introduces a slight backwards incompatible change if you were
+  using some\n  `Serial` instances that depended on host endianness (such as `Int`).\n\n*
+  Add `P1`, `P2`, `P3`, `P4`.\n\n* Add `S1`, `S2`, `S3`, `S4`.\n\n* Add `Read` instances
+  for `Some{1,2,3,4}`.\n\n* Moved documentation from `README.md` into the top-level
+  `Exinst` module.\n\n\n# Version 0.3.0.1\n\n* Removed dependency on `generic-random`.\n\n*
   Correctly deal with cabal flags for `deepseq` and `hashable`.\n\n* Add `binary`'s
   `Data.Binary.Binary` and `cereal`'s `Data.Serialize.Serialize`\n  instances for
   `Some{1,2,3,4}`. These instances are compatible with each other\n  and rely on the
@@ -74,266 +78,27 @@ all-versions:
 - '0.2'
 - '0.3'
 - '0.3.0.1'
+- '0.4'
 author: Renzo Carbonara
-latest: '0.3.0.1'
+latest: '0.4'
 description-type: markdown
-description: ! "# exinst\n\n[![Build Status](https://travis-ci.org/k0001/exinst.svg?branch=master)](https://travis-ci.org/k0001/exinst)\n\n>
-  See the [BSD3 LICENSE](https://github.com/k0001/exinst/blob/master/exinst/LICENSE.txt)\n>
-  file to learn about the legal terms and conditions for this library.\n\nExinst is
-  a library providing you with tools to automatically derive instances for\ntype-indexed
-  types whose type-indexes have been existentialized. Currently it only\nsupports
-  using [`singleton`](https://hackage.haskell.org/package/singletons) types as\ntype-indexes.\n\n>
-  TODO: Support for non-singleton-types types with kind `*` using `Typeable` should\n>
-  be possible, but I haven't worked on that yet. It's on the roadmap.\n\nIn short,
-  what `exinst` currently gives you is: For any type ``t :: k -> *``,\nif `k` is a
-  singleton type and `c (t k) :: Constraint` is satisfied, then you can\nexistentialize
-  away the `k` parameter with `Some1 t`, and have `c (Some1 t)`\nautomatically satisfied.
-  Currently, up to 4 type indexes can be existentialized\nusing `Some1`, `Some2`,
-  `Some3` and `Some4` respectively.\n\n> NOTE: This tutorial asumes some familiarity
-  with singleton types as implemented\n> by the [`singleton`](https://hackage.haskell.org/package/singletons)
-  library.\n> A singleton type is, in very rough terms, a type inhabited by a single
-  term,\n> which allows one to go from its term-level representation to its type-level\n>
-  representation and back without much trouble. A bit like the term `()`, which\n>
-  is of type `()`: whenever you have the type `()` you know what that its\n> term-level
-  representation must be `()`, and whenever you have the term `()`\n> you know that
-  its type must be `()`.\n\n## Motivation\n\nAs a motivation, let's consider the following
-  example:\n\n```haskell\n{-# LANGUAGE GADTs #-}\n{-# LANGUAGE DataKinds #-}\n{-#
-  LANGUAGE KindSignatures #-}\n{-# LANGUAGE FlexibleInstances #-}\n{-# LANGUAGE StandaloneDeriving
-  #-}\n\ndata Size = Big | Small\n\ndata Receptacle (a :: Size) :: * where\n  Vase
-  :: Receptacle 'Small\n  Glass :: Receptacle 'Small\n  Barrel :: Receptacle 'Big\n\nderiving
-  instance Show (Receptacle a)\n```\n\n`Receptacle` can describe three types of receptacles
-  (`Vase`, `Glass` and\n`Barrel`), while at the same time being able to indicate,
-  at the type level,\nwhether the size of the receptacle is `Big` or `Small`. Additionally,
-  we've\nprovided `Show` instances for `Receptacle`.\n\nNow, if we want to put `Receptacle`s
-  in a container, for example in `[]`, we can\ndo so only as long as the `Receptacle`
-  type is fully applied and monomorphic. That is, we can\nhave `[Receptacle 'Small]`
-  and `[Receptacle 'Big]`, but we can't have\n`[Receptacle]` nor `[forall a. Receptacle
-  a]`. So, if we want to have `Receptacle`s of different sizes in a\ncontainer like
-  `[]`, we need a different solution.\n\nAt this point we need to ask ourselves why
-  we need to put `Receptacle`s of\ndifferent sizes in a same container. If the answer
-  is something like “because we\nwant to show all of them, no matter what size they
-  are”, then we should realize\nthat what we are actually asking for is that no matter
-  what `Size` our\n`Receptable` has, we need to be able to find a `Show` instance
-  for that\n`Receptacle`. In Haskell, we can express just that using existential types\nand
-  constraints hidden behind a data constructor.\n\n```haskell\n--We need to add these
-  language extensions to the ones in the previous example\n--{-# LANGUAGE ExistentialQuantification
-  #-}\n--{-# LANGUAGE FlexibleContexts #-}\n\ndata ReceptacleOfAnySizeThatCanBeShown\n
-  \ = forall a. (Show (Receptacle a))\n      => MkReceptacleOfAnySizeThatCanBeShown
-  (Receptacle a)\n```\n\nWe can construct values of type `ReceptacleOfAnySizeThatCanBeShown`
-  only as long\nas there exist a `Show` instance for the `Receptacle a` we give to
-  the\n`MkReceptacleOfAnySizeThatCanBeShown` constructor. In our case, both `Receptacle\n'Small`
-  and `Receptacle 'Big` have `Show` instances, so all of `Vase`, `Glass` and\n`Barrel`
-  can be used successfully with `MkReceptacleOfAnySizeThatCanBeShown`.\n\nNow, `ReceptacleOfAnySizeThatCanBeShown`
-  on itself doesn't yet have a `Show`\ninstance, and we can't derive one automatically
-  using the `deriving` mechanism,\nbut we can give an explicit `Show` instance that
-  just forwards the work to the\n`Show` instance of the underlying `Receptacle a`.\n\n```haskell\ninstance
-  Show ReceptacleOfAnySizeThatCanBeShown where\n  show (MkReceptacleOfAnySizeThatCanBeShown
-  a) = show a\n```\n\nThat works as intended:\n\n```\n> show (MkReceptacleOfAnySizeThatCanBeShown
-  Vase)\n\"Vase\"\n> show (MkReceptacleOfAnySizeThatCanBeShown Barrel)\n\"Barrel\"\n```\n\nAnd
-  now, as we wanted, we can put `Receptacle`s of different sizes in a `[]` and\nshow
-  them (as long as we wrap each of them as\n`ReceptacleOfAnySizeThatCanBeShown`, that
-  is).\n\n```\n> map show [MkReceptacleOfAnySizeThatCanBeShown Vase, MkReceptacleOfAnySizeThatCanBeShown
-  Barrel]\n[\"Vase\", \"Barrel\"]\n```\n\nHowever, the above solution is unsatisfying
-  for various reasons: For one, the\n`Show` instance for `ReceptacleOfAnySizeThatCanBeShown`
-  works only as long as\nthe `ReceptacleOfAnySizeThatCanBeShown` itself carries a
-  witness that the `Show`\nconstraint for `Receptacle a` is satisfied, which means
-  that if we want to write\nyet another instance for `ReceptacleOfAnySizeThatCanBeShown`
-  that simply forwards\nits implementation to the underlying `Receptacle a`, say `Eq`,
-  then the\n`MkReceptacleOfAnySizeThatCanBeShown` constructor would need to be modified
-  to witness\nthe `Eq (Receptacle a)` instance too:\n\n```haskell\ndata ReceptacleOfAnySizeThatCanBeShown\n
-  \ = forall a. (Show (Receptacle a), Eq (Receptacle a))\n      => MkReceptacleOfAnySizeThatCanBeShown
-  (Receptacle a)\n```\n\nWith that in place we can provide an `Eq` instance for\n`ReceptacleOfAnySizeThatCanBeShown`
-  as we did for `Show` before, but if we pay\nclose attention, we can see how the
-  implementation of\n`ReceptacleOfAnySizeThatCanBeShown` starts to become a bottleneck:
-  Every\ninstance we want to provide for `ReceptacleOfAnySizeThatCanBeShown` that
-  simply\nforwards its work to the underlying `Receptacle a` needs to be witnessed
-  by\n`MkReceptacleOfAnySizeThatCanBeShown` itself, it is not enough that there exists\nan
-  instance for `Receptacle a`. Moreover, even the name\n`ReceptacleOfAnySizeThatCanBeShown`
-  that we chose before isn't completely\naccurate anymore, and will become less and
-  less accurate as we continue adding\nconstraints to `MkReceptacleOfAnySizeThatCanBeShown`.\n\nAdditionally,
-  everywhere we use the `MkReceptacleOfAnySizeThatCanBeShown`\nconstructor we need
-  to witness that the existentialized `Receptacle a` satisfies\nall the required constraints,
-  which means that, if the `Receptacle a` we pass to\n`MkReceptacleOfAnySizeThatCanBeShown`
-  is being received, say, as a parameter to\na function, then the type of that function
-  will also require that its caller\nsatisfies all of the same constraints, even though
-  it is obvious to us,\nstatically, that the instances exist. We can now see how all
-  of this becomes\nunmanegeable, or at least very *boilerplatey*, as those constraints
-  start to\npropagate through our code base.\n\nWhat we need is a way for instances
-  such as the `Show` instance for\n`ReceptacleOfAnySizeThatCanBeShown` to find the
-  `Show` instance for `Receptacle\na` without it being explicitely witnessed by the\n`MkReceptacleOfAnySizeThatCanBeShown`
-  constructor. That is exactly the problem\nthat `exinst` solves: allowing *exi*stentials
-  to find their *inst*ances.\n\n\n## Usage\n\nGiven the code for `Size`, `Receptacle`
-  and its `Show` instances above, we can\nachieve the same functionality as our initial
-  `ReceptacleOfAnySizeThatCanBeShown` by\nexistentializing the type indexes of `Receptacle
-  'Small` and `Receptacle 'Big`\nas `Some1 Receptacle`. In order to do that, we must
-  first ensure that `Size` and its\nconstructors can be used as singleton types (as
-  supported by the `singletons` library),\nfor which we can use some TH provided by
-  `Data.Singletons.TH`:\n\n```haskell\nimport Data.Singletons.TH\n\nData.Singletons.TH.genSingletons
-  [''Size]\n```\n\nAnd we'll also need a `Show` instance for `Size` for reasons that
-  will become\napparent later:\n\n```haskell\nderiving instance Show Size\n```\n\nNow
-  we can construct a `Show1 Size` and `show` achieving the same results as we\ndid
-  with `ReceptacleOfAnySizeThatCanBeShown` before.\n\nNote: this code won't work yet.
-  Keep reading.\n\n```\n> import Exinst (some1)\n> import Exinst.Instances.Base ()\n>
-  :t some1 Glass\n:t some1 Glass :: Some1 Receptacle\n> show (some1 Glass)\n\"Some1
-  Small Glass\"\n```\n\nWell, actually, the default `Show` instance for `Some1` shows
-  a bit more of\ninformation, as it permits this string to be `Read` back into a `Some1\nReceptacle`
-  if needed, but displaying just `\"Glass\"` would be possible too, if\ndesired.\n\n>
-  TODO: Implement said `Read` instance.\n\nThe important thing to notice in the example
-  above is that `some1` does not\nrequire us to satisfy a `Show (Receptacle 'Small)`
-  constraint, it just requires\nthat the type index for the type-indexed type we give
-  it as argument is a\nsingleton type:\n\n```haskell\nsome1 :: forall (f1 :: k1 ->
-  *) (a1 :: k1). SingI a1 => f1 a1 -> Some1 f1\n```\n\nIt is the application of `show`
-  to `some1 Glass` which will fail to compile if\nthere isn't a `Show` instance for
-  `Receptacle 'Small`, complaining that a `Show`\ninstance for `Some1 Receptable`
-  can't be found. The reason for this is that even\nif `Show` instances for `Some1`
-  are derived for free, they are only derived for\n`Some1 (t :: k1 -> *)` where a
-  `Show (t a)` for a specific but statically\nunknown `a` can be found at runtime
-  (mostly, there are other minor requirements too).\nThe mechanism through which instances
-  are found at runtime relies on `Dict` from the\n[`constraints`](https://hackage.haskell.org/package/constraints)
-  library, which\n`exinst` wraps in a `Dict1` typeclass to be instantiated once per
-  singleton\ntype.\n\n```haskell\n-- The Exinst.Dict1 class\nclass Dict1 (c :: * ->
-  Constraint) (f1 :: k1 -> *) where\n  dict1 :: Sing (a1 :: k1) -> Dict (c (f1 a1))\n```\n\nWhat
-  `Dict1` says is that: for a type-indexed type `f1`, given a term-level\nrepresentation
-  of the singleton type that indexes said `f1`, we can obtain a\nwitness that the
-  constraint `c` is satisfied by `f1` applied to the singleton\ntype.\n\nThat class
-  seems to be a bit too abstract, but the instances we as users need to\nwrite for
-  it are quite silly and straightforward. Even *boilerplatey* if you\nwill; they could
-  even be generated using TH\n\n> TODO: Write the TH for deriving the `Dict{1,2,3,4}`
-  implementation.\n\nHere's an example of how to provide `Show` support for `Some1
-  Receptacle` via\n`Dict1`:\n\n```\ninstance (Show (Receptacle 'Small), Show (Receptacle
-  'Big)) => Dict1 Show Receptacle where\n  dict1 = \\x -> case x of\n    SSmall ->
-  Dict\n    SBig -> Dict\n```\n\nThe implementation of `dict1` looks quite silly,
-  but it has to look like that as\nit is only by pattern-matching on each of the `Sing
-  Size` constructors that we\nlearn about the type level representation of a singleton
-  type, which we then use\nto select the proper `Show` instance among all of those
-  listed in the instance head.\n\nGiven this `Dict1` instance, we can proceed to excecute
-  the REPL example mentioned before\nand it will work just fine.\n\nHowever, that
-  `Dict1` instance is still a bit insatisfactory: If we wanted,\nagain, to provide
-  `Eq` support for our `Some1 Receptacle` type, we would need to\nwrite yet another
-  `Dict1` instance like the one above, but mentioning `Eq`\ninstead of `Show`. We
-  can do better.\n\nThe trick, when writing `Dict1` instances such as the one above,
-  is to leave `c`\nand `f1 :: k1 -> *` completely polymorphic, and instead only talk
-  concretely\nabout the singleton type with kind `k1`. This might sound strange at
-  first, as\n`c` and `f1` are the only two type parameters to `Dict1`. But as it often
-  happens\nwhen working with singleton types, we are not particularly interested in
-  the\ntypes involved, but in their kinds instead. So, this is the `Dict1` instance\nyou
-  often want to write:\n\n```haskell\ninstance (c (f1 'Small), c (f1 'Big)) => Dict1
-  c f1 where\n  dict1 = \\x -> case x of\n    SSmall -> Dict\n    SBig -> Dict\n```\n\nThat
-  instance says that for any choice of `c` and `f1 :: Size -> *`, if an\ninstance
-  for `c (f1 a)` exists for a specific choice of `a`, then, given a term\nlevel representation
-  for that `a` and the aid of `dict1`, said instance can be\nlooked up at runtime.\n\nNotice
-  that `Some1` itself doesn't have any requirements about `Dict1`, it's the\nvarious
-  instances for `Some1` who rely on `Dict1`. `Dict1` has nothing to do\nwith `Some1`,
-  nor with the choice of `f` nor with the choice of `c`; it is only\nrelated to the
-  singleton type used as a type-index for `f`.\n\nThe `Exinst` module exports ready-made
-  instances for `Some1`, `Some2`, `Some3`\nand `Some4` (they can be enabled with some
-  cabal flags).\n\n* `Eq`, `Ord`, `Show` from the `base` package.\n\n* `FromJSON`
-  and `ToJSON` from the `aeson` package.\n\n* `Serial` from the `bytes` package.\n\n*
-  `Hashable` from the `hashable` package.\n\n* `NFData` from the `deepseq` package.\n\n*
-  `Arbitrary` from the `QuickCheck` package.\n\nYou are invited to read the instance
-  heads for said instances so as to understand\nwhat you need to provide in order
-  to get those instances “for free”. As a rule of\nthumb, most instances will require
-  this: If you expect to have an instance for\n`class Y => Z a` satisfied for `Some1
-  (f :: k -> *)`, then make sure an instance\nfor `Z` is available for the `DemoteRep
-  ('KProxy :: KProxy k)`, that a `Dict1 Z\n(f :: k -> *)` or more general instance
-  exists, and that the `Y` instance for\n`Some1 (f :: k -> *)` exists too.\n\nHere
-  is the full code needed to have, say, the `Eq`, `Show`, `ToJSON` and\n`FromJSON`
-  instances available for `Some1 Receptacle`:\n\n```haskell\n{-# LANGUAGE ConstraintKinds
-  #-}\n{-# LANGUAGE DataKinds #-}\n{-# LANGUAGE FlexibleInstances #-}\n{-# LANGUAGE
-  GADTs #-}\n{-# LANGUAGE KindSignatures #-}\n{-# LANGUAGE MultiParamTypeClasses #-}\n{-#
-  LANGUAGE OverloadedStrings #-}\n{-# LANGUAGE StandaloneDeriving #-}\n{-# LANGUAGE
-  TemplateHaskell #-}\n{-# LANGUAGE TypeFamilies #-}\n{-# LANGUAGE UndecidableInstances
-  #-}\n\nimport qualified Data.Aeson as Ae\nimport           Data.Constraint (Dict(Dict))\nimport
-  qualified Data.Singletons.TH\nimport           Exinst (Dict1(dict1))\n\n-----\n\ndata
-  Size = Big | Small\n  deriving (Eq, Show)\n\nData.Singletons.TH.genSingletons [''Size]\nData.Singletons.TH.singDecideInstances
-  [''Size]\n\ninstance Ae.ToJSON Size where\n  toJSON = \\x -> case x of\n    Small
-  -> Ae.toJSON (\"Small\" :: String)\n    Big -> Ae.toJSON (\"Big\" :: String)\n\ninstance
-  Ae.FromJSON Size where\n  parseJSON = Ae.withText \"Size\" $ \\t -> case t of\n
-  \    \"Big\" -> return Big\n     \"Small\" -> return Small\n     _ -> fail \"Unknown\"\n\n\ninstance
-  (c (f 'Big), c (f 'Small)) => Dict1 c f where\n  dict1 = \\x -> case x of\n    SBig
-  -> Dict\n    SSmall -> Dict\n\n-----\n\ndata Receptacle (a :: Size) :: * where\n
-  \ Vase :: Receptacle 'Small\n  Glass :: Receptacle 'Small\n  Barrel :: Receptacle
-  'Big\n\nderiving instance Eq (Receptacle a)\nderiving instance Show (Receptacle
-  a)\n\ninstance Ae.ToJSON (Receptacle a) where\n  toJSON = \\x -> case x of\n    Vase
-  -> Ae.toJSON (\"Vase\" :: String)\n    Glass -> Ae.toJSON (\"Glass\" :: String)\n
-  \   Barrel -> Ae.toJSON (\"Barrel\" :: String)\n\ninstance Ae.FromJSON (Receptacle
-  'Small) where\n  parseJSON = Ae.withText \"Receptacle 'Small\" $ \\t -> case t of\n
-  \    \"Vase\" -> return Vase\n     \"Glass\" -> return Glass\n     _ -> fail \"Unknown\"\n\ninstance
-  Ae.FromJSON (Receptacle 'Big) where\n  parseJSON = Ae.withText \"Receptacle 'Big\"
-  $ \\t -> case t of\n     \"Barrel\" -> return Barrel\n     _ -> fail \"Unknown\"\n```\n\nNow,
-  provided that we import `Exinst.Instances.Base` and\n`Exinst.Instances.Aeson`, `Some1
-  Receptacle` will have `Eq`, `Show`, `FromJSON`\nand `FromJSON` instances:\n\n```\n>
-  import Exinst.Instances.Base ()\n> import Exinst.Instances.Aeson ()\n\n> -- Trying
-  `fromSome1`.\n> fromSome1 (some1 Vase) == Just Vase\nTrue\n> fromSome1 (some1 Vase)
-  == Just Glass\nFalse\n> fromSome1 (some1 Vase) == Just Barrel\nFalse\n\n> -- Trying
-  `withSome1`\n> withSome1 (some1 Vase) show\n\"Vase\"\n> withSome1 (some1 Vase) (==
-  Vase)    -- This will fail, use `fromSome1`\n                                      --
-  if you know you are expecting\n                                      -- a `Receptacle
-  'Small`\n\n> -- Trying the `Eq` instance.\n> some1 Vase == some1 Vase\nTrue\n> some1
-  Vase == some1 Glass\nFalse\n> some1 Vase == some1 Barrel\nFalse\n\n> -- Trying the
-  `Show` instance.\n> show (some1 Vase)\n\"Some1 Small Vase\"\n> map show [some1 Vase,
-  some1 Glass, some1 Barrel]\n[\"Some1 Small Vase\",\"Some1 Small Glass\",\"Some1
-  Big Barrel\"]\n\n> -- Trying the `ToJSON` and `FromJSON` instances.\n> Ae.encode
-  (some1 Vase)\n\"[\\\"Small\\\",\\\"Vase\\\"]\"  -- Just like in Show, the ToJSON
-  adds some information\n                        -- about the Size type-index. That's
-  why we require\n                        -- Size to provide a ToJSON instance too.\n>
-  Ae.decode (Ae.encode (some1 Vase)) == Just (some1 Vase)\nTrue\n> Ae.decode (Ae.encode
-  (some1 Vase)) == Just (some1 Glass)\nFalse\n```\n\n\n## About `Some2`, `Some3` and
-  `Some4`.\n\nJust like `Some1` hides the last singleton type index from fully applied\ntype-indexed
-  type, `Some2` hides the last two type indexes, `Some3` hides the\nlast three, and
-  `Some3` hides the last four. They can be used in the same way as\n`Some1`.\n\nLike
-  as most instances for `Some1` require `Dict1` instances to be present for\ntheir
-  singleton type-index, most instances for `Some2`, `Some3` and `Some4` will\nrequire
-  that `Dict2`, `Dict3` or `Dict4` instances exist, respectively. Writing\nthese instances
-  is very straightforward. Supposing you have a type `X :: T4 ->\nT3 -> T2 -> T1 ->
-  *` and want to existentialize all of the four type indexes yet\nbe able to continue
-  using all of its instances, we can write something like\nthis:\n\n```haskell\ninstance
-  (c (f1 'T1a), c (f1 'T1b)) => Dict1 c (f1 :: T1 -> *) where\n  dict1 = \\x -> case
-  x of { ST1a -> Dict; ST1b -> Dict }\ninstance (Dict1 c (f2 'T2a), Dict1 c (f2 'T2b))
-  => Dict2 c (f2 :: T2 -> k1 -> *) where\n  dict2 = \\x -> case x of { ST2a -> dict1;
-  ST2b -> dict1 }\ninstance (Dict2 c (f3 'T3a), Dict2 c (f3 'T3b)) => Dict3 c (f3
-  :: T3 -> k2 -> k1 -> *) where\n  dict3 = \\x -> case x of { ST3a -> dict2; ST3b
-  -> dict2 }\ninstance (Dict3 c (f4 'T4a), Dict3 c (f4 'T4b)) => Dict4 c (f4 :: T4
-  -> k3 -> k2 -> k1 -> *) where\n  dict4 = \\x -> case x of { ST4a -> dict3; ST4b
-  -> dict3 }\n```\n\nThat is, assuming the following `T1`, `T2`, `T3` and `T4`:\n\n```haskell\ndata
-  T4 = T4a | T4b\ndata T3 = T3a | T3b\ndata T2 = T2a | T2b\ndata T1 = T1a | T1b\n```\n\nEffectively,
-  we wrote just one instance per singleton type per type-index\nposition, each of
-  them promoting a term-level representation of a singleton\ntype to its type-level
-  representation and forwarding the rest of the work to\na “smaller” dict. That is,
-  `dict4` reifies the type of the fourth-to-last\ntype-index of `X` and then calls
-  `dict3` to do the same for the third-to-last\ntype-index of `X` and so on. Notice,
-  however, how we didn't need to mention `X`\nin none of the instances above: As we
-  said before, these instances are\nintended to work for any choice of `c`, `f4`,
-  `f3`, `f2` and `f1`.\n\n> TODO: See if instead of having `Some1`, `Some2`, `Some3`,
-  `Some4`, and their\n> respective `Dict1`, `Dict2`, `Dict3` and `Dict4`, etc., we
-  can have a single\n> `SomeN` and a single `DictN` working out the number of parameters
-  using\n> type-level natural numbers.\n\n## Converting `Some1 (f :: k -> *)` to `f
-  (a :: k)`.\n\nIf you have a `Some1 (f :: k -> *)` and you know, statically, that
-  you need an\nspecific `f (a :: k)`, then you can use `fromSome1` which will give
-  you an\n`f (a :: k)` only if `a` was the type that was existentialized by `Some1`.\nUsing
-  `fromSome1` requires that the singleton type-index implements\n`Data.Singletons.Decide.SDecide`,
-  which can be derived mechanically with TH by\nmeans of `Data.Singletons.TH.singInstance`.\n\nIf
-  you don't know, statically, the type of `f (a :: k)`, then you can use\n`withSome1Sing`
-  or `withSome1` to work with `f (a :: k)` as long as `a` never\nleaves their scope
-  (don't worry, the compiler will yell at you if you try to do\nthat).\n\n\n# Library
-  implementors: Writing instances for `Some1` and friends.\n\nInstances for `Some1`
-  seem to come out of thin air, but the truth is that they\nneed to be written at
-  least once by library authors so that, provided all its\nrequirements are satisfied,
-  they are made available.\n\nWhen we imported `Exinst.Instances.Base` before, we
-  brought to scope, among\nother things, the `Show` instance for `Some1`, which is
-  defined as this:\n\n```haskell\n-- Internal wrapper so that we don't have to write
-  the string manipulation parts\n-- in the 'Show' instance by hand.\ndata Some1'Show
-  r1 x = Some1 r1 x deriving (Show)\n\ninstance forall (f1 :: k1 -> *)\n  . ( SingKind
-  ('KProxy :: KProxy k1)\n    , Show (DemoteRep ('KProxy :: KProxy k1))\n    , Dict1
-  Show f1\n    ) => Show (Some1 f1)\n  where\n    showsPrec n = \\some1 -> withSome1Sing
-  some1 $ \\sa1 (x :: f1 a1) ->\n       case dict1 sa1 :: Dict (Show (f1 a1)) of\n
-  \         Dict -> showsPrec n (Some1 (fromSing sa1) x)\n```\n\nThis code should
-  be relatively straightforward if you are familiar with uses of\nthe `singletons`
-  and `constraints` libraries. We are simply reifying singleton\ntypes from their
-  term-level representation to their type-level representation,\nand afterwards using
-  the `Dict1` mechanism to lookup the required instances\nduring runtime. Additionaly,
-  this instance requires that the term level\nrepresentation of the singleton type
-  implements `Show` too, as, like we saw in a\nprevious example, the type index itself
-  is shown in this `Show` implementation,\nin the hope that it can be later recovered
-  and reified to the type level when\nusing `Read`.\n\n\n"
+description: ! '# exinst
+
+
+  [![Build Status](https://travis-ci.org/k0001/exinst.svg?branch=master)](https://travis-ci.org/k0001/exinst)
+
+
+  See the [BSD3 LICENSE](https://github.com/k0001/exinst/blob/master/exinst/LICENSE.txt)
+
+  file to learn about the legal terms and conditions for this library.
+
+
+  Find documentation for this library in the top-level
+
+  [`Exinst`](https://github.com/k0001/exinst/blob/master/exinst/src/lib/Exinst.hs)
+
+  module.
+
+
+'
 license-name: BSD3
