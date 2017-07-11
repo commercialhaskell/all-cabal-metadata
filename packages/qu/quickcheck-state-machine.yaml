@@ -1,31 +1,27 @@
 homepage: https://github.com/advancedtelematic/quickcheck-state-machine#readme
 changelog-type: markdown
-hash: 45e4e41c1b4213f7fbf41b832132c648979e6beefb968e16c29f882946eb857c
+hash: 2f59ffb5e02ed515364744dcc5b2741a95397b7aab9e7072bb41c12cb8734c57
 test-bench-deps:
   base: ! '>=4.9.1.0 && <4.10'
-  hspec: ! '>=2.4.3 && <2.5'
-  mtl: ! '>=2.2.1 && <2.3'
-  random: ==1.1.*
-  QuickCheck: ! '>=2.9.2 && <2.10'
-  quickcheck-state-machine: ! '>=0.0.0 && <0.1'
 maintainer: Stevan Andjelkovic <stevan@advancedtelematic.com>
 synopsis: Test monadic programs using state machine based models
-changelog: ! "#### 0.0.0\n\n  * Initial release.\n"
+changelog: ! "#### 0.1.0\n\n  * The API has been simplified, thanks to ideas stolen\n
+  \   from\n    [Hedgehog](https://github.com/hedgehogqa/haskell-hedgehog/commit/385c92f9dd0aa7e748fc677b2eeead5e3572685f).\n\n####
+  0.0.0\n\n  * Initial release.\n"
 basic-deps:
   ansi-wl-pprint: ! '>=0.6.7.3 && <0.7'
   stm: ! '>=2.4.4.1 && <2.5'
   base: ! '>=4.7 && <5'
-  constraints: ! '>=0.9.1 && <0.10'
   containers: ! '>=0.5.7.1 && <0.6'
-  singletons: ==2.2.*
   mtl: ! '>=2.2.1 && <2.3'
   parallel-io: ! '>=0.3.3 && <0.4'
   random: ==1.1.*
   QuickCheck: ! '>=2.9.2 && <2.10'
 all-versions:
 - '0.0.0'
+- '0.1.0'
 author: Stevan Andjelkovic
-latest: '0.0.0'
+latest: '0.1.0'
 description-type: markdown
 description: ! "## quickcheck-state-machine\n\n[![Hackage](https://img.shields.io/hackage/v/quickcheck-state-machine.svg)](https://hackage.haskell.org/package/quickcheck-state-machine)\n[![Build
   Status](https://api.travis-ci.org/advancedtelematic/quickcheck-state-machine.svg?branch=master)](https://travis-ci.org/advancedtelematic/quickcheck-state-machine)\n\n`quickcheck-state-machine`
@@ -38,42 +34,125 @@ description: ! "## quickcheck-state-machine\n\n[![Hackage](https://img.shields.i
   machine based model specification and property based\ntesting first appeard in Erlang's
   proprietary QuickCheck. The\n`quickcheck-state-machine` library can be seen as an
   attempt to provide similar\nfunctionality to Haskell's QuickCheck library.\n\n###
-  Sample run (teaser)\n\nHere's a sample output from when we look for race conditions
-  in the mutable\nreference example:\n\n```\n> quickCheck (MutableReference.prop_parallel
-  RaceCondition)\n*** Failed! (after 5 tests and 6 shrinks):\n\nCouldn't linearise:\n\n┌──────────────────────┐\n│
-  New                  │\n│                 ⟶ $0 │\n└──────────────────────┘\n            │
-  ┌────────┐\n            │ │ Inc $0 │\n┌─────────┐ │ │        │\n│ Inc $0  │ │ │
-  \       │\n│         │ │ │   ⟶ () │\n│         │ │ └────────┘\n│    ⟶ () │ │\n└─────────┘
-  │\n┌─────────┐ │\n│ Read $0 │ │\n│     ⟶ 1 │ │\n└─────────┘ │\n\n\n```\n\nClearly,
-  if we increment a mutable reference in parallel we can end up with a\nrace condition.
-  We shall come back to this example below, but if your are\nimpatient you can find
-  the full source\ncode\n[here](https://github.com/advancedtelematic/quickcheck-state-machine/blob/master/example/src/MutableReference.hs).\n\n###
+  Example\n\nAs a first example, let's implement and test programs using mutable\nreferences.
+  Our implementation will be using `IORef`s, but let's start with a\nrepresentation
+  of what actions are possible with program using mutable\nreferences. Our mutable
+  references can be created, read from, written to and\nincremented:\n\n```haskell\ndata
+  Action (v :: * -> *) :: * -> * where\n  New   ::                                     Action
+  v (Opaque (IORef Int))\n  Read  :: Reference v (Opaque (IORef Int)) -> Action v
+  Int\n  Write :: Reference v (Opaque (IORef Int)) -> Int -> Action v ()\n  Inc   ::
+  Reference v (Opaque (IORef Int)) -> Action v ()\n```\n\nWhen we generate actions
+  we won't be able to create arbitrary `IORef`s, that's\nwhy all uses of `IORefs`
+  are wrapped in `Reference v`, where the parameter `v`\nwill let us use symbolic
+  references while generating (and concrete ones when\nexecuting).\n\nIn order to
+  be able to show counterexamples, we need a show instance for our\nactions. `IORef`s
+  don't have a show instance, thats why we wrap them in\n`Opaque`; which gives a show
+  instance to a type that doesn't have one.\n\nNext, we give the actual implementation
+  of our mutable references. To make\nthings more interesting, we parametrise the
+  semantics by a possible problem.\n\n```haskell\ndata Problem = None | Bug | RaceCondition\n
+  \ deriving Eq\n\nsemantics :: Problem -> Action Concrete resp -> IO resp\nsemantics
+  _   New           = Opaque <$> newIORef 0\nsemantics _   (Read  ref)   = readIORef
+  \ (opaque ref)\nsemantics prb (Write ref i) = writeIORef (opaque ref) i'\n  where\n
+  \ -- One of the problems is a bug that writes a wrong value to the\n  -- reference.\n
+  \ i' | i `elem` [5..10] = if prb == Bug then i + 1 else i\n     | otherwise        =
+  i\nsemantics prb (Inc   ref)   =\n  -- The other problem is that we introduce a
+  possible race condition\n  -- when incrementing.\n  if prb == RaceCondition\n  then
+  do\n    i <- readIORef (opaque ref)\n    threadDelay =<< randomRIO (0, 5000)\n    writeIORef
+  (opaque ref) (i + 1)\n  else\n    atomicModifyIORef' (opaque ref) (\\i -> (i + 1,
+  ()))\n```\n\nNote that above `v` is instatiated to `Concrete`, which is essentially
+  the\nidentity type, so while writing the semantics we have access to real `IORef`s.\n\nWe
+  now have an implementation, the next step is to define a model for the\nimplementation
+  to be tested against. We'll use a simple map between references\nand integers as
+  a model.\n\n```haskell\nnewtype Model v = Model [(Reference v (Opaque (IORef Int)),
+  Int)]\n\ninitModel :: Model v\ninitModel = Model []\n```\n\nThe pre-condition of
+  an action specifies in what context the action is\nwell-defined. For example, we
+  can always create a new mutuable reference, but\nwe can only read from references
+  that already have been created. The\npre-conditions are used while generating programs
+  (lists of actions).\n\n```haskell\nprecondition :: Model Symbolic -> Action Symbolic
+  resp -> Bool\nprecondition _         New           = True\nprecondition (Model m)
+  (Read  ref)   = ref `elem` map fst m\nprecondition (Model m) (Write ref _) = ref
+  `elem` map fst m\nprecondition (Model m) (Inc   ref)   = ref `elem` map fst m\n```\n\nThe
+  transition function explains how actions change the model. Note that the\ntransition
+  function is polymorphic in `v`. The reason for this is that we use\nthe transition
+  function both while generating and executing.\n\n```haskell\ntransition :: Model
+  v -> Action v resp -> v resp -> Model v\ntransition (Model m) New           ref
+  = Model (m ++ [(Reference ref, 0)])\ntransition m         (Read  _)     _   = m\ntransition
+  (Model m) (Write ref i) _   = Model (update ref i         m)\ntransition (Model
+  m) (Inc   ref)   _   = Model (update ref (old + 1) m)\n  where\n  Just old = lookup
+  ref m\n\nupdate :: Eq a => a -> b -> [(a, b)] -> [(a, b)]\nupdate ref i m = (ref,
+  i) : filter ((/= ref) . fst) m\n```\n\nPost-conditions are checked after we executed
+  an action and got access to the\nresult.\n\n```haskell\npostcondition :: Model Concrete
+  -> Action Concrete resp -> resp -> Property\npostcondition _         New         _
+  \   = property True\npostcondition (Model m) (Read ref)  resp = lookup ref m ===
+  Just resp\npostcondition _         (Write _ _) _    = property True\npostcondition
+  _         (Inc _)     _    = property True\n```\n\nFinally, we have to explain how
+  to generate and shrink actions.\n\n```haskell\ngenerator :: Model Symbolic -> Gen
+  (Untyped Action)\ngenerator (Model m)\n  | null m    = pure (Untyped New)\n  | otherwise
+  = frequency\n      [ (1, pure (Untyped New))\n      , (8, Untyped .    Read  <$>
+  elements (map fst m))\n      , (8, Untyped <$> (Write <$> elements (map fst m) <*>
+  arbitrary))\n      , (8, Untyped .    Inc   <$> elements (map fst m))\n      ]\n\nshrinker
+  :: Action v resp -> [Action v resp]\nshrinker (Write ref i) = [ Write ref i' | i'
+  <- shrink i ]\nshrinker _             = []\n```\n\nWe can now define a sequential
+  property as follows.\n\n```haskell\nprop_references :: Problem -> Property\nprop_references
+  prb = forAllProgram\n  generator\n  shrinker\n  precondition\n  transition\n  initModel
+  $ \\prog ->\n    runAndCheckProgram\n      precondition\n      transition\n      postcondition\n
+  \     initModel\n      (semantics prb)\n      ioProperty\n      prog\n```\n\nIf
+  we run the sequential property without introducing any problems to the\nsemantics
+  function, i.e. `quickCheck (prop_references None)`, then the property\npasses. If
+  we however introduce the bug problem, then it will fail with the\nminimal counterexample:\n\n```\n>
+  quickCheck (prop_references Bug)\n*** Failed! Falsifiable (after 16 tests and 4
+  shrinks):\n[New (Var 0),Write (Var 0) 5 (Var 2),Read (Var 0) (Var 3)]\nJust 5 /=
+  Just 6\n```\n\nRecall that the bug problem causes the write of values ``i `elem`
+  [5..10]`` to\nactually write `i + 1`.\n\nRunning the sequential property with the
+  race condition problem will not uncover\nthe race condition.\n\nIf we however define
+  a parallel property as follows.\n\n```haskell\nprop_referencesParallel :: Problem
+  -> Property\nprop_referencesParallel prb = forAllParallelProgram\n  generator\n
+  \ shrinker\n  precondition\n  transition\n  initModel $ \\parallel ->\n    runParallelProgram
+  (semantics prb) parallel $ \\hist ->\n      checkParallelProgram\n        transition\n
+  \       postcondition\n        initModel\n        parallel\n        hist\n```\n\nAnd
+  run it using the race condition problem, then we'll find the race\ncondition:\n\n```\n>
+  quickCheck (prop_referencesParallel RaceCondition)\n*** Failed! (after 8 tests and
+  6 shrinks):\n\nCouldn't linearise:\n\n┌────────────────────────────────┐\n│ Var
+  0 ← New                    │\n│                       ⟶ Opaque │\n└────────────────────────────────┘\n┌─────────────┐
+  │\n│ Inc (Var 0) │ │\n│             │ │ ┌──────────────┐\n│             │ │ │ Inc
+  (Var 0)  │\n│        ⟶ () │ │ │              │\n└─────────────┘ │ │              │\n
+  \               │ │         ⟶ () │\n                │ └──────────────┘\n                │
+  ┌──────────────┐\n                │ │ Read (Var 0) │\n                │ │          ⟶
+  1 │\n                │ └──────────────┘\nJust 2 /= Just 1\n```\n\nAs we can see
+  above, a mutable reference is first created, and then in\nparallel (concurrently)
+  we do two increments of said reference, and finally we\nread the value `1` while
+  the model expects `2`.\n\nRecall that incrementing is implemented by first reading
+  the reference and\nthen writing it, if two such actions are interleaved then one
+  of the writes\nmight end up overwriting the other ones -- creating the race condition.\n\nWe
+  shall come back to this example below, but if your are impatient you can\nfind the
+  full source\ncode\n[here](https://github.com/advancedtelematic/quickcheck-state-machine/blob/master/example/src/MutableReference.hs).\n\n###
   How it works\n\nThe rought idea is that the user of the library is asked to provide:\n\n
-  \ * a datatype of commands;\n  * a datatype model;\n  * pre- and post-conditions
-  of the commands on the model;\n  * a state transition function that given a model
-  and a command advances the\n    model to its next state;\n  * a way to generate
-  and shrink commands;\n  * semantics for executing the commands.\n\nThe library then
-  gives back a sequential and a parallel property.\n\n#### Sequential property\n\nThe
-  *sequential property* checks if the model is consistent with respect to the\nsemantics.
-  The way this is done is:\n\n  1. generate a list of commands;\n\n  2. starting from
-  the initial model, for each command do the the following:\n\n       1. check that
-  the pre-condition holds;\n       2. if so, execute the command using the semantics;\n
-  \      3. check if the the post-condition holds;\n       4. advance the model using
-  the transition function.\n\n  3. If something goes wrong, shrink the initial list
-  of commands and present a\n     minimal counter example.\n\n#### Parallel property\n\nThe
-  *parallel property* checks if parallel execution of the semantics can be\nexplained
-  in terms of the sequential model. This is useful for trying to find\nrace conditions
-  -- which normally can be tricky to test for. It works as\nfollows:\n\n  1. generate
-  a list of commands that will act as a sequential prefix for the\n     parallel program
-  (think of this as an initialisation bit that setups up\n     some state);\n\n  2.
-  generate two lists of commands that will act as parallel suffixes;\n\n  3. execute
-  the prefix sequentially;\n\n  4. execute the suffixes in parallel and gather the
-  a trace (or history) of\n     invocations and responses of each command;\n\n  5.
-  try to find a possible sequential interleaving of command invocations and\n     responses
-  that respects the post-conditions.\n\nThe last step basically tries to find\na [linearisation](https://en.wikipedia.org/wiki/Linearizability)
-  of calls that\ncould have happend on a single thread.\n\n### Examples\n\nTo get
-  started it is perhaps easiest to have a look at one of the several\nexamples:\n\n
-  \ * The water jug problem from *Die Hard 2* -- this is a\n    simple\n    [example](https://github.com/advancedtelematic/quickcheck-state-machine/blob/master/example/src/DieHard.hs)
+  \ * a datatype of actions;\n  * a datatype model;\n  * pre- and post-conditions
+  of the actions on the model;\n  * a state transition function that given a model
+  and a action advances the\n    model to its next state;\n  * a way to generate and
+  shrink actions;\n  * semantics for executing the actions.\n\nThe library then gives
+  back a bunch of combinators that let you define a\nsequential and a parallel property.\n\n####
+  Sequential property\n\nThe *sequential property* checks if the model is consistent
+  with respect to the\nsemantics. The way this is done is:\n\n  1. generate a list
+  of actions;\n\n  2. starting from the initial model, for each action do the the
+  following:\n\n       1. check that the pre-condition holds;\n       2. if so, execute
+  the action using the semantics;\n       3. check if the the post-condition holds;\n
+  \      4. advance the model using the transition function.\n\n  3. If something
+  goes wrong, shrink the initial list of actions and present a\n     minimal counter
+  example.\n\n#### Parallel property\n\nThe *parallel property* checks if parallel
+  execution of the semantics can be\nexplained in terms of the sequential model. This
+  is useful for trying to find\nrace conditions -- which normally can be tricky to
+  test for. It works as\nfollows:\n\n  1. generate a list of actions that will act
+  as a sequential prefix for the\n     parallel program (think of this as an initialisation
+  bit that setups up\n     some state);\n\n  2. generate two lists of actions that
+  will act as parallel suffixes;\n\n  3. execute the prefix sequentially;\n\n  4.
+  execute the suffixes in parallel and gather the a trace (or history) of\n     invocations
+  and responses of each action;\n\n  5. try to find a possible sequential interleaving
+  of action invocations and\n     responses that respects the post-conditions.\n\nThe
+  last step basically tries to find\na [linearisation](https://en.wikipedia.org/wiki/Linearizability)
+  of calls that\ncould have happend on a single thread.\n\n### More examples\n\nHere
+  are some more examples to get you started:\n\n  * The water jug problem from *Die
+  Hard 2* -- this is a\n    simple\n    [example](https://github.com/advancedtelematic/quickcheck-state-machine/blob/master/example/src/DieHard.hs)
   of\n    a specification where we use the sequential property to find a solution\n
   \   (counter example) to a puzzle from an action movie. Note that this example\n
   \   has no meaningful semantics, we merely model-check. It might be helpful to\n
@@ -91,10 +170,11 @@ description: ! "## quickcheck-state-machine\n\n[![Hackage](https://img.shields.i
   \   Several metaproperties, that for example check if the counter examples are\n
   \   minimal, are specified in a\n    separate\n    [module](https://github.com/advancedtelematic/quickcheck-state-machine/blob/master/example/src/MutableReference/Prop.hs);\n\n
   \ * Ticket\n    dispenser\n    [example](https://github.com/advancedtelematic/quickcheck-state-machine/blob/master/example/src/TicketDispenser.hs)
-  --\n    a simpler example where the parallel property is used once again to find
-  a\n    race condition. This is an example used in the *Testing a Database for Race\n
-  \   Conditions with QuickCheck* and *Testing the Hard Stuff and Staying\n    Sane*\n
-  \   [[PDF](http://publications.lib.chalmers.se/records/fulltext/232550/local_232550.pdf),\n
+  --\n    a simple example where the parallel property is used once again to find
+  a\n    race condition. The semantics in this example uses a simple database file\n
+  \   that needs to be setup and teared down. This example also appears in the\n    *Testing
+  a Database for Race Conditions with QuickCheck* and *Testing the\n    Hard Stuff
+  and Staying\n    Sane*\n    [[PDF](http://publications.lib.chalmers.se/records/fulltext/232550/local_232550.pdf),\n
   \   [video](https://www.youtube.com/watch?v=zi0rHwfiX1Q)] papers.\n\nAll examples
   have an associated `Spec` module located in\nthe\n[`example/test`](https://github.com/advancedtelematic/quickcheck-state-machine/tree/master/example/test)
   directory.\nThese make use of the properties in the examples, and get tested as
@@ -114,22 +194,32 @@ description: ! "## quickcheck-state-machine\n\n[![Hackage](https://img.shields.i
   this\n    is a classic paper that describes the main technique of the parallel\n
   \   property;\n\n  * Aphyr's blogposts about [Jepsen](https://github.com/jepsen-io/jepsen),
   which\n    also uses the linearisability technique, and has found bugs in many\n
-  \   distributed systems:\n\n    - [Knossos: Redis and linearizability](https://aphyr.com/posts/309-knossos-redis-and-linearizability)\n
-  \   - [Strong consistency models](https://aphyr.com/posts/313-strong-consistency-models)\n
-  \   - [Computational techniques in Knossos](https://aphyr.com/posts/314-computational-techniques-in-knossos)\n
-  \   - [Serializability, linearizability, and locality](https://aphyr.com/posts/333-serializability-linearizability-and-locality)\n\n
+  \   distributed systems:\n\n    - [Knossos: Redis and linearizability](https://aphyr.com/posts/309-knossos-redis-and-linearizability);\n
+  \   - [Strong consistency models](https://aphyr.com/posts/313-strong-consistency-models);\n
+  \   - [Computational techniques in Knossos](https://aphyr.com/posts/314-computational-techniques-in-knossos);\n
+  \   - [Serializability, linearizability, and locality](https://aphyr.com/posts/333-serializability-linearizability-and-locality).\n\n
   \ * The use of state machines to model and verify properties about programs is\n
   \   quite well-established, as witnessed by several books on the subject:\n\n      -
   [Specifying Systems](https://www.microsoft.com/en-us/research/publication/specifying-systems-the-tla-language-and-tools-for-hardware-and-software-engineers/):\n
-  \       The TLA+ Language and Tools for Hardware and Software Engineers\n      -
+  \       The TLA+ Language and Tools for Hardware and Software Engineers;\n      -
   [Modeling in Event-B](http://www.event-b.org/abook.html): System and\n        Software
-  Engineering\n      - [Abstract State Machines](http://www.di.unipi.it/~boerger/AsmBook/):
-  A\n        Method for High-Level System Design and Analysis\n\n    The books contain
+  Engineering;\n      - [Abstract State Machines](http://www.di.unipi.it/~boerger/AsmBook/):
+  A\n        Method for High-Level System Design and Analysis.\n\n    The books contain
   general advice how to model systems using state machines,\n    and are hence relevant
   to us. For shorter texts on why state machines are\n    important for modeling,
   see:\n\n      - Lamport's\n        [*Computation and State Machines*](https://www.microsoft.com/en-us/research/publication/computation-state-machines/);\n\n
   \     - Gurevich's\n        [*Evolving Algebras 1993: Lipari Guide*](https://www.microsoft.com/en-us/research/publication/103-evolving-algebras-1993-lipari-guide/)
   and\n        *Sequential Abstract State Machines Capture Sequential\n        Algorithms*\n
-  \       [[PDF](http://delta-apache-vm.cs.tau.ac.il/~nachumd/models/gurevich.pdf)].\n\n###
-  License\n\nBSD-style (see the file LICENSE).\n"
+  \       [[PDF](http://delta-apache-vm.cs.tau.ac.il/~nachumd/models/gurevich.pdf)].\n\n
+  \ * Other similar libraries:\n\n      - Erlang QuickCheck, [eqc](http://quviq.com/documentation/eqc/),
+  the first\n        property based testing library to have support for state machines\n
+  \       (closed source);\n\n      - The Erlang library [PropEr](https://github.com/manopapad/proper)
+  is\n        *eqc*-inspired, open source, and has support for state\n        machine
+  [testing](http://propertesting.com/);\n\n      - The Haskell\n        library [Hedgehog](https://github.com/hedgehogqa/haskell-hedgehog),
+  also\n        has support for state machine based testing (no parallel property
+  yet\n        though);\n\n      - [ScalaCheck](http://www.scalacheck.org/), likewise
+  has support for state\n        machine\n        based\n        [testing](https://github.com/rickynils/scalacheck/blob/master/doc/UserGuide.md#stateful-testing)
+  (no\n        parallel property);\n\n      - The Python\n        library [Hypothesis](https://hypothesis.readthedocs.io/en/latest/),
+  also\n        has support for state machine\n        based\n        [testing](https://hypothesis.readthedocs.io/en/latest/stateful.html)
+  (no\n        parallel property).\n\n### License\n\nBSD-style (see the file LICENSE).\n"
 license-name: BSD3
