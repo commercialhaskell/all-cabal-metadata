@@ -1,6 +1,6 @@
 homepage: https://github.com/morphismtech/squeal
 changelog-type: ''
-hash: aaf3967ff12006ce9e7b85b17d518b31d80d4cbfe9b57799665a6df7ebe053b4
+hash: eadd374f2b844e6dcf094e539f4af5223c23468a4003fd735a8a9a520ad4a8c8
 test-bench-deps:
   base: ! '>=4.10.0.0 && <5'
   hspec: ! '>=2.4.4 && <3'
@@ -34,19 +34,87 @@ all-versions:
 - '0.1.1.0'
 - '0.1.1.1'
 - '0.1.1.2'
+- '0.1.1.3'
 author: Eitan Chatav
-latest: '0.1.1.2'
+latest: '0.1.1.3'
 description-type: markdown
-description: ! '# squeal
-
-
-  ![squeal-icon](http://www.emoticonswallpapers.com/emotion/cute-big-pig/cute-pig-smiley-046.gif)
-
-
-  [![CircleCI](https://circleci.com/gh/echatav/squeal.svg?style=svg&circle-token=a699a654ef50db2c3744fb039cf2087c484d1226)](https://circleci.com/gh/echatav/squeal)
-
-
-  Main repository for the squeal database library.
-
-'
+description: ! "# squeal\n\n![squeal-icon](http://www.emoticonswallpapers.com/emotion/cute-big-pig/cute-pig-smiley-046.gif)\n\n[![CircleCI](https://circleci.com/gh/echatav/squeal.svg?style=svg&circle-token=a699a654ef50db2c3744fb039cf2087c484d1226)](https://circleci.com/gh/echatav/squeal)\n\n[Github](https://github.com/morphismtech/squeal)\n\n[Hackage](https://hackage.haskell.org/package/squeal-postgresql)\n\n[Stackage](https://www.stackage.org/package/squeal-postgresql)\n\n##
+  installation\n\n`stack install squeal-postgresql`\n\n## usage\n\nSqueal is a deep
+  embedding of PostgreSQL in Haskell. Let's see an example!\n\nFirst, we need some
+  language extensions because Squeal uses modern GHC features.\n\n```haskell\n{-#
+  LANGUAGE\n    DataKinds\n  , DeriveGeneric\n  , OverloadedLabels\n  , OverloadedStrings\n
+  \ , TypeApplications\n  , TypeOperators\n#-}\n```\n\nHere comes the Main module
+  and imports.\n\n```haskell\nmodule Main (main) where\n\nimport Control.Monad.Base
+  (liftBase)\nimport Data.Int (Int32)\nimport Data.Text (Text)\n\nimport Squeal.PostgreSQL\n```\n\nWe'll
+  use generics to easily convert between Haskell and PostgreSQL values.\n\n```haskell\nimport
+  qualified Generics.SOP as SOP\nimport qualified GHC.Generics as GHC\n```\n\nThe
+  first step is to define the schema of our database. This is where we use DataKinds
+  and TypeOperators. The schema consists of a type-level list of tables, a `:::` pairing
+  of a type level string or `Symbol` and a list a columns, itself a `:::` pairing
+  of a `Symbol` and a `ColumnType`. The `ColumnType` describes the PostgreSQL type
+  of the column as well as whether or not it may contain `NULL` and whether or not
+  inserts and updates can use a `DEFAULT`. For our schema, we'll define two tables,
+  a users table and an emails table.\n\n```haskell\ntype Schema =\n  '[ \"users\"
+  \ :::\n       '[ \"id\"   ::: 'Optional ('NotNull 'PGint4)\n        , \"name\" :::
+  'Required ('NotNull 'PGtext)\n        ]\n   , \"emails\" :::\n       '[ \"id\"      :::
+  'Optional ('NotNull 'PGint4)\n        , \"user_id\" ::: 'Required ('NotNull 'PGint4)\n
+  \       , \"email\"   ::: 'Required ('Null 'PGtext)\n        ]\n   ]\n```\n\nNext,
+  we'll write Definitions to set up and tear down the schema. In Squeal, a Definition
+  is a `createTable`, `alterTable` or `dropTable` command and has two type parameters,
+  corresponding to the schema before being run and the schema after. We can compose
+  definitions using `>>>`. Here and in the rest of our commands we make use of overloaded
+  labels to refer to named tables and columns in our schema.\n\n```haskell\nsetup
+  :: Definition '[] Schema\nsetup = \n  createTable #users\n    ( serial `As` #id
+  :*\n      (text & notNull) `As` #name :* Nil )\n    [ primaryKey (Column #id :*
+  Nil) ]\n  >>>\n  createTable #emails\n    ( serial `As` #id :*\n      (int & notNull)
+  `As` #user_id :*\n      text `As` #email :* Nil )\n    [ primaryKey (Column #id
+  :* Nil)\n    , foreignKey (Column #user_id :* Nil) #users (Column #id :* Nil)\n
+  \     OnDeleteCascade OnUpdateCascade ]\n```\n\nNotice that setup starts with an
+  empty schema `'[]` and produces `Schema`. In our `createTable` commands we included
+  `TableConstraint`s to define primary and foreign keys, making them somewhat complex.
+  Our tear down `Definition` is simpler.\n\n```haskell\nteardown :: Definition Schema
+  '[]\nteardown = dropTable #emails >>> dropTable #users\n```\n\nNext, we'll write
+  `Manipulation`s to insert data into our two tables. A `Manipulation` is an `insertInto`,
+  `update` or `deleteFrom` command and has three type parameters, the schema it refers
+  to, a list of parameters it can take as input, and a list of columns it produces
+  as output. When we insert into the users table, we will need a parameter for the
+  name field but not for the id field. Since it's optional, we can use a default value.
+  However, since the emails table refers to the users table, we will need to retrieve
+  the user id that the insert generates and insert it into the emails table. Take
+  a careful look at the type and definition of both of our inserts.\n\n```haskell\ninsertUser
+  :: Manipulation Schema\n  '[ 'Required ('NotNull 'PGtext)]\n  '[ \"fromOnly\" :::
+  'Required ('NotNull 'PGint4) ]\ninsertUser = insertInto #users\n  ( Values (def
+  `As` #id :* param @1 `As` #name :* Nil) [] )\n  OnConflictDoNothing (Returning (#id
+  `As` #fromOnly :* Nil))\n\ninsertEmail :: Manipulation Schema\n  '[ 'Required ('NotNull
+  'PGint4), 'Required ('Null 'PGtext)] '[]\ninsertEmail = insertInto #emails ( Values\n
+  \ ( def `As` #id :*\n    param @1 `As` #user_id :*\n    param @2 `As` #email :*
+  Nil) [] )\n  OnConflictDoNothing (Returning Nil)\n```\n\nNext we write a `Query`
+  to retrieve users from the database. We're not interested in the ids here, just
+  the usernames and email addresses. We need to use an inner join to get the right
+  result. A `Query` is like a `Manipulation` with the same kind of type parameters.\n\n```haskell\ngetUsers
+  :: Query Schema '[]\n  '[ \"userName\" ::: 'Required ('NotNull 'PGtext)\n   , \"userEmail\"
+  ::: 'Required ('Null 'PGtext) ]\ngetUsers = select\n  (#u ! #name `As` #userName
+  :* #e ! #email `As` #userEmail :* Nil)\n  ( from (Table (#users `As` #u)\n    &
+  InnerJoin (Table (#emails `As` #e))\n      (#u ! #id .== #e ! #user_id)) )\n```\n\nNow
+  that we've defined the SQL side of things, we'll need a Haskell type for users.
+  We give the type `Generic` and `HasDatatypeInfo` instances so that we can decode
+  the rows we receive when we run getUsers. Notice that the record fields of the `User`
+  type match the column names of `getUsers`.\n\n```haskell\ndata User = User { userName
+  :: Text, userEmail :: Maybe Text }\n  deriving (Show, GHC.Generic)\ninstance SOP.Generic
+  User\ninstance SOP.HasDatatypeInfo User\n```\n\nLet's also create some users to
+  add to the database.\n\n```haskell\nusers :: [User]\nusers = \n  [ User \"Alice\"
+  (Just \"alice@gmail.com\")\n  , User \"Bob\" Nothing\n  , User \"Carole\" (Just
+  \"carole@hotmail.com\")\n  ]\n```\n\nNow we can put together all the pieces into
+  a program. The program connects to the database, sets up the schema, inserts the
+  user data (using prepared statements as an optimization), queries the user data
+  and prints it out and finally closes the connection. We can thread the changing
+  schema information through by using the indexed `PQ` monad transformer and when
+  the schema doesn't change we can use `Monad` and `MonadPQ` functionality.\n\n```haskell\nmain
+  :: IO ()\nmain = void $\n  withConnection \"host=localhost port=5432 dbname=exampledb\"
+  . runPQ $\n    define setup\n    & pqThen session\n    & thenDefine teardown\n  where\n
+  \   session = do\n      idResults <- traversePrepared insertUser (Only . userName
+  <$> users)\n      ids <- traverse (fmap fromOnly . getRow (RowNumber 0)) idResults\n
+  \     traversePrepared_ insertEmail (zip (ids :: [Int32]) (userEmail <$> users))\n
+  \     usersResult <- runQuery getUsers\n      usersRows <- getRows usersResult\n
+  \     liftBase $ print (usersRows :: [User])\n```\n"
 license-name: BSD3
