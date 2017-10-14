@@ -1,6 +1,6 @@
 homepage: https://github.com/nshimaza/thread-hierarchy#readme
 changelog-type: markdown
-hash: a8ecb05a3a3e2e3ee205f3fcdbbbec37f0a247e4812ee19312f5641945a2a27e
+hash: 38606ee9b5cdcff7ce63ae51acf82bdf3360a9c5b261b53b524a74b5b4cf3bb5
 test-bench-deps:
   thread-hierarchy: -any
   base: -any
@@ -8,7 +8,12 @@ test-bench-deps:
   containers: -any
 maintainer: Naoto.Shimazaki@gmail.com
 synopsis: Simple Haskel thread management in hierarchical manner
-changelog: ! '## Thread-hierarchy 0.1.0.1
+changelog: ! '## Thread-hierarchy 0.1.0.2
+
+  * Fixed space leaks in map operation.
+
+
+  ## Thread-hierarchy 0.1.0.1
 
   * Timing dependencies are removed from tests.
 
@@ -28,44 +33,69 @@ basic-deps:
 all-versions:
 - '0.1.0.0'
 - '0.1.0.1'
+- '0.1.0.2'
 author: Naoto Shimazaki
-latest: '0.1.0.1'
+latest: '0.1.0.2'
 description-type: markdown
 description: ! "# thread-hierarchy\n\n[![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)\n[![Build
-  Status](https://travis-ci.org/nshimaza/thread-hierarchy.svg?branch=master)](https://travis-ci.org/nshimaza/thread-hierarchy)\n[![Hackage](https://img.shields.io/hackage/v/thread-hierarchy.svg?style=flat)](https://hackage.haskell.org/package/thread-hierarchy)\n\nManaging
-  Haskell threads in hierarchical manner.\n\nThreads created by newChild guarantee
-  automatic cleanup on its exit regardless normal exit\nor cancellation by asynchronous
-  exception.\n\nIn order to this module works properly, user must ensure following
-  rules.\n\n* User provided thread handler must accept `ThreadMap` as its first argument.\n*
-  When new thread created by newChild, handler receives newly created empty `ThreadMap`.\n*
-  When the user provided handler creates its child thread, it must use newChild.\n*
-  At the same time, the handler must pass the `ThreadMap` received via its argument
-  to newChild.\n\n`ThreadMap` is mutable map holding live threads.  Each threads managed
-  by this module has its\nown `ThreadMap` instance.  Each `ThreadMap` keeps live \"child\"
-  threads for future cleanup on exit.\nPopulating `ThreadMap` is done by newChild
-  automatically.\nActually the function newChild accept a `ThreadMap` then mutate
-  it.\n\nAt the same time newChild create a new empty `ThreadMap` for newly created
-  thread and pass it\nto user provided handler of the new thread.\nAlso newChild automatically
-  install cleanup routine which kill all threads living in the new\n`ThreadMap` created
-  for the thread.\nThe cleanup routine also unregister itself from `ThreadMap` of
-  parent.\n\nIn order to work this properly, user provided thread handler must use
-  newChild with `ThreadMap`\ngiven via its argument when it creates its child so that
-  cleanup routine can terminate\nits children properly.\n\n\n### Example\n\nWhen you
-  create the first thread managed by this module, create a new empty `ThreadMap` then
-  call\nnewChild with it.  The newCall automatically install cleanup routine to the
-  handler you provided.\n\n```haskell\ncreateRootThread :: IO ThreadId\ncreateRootThread
-  = do\n    rootThreadMap <- newThreadMap\n    threadID <- newChild rootThreadMap
-  rootThreadHandler\n    return threadID\n```\n\nWhen a thread managed by this module
-  creates its child thread, call newChild with `TreadMap`\nreceived via handlers argument.\n\n```haskell\nrootThreadHandler
-  :: ThreadMap -> IO ()\nrootThreadHandler myChildrenThreadMap = do\n    void $ newChild
-  myChildrenThreadMap $ \\grandChildrenThreadMap -> do\n        yourCode\n        return
-  ()\n```\n\nYou can install your own cleanup routine using finally or both resource
-  acquisition and cleanup\nroutine using bracket.\n\n```haskell\n    -- Forking a
-  new child with your own cleanup\n    void $ newChild childrenOfCurrentThread $ \\childrenOfHandler
-  ->\n        yourThreadHandler `finally` yourCleanupRoutine\n\n    -- Forking a new
-  child with resource acquisition and cleanup\n    void $ newChild childrenOfCurrentThread
-  $ \\childrenOfHandler ->\n        bracket yourResourceAcquiringRoutine yourCleanupRoutine
-  yourThreadHandler\n```\n\n### Limitation\n\nCurrently, unlike async function, this
-  module is not designed to back any return value\nfrom child thread to parent thread.
-  \ This module focuses on guaranteed cleanup on thread termination.\n"
+  Status](https://travis-ci.org/nshimaza/thread-hierarchy.svg?branch=master)](https://travis-ci.org/nshimaza/thread-hierarchy)\n[![Hackage](https://img.shields.io/hackage/v/thread-hierarchy.svg?style=flat)](https://hackage.haskell.org/package/thread-hierarchy)\n[![Stackage
+  Nightly](http://stackage.org/package/thread-hierarchy/badge/nightly)](http://stackage.org/nightly/package/thread-hierarchy)\n[![Stackage
+  LTS](http://stackage.org/package/thread-hierarchy/badge/lts)](http://stackage.org/lts/package/thread-hierarchy)\n\nManaging
+  Haskell threads in hierarchical manner.\n\n### Overview\n\nThis package provides
+  parent-child association and guaranteed clean-up of children\nover plain Haskell
+  thread.  You can terminate all child threads and grand child threads by\njust killing
+  their parent thread.\n\n### Motivation\n\nUnlike Unix process, plain Haskell thread,
+  created by forkIO, has no parent-child relation each other.\nThis means termination
+  of parent thread doesn't result its children also terminated.\nThis is good design
+  as it is low level API because it gives programmer greatest flexibility.\nHowever,
+  it also means managing entire lifecycle of thread is totally a responsibility of
+  programmer.\n\nHere one thing you need to be aware.  Garbage collection doesn't
+  work on living thread.\nWhen you lost reference to an object, garbage collector
+  frees up the object for you.\nHowever, even though you lost the thread ID of your
+  child thread, Haskel runtime doesn't consider\nthe thread is orphaned.  The child
+  thread continue running.\n\nThis is prone to create thread leakage.  You can accidentally
+  lose thread ID of child thread\nby crash of parent thread.  Now you no longer have
+  way to kill orphaned child thread.\nThis is thread leakage.\n\nThe low level forkIO
+  API requires you keep track and manage entire thread lifecycle\nincluding accidental
+  case like the above.  Hand crafting it might be painful.\n\nThis package is intended
+  to provide simple replacement API over plain forkIO in case of when\nall you need
+  to do on parent termination is just terminating all its children.\n\nIf you need
+  to keep your child running after parent terminated, this API is not for you.\n \n###
+  Usage \n\nAlmost all you need to know is one data type and one function:  `ThreadMap`
+  and `newChild`.\n\nThreads created by `newChild` guarantee automatic cleanup on
+  its exit\nregardless normal exit or cancellation by asynchronous exception.\n\nIn
+  order to that works properly, user must ensure following rules.\n\n* User provided
+  thread handler must accept `ThreadMap` as its first argument.\n* When the user provided
+  handler creates its child thread, it must use newChild with given `ThreadMap`.\n*
+  For 1st thread you create by newChild, give it a `ThreadMap` created by `newThreadMap`.\n\n`ThreadMap`
+  is house-keeping object for your thread.  It is a mutable map keeping track\nliving
+  child threads of your thread.  When your thread handler started, you receives\nan
+  empty `ThreadMap` via 1st argument of your handler.  When you create a child thread\nof
+  your thread, `newChild` automatically update (mutate) your `ThreadMap` by adding\nnewly
+  created child thread.  When your child thread terminated, it is automatically removed\nfrom
+  your `ThreadMap`.\n\nSame manner is applied to child thread and grandchild thread
+  as long as you follow the rule the above.\n\n### How it works\n\nWhen `newChild`
+  creates a new thread, it installs two cleanup tasks for you.\n\n* Killing all thread
+  contained in `ThreadMap` of the new thread.  It kills all children of the new thread.\n*
+  Removing the new thread itself from parent's `ThreadMap`.\n\nThe cleanup tasks are
+  called when the new thread exit normally or terminated by asynchronous exception.\nBy
+  this mechanism, termination of top level thread is propagated down to all its children,\n
+  children of children, and so on.\n\n### Example\n\nWhen you create the first thread
+  managed by this module, create a new empty `ThreadMap` then call\nnewChild with
+  it.  The newCall automatically install cleanup routine to the handler you provided.\n\n```haskell\ncreateRootThread
+  :: IO ThreadId\ncreateRootThread = do\n    rootThreadMap <- newThreadMap\n    threadID
+  <- newChild rootThreadMap rootThreadHandler\n    return threadID\n```\n\nWhen a
+  thread managed by this module creates its child thread, call newChild with `TreadMap`\nreceived
+  via handlers argument.\n\n```haskell\nrootThreadHandler :: ThreadMap -> IO ()\nrootThreadHandler
+  myChildrenThreadMap = do\n    void $ newChild myChildrenThreadMap $ \\grandChildrenThreadMap
+  -> do\n        yourCode\n        return ()\n```\n\nYou can install your own cleanup
+  routine using finally or both resource acquisition and cleanup\nroutine using bracket.\n\n```haskell\n
+  \   -- Forking a new child with your own cleanup\n    void $ newChild childrenOfCurrentThread
+  $ \\childrenOfHandler ->\n        yourThreadHandler `finally` yourCleanupRoutine\n\n
+  \   -- Forking a new child with resource acquisition and cleanup\n    void $ newChild
+  childrenOfCurrentThread $ \\childrenOfHandler ->\n        bracket yourResourceAcquiringRoutine
+  yourCleanupRoutine yourThreadHandler\n```\n\nYou can also find a use case from [tcp-server](https://github.com/nshimaza/tcp-server)
+  package.\n\n### Limitation\n\nCurrently, unlike async function, this module is not
+  designed to back any return value\nfrom child thread to parent thread.  This module
+  focuses on guaranteed cleanup on thread termination.\n"
 license-name: MIT
