@@ -1,13 +1,23 @@
-homepage: https://github.com/fpco/monad-unlift/tree/master/unliftio#readme
+homepage: https://github.com/fpco/unliftio/tree/master/unliftio#readme
 changelog-type: markdown
-hash: dbb63eba4865c47e8dfbbbfe5ec1b3a99a9ce439efbda567a90d66e56540841d
+hash: 74e4db7799df165fd582c374bda8d681b2f48ed14ad1a2ec11e6db364602a3d2
 test-bench-deps: {}
 maintainer: michael@snoyman.com
 synopsis: The MonadUnliftIO typeclass for unlifting monads to IO (batteries included)
-changelog: ! '## 0.1.0.0
+changelog: ! '## 0.1.1.0
 
 
-  * Initial release
+  * Doc improvements.
+
+  * Fix `UnliftIO.Chan` type signatures [#3](https://github.com/fpco/unliftio/pull/3).
+
+  * Add `UnliftIO.Concurrent` module [#5](https://github.com/fpco/unliftio/pull/5).
+
+
+  ## 0.1.0.0
+
+
+  * Initial release.
 
 '
 basic-deps:
@@ -23,8 +33,9 @@ basic-deps:
   directory: -any
 all-versions:
 - '0.1.0.0'
+- '0.1.1.0'
 author: Michael Snoyman, Francesco Mazzoli
-latest: '0.1.0.0'
+latest: '0.1.1.0'
 description-type: markdown
 description: ! "# unliftio\n\n[![Travis Build Status](https://travis-ci.org/fpco/unliftio.svg?branch=master)](https://travis-ci.org/fpco/unliftio)\n[![AppVeyor
   Build status](https://ci.appveyor.com/api/projects/status/sprg5nlyh0codcpv?svg=true)](https://ci.appveyor.com/project/snoyberg/unliftio)\n\n\nProvides
@@ -72,32 +83,41 @@ description: ! "# unliftio\n\n[![Travis Build Status](https://travis-ci.org/fpco
   through the codebase here is likely the best example to see\nhow to use `MonadUnliftIO`
   in practice. And for many cases, you can\nsimply add the `MonadUnliftIO` constraint
   and then use the\npre-unlifted versions of functions (like\n`UnliftIO.Exception.catch`).
-  But ultimately, you'll probably want to\nuse the typeclass directly. Here are some
-  simple examples. First: ome\ntypeclass instances:\n\n```haskell\ninstance MonadUnliftIO
-  IO where\n  askUnliftIO = return (UnliftIO id)\ninstance MonadUnliftIO m => MonadUnliftIO
-  (IdentityT m) where\n  askUnliftIO = IdentityT $\n                withUnliftIO $
-  \\u ->\n                return (UnliftIO (unliftIO u . runIdentityT))\ninstance
+  But ultimately, you'll probably want to\nuse the typeclass directly. The type class
+  has only one method --\n`askUnliftIO`:\n\n```haskell\nnewtype UnliftIO m = UnliftIO
+  { unliftIO :: forall a. m a -> IO a }\n\nclass MonadIO m => MonadUnliftIO m where\n
+  \ askUnliftIO :: m (UnliftIO m)\n```\n\n`askUnliftIO` gives us a function to run
+  arbitrary computation in `m`\nin `IO`. Thus the \"unlift\": it's like `liftIO`,
+  but the other way around.\n\nHere are some sample typeclass instances:\n\n```haskell\ninstance
+  MonadUnliftIO IO where\n  askUnliftIO = return (UnliftIO id)\ninstance MonadUnliftIO
+  m => MonadUnliftIO (IdentityT m) where\n  askUnliftIO = IdentityT $\n                withUnliftIO
+  $ \\u ->\n                return (UnliftIO (unliftIO u . runIdentityT))\ninstance
   MonadUnliftIO m => MonadUnliftIO (ReaderT r m) where\n  askUnliftIO = ReaderT $
   \\r ->\n                withUnliftIO $ \\u ->\n                return (UnliftIO
   (unliftIO u . flip runReaderT r))\n```\n\nNote that:\n\n* The `IO` instance does
   not actually do any lifting or unlifting, and\n  therefore it can use `id`\n* `IdentityT`
   is essentially just wrapping/unwrapping its data\n  constructor, and then recursively
   calling `withUnliftIO` on the\n  underlying monad.\n* `ReaderT` is just like `IdentityT`,
-  but it captures the reader\n  environment when starting.\n\nSecond, using `withRunInIO`
+  but it captures the reader\n  environment when starting.\n\nWe can use `askUnliftIO`
   to unlift a function:\n\n```haskell\ntimeout :: MonadUnliftIO m => Int -> m a ->
-  m (Maybe a)\ntimeout x y = withRunInIO $ \\run -> System.Timeout.timeout x $ run
-  y\n```\n\nThis is a common pattern: use `withRunInIO` to capture a run function,\nand
-  then call the original function with the user-supplied arguments,\napplying `run`
-  as necessary.\n\nThirdly, using `askUnliftIO` directly when multiple types are needed:\n\n```haskell\nrace
-  :: MonadUnliftIO m => m a -> m b -> m (Either a b)\nrace a b = withUnliftIO $ \\u
-  -> A.race (unliftIO u a) (unliftIO u b)\n```\n\nThis works just like `withRunIO`,
-  except we use `unliftIO u` instead\nof `run`, which is polymorphic. You _could_
-  get away with multiple\n`withRunInIO` calls here instead, but this approach is idiomatic
-  and\nmay be more performant (depending on optimizations).\n\nAnd finally, a much
-  more complex usage, when unlifting the `mask`\nfunction. This function needs to
-  unlift vaues to be passed into the\n`restore` function, and then `liftIO` the result
-  of the `restore`\nfunction.\n\n```haskell\nmask :: MonadUnliftIO m => ((forall a.
-  m a -> m a) -> m b) -> m b\nmask f = withUnliftIO $ \\u -> Control.Exception.mask
+  m (Maybe a)\ntimeout x y = do\n  u <- askUnliftIO\n  System.Timeout.timeout x $
+  unliftIO u y\n```\n\nor more concisely using `withRunIO`:\n\n```haskell\ntimeout
+  :: MonadUnliftIO m => Int -> m a -> m (Maybe a)\ntimeout x y = withRunInIO $ \\run
+  -> System.Timeout.timeout x $ run y\n```\n\nThis is a common pattern: use `withRunInIO`
+  to capture a run function,\nand then call the original function with the user-supplied
+  arguments,\napplying `run` as necessary. `withRunIO` takes care of invoking\n`unliftIO`
+  for us.\n\nHowever, if we want to use the run function with different types, we\nmust
+  use `askUnliftIO`:\n\n```haskell\nrace :: MonadUnliftIO m => m a -> m b -> m (Either
+  a b)\nrace a b = do\n  u <- askUnliftIO\n  liftIO (A.race (unliftIO u a) (unliftIO
+  u b))\n```\n\nor more idiomatically `withUnliftIO`:\n\n```haskell\nrace :: MonadUnliftIO
+  m => m a -> m b -> m (Either a b)\nrace a b = withUnliftIO $ \\u -> A.race (unliftIO
+  u a) (unliftIO u b)\n```\n\nThis works just like `withRunIO`, except we use `unliftIO
+  u` instead\nof `run`, which is polymorphic. You _could_ get away with multiple\n`withRunInIO`
+  calls here instead, but this approach is idiomatic and\nmay be more performant (depending
+  on optimizations).\n\nAnd finally, a more complex usage, when unlifting the `mask`\nfunction.
+  This function needs to unlift vaues to be passed into the\n`restore` function, and
+  then `liftIO` the result of the `restore`\nfunction.\n\n```haskell\nmask :: MonadUnliftIO
+  m => ((forall a. m a -> m a) -> m b) -> m b\nmask f = withUnliftIO $ \\u -> Control.Exception.mask
   $ \\unmask ->\n  unliftIO u $ f $ liftIO . unmask . unliftIO u\n```\n\n## Limitations\n\nNot
   all monads which can be an instance of `MonadIO` can be instances\nof `MonadUnliftIO`,
   due to the `MonadUnliftIO` laws (described in the\nHaddocks for the typeclass).
@@ -151,9 +171,11 @@ description: ! "# unliftio\n\n[![Travis Build Status](https://travis-ci.org/fpco
   of `monad-control` over `MonadUnliftIO`. We've avoided\nproviding any such extra
   typeclass in this package though, for two\nreasons:\n\n* `MonadUnliftIO` is a simple
   typeclass, easy to explain. We don't\n  want to complicated matters (`MonadBaseControl`
-  is a notoriously\n  difficult to understand typeclass)\n* Having this kind of split
-  would be confusing in user code, when\n  suddenly `finally` is not available to
-  us. We would rather encourage\n  [good practices](https://www.fpcomplete.com/blog/2017/06/readert-design-pattern)\n
+  is a notoriously\n  difficult to understand typeclass). This simplicity\n  is captured
+  by the laws for `MonadUnliftIO`, which make the\n  behavior of the run functions
+  close to that of the already familiar\n  `lift` and `liftIO`.\n* Having this kind
+  of split would be confusing in user code, when\n  suddenly `finally` is not available
+  to us. We would rather encourage\n  [good practices](https://www.fpcomplete.com/blog/2017/06/readert-design-pattern)\n
   \ from the beginning.\n\nAnother distinction is that `monad-control` uses the `MonadBase`\nstyle,
   allowing unlifting to arbitrary base monads. In this package,\nwe've elected to
   go with `MonadIO` style. This limits what we can do\n(e.g., no unlifting to `STM`),
