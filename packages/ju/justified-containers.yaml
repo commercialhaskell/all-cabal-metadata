@@ -1,11 +1,19 @@
 homepage: https://github.com/matt-noonan/justified-containers
 changelog-type: ''
-hash: eabbf77d313678d461e442b9c7abf508826247768064bee55a0ea0b96d8f7b79
-test-bench-deps: {}
+hash: 394e4e3c54430cad9451f1c8d5140d749b34a858c7e7ee4f703137e25d67fad5
+test-bench-deps:
+  base: ! '>=4.7 && <5'
+  hspec: -any
+  justified-containers: -any
+  containers: -any
+  ghc-prim: -any
+  should-not-typecheck: -any
+  QuickCheck: -any
 maintainer: matt.noonan@gmail.com
 synopsis: Keyed container types with type-checked proofs of key presence.
 changelog: ''
 basic-deps:
+  roles: ! '>=0.2'
   base: ! '>=4.7 && <5'
   containers: -any
 all-versions:
@@ -13,21 +21,24 @@ all-versions:
 - '0.1.1.0'
 - '0.1.1.1'
 - '0.1.2.0'
+- '0.2.0.0'
 author: Matt Noonan
-latest: '0.1.2.0'
+latest: '0.2.0.0'
 description-type: markdown
 description: ! "# justified-containers\nKeyed container types with type-checked proofs
-  of key presence.\n\n# Description\n\nHave you ever *known* that a key could be found
-  in a certain map? Were you tempted to\nreach for `fromJust` or `error` to handle
-  the \"impossible\" case, when you knew that\n`lookup` should give `Just v`? (and
-  did shifting requirements ever make the impossible\nbecome possible after all?)\n\n`Data.Map.Justified`
-  provides a zero-cost `newtype` wrapper around `Data.Map.Map`\nthat enables you to
-  separate the *proof that a key is present* from the *operations using the key*.\nOnce
-  you prove that a key is present, you can use it `Maybe`-free in any number of other\noperations
-  -- sometimes even operations on other maps!\n\nNone of the functions in this module
-  can cause a run-time error, and very few\nof the operations return a `Maybe` value.\n\nSee
-  the `Data.Map.Justified.Tutorial` module for usage examples, or browse the API of
-  the\nmost recent release [on Hackage](https://hackage.haskell.org/package/justified-containers/docs/Data-Map-Justified.html).\n\n###
+  of key presence.\n\n# Table of contents\n\n  * [Description](#description)\n    *
+  [A simple example](#example)\n  * [Motivation](#motivation)\n  * [How it works](#how-it-works)\n
+  \   * [Phantom evidence](#phantom-evidence)\n\n\n# Description\n\nHave you ever
+  *known* that a key could be found in a certain map? Were you tempted to\nreach for
+  `fromJust` or `error` to handle the \"impossible\" case, when you knew that\n`lookup`
+  should give `Just v`? (and did shifting requirements ever make the impossible\nbecome
+  possible after all?)\n\n`Data.Map.Justified` provides a zero-cost `newtype` wrapper
+  around `Data.Map.Map`\nthat enables you to separate the *proof that a key is present*
+  from the *operations using the key*.\nOnce you prove that a key is present, you
+  can use it `Maybe`-free in any number of other\noperations -- sometimes even operations
+  on other maps!\n\nNone of the functions in this module can cause a run-time error,
+  and very few\nof the operations return a `Maybe` value.\n\nSee the `Data.Map.Justified.Tutorial`
+  module for usage examples, or browse the API of the\nmost recent release [on Hackage](https://hackage.haskell.org/package/justified-containers/docs/Data-Map-Justified.html).\n\n###
   Example\n\n```haskell\n    withMap test_table $ \\table -> do\n    \n      case
   member 1 table of\n    \n        Nothing  -> putStrLn \"Sorry, I couldn't prove
   that the key is present.\"\n    \n        Just key -> do\n        \n          --
@@ -83,5 +94,58 @@ description: ! "# justified-containers\nKeyed container types with type-checked 
   can then be used to do any number of `Maybe`-free\noperations on the map.\n\n`Data.Map.Justified`
   uses the same rank-2 polymorphism trick used in the `Control.Monad.ST` monad to\nensure
   that the `ph` phantom type can not be extracted; in effect, the proof that a key
-  is\npresent can't leak to contexts where the proof would no longer be valid.\n"
+  is\npresent can't leak to contexts where the proof would no longer be valid.\n\n##
+  Phantom evidence\n\nYou can interpret the `ph` phantom type as a concrete *set of
+  keys*; under this interpretation,\na value of type `Key ph k` is a key of type `k`,
+  belonging to the subset described by `ph`.\nSimilarly, a `Map ph k v` is a map whose
+  keys are exactly the subset of `k` described by `ph`.\nFrom this perspective, the
+  maps behave as if they were total, leading to their `Maybe`-free behavior.\n\n##
+  Why all the continuations?\n\nMany of the functions in `justified-containers` make
+  use of continuations, but why? As a case-study,\nconsider the basic function `withMap`
+  that promotes a standard `Data.Map.Map` to a `Data.Map.Justified.Map':\n\n```haskell\nimport
+  Data.Map.Justified\nimport qualified Data.Map as M\nwithMap :: M.Map k v -> (forall
+  ph. Map ph k v -> t) -> t\n```\n\nThe last `(forall ph. Map ph k v -> t) -> t` part
+  is the continuation.\n\nThe idea is that we know there is *some* set of keys `ph`
+  belonging to this particular map, but\nat compile-time we may not know exactly what
+  it is. But it does exist, after all, so we should be\nable to write\n\n```haskell\nwithMap
+  :: M.Map k v -> exists ph. Map ph k v\n```\n\nSimilarly, the `inserting` function
+  could look like\n\n```haskell\ninserting :: k -> v -> Map ph k v -> exists ph'.
+  Map ph' k v\n```\n\nwhich can be read as \"after inserting a key/value pair, we
+  get a (possibly) different set of keys `ph'`\".\nBut in this case, we actually know
+  a bit more: first, the inserted key will be found in the new map. And\nsecond, every
+  key in `ph` can also be found in `ph'`. We\ncan encode that knowledge by giving
+  an explicit inclusion of `ph` into `ph'`, encoded as a function of\ntype `Key ph
+  k -> Key ph' k`. So we could re-write `inserting` with the type\n\n```haskell\ninserting
+  :: k -> v -> Map ph k v -> exists ph'. (Key ph' k, Key ph k -> Key ph' k, Map ph'
+  k v)\n--                                                \\_______/  \\___________________/
+  \ \\_________/\n--                                   the new key______|                |
+  \                |\n--                                                      the
+  inclusion__|                 |\n--                                                                       the
+  new map_____|\n```\n\nLikewise, when deleting a key from a map with keys `ph`, we
+  get a new map with keys `ph'` along\nwith a guarantee that `ph'` is a subset of
+  `ph`. Compared to `inserting`, the inclusion goes the\nother way: there is an inclusion
+  of `ph'` in `ph`, encoded as a function of type `Key ph' k -> Key ph l`.\nAltogether,
+  we could give `deleting` the type\n\n```haskell\ndeleting :: k -> Map ph k v ->
+  exists ph'. (Key ph' k -> Key ph k, Map ph' k v)\n--                                          \\___________________/
+  \ \\_________/\n--                                                    |                 |\n--
+  \                           the reversed inclusion__|                 |\n--                                                      the
+  new map_____|\n```\n\nA similar pattern works for other map operations like `union`,
+  `intersection`, `difference`, and\n`filter`.\n\n## But what about the continuations?\n\nIn
+  the last section, we argued that `deleting` should have a type like\n\n```haskell\ndeleting
+  :: k -> Map ph k v -> exists ph'. (Key ph' k -> Key ph k, Map ph' k v)\n--                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n```\n\nBut
+  if you check the documentation, you'll see the type\n\n```haskell\ndeleting :: k
+  -> Map ph k v -> (forall ph'. (Key ph' k -> Key ph k, Map ph' k v) -> t) -> t\n--
+  \                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n```\n\nWhat
+  happened to the underlined part of the type?\n\nThe problem is that Haskell doesn't
+  support existential types directly: the `exists` part of\nthe type we wrote out
+  is just wishful thinking. Instead, we have to go about things a little\nindirectly:
+  we'll *encode* existentially-quantified types, via *rank-2 universally-quantified
+  types*.\n\n\nThe idea can be understood via the Curry-Howard correspondence:\nIn
+  classical logic, we have an equivalence between the propositions `∃X.P(X)`\nand
+  `∀T. ((∀X.F(X) => T) => T)`.  It turns out that this equivalence remains valid\nin
+  constructive logic, so we can transport it via the Curry-Howard correspondence to
+  get\nan isomorphism between types:\n\n```haskell\nexists ph.  Map ph k v ~ (forall
+  ph. Map ph k v -> t) -> t\n```\n\nIn other words, instead of returning the existentially-quantified
+  type directly\nwe say \"tell me what you wanted to do with that existentially-quantified
+  type,\nand I'll do it for you\". "
 license-name: BSD2
