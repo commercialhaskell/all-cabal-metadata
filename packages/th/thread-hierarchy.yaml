@@ -1,6 +1,6 @@
 homepage: https://github.com/nshimaza/thread-hierarchy#readme
 changelog-type: markdown
-hash: 38606ee9b5cdcff7ce63ae51acf82bdf3360a9c5b261b53b524a74b5b4cf3bb5
+hash: 2803de088e04f21ebbc8ca350c4bdba1fe6c18ccc199553b72502ee0318d47b0
 test-bench-deps:
   thread-hierarchy: -any
   base: -any
@@ -8,7 +8,12 @@ test-bench-deps:
   containers: -any
 maintainer: Naoto.Shimazaki@gmail.com
 synopsis: Simple Haskel thread management in hierarchical manner
-changelog: ! '## Thread-hierarchy 0.1.0.2
+changelog: ! '## Thread-hierarchy 0.1.0.3
+
+  * Fixed BlockedIndefinitelyOnMVar under race condition.
+
+
+  ## Thread-hierarchy 0.1.0.2
 
   * Fixed space leaks in map operation.
 
@@ -34,8 +39,9 @@ all-versions:
 - '0.1.0.0'
 - '0.1.0.1'
 - '0.1.0.2'
+- '0.1.0.3'
 author: Naoto Shimazaki
-latest: '0.1.0.2'
+latest: '0.1.0.3'
 description-type: markdown
 description: ! "# thread-hierarchy\n\n[![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)\n[![Build
   Status](https://travis-ci.org/nshimaza/thread-hierarchy.svg?branch=master)](https://travis-ci.org/nshimaza/thread-hierarchy)\n[![Hackage](https://img.shields.io/hackage/v/thread-hierarchy.svg?style=flat)](https://hackage.haskell.org/package/thread-hierarchy)\n[![Stackage
@@ -47,27 +53,47 @@ description: ! "# thread-hierarchy\n\n[![License: MIT](https://img.shields.io/ba
   their parent thread.\n\n### Motivation\n\nUnlike Unix process, plain Haskell thread,
   created by forkIO, has no parent-child relation each other.\nThis means termination
   of parent thread doesn't result its children also terminated.\nThis is good design
-  as it is low level API because it gives programmer greatest flexibility.\nHowever,
-  it also means managing entire lifecycle of thread is totally a responsibility of
-  programmer.\n\nHere one thing you need to be aware.  Garbage collection doesn't
-  work on living thread.\nWhen you lost reference to an object, garbage collector
-  frees up the object for you.\nHowever, even though you lost the thread ID of your
-  child thread, Haskel runtime doesn't consider\nthe thread is orphaned.  The child
-  thread continue running.\n\nThis is prone to create thread leakage.  You can accidentally
-  lose thread ID of child thread\nby crash of parent thread.  Now you no longer have
-  way to kill orphaned child thread.\nThis is thread leakage.\n\nThe low level forkIO
-  API requires you keep track and manage entire thread lifecycle\nincluding accidental
-  case like the above.  Hand crafting it might be painful.\n\nThis package is intended
-  to provide simple replacement API over plain forkIO in case of when\nall you need
-  to do on parent termination is just terminating all its children.\n\nIf you need
-  to keep your child running after parent terminated, this API is not for you.\n \n###
-  Usage \n\nAlmost all you need to know is one data type and one function:  `ThreadMap`
-  and `newChild`.\n\nThreads created by `newChild` guarantee automatic cleanup on
-  its exit\nregardless normal exit or cancellation by asynchronous exception.\n\nIn
-  order to that works properly, user must ensure following rules.\n\n* User provided
-  thread handler must accept `ThreadMap` as its first argument.\n* When the user provided
-  handler creates its child thread, it must use newChild with given `ThreadMap`.\n*
-  For 1st thread you create by newChild, give it a `ThreadMap` created by `newThreadMap`.\n\n`ThreadMap`
+  as a low level API because it gives user greatest flexibility.\nHowever, it also
+  means managing entire lifecycle of thread is totally a responsibility of user.\n\nHere
+  one thing you need to be aware.  Garbage collection doesn't work on living thread.\nWhen
+  you lost reference to an object, garbage collector frees up the object for you.\nHowever,
+  even though you lost the thread ID of your child thread, Haskel runtime doesn't
+  consider\nthe thread is orphaned.  The child thread continue running.\n\nThis is
+  prone to create thread leakage.  You can accidentally lose thread ID of child thread\nby
+  crash of parent thread.  Now you no longer have way to kill orphaned child thread.\nThis
+  is thread leakage.\n\nThe low level forkIO API requires you keep track and manage
+  entire thread lifecycle\nincluding accidental case like the above.  Hand crafting
+  it might be painful.\n\nThis package is intended to provide simple replacement API
+  over plain forkIO in case of when\nall you need to do on parent termination is just
+  terminating all its children.\n\nIf you need to keep your child running after parent
+  terminated, this API is not for you.\n\n### Why not withAsync?\n\nThe typical use
+  case for this package is TCP server style use case.  In such use case,\nyou have
+  to create virtually infinite number of threads and they finish in random timing\nbut
+  you are not so interested in their return value.\n\nThe `withAsync` coming with
+  `async` package solves different problem than this package.\nIt is good for taking
+  actions asynchronously but eventually you need their return values.\nOr, even you
+  aren't care of return values, you only need to take several finite number of\nactions
+  concurrently.\n\nBellow explains why `withAsync` is not good for managing large
+  number of threads. \n\n`withAsync` is essentially a sugar over bracket pattern like
+  this.\n\n```haskell\nwithAsync action inner = bracket (async action) uninterruptibleCancel
+  inner\n```\n\nIt guarantees `uninterruptibleCancel` to the `action` is executed
+  on asynchronous exception\nat parent thread where withAsync itself is living.  However
+  it also guarantees the `uninterruptibleCancel`\nis executed on normal exit from
+  `inner` too.  Thus, the `action` can only live within the\nlifecycle of the `withAsync`
+  call.  If you want to keep your `ation` alive, you have to\nkeep `inner` continue
+  running until your `action` finishes.\n\nSo, what if let async action go and make
+  recursive call form `innter` back to your loop?\nIt is a bad idea.  Because `withAsync`
+  is a `bracket`, recursive call from `inner` makes\nnon-tail-recurse call.\n\nIn
+  other words, the difference between `withAsync` and `newChild` is strategy of un-installing\ncleanup
+  handler.  `withAsync` uninstalls its cleanup handler based on its lexical scope.\n`newChild`
+  uninstalls it based on actual dynamic thread termination.\n\n### Usage \n\nAlmost
+  all you need to know is one data type and one function:  `ThreadMap` and `newChild`.\n\nThreads
+  created by `newChild` guarantee automatic cleanup on its exit\nregardless normal
+  exit or cancellation by asynchronous exception.\n\nIn order to that works properly,
+  user must ensure following rules.\n\n* User provided thread handler must accept
+  `ThreadMap` as its first argument.\n* When the user provided handler creates its
+  child thread, it must use newChild with given `ThreadMap`.\n* For 1st thread you
+  create by newChild, give it a `ThreadMap` created by `newThreadMap`.\n\n`ThreadMap`
   is house-keeping object for your thread.  It is a mutable map keeping track\nliving
   child threads of your thread.  When your thread handler started, you receives\nan
   empty `ThreadMap` via 1st argument of your handler.  When you create a child thread\nof
