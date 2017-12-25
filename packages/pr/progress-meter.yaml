@@ -1,10 +1,13 @@
 homepage: https://github.com/esoeylemez/progress-meter
 changelog-type: markdown
-hash: 30edbf990643e6008634f8cf59870251ee483e225aa0a80dccb91a1c116335b9
+hash: c605e9adafc379dc0e98f96b712a2f371388fe912273a90266c63567cb2c8b73
 test-bench-deps: {}
 maintainer: Ertugrul Söylemez <esz@posteo.de>
 synopsis: Live diagnostics for concurrent activity
-changelog: ! "# 0.1.0\n\n  * Initial version.\n"
+changelog: ! "# 1.0.0.1\n\n  * Fixed non-Haddock documentation\n\n# 1.0.0 (complete
+  rewrite)\n\n  * Highly simplified implementation\n\n  * Replaced separately managed
+  individual text chunks by the ability to\n    choose a state type and zoom into
+  it using a lens-inspired approach\n\n# 0.1.0\n\n  * Initial version.\n"
 basic-deps:
   stm: ==2.4.*
   base: ! '>=4.8 && <4.11'
@@ -13,26 +16,61 @@ basic-deps:
 all-versions:
 - '0.1.0'
 - '1.0.0'
+- '1.0.0.1'
 author: Ertugrul Söylemez <esz@posteo.de>
-latest: '1.0.0'
+latest: '1.0.0.1'
 description-type: markdown
-description: ! 'progress-meter
-
-  ==============
-
-
-  This library can be used to display progress meters or other diagnostics
-
-  for concurrently running actions.  It supports dynamic creation and
-
-  removal of new sub-meters as well as correct behaviour when printing
-
-  diagnostics that are not part of the progress meter and should just
-
-  scroll by.
-
-
-  The `System.ProgressMeter` module contains a tutorial.
-
-'
+description: ! "Progress-Meter\n==============\n\nThis library can be used to display
+  a progress bar or other live\ndiagnostics for your application.  It supports partial
+  updates from\nmultiple threads without interfering with each other, and it has the\ncorrect
+  behaviour when printing diagnostics that are not part of the\nprogress bar and should
+  just scroll by.\n\nThe @System.Progress@ module contains a tutorial.\n\n\nQuickstart\n----------\n\nUse
+  the `withProgress_` function to create a progress bar for the\nduration of an action:\n\n```
+  haskell\nwithProgress_\n    :: s                   -- ^ Initial state value\n    ->
+  (s -> String)       -- ^ State renderer\n    -> (Meter' s -> IO r)  -- ^ Action
+  with a progress bar\n    -> IO r\n```\n\nYou need to choose a state type and a renderer
+  for the state that is\nused to display it in the terminal.  Then you can use `setMeter`
+  or\n`modifyMeter` to update the state value, which triggers a redraw of the\nprogress
+  bar:\n\n``` haskell\nsetMeter    :: Meter' s -> s -> IO ()\nmodifyMeter :: Meter'
+  s -> (s -> s) -> IO ()\n```\n\nTo perform regular output (logging or other diagnostics
+  that should\nscroll by) use the `putMsgLn` function:\n\n``` haskell\nputMsgLn ::
+  Meter' s -> String -> IO ()\n```\n\nYou can use the `zoomMeter` function to give
+  individual threads a meter\nthat only changes part of the state:\n\n``` haskell\nzoomMeter
+  :: ((a -> a) -> s -> s) -> Meter' s -> Meter' a\n```\n\n\nSimple example\n--------------\n\nTaken
+  from the tutorial the following uses a progress bar with state of\ntype `Int` and
+  renders it to a simple percentage display:\n\n``` haskell\nimport Control.Concurrent\nimport
+  Data.Foldable\nimport System.Progress\n\nmain :: IO ()\nmain =\n    withProgress_
+  0 render $ \\pm -> do\n        for_ [1..99] $ \\p -> do\n            threadDelay
+  20000\n            setMeter pm p\n        threadDelay 3000000\n        setMeter
+  pm 100\n        threadDelay 1000000\n\n    where\n    render :: Int -> String\n
+  \   render x = \"Progress: \" ++ show x ++ \"%\"\n```\n\n\nComplex example\n---------------\n\nThe
+  following is an example of how you can use `zoomMeter` to display\nmultiple progress
+  indicators for concurrent threads and update each of\nthem independently.  The program
+  takes a bunch of command line arguments\nand launches a separate worker thread for
+  each.  The overall progress\nstate is represented by a value of type `(Map FilePath
+  Int)` that keeps\ntrack of the percentage of each individual worker:\n\n``` haskell\nimport
+  Control.Concurrent\nimport Control.Concurrent.Async\nimport Control.Exception\nimport
+  Control.Monad\nimport Data.Foldable\nimport Data.List (intercalate)\nimport qualified
+  Data.Map.Strict as M\nimport System.Environment\nimport System.Progress\nimport
+  System.Random\n\n\n-- Worker threads take a meter that points to an individual percentage.\n--
+  The percentage is 'Maybe'-wrapped, because 'Nothing' represents\n-- absence of the
+  percentage.\n\nthread :: Meter' (Maybe Int) -> FilePath -> IO ()\nthread pm fp =\n
+  \   -- Add the percentage for this file path at the beginning and make\n    -- sure
+  it disappears at the end\n    bracket_ (setMeter pm (Just 0)) (setMeter pm Nothing)
+  $ do\n\n        -- Simulate real work by choosing a random delay for each thread\n
+  \       delay <- randomRIO (100000, 200000)\n\n        putMsgLn pm (\"Started work
+  on \" ++ fp)\n\n        -- Do the actual \"work\"\n        for_ [1..99] $ \\p ->
+  do\n            when (p == 50)\n                 (putMsgLn pm (fp ++ \" is half-way
+  done\"))\n            setMeter pm (Just p)\n            threadDelay delay\n\n        putMsgLn
+  pm (\"Done with \" ++ fp)\n\n\n-- This function turns a meter that points to a 'Map
+  k a' into a meter\n-- that points to a specific key.  'Nothing' represents lack
+  of that\n-- particular key in the map.\n\nzoomKey :: (Ord k) => k -> Meter' (M.Map
+  k a) -> Meter' (Maybe a)\nzoomKey k = zoomMeter (\\f -> M.alter f k)\n\n\nmain ::
+  IO ()\nmain =\n    -- The initial progress state is the empty map\n    withProgress_
+  M.empty render $ \\pm ->\n        getArgs >>=\n\n        -- The 'zoomMeter' function
+  is used here to construct a meter\n        -- that points to an individual key of
+  the map:\n        mapConcurrently_ (\\fp -> thread (zoomKey fp pm) fp)\n\n    where\n
+  \   -- The renderer displays something like this:\n    -- a: 21% | b: 50% | c: 8%\n
+  \   render :: M.Map FilePath Int -> String\n    render =\n        intercalate \"
+  | \" .\n        map (\\(fp, p) -> fp ++ \": \" ++ show p ++ \"%\") .\n        M.assocs\n```\n"
 license-name: BSD3
