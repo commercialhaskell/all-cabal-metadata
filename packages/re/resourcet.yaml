@@ -1,6 +1,6 @@
 homepage: http://github.com/snoyberg/conduit
 changelog-type: markdown
-hash: 1dcd374acdd3fe7d96606421fef764ce4fc58f68823f34ed892dcb9dddd436d8
+hash: 68177bf60e8db0c96049e0c47047da19cb196b6fee9a6eef4378f98220a5c3bd
 test-bench-deps:
   base: -any
   hspec: ! '>=1.3'
@@ -9,9 +9,13 @@ test-bench-deps:
   resourcet: -any
 maintainer: michael@snoyman.com
 synopsis: Deterministic allocation and freeing of scarce resources.
-changelog: ! "## 1.1.10\n\n* Added `MonadUnliftIO` instances and `UnliftIO.Resource`\n\n##
-  1.1.9\n\n* Add generalized version of resourceForkIO\n\n## 1.1.8.1\n\n* Allocation
-  actions should be masked\n\n## 1.1.8\n\n* Add `instance MonadFix ResourceT`\n  [#281](https://github.com/snoyberg/conduit/pull/281)\n\n##
+changelog: ! "## 1.1.11\n\n* `runResourceTChecked`, which checks if any of the cleanup
+  actions\n  threw exceptions and, if so, rethrows them. __NOTE__ This is\n  probably
+  a much better choice of function than `runResourceT`, and\n  in the next major version
+  release, will become the new behavior of\n  `runResourceT`.\n\n## 1.1.10\n\n* Added
+  `MonadUnliftIO` instances and `UnliftIO.Resource`\n\n## 1.1.9\n\n* Add generalized
+  version of resourceForkIO\n\n## 1.1.8.1\n\n* Allocation actions should be masked\n\n##
+  1.1.8\n\n* Add `instance MonadFix ResourceT`\n  [#281](https://github.com/snoyberg/conduit/pull/281)\n\n##
   1.1.7.5\n\n* Inline the tutorial from SoH\n\n## 1.1.7.4\n\n* Make test suite slightly
   more robust\n\n## 1.1.7.3\n\n* Doc tweak\n\n## 1.1.7.2\n\n* Remove upper bound on
   transformers [#249](https://github.com/snoyberg/conduit/issues/249)\n\n## 1.1.7.1\n\n*
@@ -84,8 +88,9 @@ all-versions:
 - '1.1.8.1'
 - '1.1.9'
 - '1.1.10'
+- '1.1.11'
 author: Michael Snoyman
-latest: '1.1.10'
+latest: '1.1.11'
 description-type: markdown
 description: ! "## resourcet\n\nProper exception handling, especially in the presence
   of asynchronous\nexceptions, is a non-trivial task. But such proper handling is
@@ -103,54 +108,65 @@ description: ! "## resourcet\n\nProper exception handling, especially in the pre
   Let's write a simple example program: we'll ask the user for some input and pretend
   like it's a scarce resource that must be released. We'll then do something dangerous
   (potentially introducing a divide-by-zero error). We then want to immediately release
-  our scarce resource and perform some long-running computation.\n\n```haskell\nimport
-  Control.Monad.Trans.Resource\nimport Control.Monad.IO.Class\n\nmain = runResourceT
-  $ do\n    (releaseKey, resource) <- allocate\n        (do\n            putStrLn
-  \"Enter some number\"\n            readLn)\n        (\\i -> putStrLn $ \"Freeing
-  scarce resource: \" ++ show i)\n    doSomethingDangerous resource\n    liftIO $
-  putStrLn $ \"Going to release resource immediately: \" ++ show resource\n    release
-  releaseKey\n    somethingElse\n    \ndoSomethingDangerous i =\n    liftIO $ putStrLn
-  $ \"5 divided by \" ++ show i ++ \" is \" ++ show (5 `div` i)\n    \nsomethingElse
+  our scarce resource and perform some long-running computation.\n\n```haskell\n#!/usr/bin/env
+  stack\n{- stack\n     --resolver lts-9.0\n     --install-ghc\n     runghc\n     --package
+  resourcet\n-}\n\nimport Control.Monad.Trans.Resource\nimport Control.Monad.IO.Class\n\nmain
+  :: IO ()\nmain = runResourceT $ do\n    (releaseKey, resource) <- allocate\n        (do\n
+  \           putStrLn \"Enter some number\"\n            readLn)\n        (\\i ->
+  putStrLn $ \"Freeing scarce resource: \" ++ show i)\n    doSomethingDangerous resource\n
+  \   liftIO $ putStrLn $ \"Going to release resource immediately: \" ++ show resource\n
+  \   release releaseKey\n    somethingElse\n\ndoSomethingDangerous :: Int -> ResourceT
+  IO ()\ndoSomethingDangerous i =\n    liftIO $ putStrLn $ \"5 divided by \" ++ show
+  i ++ \" is \" ++ show (5 `div` i)\n\nsomethingElse :: ResourceT IO ()    \nsomethingElse
   = liftIO $ putStrLn\n    \"This could take a long time, don't delay releasing the
-  resource!\"\n```\n\nTry entering a valid value, such as 3, and then enter 0. Notice
-  that in both cases the \"Freeing scarce resource\" message is printed. And by using
-  `release` before `somethingElse`, we guarantee that the resource is freed *before*
-  running the potentially long process.\n\nIn this specific case, we could easily
-  represent our code in terms of bracket with a little refactoring.\n\n```haskell\nimport
-  Control.Exception (bracket)\n\nmain = do\n    bracket\n        (do\n            putStrLn
+  resource!\"\n\n```\n\nTry entering a valid value, such as 3, and then enter 0. Notice
+  that in both cases the \"Freeing scarce resource\" message is printed. \n\n``` shellsession\n~
+  $ stack code.hs\nEnter some number\n3\n5 divided by 3 is 1\nGoing to release resource
+  immediately: 3\nFreeing scarce resource: 3\nThis could take a long time, don't delay
+  releasing the resource!\n\n~ $ stack code.hs\nEnter some number\n0\n5 divided by
+  0 is Freeing scarce resource: 0\ncode.hs: divide by zero\n```\n\nAnd by using `release`
+  before `somethingElse`, we guarantee that the resource is freed *before* running
+  the potentially long process.\n\nIn this specific case, we could easily represent
+  our code in terms of bracket with a little refactoring.\n\n```haskell\nimport Control.Exception
+  (bracket)\n\nmain :: IO ()\nmain = do\n    bracket\n        (do\n            putStrLn
   \"Enter some number\"\n            readLn)\n        (\\i -> putStrLn $ \"Freeing
-  scarce resource: \" ++ show i)\n        doSomethingDangerous\n    somethingElse\ndoSomethingDangerous
-  i =\n    putStrLn $ \"5 divided by \" ++ show i ++ \" is \" ++ show (5 `div` i)\n
-  \   \nsomethingElse = putStrLn\n    \"This could take a long time, don't delay releasing
-  the resource!\"\n```\n\nIn fact, the `bracket` version is cleaner than the resourcet
-  version. If so, why bother with resourcet at all? Let's build up to the more complicated
-  cases.\n\n## bracket in terms of ResourceT\n\nThe first thing to demonstrate is
-  that `ResourceT` is strictly more powerful than `bracket`, in the sense that:\n\n1.
-  `bracket` can be implemented in terms of `ResourceT`.\n2. `ResourceT` cannot be
-  implemented in terms of `bracket`.\n\nThe first one is pretty easy to demonstrate:\n\n```haskell\nimport
-  Control.Monad.Trans.Resource\nimport Control.Monad.Trans.Class\n\nbracket alloc
-  free inside = runResourceT $ do\n    (_releaseKey, resource) <- allocate alloc free\n
-  \   lift $ inside resource\n    \nmain = bracket\n    (putStrLn \"Allocating\" >>
-  return 5)\n    (\\i -> putStrLn $ \"Freeing: \" ++ show i)\n    (\\i -> putStrLn
-  $ \"Using: \" ++ show i)\n```\n\nNow let's analyze why the second statement is true.\n\n##
-  What ResourceT adds\n\nThe `bracket` pattern is designed with nested resource allocations.
-  For example, consider the following program which copies data from one file to another.
-  We'll open up the source file using `withFile`, and then nest within it another
-  `withFile` to open the destination file, and finally do the copying with both file
-  handles.\n\n```haskell\n{-# START_FILE main.hs #-}\nimport System.IO\nimport qualified
-  Data.ByteString as S\n\nmain = do\n    withFile \"input.txt\" ReadMode $ \\input
-  ->\n      withFile \"output.txt\" WriteMode $ \\output -> do\n        bs <- S.hGetContents
-  input\n        S.hPutStr output bs\n    S.readFile \"output.txt\" >>= S.putStr\n{-#
-  START_FILE input.txt #-}\nThis is the input file.\n```\n\nBut now, let's tweak this
-  a bit. Instead of reading from a single file, we want to read from two files and
-  concatenate them. We could just have three nested `withFile` calls, but that would
-  be inefficient: we'd have two `Handle`s open for reading at once, even though we'll
-  only ever need one. We could restructure our program a bit instead: put the `withFile`
-  for the output file on the outside, and then have two calls to `withFile` for the
-  input files on the inside.\n\nBut consider a more complicated example. Instead of
-  just a single destination file, let's say we want to break up our input stream into
-  chunks of, say, 50 bytes each, and write each chunk to successive output files.
-  We now need to __interleave__ allocations and freeings of both the source and destination
+  scarce resource: \" ++ show i)\n        doSomethingDangerous\n    somethingElse\n\ndoSomethingDangerous
+  :: Int -> IO ()\ndoSomethingDangerous i =\n    putStrLn $ \"5 divided by \" ++ show
+  i ++ \" is \" ++ show (5 `div` i)\n\nsomethingElse :: IO ()\nsomethingElse = putStrLn\n
+  \   \"This could take a long time, don't delay releasing the resource!\"\n```\n\nIn
+  fact, the `bracket` version is cleaner than the resourcet version. If so, why bother
+  with resourcet at all? Let's build up to the more complicated cases.\n\n## bracket
+  in terms of ResourceT\n\nThe first thing to demonstrate is that `ResourceT` is strictly
+  more powerful than `bracket`, in the sense that:\n\n1. `bracket` can be implemented
+  in terms of `ResourceT`.\n2. `ResourceT` cannot be implemented in terms of `bracket`.\n\nThe
+  first one is pretty easy to demonstrate:\n\n```haskell\n#!/usr/bin/env stack\n{-
+  stack\n     --resolver lts-9.0\n     --install-ghc\n     runghc\n     --package
+  resourcet\n-}\n\n{-# LANGUAGE FlexibleContexts #-}\n\nimport Control.Monad.Trans.Resource\nimport
+  Control.Monad.Trans.Class\nimport Control.Monad.IO.Class (MonadIO)\n\nbracket ::\n
+  \ (MonadThrow m, MonadBaseControl IO m,\n   MonadIO m) =>\n  IO t -> (t -> IO ())
+  -> (t -> m a) -> m a\nbracket alloc free inside = runResourceT $ do\n  (releaseKey,
+  resource) <- allocate alloc free\n  lift $ inside resource\n\nmain :: IO ()\nmain
+  = bracket\n       (putStrLn \"Allocating\" >> return 5)\n       (\\i -> putStrLn
+  $ \"Freeing: \" ++ show i)\n       (\\i -> putStrLn $ \"Using: \" ++ show i)\n```\n\nNow
+  let's analyze why the second statement is true.\n\n## What ResourceT adds\n\nThe
+  `bracket` pattern is designed with nested resource allocations. For example, consider
+  the following program which copies data from one file to another. We'll open up
+  the source file using `withFile`, and then nest within it another `withFile` to
+  open the destination file, and finally do the copying with both file handles.\n\n```haskell\n{-#
+  START_FILE main.hs #-}\nimport System.IO\nimport qualified Data.ByteString as S\n\nmain
+  = do\n    withFile \"input.txt\" ReadMode $ \\input ->\n      withFile \"output.txt\"
+  WriteMode $ \\output -> do\n        bs <- S.hGetContents input\n        S.hPutStr
+  output bs\n    S.readFile \"output.txt\" >>= S.putStr\n{-# START_FILE input.txt
+  #-}\nThis is the input file.\n```\n\nBut now, let's tweak this a bit. Instead of
+  reading from a single file, we want to read from two files and concatenate them.
+  We could just have three nested `withFile` calls, but that would be inefficient:
+  we'd have two `Handle`s open for reading at once, even though we'll only ever need
+  one. We could restructure our program a bit instead: put the `withFile` for the
+  output file on the outside, and then have two calls to `withFile` for the input
+  files on the inside.\n\nBut consider a more complicated example. Instead of just
+  a single destination file, let's say we want to break up our input stream into chunks
+  of, say, 50 bytes each, and write each chunk to successive output files. We now
+  need to __interleave__ allocations and freeings of both the source and destination
   files, and we cannot statically know exactly how the interleaving will look, since
   we don't know the size of the files at compile time.\n\nThis is the kind of situation
   that `resourcet` solves well (we'll demonstrate in the next section). As an extension
@@ -163,51 +179,65 @@ description: ! "## resourcet\n\nProper exception handling, especially in the pre
   demonstrate the interleaving example described above. To simplify the code, we'll
   use the conduit package for the actual chunking implementation. Notice when you
   run the program that there are never more than two file handles open at the same
-  time.\n\n```haskell\nimport           Control.Monad.IO.Class (liftIO)\nimport           Data.Conduit
-  \          (addCleanup, runResourceT, ($$), (=$))\nimport           Data.Conduit.Binary
+  time.\n\n```haskell\n#!/usr/bin/env stack\n{- stack\n     --resolver lts-10.0\n
+  \    --install-ghc\n     runghc\n     --package resourcet\n     --package conduit\n
+  \    --package directory\n-}\n\n{-#LANGUAGE FlexibleContexts#-}\n{-#LANGUAGE RankNTypes#-}\n\nimport
+  \          Control.Monad.IO.Class (liftIO)\nimport           Control.Monad.Trans.Resource
+  (runResourceT, ResourceT, MonadResource)\nimport           Data.Conduit           (Producer,
+  Consumer,addCleanup, (.|))\nimport           Conduit (runConduitRes)\nimport           Data.Conduit.Binary
   \   (isolate, sinkFile, sourceFile)\nimport           Data.Conduit.List      (peek)\nimport
-  \          Data.Conduit.Zlib      (gzip)\nimport           System.Directory       (createDirectoryIfMissing)\n\n--
-  show\n-- All of the files we'll read from\ninfiles = map (\\i -> \"input/\" ++ show
-  i ++ \".bin\") [1..10]\n\n-- Generate a filename to write to\noutfile i = \"output/\"
-  ++ show i ++ \".gz\"\n\n-- Monad instance of Source allows us to simply mapM_ to
-  create a single Source\n-- for reading all of the files sequentially.\nsource =
-  mapM_ sourceFileTrace infiles\n\n-- The Sink is a bit more complicated: we keep
-  reading 30kb chunks of data into\n-- new files. We then use peek to check if there
-  is any data left in the\n-- stream. If there is, we continue the process.\nsink
-  =\n    loop 1\n  where\n    loop i = do\n        isolate (30 * 1024) =$ sinkFileTrace
-  (outfile i)\n        mx <- peek\n        case mx of\n            Nothing -> return
-  ()\n            Just _ -> loop (i + 1)\n\n-- Putting it all together is trivial.
-  ResourceT guarantees we have exception\n-- safety.\ntransform = runResourceT $ source
-  $$ gzip =$ sink\n-- /show\n\n-- Just some setup for running our test.\nmain = do\n
-  \   createDirectoryIfMissing True \"input\"\n    createDirectoryIfMissing True \"output\"\n
-  \   mapM_ fillRandom infiles\n    transform\n\nfillRandom fp = runResourceT\n              $
-  sourceFile \"/dev/urandom\"\n             $$ isolate (50 * 1024)\n             =$
-  sinkFile fp\n\n\n-- Modified sourceFile and sinkFile that print when they are opening
-  and\n-- closing file handles, to demonstrate interleaved allocation.\nsourceFileTrace
-  fp = do\n    liftIO $ putStrLn $ \"Opening: \" ++ fp\n    addCleanup (const $ liftIO
-  $ putStrLn $ \"Closing: \" ++ fp) (sourceFile fp)\n\nsinkFileTrace fp = do\n    liftIO
+  \          Data.Conduit.Zlib      (gzip)\nimport           System.Directory       (createDirectoryIfMissing)\nimport
+  qualified Data.ByteString as B\n\n-- show all of the files we'll read from\ninfiles
+  :: [String]\ninfiles = map (\\i -> \"input/\" ++ show i ++ \".bin\") [1..10]\n\n--
+  Generate a filename to write to\noutfile :: Int -> String\noutfile i = \"output/\"
+  ++ show i ++ \".gz\"\n\n-- Modified sourceFile and sinkFile that print when they
+  are opening and\n-- closing file handles, to demonstrate interleaved allocation.\nsourceFileTrace
+  :: (MonadResource m) => FilePath -> Producer m B.ByteString\nsourceFileTrace fp
+  = do\n    liftIO $ putStrLn $ \"Opening: \" ++ fp\n    addCleanup (const $ liftIO
+  $ putStrLn $ \"Closing: \" ++ fp) (sourceFile fp)\n\nsinkFileTrace :: (MonadResource
+  m) => FilePath -> Consumer B.ByteString m ()\nsinkFileTrace fp = do\n    liftIO
   $ putStrLn $ \"Opening: \" ++ fp\n    addCleanup (const $ liftIO $ putStrLn $ \"Closing:
-  \" ++ fp) (sinkFile fp)\n```\n\n## resourcet is not conduit\n\nresourcet was originally
+  \" ++ fp) (sinkFile fp)\n\n-- Monad instance of Producer allows us to simply mapM_
+  to create a single Source\n-- for reading all of the files sequentially.\nsource
+  :: (MonadResource m) => Producer m B.ByteString\nsource = mapM_ sourceFileTrace
+  infiles\n\n-- The Sink is a bit more complicated: we keep reading 30kb chunks of
+  data into\n-- new files. We then use peek to check if there is any data left in
+  the\n-- stream. If there is, we continue the process.\nsink :: (MonadResource m)
+  => Consumer B.ByteString m ()\nsink =\n    loop 1\n  where\n    loop i = do\n        isolate
+  (30 * 1024) .| sinkFileTrace (outfile i)\n        mx <- peek\n        case mx of\n
+  \           Nothing -> return ()\n            Just _ -> loop (i + 1)\n\nfillRandom
+  :: FilePath -> IO ()\nfillRandom fp = runConduitRes $ \n                sourceFile
+  \"/dev/urandom\" \n                .| isolate (50 * 1024) \n                .| sinkFile
+  fp\n\n-- Putting it all together is trivial. ResourceT guarantees we have exception\n--
+  safety.\ntransform :: IO ()\ntransform = runConduitRes $ source .| gzip .| sink\n--
+  /show\n\n-- Just some setup for running our test.\nmain :: IO ()\nmain = do\n    createDirectoryIfMissing
+  True \"input\"\n    createDirectoryIfMissing True \"output\"\n    mapM_ fillRandom
+  infiles\n    transform\n```\n\n## resourcet is not conduit\n\nresourcet was originally
   created in the process of writing the conduit package.\nAs a result, many people
   have the impression that these two concepts are\nintrinsically linked. In fact,
   this is not true: each can be used separately\nfrom the other. The canonical demonstration
-  of resourcet combined with conduit\nis the file copy function:\n\n```haskell\nimport
-  Data.Conduit\nimport Data.Conduit.Binary\n\nfileCopy src dst = runResourceT $ sourceFile
-  src $$ sinkFile dst\n\nmain = do\n    writeFile \"input.txt\" \"Hello\"\n    fileCopy
-  \"input.txt\" \"output.txt\"\n    readFile \"output.txt\" >>= putStrLn\n```\n\nHowever,
-  since this function does not actually use any of ResourceT's added functionality,
-  it can easily be implemented with the bracket pattern instead:\n\n```haskell\nimport
-  Data.Conduit\nimport Data.Conduit.Binary\nimport System.IO\n\nfileCopy src dst =
-  withFile src ReadMode $ \\srcH ->\n                   withFile dst WriteMode $ \\dstH
-  ->\n                   sourceHandle srcH $$ sinkHandle dstH\n\nmain = do\n    writeFile
-  \"input.txt\" \"Hello\"\n    fileCopy \"input.txt\" \"output.txt\"\n    readFile
-  \"output.txt\" >>= putStrLn\n```\n\nLikewise, resourcet can be freely used for more
-  flexible resource management without touching conduit. In other words, these two
-  libraries are completely orthogonal and, while they complement each other nicely,
-  can certainly be used separately.\n\n## Conclusion\n\nResourceT provides you with
-  a flexible means of allocating resources in an exception safe manner. Its main advantage
-  over the simpler bracket pattern is that it allows interleaving of allocations,
-  allowing for more complicated programs to be created efficiently. If your needs
-  are simple, stick with bracket. If you have need of something more complex, resourcet
-  may be your answer.\n"
+  of resourcet combined with conduit\nis the file copy function:\n\n```haskell\n#!/usr/bin/env
+  stack\n{- stack\n     --resolver lts-10.0\n     --install-ghc\n     runghc\n     --package
+  conduit\n     --package resourcet\n-}\n\n{-#LANGUAGE FlexibleContexts#-}\n\nimport
+  Data.Conduit\nimport Data.Conduit.Binary\n\nfileCopy :: FilePath -> FilePath ->
+  IO ()\nfileCopy src dst = runConduitRes $ sourceFile src .| sinkFile dst\n\nmain
+  :: IO ()\nmain = do\n  writeFile \"input.txt\" \"Hello\"\n  fileCopy \"input.txt\"
+  \"output.txt\"\n  readFile \"output.txt\" >>= putStrLn\n```\n\nHowever, since this
+  function does not actually use any of ResourceT's added functionality, it can easily
+  be implemented with the bracket pattern instead:\n\n```haskell\n#!/usr/bin/env stack\n{-
+  stack\n     --resolver lts-10.0\n     --install-ghc\n     runghc\n     --package
+  conduit\n-}\n\nimport Data.Conduit\nimport Data.Conduit.Binary\nimport System.IO\n\nfileCopy
+  :: FilePath -> FilePath -> IO ()\nfileCopy src dst = withFile src ReadMode $ \\srcH
+  ->\n                   withFile dst WriteMode $ \\dstH ->\n                   sourceHandle
+  srcH $$ sinkHandle dstH\n\nmain :: IO ()\nmain = do\n    writeFile \"input.txt\"
+  \"Hello\"\n    fileCopy \"input.txt\" \"output.txt\"\n    readFile \"output.txt\"
+  >>= putStrLn\n```\n\nLikewise, resourcet can be freely used for more flexible resource
+  management without touching conduit. In other words, these two libraries are completely
+  orthogonal and, while they complement each other nicely, can certainly be used separately.\n\n##
+  Conclusion\n\nResourceT provides you with a flexible means of allocating resources
+  in an exception safe manner. Its main advantage over the simpler bracket pattern
+  is that it allows interleaving of allocations, allowing for more complicated programs
+  to be created efficiently. If your needs are simple, stick with bracket. If you
+  have need of something more complex, resourcet may be your answer. For understanding
+  how it works under the hook, refer [here](https://www.fpcomplete.com/blog/2017/06/understanding-resourcet).\n"
 license-name: BSD3
