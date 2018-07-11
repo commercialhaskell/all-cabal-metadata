@@ -1,11 +1,11 @@
 homepage: https://github.com/composewell/streamly
 changelog-type: markdown
-hash: d2fe79c13d09e91718747548f80b1137bc42e1e699b21b95496609c687cc8fa8
+hash: e421ec35182447cc9064b09e194cc5b538890701eceec19e6026bbf53bc173b0
 test-bench-deps:
   exceptions: ! '>=0.8 && <0.11'
   base: ! '>=4.8 && <5'
   hspec: ! '>=2.0 && <3'
-  gauge: ! '>=0.2.1 && <0.3'
+  gauge: ! '>=0.2.3 && <0.3'
   containers: ! '>=0.5 && <0.6'
   mtl: ! '>=2.2 && <3'
   transformers: ! '>=0.4 && <0.6'
@@ -15,8 +15,18 @@ test-bench-deps:
   streamly: -any
 maintainer: harendra.kumar@gmail.com
 synopsis: Beautiful Streaming, Concurrent and Reactive Composition
-changelog: ! "## 0.3.0\n\n### Breaking changes\n\n* Some prelude functions, to whom
-  concurrency capability has been added, will\n  now require a `MonadAsync` constraint.\n\n###
+changelog: ! "## 0.4.0\n\n### Breaking changes\n\n* Signatures of `zipWithM` and `zipAsyncWithM`
+  have changed\n* Some functions in prelude now require an additional `Monad` constraint
+  on\n  the underlying type of the stream.\n\n### Deprecations\n\n* `once` has been
+  deprecated and renamed to `yieldM`\n\n### Enhancements\n\n* Add concurrency control
+  primitives `maxThreads` and `maxBuffer`.\n* Significant performance improvements
+  utilizing stream fusion optimizations.\n* Add `yield` to construct a singleton stream
+  from a pure value\n* Add `repeat` to generate an infinite stream by repeating a
+  pure value\n* Add `fromList` and `fromListM` to generate streams from lists, faster
+  than\n  `fromFoldable` and `fromFoldableM`\n* Add `map` as a synonym of fmap\n*
+  Add `scanlM'`, the monadic version of scanl'\n* Add `takeWhileM` and `dropWhileM`\n*
+  Add `filterM`\n\n## 0.3.0\n\n### Breaking changes\n\n* Some prelude functions, to
+  whom concurrency capability has been added, will\n  now require a `MonadAsync` constraint.\n\n###
   Bug Fixes\n\n* Fixed a race due to which, in a rare case, we might block indefinitely
   on\n  an MVar due to a lost wakeup.\n* Fixed an issue in adaptive concurrency. The
   issue caused us to stop creating\n  more worker threads in some cases due to a race.
@@ -89,6 +99,7 @@ basic-deps:
   monad-control: ! '>=1.0 && <2'
   lockfree-queue: ! '>=0.2.3 && <0.3'
   containers: ! '>=0.5 && <0.6'
+  ghc-prim: ! '>=0.2 && <0.6'
   atomic-primops: ! '>=0.8 && <0.9'
   mtl: ! '>=2.2 && <3'
   transformers-base: ! '>=0.4 && <0.5'
@@ -100,8 +111,9 @@ all-versions:
 - '0.2.0'
 - '0.2.1'
 - '0.3.0'
+- '0.4.0'
 author: Harendra Kumar
-latest: '0.3.0'
+latest: '0.4.0'
 description-type: markdown
 description: ! "# Streamly\n\n## Stream`ing` `Concurrent`ly\n\nStreamly, short for
   streaming concurrently, provides monadic streams, with a\nsimple API, almost identical
@@ -128,7 +140,10 @@ description: ! "# Streamly\n\n## Stream`ing` `Concurrent`ly\n\nStreamly, short f
   programs are written exactly the\n    same way as non-concurrent ones.\n  * _Generality_:
   Unifies functionality provided by several disparate packages\n    (streaming, concurrency,
   list transformer, logic programming, reactive\n    programming) in a concise API.\n
-  \ * _Performance_: Streamly is designed for high performance. See\n    [streaming-benchmarks](https://github.com/composewell/streaming-benchmarks)\n
+  \ * _Performance_: Streamly is designed for high performance. It employs stream\n
+  \   fusion optimizations for best possible performance. Serial peformance is\n    equivalent
+  to the venerable `vector` library in most cases and even better\n    in some cases.
+  \ Concurrent performance is unbeatable.  See\n    [streaming-benchmarks](https://github.com/composewell/streaming-benchmarks)\n
   \   for a comparison of popular streaming libraries on micro-benchmarks.\n\nFor
   more details on streaming library ecosystem and where streamly fits in,\nplease
   see\n[streaming libraries](https://github.com/composewell/streaming-benchmarks#streaming-libraries).\nAlso,
@@ -136,83 +151,90 @@ description: ! "# Streamly\n\n## Stream`ing` `Concurrent`ly\n\nStreamly, short f
   in the streamly tutorial.\n\nFor more information on streamly, see:\n\n  * [Streamly.Tutorial](https://hackage.haskell.org/package/streamly/docs/Streamly-Tutorial.html)
   module in the haddock documentation for a detailed introduction\n  * [examples](https://github.com/composewell/streamly/tree/master/examples)
   directory in the package for some simple practical examples\n\n## Streaming Pipelines\n\nUnlike
-  `pipes` or `conduit` and like `vector` and `streaming` `streamly`\ncomposes stream
+  `pipes` or `conduit` and like `vector` and `streaming`, `streamly`\ncomposes stream
   data instead of stream processors (functions).  A stream is\njust like a list and
   is explicitly passed around to functions that process the\nstream.  Therefore, no
   special operator is needed to join stages in a streaming\npipeline, just the standard
-  forward (`$`) or reverse (`&`) function application\noperator is enough.  Combinators
-  are provided in `Streamly.Prelude` to\ntransform or fold streams.\n\nThis snippet
-  reads numbers from stdin, prints the squares of even numbers and\nexits if an even
-  number more than 9 is entered.\n\n```haskell\nimport Streamly\nimport qualified
-  Streamly.Prelude as S\nimport Data.Function ((&))\n\nmain = runStream $\n       S.repeatM
-  getLine\n     & fmap read\n     & S.filter even\n     & S.takeWhile (<= 9)\n     &
-  fmap (\\x -> x * x)\n     & S.mapM print\n```\n\n## Concurrent Stream Generation\n\nMonadic
+  function application (`$`) or reverse function\napplication (`&`) operator is enough.
+  \ Combinators are provided in\n`Streamly.Prelude` to transform or fold streams.\n\nThe
+  following snippet provides a simple stream composition example that reads\nnumbers
+  from stdin, prints the squares of even numbers and exits if an even\nnumber more
+  than 9 is entered.\n\n```haskell\nimport Streamly\nimport qualified Streamly.Prelude
+  as S\nimport Data.Function ((&))\n\nmain = runStream $\n       S.repeatM getLine\n
+  \    & fmap read\n     & S.filter even\n     & S.takeWhile (<= 9)\n     & fmap (\\x
+  -> x * x)\n     & S.mapM print\n```\n\n## Concurrent Stream Generation\n\nMonadic
   construction and generation functions e.g. `consM`, `unfoldrM`,\n`replicateM`, `repeatM`,
   `iterateM` and `fromFoldableM` etc. work concurrently\nwhen used with appropriate
-  stream type combinator.\n\nThe following code finishes in 3 seconds (6 seconds when
-  serial):\n\n```\n> let p n = threadDelay (n * 1000000) >> return n\n> S.toList $
-  aheadly $ p 3 |: p 2 |: p 1 |: S.nil\n[3,2,1]\n\n> S.toList $ parallely $ p 3 |:
-  p 2 |: p 1 |: S.nil\n[1,2,3]\n```\n\nThe following finishes in 10 seconds (100 seconds
-  when serial):\n\n```\nrunStream $ asyncly $ S.replicateM 10 $ p 10\n```\n\n## Concurrent
-  Streaming Pipelines\n\nUse `|&` or `|$` to apply stream processing functions concurrently.
-  In the\nfollowing example \"hello\" is printed every second, if you use `&` instead
-  of\n`|&` you will see that the delay doubles to 2 seconds instead because of serial\napplication.\n\n```\nmain
+  stream type combinator (e.g. `asyncly`, `aheadly` or\n`parallely`).\n\nThe following
+  code finishes in 3 seconds (6 seconds when serial):\n\n```\n> let p n = threadDelay
+  (n * 1000000) >> return n\n> S.toList $ aheadly $ p 3 |: p 2 |: p 1 |: S.nil\n[3,2,1]\n\n>
+  S.toList $ parallely $ p 3 |: p 2 |: p 1 |: S.nil\n[1,2,3]\n```\n\nThe following
+  finishes in 10 seconds (100 seconds when serial):\n\n```\nrunStream $ asyncly $
+  S.replicateM 10 $ p 10\n```\n\n## Concurrent Streaming Pipelines\n\nUse `|&` or
+  `|$` to apply stream processing functions concurrently. The\nfollowing example prints
+  a \"hello\" every second; if you use `&` instead of\n`|&` you will see that the
+  delay doubles to 2 seconds instead because of serial\napplication.\n\n```\nmain
   = runStream $\n      S.repeatM (threadDelay 1000000 >> return \"hello\")\n   |&
   S.mapM (\\x -> threadDelay 1000000 >> putStrLn x)\n```\n\n## Mapping Concurrently\n\nWe
-  can use `mapM` or `sequence` concurrently on a stream.\n\n```\n> let p n = threadDelay
-  (n * 1000000) >> return n\n> runStream $ aheadly $ S.mapM (\\x -> p 1 >> print x)
-  (serially $ repeatM (p 1))\n```\n\n## Serial and Concurrent Merging\n\nSemigroup
+  can use `mapM` or `sequence` functions concurrently on a stream.\n\n```\n> let p
+  n = threadDelay (n * 1000000) >> return n\n> runStream $ aheadly $ S.mapM (\\x ->
+  p 1 >> print x) (serially $ repeatM (p 1))\n```\n\n## Serial and Concurrent Merging\n\nSemigroup
   and Monoid instances can be used to fold streams serially or\nconcurrently. In the
-  following example we are composing ten actions in the\nstream each with a delay
-  of 1 to 10 seconds, respectively. Since all the\nactions are concurrent we see one
-  output printed every second:\n\n``` haskell\nimport Streamly\nimport qualified Streamly.Prelude
+  following example we compose ten actions in the\nstream, each with a delay of 1
+  to 10 seconds, respectively. Since all the\nactions are concurrent we see one output
+  printed every second:\n\n``` haskell\nimport Streamly\nimport qualified Streamly.Prelude
   as S\nimport Control.Concurrent (threadDelay)\n\nmain = S.toList $ parallely $ foldMap
-  delay [1..10]\n where delay n = S.once $ threadDelay (n * 1000000) >> print n\n```\n\nStreams
-  can be combined together in many ways. We are providing some examples\nbelow, see
-  the tutorial for more ways. We will use the following `delay`\nfunction in the examples
-  to demonstrate the concurrency aspects:\n\n``` haskell\nimport Streamly\nimport
-  qualified Streamly.Prelude as S\nimport Control.Concurrent\n\ndelay n = S.once $
-  do\n    threadDelay (n * 1000000)\n    tid <- myThreadId\n    putStrLn (show tid
-  ++ \": Delay \" ++ show n)\n```\n### Serial\n\n```haskell\nmain = runStream $ delay
-  3 <> delay 2 <> delay 1\n```\n```\nThreadId 36: Delay 3\nThreadId 36: Delay 2\nThreadId
-  36: Delay 1\n```\n\n### Parallel\n\n```haskell\nmain = runStream . parallely $ delay
-  3 <> delay 2 <> delay 1\n```\n```\nThreadId 42: Delay 1\nThreadId 41: Delay 2\nThreadId
+  delay [1..10]\n where delay n = S.yieldM $ threadDelay (n * 1000000) >> print n\n```\n\nStreams
+  can be combined together in many ways. We provide some examples\nbelow, see the
+  tutorial for more ways. We use the following `delay`\nfunction in the examples to
+  demonstrate the concurrency aspects:\n\n``` haskell\nimport Streamly\nimport qualified
+  Streamly.Prelude as S\nimport Control.Concurrent\n\ndelay n = S.yieldM $ do\n    threadDelay
+  (n * 1000000)\n    tid <- myThreadId\n    putStrLn (show tid ++ \": Delay \" ++
+  show n)\n```\n### Serial\n\n```haskell\nmain = runStream $ delay 3 <> delay 2 <>
+  delay 1\n```\n```\nThreadId 36: Delay 3\nThreadId 36: Delay 2\nThreadId 36: Delay
+  1\n```\n\n### Parallel\n\n```haskell\nmain = runStream . parallely $ delay 3 <>
+  delay 2 <> delay 1\n```\n```\nThreadId 42: Delay 1\nThreadId 41: Delay 2\nThreadId
   40: Delay 3\n```\n\n## Nested Loops (aka List Transformer)\n\nThe monad instance
   composes like a list monad.\n\n``` haskell\nimport Streamly\nimport qualified Streamly.Prelude
   as S\n\nloops = do\n    x <- S.fromFoldable [1,2]\n    y <- S.fromFoldable [3,4]\n
-  \   S.once $ putStrLn $ show (x, y)\n\nmain = runStream loops\n```\n```\n(1,3)\n(1,4)\n(2,3)\n(2,4)\n```\n\n##
-  Concurrent Nested Loops\n\nTo run the above code with demand-driven depth first
-  concurrency i.e. each\niteration in the loops can run concurrently depending on
-  the consumer rate:\n\n``` haskell\nmain = runStream $ asyncly $ loops\n```\n\nTo
-  run it with demand driven breadth first concurrency:\n\n``` haskell\nmain = runStream
-  $ wAsyncly $ loops\n```\n\nTo run it with strict concurrency irrespective of demand:\n\n```
-  haskell\nmain = runStream $ parallely $ loops\n```\n\nTo run it serially but interleaving
-  the outer and inner loop iterations\n(breadth first serial):\n\n``` haskell\nmain
-  = runStream $ wSerially $ loops\n```\n\n## Magical Concurrency\n\nStreams can perform
-  semigroup (<>) and monadic bind (>>=) operations\nconcurrently using combinators
-  like `asyncly`, `parallelly`. For example,\nto concurrently generate squares of
-  a stream of numbers and then concurrently\nsum the square roots of all combinations
-  of two streams:\n\n``` haskell\nimport Streamly\nimport qualified Streamly.Prelude
-  as S\n\nmain = do\n    s <- S.sum $ asyncly $ do\n        -- Each square is performed
-  concurrently, (<>) is concurrent\n        x2 <- foldMap (\\x -> return $ x * x)
-  [1..100]\n        y2 <- foldMap (\\y -> return $ y * y) [1..100]\n        -- Each
-  addition is performed concurrently, monadic bind is concurrent\n        return $
-  sqrt (x2 + y2)\n    print s\n```\n\nOf course, the actions running in parallel could
-  be arbitrary IO actions.  For\nexample, to concurrently list the contents of a directory
-  tree recursively:\n\n``` haskell\nimport Path.IO (listDir, getCurrentDir)\nimport
-  Streamly\nimport qualified Streamly.Prelude as S\n\nmain = runStream $ aheadly $
-  getCurrentDir >>= readdir\n   where readdir d = do\n            (dirs, files) <-
-  S.once $ listDir d\n            S.once $ mapM_ putStrLn $ map show files\n            --
-  read the subdirs concurrently, (<>) is concurrent\n            foldMap readdir dirs\n```\n\nIn
-  the above examples we do not think in terms of threads, locking or\nsynchronization,
-  rather we think in terms of what can run in parallel, the rest\nis taken care of
-  automatically. When using `aheadly` the programmer does\nnot have to worry about
-  how many threads are to be created, they are\nautomatically adjusted based on the
-  demand of the consumer.\n\nThe concurrency facilities provided by streamly can be
-  compared with\n[OpenMP](https://en.wikipedia.org/wiki/OpenMP) and\n[Cilk](https://en.wikipedia.org/wiki/Cilk)
-  but with a more declarative\nexpression.\n\n## Reactive Programming (FRP)\n\nStreamly
-  is a foundation for first class reactive programming as well by virtue\nof integrating
-  concurrency and streaming. See\n[AcidRain.hs](https://github.com/composewell/streamly/tree/master/examples/AcidRain.hs)\nfor
+  \   S.yieldM $ putStrLn $ show (x, y)\n\nmain = runStream loops\n```\n```\n(1,3)\n(1,4)\n(2,3)\n(2,4)\n```\n\n##
+  Concurrent Nested Loops\n\nTo run the above code with, lookahead style concurrency
+  i.e. each iteration in\nthe loop can run run concurrently by but the results are
+  presented in the same\norder as serial execution:\n\n``` haskell\nmain = runStream
+  $ aheadly $ loops\n```\n\nTo run it with depth first concurrency yielding results
+  asynchronously in the\nsame order as they become available (deep async composition):\n\n```
+  haskell\nmain = runStream $ asyncly $ loops\n```\n\nTo run it with breadth first
+  concurrency and yeilding results asynchronously\n(wide async composition):\n\n```
+  haskell\nmain = runStream $ wAsyncly $ loops\n```\n\nThe above streams provide lazy/demand-driven
+  concurrency which is automatically\nscaled as per demand and is controlled/bounded
+  so that it can be used on\ninfinite streams. The following combinator provides strict,
+  unbounded\nconcurrency irrespective of demand:\n\n``` haskell\nmain = runStream
+  $ parallely $ loops\n```\n\nTo run it serially but interleaving the outer and inner
+  loop iterations\n(breadth first serial):\n\n``` haskell\nmain = runStream $ wSerially
+  $ loops\n```\n\n## Magical Concurrency\n\nStreams can perform semigroup (<>) and
+  monadic bind (>>=) operations\nconcurrently using combinators like `asyncly`, `parallelly`.
+  For example,\nto concurrently generate squares of a stream of numbers and then concurrently\nsum
+  the square roots of all combinations of two streams:\n\n``` haskell\nimport Streamly\nimport
+  qualified Streamly.Prelude as S\n\nmain = do\n    s <- S.sum $ asyncly $ do\n        --
+  Each square is performed concurrently, (<>) is concurrent\n        x2 <- foldMap
+  (\\x -> return $ x * x) [1..100]\n        y2 <- foldMap (\\y -> return $ y * y)
+  [1..100]\n        -- Each addition is performed concurrently, monadic bind is concurrent\n
+  \       return $ sqrt (x2 + y2)\n    print s\n```\n\nOf course, the actions running
+  in parallel could be arbitrary IO actions.  For\nexample, to concurrently list the
+  contents of a directory tree recursively:\n\n``` haskell\nimport Path.IO (listDir,
+  getCurrentDir)\nimport Streamly\nimport qualified Streamly.Prelude as S\n\nmain
+  = runStream $ aheadly $ getCurrentDir >>= readdir\n   where readdir d = do\n            (dirs,
+  files) <- S.yieldM $ listDir d\n            S.yieldM $ mapM_ putStrLn $ map show
+  files\n            -- read the subdirs concurrently, (<>) is concurrent\n            foldMap
+  readdir dirs\n```\n\nIn the above examples we do not think in terms of threads,
+  locking or\nsynchronization, rather we think in terms of what can run in parallel,
+  the rest\nis taken care of automatically. When using `aheadly` the programmer does\nnot
+  have to worry about how many threads are to be created, they are\nautomatically
+  adjusted based on the demand of the consumer.\n\nThe concurrency facilities provided
+  by streamly can be compared with\n[OpenMP](https://en.wikipedia.org/wiki/OpenMP)
+  and\n[Cilk](https://en.wikipedia.org/wiki/Cilk) but with a more declarative\nexpression.\n\n##
+  Reactive Programming (FRP)\n\nStreamly is a foundation for first class reactive
+  programming as well by virtue\nof integrating concurrency and streaming. See\n[AcidRain.hs](https://github.com/composewell/streamly/tree/master/examples/AcidRain.hs)\nfor
   a console based FRP game example and\n[CirclingSquare.hs](https://github.com/composewell/streamly/tree/master/examples/CirclingSquare.hs)\nfor
   an SDL based animation example.\n\n## Performance\n\n`Streamly` has best in class
   performance even though it generalizes streaming\nto concurrent composition that
