@@ -1,6 +1,6 @@
 homepage: https://github.com/lucasdicioccio/http2-client
 changelog-type: ''
-hash: 570f5d7251a591e5195d2012e74896fe1e11bbe2e9eb9cb80e3935903e0414f1
+hash: 5b1747a846c8a9b67c992244e5b7ad52ae9b53de52127f3037397cfc4841b94c
 test-bench-deps:
   base: -any
   http2-client: -any
@@ -12,14 +12,11 @@ basic-deps:
   http2: ! '>=1.6 && <2'
   stm: ! '>=2.4 && <3'
   base: ! '>=4.7 && <5'
-  data-default-class: -any
   time: ! '>=1.8 && <2'
   tls: ! '>=1.4 && <2'
-  http2-client: -any
   network: ! '>=2.6 && <3'
   async: ! '>=2.1 && <3'
   containers: ! '>=0.5 && <1'
-  optparse-applicative: -any
   deepseq: ! '>=1.4 && <2'
 all-versions:
 - '0.1.0.0'
@@ -35,8 +32,9 @@ all-versions:
 - '0.6.0.0'
 - '0.7.0.0'
 - '0.8.0.0'
+- '0.8.0.1'
 author: Lucas DiCioccio
-latest: '0.8.0.0'
+latest: '0.8.0.1'
 description-type: markdown
 description: ! "# http2-client\n\nAn native-Haskell HTTP2 client library based on
   `http2` and `tls` packages.\n\nHackage: https://hackage.haskell.org/package/http2-client
@@ -72,76 +70,77 @@ description: ! "# http2-client\n\nAn native-Haskell HTTP2 client library based o
   see some literate Haskell documents in the `examples/` directory.  For\na more involved
   usage, we currently provide a command-line example client:\n`http2-client-exe` which
   I use as a test client and you could use to test\nvarious flow-control parameters.
-  \ Read `app/Main.hs` and\n`src/Network/HTTP2/Client/Helpers.hs` to look at how a
-  user application is\nimplemented.\n\nThe Haddocks should have plenty implementation
-  details, so please have a look.\nOtherwise, you can ask help by creating an Issue
-  on the bug-tracker.\n\n### Opening a stream\n\nFirst, you open a (TLS-protected)
-  connection to a server and configure the\ninitial SETTINGS to advertise. Then you
-  can open and consume streams. Opening\nstreams takes a stream-definition and expresses
-  two sequential parts. First,\nsending the HTTP headers, which reserves an increasing
-  stream-ID with the\nserver. Second, you consume a stream by sending DATA chunk or
-  receiving DATA\nchunks. One thing that can prevent concurrency is if you have too
-  many opened\nstreams for the server. The `http2-client` library tracks server's
-  max\nconcurrency preference and will prevent you from opening too many streams.\n\n###
-  Sending chunked data\n\nSent data must be chunked according to server's preferences.
-  A function named\n`sendData` performs the chunking but this chunking could have
-  some suboptimal\noverhead if you want to repeatedly call sendData with a buffer
-  size that is not\na multiple of the server's preferred chunk size.\n\n### Flow control\n\nHTTP2
-  mandates a flow-control system that cannot be disabled. DATA chunks\nconsume credit
-  from the flow-control system. The standard defines a\nflow-control context per stream
-  plus one global per-connection. \n\n** Received DATA flow control ** In order to
-  keep receiving data you need to\nperiodically transfer credit to the server. One
-  transfers credit to server by\ncalling `_updateWindow`, which transfers locally-accumulated
-  credit (you\naccumulate credit with `addCredit`). The current implementation already
-  follows\na \"zero-sum\" credit where received DATA is immediately consumed and\nre-credited.
-  \ That is, if you only keep calling `_updateWindow` at some\nfrequency the stream
-  will progress. You can also `_addCredit` to permit\nreceiving more DATA on a stream/connection
-  (e.g., if you want to implement\nsomething like TCP slow-start).\n\n** Sent DATA
-  flow control ** A server following the HTTP2 specification\nstrictly will kick you
-  for sending too much data. The `http2-client` library\nallows you to be more aggressive
-  than the server allows and you have to care\nfor your streams. We provide an incoming
-  flow-control context that will allow\nyou to call `_withdrawCredit` to wait until
-  some credit is available. At the\ntime of this writing, the `sendData` function
-  does not call `_withdrawCredit`\nand we provide no equivalent. Note that the chunking
-  and flow-control\nmechanisms have interesting interactions in HTTP2 in a multi-threaded
-  context.\nPay attention to always take credit in the per-stream flow-control context\nbefore
-  taking it from the global per-connection flow-control context.\nOtherwise, you risk
-  starving the global per-connection flow-control with no\nguarantee that you'll be
-  allowed to send a DATA frame.\n\n## Settings changes\n\nThe HTTP2 RFC acknowledges
-  the inherent race conditions that may occur when\nchanging SETTINGS. The `http2-client`
-  library should be rather permissive and\naccept rather than reject frames caught
-  violating inconsistent settings once\nclient settings are made stricter. Conversely,
-  the `http2-client` library tries\nto enforce server-SETTINGS strictly before ACKnowledging
-  the setting changes.\nThis configuration can lead to problems if the server send
-  more-permissive\nSETTINGS (e.g., allowing a large default window size -> which recredits
-  all\nstreams) but if the server applies this change locally only after receiving
-  the\nclient ACK. One way to be double-sure the `http2-client` library is always\nstrict
-  would be to apply settings changes in two steps: settings that move in\nthe \"stricter
-  direction\" (e.g., fewer concurrency, smaller initial window)\nshould be applied
-  _before_ ACK-ing the SETTING frame. Meanwhile settings that\nmove in the \"looser
-  direction\" (e.g., more concurrency) should be applied\n_after_ ACK-ing the SETTINGS
-  frame.\n\nThe current design apply SETTINGS:\n- (client prefs) after receiving a
-  ACK for sent SETTINGS, you get the choice to\n  wait for an ACK or wait in a thread,
-  but you must wait for an ACK to apply\n  changed settings (the `_settings` function
-  will return an IO to wait for the\n  ACK and apply settings). Note that the initial
-  SETTINGS change frame is\n  waited for in a thread without library's user intervention
-  (if you feel\n  strongly against this choice, please open a bug).\n- (server prefs)
-  immediately after receiving and hence before sending ACK-SETTINGS\n\nFortunately,
-  changing settings mid-stream is probably a rare behavior and the\ndefault SETTINGS
-  are large enough to avoid creating fatal errors before\nsending/receiving the initial
-  SETTINGS frames.\n\n## Things that are hardcoded\n\nA number of HTTP2 features are
-  currently hardcoded:\n- PINGs are replied-to immediately (i.e., a server could hog
-  a connection with PINGs)\n- the initial SETTINGS frame sent to the server is waited-for
-  in a separate\n  thread, settings are applied to the connection when the server
-  ACKs the frame\n- flow-control from DATA frames is decremented immediately when
-  received (in a\n  separate thread) rather than when consumed from the client\n-
-  similarly, flow-control re-increment every DATA received as soon as it is\n  received\n\n##
-  Contributing\n\nContributions are welcome. As I start integrating external contribution
-  I plan\nto follow the following procedure:\n- stop pushing directly into master\n-
-  develop any patch in a new branch, branched from master\n- merge requests target
-  master\n\nPlease pay attention to the following:\n- avoid introducing external dependencies,
-  especially if dependencies are not in stackage\n- avoid reformatting-only merge
-  requests\n- please verify that you can `stack clean` and `stack build --pedantic`\n\nGeneral
+  This binary lives in a separate package\nat https://github.com/lucasdicioccio/http2-client-exe
+  .\n\nThe Haddocks, at https://hackage.haskell.org/package/http2-client, should have\nplenty
+  implementation details, so please have a look.  Otherwise, you can ask\nhelp by
+  creating an Issue on the bug-tracker.\n\n### Opening a stream\n\nFirst, you open
+  a (TLS-protected) connection to a server and configure the\ninitial SETTINGS to
+  advertise. Then you can open and consume streams. Opening\nstreams takes a stream-definition
+  and expresses two sequential parts. First,\nsending the HTTP headers, which reserves
+  an increasing stream-ID with the\nserver. Second, you consume a stream by sending
+  DATA chunk or receiving DATA\nchunks. One thing that can prevent concurrency is
+  if you have too many opened\nstreams for the server. The `http2-client` library
+  tracks server's max\nconcurrency preference and will prevent you from opening too
+  many streams.\n\n### Sending chunked data\n\nSent data must be chunked according
+  to server's preferences. A function named\n`sendData` performs the chunking but
+  this chunking could have some suboptimal\noverhead if you want to repeatedly call
+  sendData with a buffer size that is not\na multiple of the server's preferred chunk
+  size.\n\n### Flow control\n\nHTTP2 mandates a flow-control system that cannot be
+  disabled. DATA chunks\nconsume credit from the flow-control system. The standard
+  defines a\nflow-control context per stream plus one global per-connection. \n\n**
+  Received DATA flow control ** In order to keep receiving data you need to\nperiodically
+  transfer credit to the server. One transfers credit to server by\ncalling `_updateWindow`,
+  which transfers locally-accumulated credit (you\naccumulate credit with `addCredit`).
+  The current implementation already follows\na \"zero-sum\" credit where received
+  DATA is immediately consumed and\nre-credited.  That is, if you only keep calling
+  `_updateWindow` at some\nfrequency the stream will progress. You can also `_addCredit`
+  to permit\nreceiving more DATA on a stream/connection (e.g., if you want to implement\nsomething
+  like TCP slow-start).\n\n** Sent DATA flow control ** A server following the HTTP2
+  specification\nstrictly will kick you for sending too much data. The `http2-client`
+  library\nallows you to be more aggressive than the server allows and you have to
+  care\nfor your streams. We provide an incoming flow-control context that will allow\nyou
+  to call `_withdrawCredit` to wait until some credit is available. At the\ntime of
+  this writing, the `sendData` function does not call `_withdrawCredit`\nand we provide
+  no equivalent. Note that the chunking and flow-control\nmechanisms have interesting
+  interactions in HTTP2 in a multi-threaded context.\nPay attention to always take
+  credit in the per-stream flow-control context\nbefore taking it from the global
+  per-connection flow-control context.\nOtherwise, you risk starving the global per-connection
+  flow-control with no\nguarantee that you'll be allowed to send a DATA frame.\n\n##
+  Settings changes\n\nThe HTTP2 RFC acknowledges the inherent race conditions that
+  may occur when\nchanging SETTINGS. The `http2-client` library should be rather permissive
+  and\naccept rather than reject frames caught violating inconsistent settings once\nclient
+  settings are made stricter. Conversely, the `http2-client` library tries\nto enforce
+  server-SETTINGS strictly before ACKnowledging the setting changes.\nThis configuration
+  can lead to problems if the server send more-permissive\nSETTINGS (e.g., allowing
+  a large default window size -> which recredits all\nstreams) but if the server applies
+  this change locally only after receiving the\nclient ACK. One way to be double-sure
+  the `http2-client` library is always\nstrict would be to apply settings changes
+  in two steps: settings that move in\nthe \"stricter direction\" (e.g., fewer concurrency,
+  smaller initial window)\nshould be applied _before_ ACK-ing the SETTING frame. Meanwhile
+  settings that\nmove in the \"looser direction\" (e.g., more concurrency) should
+  be applied\n_after_ ACK-ing the SETTINGS frame.\n\nThe current design apply SETTINGS:\n-
+  (client prefs) after receiving a ACK for sent SETTINGS, you get the choice to\n
+  \ wait for an ACK or wait in a thread, but you must wait for an ACK to apply\n  changed
+  settings (the `_settings` function will return an IO to wait for the\n  ACK and
+  apply settings). Note that the initial SETTINGS change frame is\n  waited for in
+  a thread without library's user intervention (if you feel\n  strongly against this
+  choice, please open a bug).\n- (server prefs) immediately after receiving and hence
+  before sending ACK-SETTINGS\n\nFortunately, changing settings mid-stream is probably
+  a rare behavior and the\ndefault SETTINGS are large enough to avoid creating fatal
+  errors before\nsending/receiving the initial SETTINGS frames.\n\n## Things that
+  are hardcoded\n\nA number of HTTP2 features are currently hardcoded:\n- PINGs are
+  replied-to immediately (i.e., a server could hog a connection with PINGs)\n- the
+  initial SETTINGS frame sent to the server is waited-for in a separate\n  thread,
+  settings are applied to the connection when the server ACKs the frame\n- flow-control
+  from DATA frames is decremented immediately when received (in a\n  separate thread)
+  rather than when consumed from the client\n- similarly, flow-control re-increment
+  every DATA received as soon as it is\n  received\n\n## Contributing\n\nContributions
+  are welcome. As I start integrating external contribution I plan\nto follow the
+  following procedure:\n- stop pushing directly into master\n- develop any patch in
+  a new branch, branched from master\n- merge requests target master\n\nPlease pay
+  attention to the following:\n- avoid introducing external dependencies, especially
+  if dependencies are not in stackage\n- avoid reformatting-only merge requests\n-
+  please verify that you can `stack clean` and `stack build --pedantic`\n\nGeneral
   mindset to have during code-reviews:\n- be kind\n- be patient\n- surpass egos and
   bring data if there is a disagreement\n\n## Bugtracker\n\nMost of the following
   points have their own issues on the issue tracker at\nGitHub: https://github.com/lucasdicioccio/http2-client/issues
