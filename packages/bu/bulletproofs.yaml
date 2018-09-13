@@ -1,11 +1,13 @@
 homepage: https://github.com/adjoint-io/bulletproofs#readme
 changelog-type: markdown
-hash: 7e5a2cbcaddcaa9e462b4b26abfaf5797ba7f2f099573da60274e794ccf0a846
+hash: abc12ac7f71d500de7c3cdf3bd8da115eabe5ce4c5a66de2b0c0f9c9b9a80795
 test-bench-deps:
+  MonadRandom: -any
   base: -any
   tasty-discover: -any
   text: -any
   protolude: ! '>=0.2'
+  random-shuffle: -any
   memory: -any
   bulletproofs: -any
   containers: -any
@@ -27,9 +29,11 @@ changelog: ! '# Changelog for bulletproofs
 
 '
 basic-deps:
+  MonadRandom: -any
   base: ! '>=4.7 && <5'
   text: -any
   protolude: ! '>=0.2'
+  random-shuffle: -any
   memory: -any
   containers: -any
   cryptonite: -any
@@ -37,8 +41,9 @@ basic-deps:
 all-versions:
 - '0.1.0'
 - '0.2.0'
+- '0.3.0'
 author: ''
-latest: '0.2.0'
+latest: '0.3.0'
 description-type: markdown
 description: ! "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img src=\"https://www.adjoint.io/assets/img/adjoint-logo@2x.png\"
   width=\"250\"/></a>\n</p>\n\n[![CircleCI](http://circleci.com/gh/adjoint-io/bulletproofs.svg?style=shield)](https://circleci.com/gh/adjoint-io/bulletproofs)\n[![Hackage](https://img.shields.io/hackage/v/bulletproofs.svg)](http://hackage.haskell.org/package/bulletproofs)\n\nBulletproofs
@@ -90,25 +95,68 @@ description: ! "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img s
   of (tau, mu, t) and an execution of an inner product argument.\n\nThen, instead
   of sharing **l** and **r**, which has a communication cost of 2n elements, the inner-product\nargument
   transmits only 2 [log<sub>2</sub>] + 2 elements. In total, the prover sends only
-  2 [log<sub>2</sub>(n)] + 4\ngroup elements and 5 elements in _Z_<sub>p</sub>\n\nUsage\n=====\n\n```haskell\nimport
-  Bulletproofs.RangeProof\n\ntestProtocol :: Integer -> Integer -> IO Bool\ntestProtocol
-  v vBlinding = do\n  let vCommit = commit v vBlinding\n      -- n needs to be a power
-  of 2\n      n = 2 ^ 8\n      upperBound = 2 ^ n\n\n  -- Prover\n  proofE <- generateProof
-  upperBound v vBlinding\n  -- Verifier\n  case proofE of\n    Left err -> panic $
-  show err\n    Right (proof@RangeProof{..})\n      -> pure $ verifyProof upperBound
-  vCommit proof\n```\n\nThe dimension _n_ needs to be a power of 2.\nThis implementation
-  offers support for the SECp256k1 curve, a Koblitz curve.\nFurther information about
-  this curve can be found in the Uplink docs:\n[SECp256k1 curve](https://www.adjoint.io/docs/cryptography.html#id1
-  \"SECp256k1 curve\")\n\n\n**References**:\n\n1.  Bunz B., Bootle J., Boneh D., Poelstra
-  A., Wuille P., Maxwell G.\n    \"Bulletproofs: Short Proofs for Confidential Transactions
-  and More\". Stanford, UCL, Blockstream, 2017\n\n2. Groth J. \"Linear Algebra with
-  Sub-linear Zero-Knowledge Arguments\". University College London, 2009\n\n3. Bootle
-  J., Cerully A., Chaidos P., Groth J, Petit C. \"Efficient Zero-Knowledge Arguments
-  for\nArithmetic Circuits in the Discrete Log Setting\". University College London
-  and University of Oxford, 2016.\n\n**Notation**:\n\n- ◦ : Hadamard product\n- <>
-  :Inner product\n- **a**: Vector\n\n\nLicense\n-------\n\n```\nCopyright 2018 Adjoint
-  Inc\n\nLicensed under the Apache License, Version 2.0 (the \"License\");\nyou may
-  not use this file except in compliance with the License.\nYou may obtain a copy
+  2 [log<sub>2</sub>(n)] + 4\ngroup elements and 5 elements in _Z_<sub>p</sub>\n\nAggregating
+  Logarithmic Proofs\n==============================\n\nWe can construct a single
+  proof of range of multiple values, while only incurring an additional space cost
+  of 2 log<sub>2</sub>(m) for\n_m_ additional values _v_, as opposed to a multiplicative
+  factor of _m_ when creating _m_ independent range proofs.\n\nThe aggregate range
+  proof makes use of the inner product argument. It uses 2 [log<sub>2</sub> (n * m)]
+  + 4 group elements and 5 elements in Z<sub>p</sub>.\n\nSee [Multi range proof example](https://github.com/adjoint-io/bulletproofs/tree/master#multi-range-proof)\n\n\nUsage\n=====\n\nSingle
+  range proof:\n-------------------\n\n```haskell\nimport qualified Bulletproofs.RangeProof
+  as RP\n\ntestSingleRangeProof :: (Integer, Integer) -> IO Bool\ntestSingleRangeProof
+  (v, vBlinding) = do\n  let vCommit = commit v vBlinding\n      -- n needs to be
+  a power of 2\n      n = 2 ^ 8\n      upperBound = 2 ^ n\n\n  -- Prover\n  proofE
+  <- runExceptT $ RP.generateProof upperBound (v, vBlinding)\n\n  -- Verifier\n  case
+  proofE of\n    Left err -> panic $ show err\n    Right (proof@RangeProof{..})\n
+  \     -> pure $ RP.verifyProof upperBound vCommit proof\n```\n\nMulti range proof:\n------------------\n\n```haskell\nimport
+  qualified Bulletproofs.MultiRangeProof as MRP\n\ntestMultiRangeProof :: [(Integer,
+  Integer)] -> IO Bool\ntestMultiRangeProof vsAndvBlindings = do\n  let vCommits =
+  fmap (uncurry commit) vsAndvBlindings\n      -- n needs to be a power of 2\n      n
+  = 2 ^ 8\n      upperBound = 2 ^ n\n\n  -- Prover\n  proofE <- runExceptT $ MRP.generateProof
+  upperBound vsAndvBlindings\n\n  -- Verifier\n  case proofE of\n    Left err -> panic
+  $ show err\n    Right (proof@RangeProof{..})\n      -> pure $ MRP.verifyProof upperBound
+  vCommits proof\n```\n\n\nThe dimension _n_ needs to be a power of 2.\nThis implementation
+  offers support for SECp256k1, a Koblitz curve.\nFurther information about this curve
+  can be found in the Uplink docs:\n[SECp256k1 curve](https://www.adjoint.io/docs/cryptography.html#id1
+  \"SECp256k1 curve\")\n\n\nZero-knowledge proof for Arithmetic Circuits\n============================================\n\nAn
+  arithmetic circuit over a field and variables (a<sub>1</sub>, ..., a<sub>n</sub>)
+  is a directed acyclic graph whose vertices are called gates.\n\nArithmetic circuit
+  can be described alternatively as a list of multiplication gates with a collection
+  of linear consistency equations\nrelating the inputs and outputs of the gates. Any
+  circuit described as an acyclic graph can be efficiently converted into this alternative
+  description.\n\nBulletproofs present a protocol to generate zero-knowledge argument
+  for arithmetic circuits using the inner product argument,\nwhich allows to get a
+  proof of size 2 log<sub>2</sub>(n) + 13 elements and include committed values as
+  inputs to the arithmetic circuit.\n\nIn the protocol, the Prover proves that the
+  hadamard product of _a<sub>L</sub>_ and _a<sub>R</sub>_ and a set of linear constraints
+  hold.\nThe input values _v_ used to generate the proof are then committed and shared
+  with the Verifier.\n\n```haskell\nimport qualified Bulletproofs.ArithmeticCircuit\n\n--
+  \ Example:\n--  2 linear constraints (q = 2):\n--  aL[0] + aL[1] + aL[2] + aL[3]
+  = v[0]\n--  aR[0] + aR[1] + aR[2] + aR[3] = v[1]\n--\n--  4 multiplication constraints
+  (implicit) (n = 4):\n--  aL[0] * aR[0] = aO[0]\n--  aL[1] * aR[1] = aO[1]\n--  aL[2]
+  * aR[2] = aO[2]\n--  aL[3] * aR[3] = aO[3]\n--\n--  2 input values (m = 2)\n\narithCircuitExample
+  :: ArithCircuit Fq\narithCircuitExample = ArithCircuit\n  { weights = GateWeights\n
+  \   { wL = [[1, 1, 1, 1]\n           ,[0, 0, 0, 0]]\n    , wR = [[0, 0, 0, 0]\n
+  \          ,[1, 1, 1, 1]]\n    , wO = [[0, 0, 0, 0]\n           ,[0, 0, 0, 0]]\n
+  \   }\n  , commitmentWeights = [[1, 0]\n                        ,[0, 1]]\n  , cs
+  = [0, 0]\n  }\n\ntestArithCircuitProof :: ([Fq], [Fq]) -> ArithCircuit Fq -> IO
+  Bool\ntestArithCircuitProof (aL, aR) arithCircuit = do\n  let n = 4\n      m = 2\n
+  \     q = 2\n\n  -- Multiplication constraints\n  let aO = aL `hadamardp` aR\n\n
+  \ -- Linear constraints\n      v0 = sum aL\n      v1 = sum aR\n\n  commitBlinders
+  <- replicateM m Fq.random\n  let commitments = zipWith commit [v0, v1] commitBlinders\n\n
+  \ let arithWitness = ArithWitness\n        { assignment = Assignment aL aR aO\n
+  \       , commitments = commitments\n        , commitBlinders = commitBlinders\n
+  \       }\n\n  proof <- generateProof arithCircuit arithWitness\n\n  pure $ verifyProof
+  commitments proof arithCircuit\n```\n\n**References**:\n\n1.  Bunz B., Bootle J.,
+  Boneh D., Poelstra A., Wuille P., Maxwell G.\n    \"Bulletproofs: Short Proofs for
+  Confidential Transactions and More\". Stanford, UCL, Blockstream, 2017\n\n2. Groth
+  J. \"Linear Algebra with Sub-linear Zero-Knowledge Arguments\". University College
+  London, 2009\n\n3. Bootle J., Cerully A., Chaidos P., Groth J, Petit C. \"Efficient
+  Zero-Knowledge Arguments for\nArithmetic Circuits in the Discrete Log Setting\".
+  University College London and University of Oxford, 2016.\n\n**Notation**:\n\n-
+  ◦ : Hadamard product\n- <> :Inner product\n- **a**: Vector\n\n\nLicense\n-------\n\n```\nCopyright
+  2018 Adjoint Inc\n\nLicensed under the Apache License, Version 2.0 (the \"License\");\nyou
+  may not use this file except in compliance with the License.\nYou may obtain a copy
   of the License at\n\n    http://www.apache.org/licenses/LICENSE-2.0\n\nUnless required
   by applicable law or agreed to in writing, software\ndistributed under the License
   is distributed on an \"AS IS\" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
