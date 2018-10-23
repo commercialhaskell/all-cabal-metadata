@@ -1,6 +1,6 @@
 homepage: https://github.com/Tinybop/gingersnap
 changelog-type: markdown
-hash: 99e22de5158fbfc8c4a665889f6105a81fb095cb7c7140c4f7516ff745a716e8
+hash: cbade47ce3c77aaa7b1928a2b54438dcc6ae01c10075c830462d4d28eb2b9122
 test-bench-deps: {}
 maintainer: tom@tinybop.com
 synopsis: snap-core + aeson + postgresql-simple = delicious
@@ -26,8 +26,73 @@ all-versions:
 - '0.1.1.0'
 - '0.1.2.0'
 - '0.1.3.0'
+- '0.1.4.0'
 author: Tinybop Labs, tom-bop
-latest: '0.1.3.0'
-description-type: haddock
-description: JSON API idioms for snap-core, preventing DB connection leaks
+latest: '0.1.4.0'
+description-type: markdown
+description: ! "# Gingersnap\n\nWhat _is_ Gingersnap? Not a web framework: that's
+  Snap Core's job.\nMore a set of lightweight idioms for building a resource-safe
+  JSON API with\nAeson and postgresql-simple.\n\nAs it's just a set of idioms, it's
+  easy to only use 'em where you need 'em.\nAn app could have only a single endpoint
+  that uses Gingersnap, with the rest\nusing plain Snap Core.\n\nHow do we use it?
+  This README is also a Literate Haskell file so it's a full\nexample you can run
+  with markdown-unlit. Let's get started:\n\n## Imports at the top!\n\nA few imports
+  we'll need for this tutorial:\n\n```haskell\n{-# LANGUAGE DeriveGeneric, OverloadedStrings
+  #-}\n\nimport Data.Aeson (ToJSON)\nimport qualified Database.PostgreSQL.Simple as
+  PSQL\n -- For our automatic JSON instance:\nimport GHC.Generics (Generic)\nimport
+  Gingersnap.Core\nimport Snap.Core\n-- From the 'snap-server' package:\nimport Snap.Http.Server
+  (quickHttpServe)\n```\n\n## A first endpoint\n\nNow that we've got our imports,
+  let's jump into defining an endpoint. We'll\ndefine a little bit of setup code later
+  on in the file.\n\n```haskell\ndata SomeData = SomeData Int Bool\n deriving (Show,
+  Generic)\n\ninstance ToJSON SomeData\n\none :: Ctx -> Snap ()\none ctx =\n   pureRsp
+  ctx $ rspGood $ SomeData 5 True\n```\n\nYou can run the code from this file with\n\n
+  \   $ cabal update\n    $ cabal install gingersnap snap-server\n    $ ghci -pgmL
+  markdown-unlit README.lhs   # The \"-pgmL\" is just for this README\n\nAnd calling
+  \"main\". In another window, if you call:\n\n    $ curl 'localhost:8000/one'\n\nYou
+  should get back:\n\n    {\"result\":[5,true]}\n\nA few things to notice:\n  - The
+  endpoint takes as an argument a \"Ctx\". We'll see the definition of that\n    later.\n
+  \ - The endpoint returns our data with \"rspGood\". More on that in a moment.\n
+  \ - The response came wrapped in a \"result\" JSON object. You can customize that\n
+  \   behavior but we'll use the default here.\n\nSo, what's \"rspGood\"? Well, it
+  has the type\n\n    rspGood :: ToJSON x => x -> Rsp\n\nThe \"Rsp\" type is one of
+  the core types in Gingersnap. Keep an eye out for it later.\n\n## Defining \"main\"\n\nLet's
+  now look at how we defined our main function.\n\n```haskell\nmain :: IO ()\nmain
+  = do\n   ctx <- makeCtx\n   quickHttpServe $ route [\n        (\"one\", one ctx)\n
+  \     , (\"two\", two ctx)\n      ]\n```\n\nOther than \"ctx\", this isn't Gingersnap-specific
+  at all: just a simple\nSnap Core server. \"makeCtx\" is a function we define ourselves.
+  It creates a\nvalue of type \"Ctx\", which we define ourselves, and which is an
+  instance of\n\"IsCtx\".\n\n## IsCtx\n\nThe idea of \"IsCtx\" is that it allows us
+  to thread whatever data we need through\nto our endpoints. We'll definitely need
+  a database connection (pool), but it's a\ntypeclass, so you can define whatever
+  other fields you'd like to pass to your\nhandlers in the type that's an instance
+  of that class.\n\nFor example, if you're using the 'auto-update' package to efficiently
+  run\nperiodic actions (like getting the current time), you may want to create another\nset
+  of fields in your \"Ctx\" type to easily thread auto-update's actions through\nto
+  your handlers, too.\n\nSo let's define our own! We unimaginitavely call it \"Ctx\":\n\n```haskell\ndata
+  Ctx = Ctx { ctx_db :: Pool PSQL.Connection }\n\ninstance IsCtx Ctx where\n   ctxConnectionPool
+  = ctx_db\n```\n\nAnd then define a simple \"makeCtx\":\n\n```haskell\nmakeCtx ::
+  IO Ctx\nmakeCtx = do\n\n   -- Setting up the DB connection pool:\n   let connString
+  = \" host=localhost port=5432 dbname=postgres user=postgres \"\n   pool <- createPool
+  (PSQL.connectPostgreSQL connString) PSQL.close 1 5 20\n\n   pure $ Ctx { ctx_db
+  = pool }\n```\n\nAnd that's that!\n\n## Talking to the database\n\nNow that we've
+  got (through Ctx) a DB connection pool, let's query the DB:\n\n\n```haskell\ntwo
+  :: Ctx -> Snap ()\ntwo ctx = do\n   inTransaction ctx $ \\conn -> do\n      [PSQL.Only
+  x] <- PSQL.query_ conn \" SELECT 2 + 2 \"\n      pure $ rspGood $ SomeData x True\n```\n\n
+  \   $ curl 'localhost:8000/two'\n    {\"result\":[4,true]}\n\nNice! This uses \"inTransaction\",
+  another core tool in Gingersnap:\n\n    inTransaction :: IsCtx ctx => ctx -> (Connection
+  -> IO Rsp) -> Snap ()\n\nWe've already seen IsCtx and Rsp, so the main thing to
+  notice here is that the\naction we pass to inTransaction is passed a Connection
+  and is in IO, not in Snap\n(or MonadSnap). This gives us a few nice things:\n  -
+  If you're in Snap, you can accidentally leak a Connection resource by calling\n
+  \   finishWith while in the middle of a transaction or DB action. We don't have
+  this\n    problem.\n  - We can choose at any time whether to commit or rollback.
+  The \"Rsp\" type carries\n    information about whether to commit or rollback (e.g.
+  \"rspGood\" will commit,\n    \"rspBadRollback\" won't). This is in contrast to
+  \"withTransaction\", that'll\n    only roll back if there's an exception, and in
+  contrast to manually beginning\n    a transaction, which provides no check that
+  we properly commit or rollback\n    (e.g. we could forget to commit/rollback in
+  one case among many in a complicated\n    statement)\n\n\n## Other things to discover\n\nThis
+  tutorial is a work in progress, and these'll be the next concepts to be\ntouched
+  on:\n\n  - \"Not everything's rspGood\": rspBadRollback, ApiErr, and others\n  -
+  reqObject and (.!) for consuming JSON\n"
 license-name: BSD3
