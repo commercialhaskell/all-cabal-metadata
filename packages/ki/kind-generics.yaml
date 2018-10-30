@@ -1,0 +1,222 @@
+homepage: ''
+changelog-type: ''
+hash: 3adb801864e97218e66841439c3d831ce96407fd1b01ae024bbfe6ddd5fa8621
+test-bench-deps: {}
+maintainer: trupill@gmail.com
+synopsis: Generic programming in GHC style for arbitrary kinds and GADTs.
+changelog: ''
+basic-deps:
+  base: ! '>=4.12 && <5'
+  kind-apply: -any
+all-versions:
+- '0.1.0.0'
+author: Alejandro Serrano
+latest: '0.1.0.0'
+description-type: markdown
+description: ! "# `kind-generics`: generic programming for arbitrary kinds and GADTs\n\nData
+  type-generic programming in Haskell is restricted to types of kind `*` (by using
+  `Generic`) or `* -> *` (by using `Generic1`). This works fine for implementing generic
+  equality or generic printing, notions which are applied to types of kind `*`. But
+  what about having a generic `Bifunctor` or `Contravariant`? We need to extend our
+  language for describing data types to other kinds -- hopefully without having to
+  introduce `Generic2`, `Generic3`, and so on.\n\nThe language for describing data
+  types in `GHC.Generics` is also quite restricted. In particular, it can only describe
+  algebraic data types, not the full extent of GADTs. It turns out that both problems
+  are related: if you want to describe a constructor of the form `forall a. blah`,
+  then `blah` must be a data type which takes one additional type variable. As a result,
+  we need to enlarge and shrink the kind at will.\n\nThis library, `kind-generics`,
+  provides a new type class `GenericK` and a set of additional functors `F` (from
+  *field*), `C` (from *constraint*), and `E` (from *existential*) which extend the
+  language of `GHC.Generics`. We have put a lot of effort in coming with a simple
+  programming experience, even though the implementation is full of type trickery.\n\n##
+  Short summary for simple data types\n\nGHC has built-in support for data type-generic
+  programming via its `GHC.Generics` module. In order to use those facilities, your
+  data type must implement the `Generic` type class. Fortunately, GHC can automatically
+  derive such instances for algebraic data types. For example:\n\n```haskell\n{-#
+  language DeriveGeneric #-}  -- this should be at the top of the file\n\ndata Tree
+  a = Branch (Tree a) (Tree a) | Leaf a\n            deriving Generic    -- this is
+  the magical line\n```\n\nFrom this `Generic` instance, `kind-generics` can derive
+  another one for its very own `GenericK`. It needs one additional piece of information,
+  though: the description of the data type in the enlarged language of descriptions.
+  The reason for this is that `Generic` does not distinguish whether the type of a
+  field mentions one of the type variables (`a` in this case) or not. But `GenericK`
+  requires so.\n\nLet us look at the `GenericK` instance for `Tree`:\n\n```haskell\ninstance
+  GenericK Tree (a :&&: LoT0) where\n  type RepK Tree = (F (Tree :$: V0) :*: F (Tree
+  :$: V0)) :+: (F V0)\n```\n\nIn this case we have two constructors, separated by
+  `(:+:)`. The first constructor has two fields, tied together by `(:*:)`. In the
+  description of each field is where the difference with `GHC.Generics` enters the
+  game: you need to describe *each* piece which makes us the type. In this case `Tree
+  :$: V0` says that the type constructor `Tree` is applied to the first type variable.
+  Type variables, in turn, are represented by zero-indexed `V0`, `V1`, and so on.\n\nThe
+  other piece of information we need to give `GenericK` is how to separate the type
+  constructor from its arguments. The first line of the instance always takes the
+  name of the type, and then a *list of types* representing each of the arguments.
+  In this case there is only one argument, and thus the list has only one element.
+  In order to get better type inference you might also add the following declaration:\n\n```haskell\ninstance
+  Split (Tree a) Tree (a :&&: LoT0)\n```\n\nYou can finally use the functionality
+  from `kind-generics` and derive some type classes automatically:\n\n```haskell\nimport
+  Generics.Kind.Derive.Eq\nimport Generics.Kind.Derive.Functor\n\ninstance Eq a =>
+  Eq (Tree a) where\n  (==) = geq'\ninstance Functor Tree where\n  fmap = fmapDefault\n```\n\n##
+  Type variables in a list: `LoT` and `(:@@:)`\n\nLet us have a closer look at the
+  definition of the `GenericK` type class. If you have been using other data type-generic
+  programming libraries you might recognize `RepK` as the generalized version of `Rep`,
+  which ties a data type with its description, and the pair of functions `fromK` and
+  `toK` to go back and forth the original values and their generic counterparts.\n\n```haskell\nclass
+  GenericK (f :: k) (x :: LoT k) where\n  type RepK f :: LoT k -> *\n  fromK :: f
+  :@@: x -> RepK f x\n  toK   :: RepK f x -> f :@@: x\n```\n\nBut what are those `LoT`
+  and `(:@@:)` which appear there? That is indeed the secret sauce which makes the
+  whole `kind-generics` library work. The name `LoT` comes from *list of types*. It
+  is a type-level version of a regular list, where the `(:)` constructor is replaced
+  by `(:&&:)` and the empty list is represented by `LoT0`. For example:\n\n```haskell\nInt
+  :&&: [Bool] :&&: LoT0  -- a list with two basic types\nInt :&&: [] :&&: LoT0      --
+  type constructor may also appear\n```\n\nWhat can you do with such a list of types?
+  You can pass them as type arguments to a type constructor. This is the role of `(:@@:)`
+  (which you can pronounce *of*, or *application*). For example:\n\n```haskell\nEither
+  :@@: (Int :&&: Bool :&&: LoT0) = Either Int Bool\nFree   :@@: ([]  :&&: Int  :&&:
+  LoT0) = Free [] Int\nInt    :@@:                     LoT0 = Int\n```\n\nWait, you
+  cannot apply any list of types to any constructor! Something like `Maybe []` is
+  rejected by the compiler, and so should we reject `Maybe ([] :&&: LoT0)`. To prevent
+  such problems, the list of types is decorated with the *kinds* of all the types
+  inside of it. Going back to the previous examples:\n\n```haskell\nInt :&&: [Bool]
+  :&&: LoT0  ::  LoT (* -> * -> *)\nInt :&&: [] :&&: LoT0      ::  LoT (* -> (* ->
+  *) -> *)\n```\n\nThe application operator `(:@@:)` only allows us to apply a list
+  of types of kind `k` to types constructors of the same kind. The shared variable
+  in the head of the type class enforces this invariant also in our generic descriptions.\n\n###
+  Helper classes: `GenericS`, `GenericF`, `GenericN`\n\nIf you want to turn a value
+  into its generic representation, the `fromK` method of the `GenericK` class should
+  be enough. Alas, that is a hard nut to crack for GHC's inference engine. Imagine
+  you call `fromK (Left True)`: should it break the type `Either Bool a` into `Either
+  :@@: (Bool :&&: a :&&: LoT0)`, or maybe into `Either Bool :@@: (a :&&: LoT0)`? In
+  principle, it is possible that even *both* instances exist, although it does not
+  make sense in the context of this library.\n\nIt turns out that the interface provided
+  by `GenericK` is very helpful for those writing conversion from and to generic representations,
+  but not so much for those using `fromK` and `toK`. For that reason, `kind-generics`
+  provides three different extensions to `GenericK` depending on how much of the type
+  you know:\n\n* When the type is completely known and you have an instance for `Split`
+  (which describes how to separate a type into its head and its type arguments), you
+  should use `GenericS`. This is the most common scenario: for example, `fromS (Left
+  True)` works as you may expect, using the `GenericK` instance for `Either`. This
+  option also provides the closest experience to `GHC.Generics`.\n* When you know
+  the `f` in the `f :@@: x`, it is possible to use `GenericF`. In that case, you have
+  to provide the head of the type using a type application. For example, `fromF @Either
+  (Just True)`.\n* A third option is to indicate *how many* arguments should go in
+  the list of types `x` to generate `f :@@: x`. In the previous case, you might have
+  also used `fromN @(S (S Z)) (Just True)`. Note that the length of the list of types
+  is expressed as a unary number.\n\n## Describing fields: the functor `F`\n\nAs mentioned
+  in the introduction, `kind-generics` features a more expressive language to describe
+  the types of the fields of data types. We call the description of a specific type
+  an *atom*. The language of atoms reproduces the ways in which you can build a type
+  in Haskell:\n\n1. You can have a constant type `t`, which is represented by `Kon
+  t`.\n2. You can mention a variable, which is represented by `V0`, `V1`, and so on.
+  For those interested in the internals, there is a general `Var v` where `v` is a
+  type-level number. The library provides the synonyms for ergonomic reasons.\n3.
+  You can take two types `f` and `x` and apply one to the other, `f :@: x`.\n\nFor
+  example, suppose the `a` is the name of the first type variable and `b` the name
+  of the second. Here are the corresponding atoms:\n\n```haskell\na            ->
+  \ V0\nMaybe a      ->  Kon Maybe :@: V0\nEither b a   ->  Kon Either :@: V1 :@:
+  V0\nb (Maybe a)  ->  V1 :@: (Kon Maybe :@: V0)\n```\n\nSince the `Kon f :@: x` pattern
+  is very common, `kind-generics` also allows you to write it as simply `f :$: x`.
+  The names `(:$:)` and `(:@:)` are supposed to resemble `(<$>)` and `(<*>)` from
+  the `Applicative` type class.\n\nThe kind of an atom is described by two pieces
+  of information, `Atom d k`. The first argument `d` specifies the amounf of variables
+  that it uses. The second argument `k` tells you the kind of the type you obtain
+  if you replace the variable markers `V0`, `V1`, ... by actual types. For example:\n\n```haskell\nV0
+  \                    ->  Atom (k -> ks)             k\nV1 :@: (Maybe :$: V0)  ->
+  \ Atom (* -> (* -> *) -> ks) (*)\n```\n\nIn the first example, if you tell me the
+  value of the variable `a` regardless of the kind `k`, the library can build a type
+  of kind `k`. In the second example, the usage requires the first variable to be
+  a ground type, and the second one to be a one-parameter type constructor. If you
+  give those types, the library can build a type of kind `*`.\n\nThis operation we
+  have just described is embodied by the `Ty` type family. A call looks like `Ty atom
+  lot`, where `atom` is an atom and `lot` a list of types which matches the requirements
+  of the atom. We say that `Ty` *interprets* the `atom`. Going back to the previous
+  examples:\n\n```haskell\nTy V0                    Int                      =  Int\nTy
+  V1 :@: (Maybe :$: V0) (Bool :&&: [] :&&: LoT0) =  [Maybe Bool]\n```\n\nThis bridge
+  is used in the first of the pattern functors that `kind-generics` add to those from
+  `GHC.Generics`. The pattern functor `F` is used to represent fields in a constructor,
+  where the type is represented by an atom. Compare its definition with the `K1` type
+  from `GHC.Generics`:\n\n```haskell\nnewtype F  (t :: Atom d (*)) (x :: LoT d) =
+  F { unF :: Ty t x }\nnewtype K1 i (t ::  *) = K1 { unK1 :: t }\n```\n\nAt the term
+  level there is almost no difference in the usage, except for the fact that fields
+  are wrapped in the `F` constructor instead of `K1`.\n\n```haskell\ninstance GenericK
+  Tree (a :&&: LoT0) where\n  type RepK Tree = (F (Tree :$: V0) :*: F (Tree :$: V0))
+  :+: (F V0)\n\n  fromK (Branch l r) = L1 (F l :*: F r)\n  fromK (Node   x)   = R1
+  (F x)\n```\n\nOn the other hand, separating the atom from the list of types gives
+  us the ability to interpret the same atom with different list of types. This is
+  paramount to classes like `Functor`, in which the same type constructor is applied
+  to different type variables.\n\n## Functors for GADTS: `(:=>:)` and `E`\n\nGeneralised
+  Algebraic Data Types, GADTs for short, extend the capabilities of Haskell data types.
+  Once the extension is enabled, constructor gain the ability to constrain the set
+  of allowed types, and to introduce existential types. Here is an extension of the
+  previously-defined `Tree` type to include an annotation in every leaf, each of them
+  with possibly a different type, and also require `Show` for the `a`s:\n\n```haskell\ndata
+  WeirdTree a where\n  WeirdBranch :: WeirdTree a -> WeirdTree a -> WeirdTree a \n
+  \ WeirdLeaf   :: Show a => t -> a -> WeirdTree a\n```\n\nThe family of pattern functors
+  `U1`, `F`, `(:+:)`, and `(:*:)` is not enough. Let us see what other things we use
+  in the representation of `WeirdTree`:\n\n```haskell\ninstance GenericK WeirdTree
+  (a :&&: LoT0) where\n  type RepK WeirdTree\n    = F (WeirdTree :$: V0) :*: F (WeirdTree
+  :$: V0)\n      :+: E ((Show :$: V1) :=>: (F V0 :*: F V1))\n```\n\nHere the `(:=>:)`
+  pattern functor plays the role of `=>` in the definition of the data type. It reuses
+  the same notion of atoms from `F`, but requiring those atoms to give back a constraint
+  instead of a ground type.\n\nBut wait a minute! You have just told me that the first
+  type variable is represented by `V0`, and in the representation above `Show a` is
+  transformed into `Show :$: V1`, what is going on? This change stems from `E`, which
+  represents existential quantification. Whenever you go inside an `E`, you gain a
+  new type variable in your list of types. This new variable is put *at the front*
+  of the list of types, shifting all the other one position. In the example above,
+  inside the `E` the atom `V0` points to `t`, and `V1` points to `a`. This approach
+  implies that inside nested existentials the innermost variable corresponds to head
+  of the list of types `V0`.\n\nUnfortunately, at this point you need to write your
+  own conversion functions if you use any of these extended features (pull requests
+  implementing it in Template Haskell are more than welcome).\n\n```haskell\ninstance
+  GenericK WeirdTree (a :&&: LoT0) where\n  type RepK WeirdTree = ...\n\n  fromK (WeirdBranch
+  l r) = L1 $         F l :*: F r\n  fromK (WeirdLeaf   a x) = R1 $ E $ C $ F a :*:
+  F x\n\n  toK ...\n```\n\nIf you have ever done this work in `GHC.Generics`, there
+  is not a big step. You just need to apply the `E` and `C` constructor every time
+  there is an existential or constraint, respectively. However, since the additional
+  information required by those types is implicitly added by the compiler, you do
+  not need to write anything else.\n\n## Implementing a generic operation with `kind-generics`\n\nThe
+  last stop in our journey through `kind-generics` is being able to implement a generic
+  operation. At this point we assume that the reader is comfortable with the definition
+  of generic operations using `GHC.Generics`, so only the differences with that style
+  are pointed out.\n\nTake an operation like `Show`. Using `GHC.Generics` style, you
+  create a type class whose instances are the corresponding pattern functors:\n\n```haskell\nclass
+  GShow (f :: * -> *) where\n  gshow :: f x -> String\n\ninstance GShow U1 ...\ninstance
+  Show t => GShow (K1 i t) ...\ninstance (GShow f, GShow g) => GShow (f :+: g) ...\ninstance
+  (GShow f, GShow g) => GShow (f :*: g) ...\n```\n\nWhen using `kind-generics`, the
+  type class needs to feature the separation between the head and its type arguments,
+  in a similar way to `GenericK`. In this case, that means extending the class with
+  a new parameter, and reworking the basic cases to include that argument.\n\n```haskell\nclass
+  GShow (f :: LoT k -> *) (x :: LoT k) where\n  gshow :: f :@@: x -> String\n\ninstance
+  GShow U1 x ...\ninstance (GShow f x, GShow g x) => GShow (f :+: g) x ...\ninstance
+  (GShow f x, GShow g x) => GShow (f :*: g) x ...\n```\n\nNow we have the three new
+  constructors. Let us start with `F atom`: when is it `Show`able? Whenever the interpretation
+  of the atom, with the given list of types, satisfies the `Show` constraint. We can
+  use the type family `Ty` to express this fact:\n\n```haskell\ninstance (Show (Ty
+  a x)) => GShow (F a) x where\n  gshow (F x) = show x\n```\n\nIn the case of existential
+  constraints we do not need to enforce any additional constraints. However, we need
+  to extend our list of types with a new one for the existential. We can do that using
+  the `QuantifiedConstraints` extension introduced in GHC 8.6:\n\n```haskell\n{-#
+  language QuantifiedConstraints #-}\n\ninstance (forall t. Show f (t :&&: x)) =>
+  GShow (E f) x where\n  gshow (E x) = gshow x\n```\n\nThe most interesting case is
+  the one for constraints. If we have a constraint in a constructor, we know that
+  by pattern matching on it we can use the constraint. In other words, we are allowed
+  to assume that the constraint at the left-hand side of `(:=>:)` holds when trying
+  to decide whether `GShow` does. This is again allowed by the `QuantifiedConstraints`
+  extension:\n\n```haskell\n{-# language QuantifiedConstraints #-}\n\ninstance (Ty
+  c x => GShow f x) => GShow (c :=>: f) x where\n  gshow (C x) = gshow x\n```\n\nNote
+  that sometimes we cannot implement a generic operation for every GADT. One example
+  is generic equality (which you can find in the module `Generics.Kind.Derive.Eq`):
+  when faced with two values of a constructor with an existential, we cannot move
+  forward, since we have no way of knowing if the types enclosed by each value are
+  the same or not.\n\n## Conclusion and limitations\n\nThe `kind-generics` library
+  extends the support for data type-generic programming from `GHC.Generics` to account
+  for kinds different from `*`  and `* -> *` and for GADTs. We have tried to reuse
+  as much information as possible from what the compiler already gives us for free,
+  in particular you can obtain a `GenericK` instance if you already have a `Generic`
+  one.\n\nAlthough we can now express a larger amount of types and operations, not
+  *all* Haskell data types are expressible in this language. In particular, we cannot
+  have *dependent* kinds, like in the following data type:\n\n```haskell\ndata Proxy
+  k (d :: k) = Proxy\n```\n\nbecause the kind of the second argument `d` refers to
+  the first argument `k`."
+license-name: BSD3
