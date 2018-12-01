@@ -1,13 +1,14 @@
 homepage: https://github.com/feuerbach/tasty
 changelog-type: markdown
-hash: 1310ceed449b3227614b329a1672a2c5bb046cb49e281996523567b3b0ad9ecc
+hash: 0d08fbcdda8914c9c8abda8ac212e3209f3b5b86cae01724d0398bcf0c8691d4
 test-bench-deps: {}
 maintainer: Roman Cheplyaka <roma@ro-che.info>
 synopsis: Modern and extensible testing framework
-changelog: ! "Changes\n=======\n\nVersion 1.1.0.4\n---------------\n\nMake tasty work
-  with GHCJS\n\nVersion 1.1.0.3\n---------------\n\nFix compatibility with GHC 8.6\n\nVersion
-  1.1.0.2\n---------------\n\nFix a bug where some (mostly Asian) characters would
-  break alignment in the\nterminal output\n\nVersion 1.1.0.1\n---------------\n\nFix
+changelog: ! "Changes\n=======\n\nVersion 1.2\n-----------\n\nMake it possible to
+  declare dependencies between tests (see the README for\ndetails)\n\nVersion 1.1.0.4\n---------------\n\nMake
+  tasty work with GHCJS\n\nVersion 1.1.0.3\n---------------\n\nFix compatibility with
+  GHC 8.6\n\nVersion 1.1.0.2\n---------------\n\nFix a bug where some (mostly Asian)
+  characters would break alignment in the\nterminal output\n\nVersion 1.1.0.1\n---------------\n\nFix
   a bug where `-l` was still using `/` instead of `.` as a field separator\n\nVersion
   1.1\n-----------\n\n**NOTE**: This major release contains some breaking changes
   to the semantics of patterns.\nIn the original pattern design I didn't notice the
@@ -194,8 +195,9 @@ all-versions:
 - '1.1.0.2'
 - '1.1.0.3'
 - '1.1.0.4'
+- '1.2'
 author: Roman Cheplyaka <roma@ro-che.info>
-latest: '1.1.0.4'
+latest: '1.2'
 description-type: markdown
 description: ! "# Tasty\n\n**Tasty** is a modern testing framework for Haskell.\n\nIt
   lets you combine your unit tests, golden tests, QuickCheck/SmallCheck\nproperties,
@@ -413,14 +415,60 @@ description: ! "# Tasty\n\n**Tasty** is a modern testing framework for Haskell.\
   this new library. The library can be\n  declared in the same cabal file.\n* Add
   your program sources directory to the `Hs-source-dirs`. Note that this\n  will lead
   to double compilation (once for the program and once for the test\n  suite).\n\n##
-  FAQ\n\n1.  How do I make some tests execute after others?\n\n    Currently, your
-  only option is to make all tests execute sequentially by\n    setting the number
-  of tasty threads to 1 ([example](#num_threads_example)).\n    See [#48](https://github.com/feuerbach/tasty/issues/48)
-  for the discussion.\n\n2.  When my tests write to stdout/stderr, the output is garbled.
-  Why is that and\n    what do I do?\n\n    It is not recommended that you print anything
-  to the console when using the\n    console test reporter (which is the default one).\n
-  \   See [#103](https://github.com/feuerbach/tasty/issues/103) for the\n    discussion.\n\n
-  \   Some ideas on how to work around this:\n\n    * Use [testCaseSteps](https://hackage.haskell.org/package/tasty-hunit/docs/Test-Tasty-HUnit.html#v:testCaseSteps)
+  Dependencies\n\nTasty executes tests in parallel to make them finish faster.\nIf
+  this parallelism is not desirable, you can declare *dependencies* between\ntests,
+  so that one test will not start until certain other tests finish.\n\nDependencies
+  are declared using the `after` combinator:\n\n* `after AllFinish \"pattern\" my_tests`
+  will execute the test tree `my_tests` only after all\n    tests that match the pattern
+  finish.\n* `after AllSucceed \"pattern\" my_tests` will execute the test tree `my_tests`
+  only after all\n    tests that match the pattern finish **and** only if they all
+  succeed. If at\n    least one dependency fails, then `my_tests` will be skipped.\n\nThe
+  relevant types are:\n\n``` haskell\nafter\n  :: DependencyType -- ^ whether to run
+  the tests even if some of the dependencies fail\n  -> String         -- ^ the pattern\n
+  \ -> TestTree       -- ^ the subtree that depends on other tests\n  -> TestTree
+  \      -- ^ the subtree annotated with dependency information\n\ndata DependencyType
+  = AllSucceed | AllFinish\n```\n\nThe pattern follows the same AWK-like syntax and
+  semantics as described in\n[Patterns](#patterns). There is also a variant named
+  `after_` that accepts the\nAST of the pattern instead of a textual representation.\n\nLet's
+  consider some typical examples. (A note about terminology: here\nby \"resource\"
+  I mean anything stateful and external to the test: it could be a file,\na database
+  record, or even a value stored in an `IORef` that's shared among\ntests. The resource
+  may or may not be managed by `withResource`.)\n\n1. Two tests, Test A and Test B,
+  access the same shared resource and cannot be\n   run concurrently. To achieve this,
+  make Test A a dependency of Test B:\n\n   ``` haskell\n   testGroup \"Tests accessing
+  the same resource\"\n     [ testCase \"Test A\" $ ...\n     , after AllFinish \"Test
+  A\" $\n         testCase \"Test B\" $ ...\n     ]\n   ```\n\n1. Test A creates a
+  resource and Test B uses that resource. Like above, we make\n   Test A a dependency
+  of Test B, except now we don't want to run Test B if Test\n   A failed because the
+  resource may not have been set up properly. So we use\n   `AllSucceed` instead of
+  `AllFinish`\n\n   ``` haskell\n   testGroup \"Tests creating and using a resource\"\n
+  \    [ testCase \"Test A\" $ ...\n     , after AllSucceed \"Test A\" $\n         testCase
+  \"Test B\" $ ...\n     ]\n   ```\n\nHere are some caveats to keep in mind regarding
+  dependencies in Tasty:\n\n1. If Test B depends on Test A, remember that either of
+  the may be filtered out\n   using the `--pattern` option. Collecting the dependency
+  info happens *after*\n   filtering. Therefore, if Test A is filtered out, Test B
+  will run\n   unconditionally, and if Test B is filtered out, it simply won't run.\n1.
+  Tasty does not currently check whether the pattern in a dependency matches\n   anything
+  at all, so make sure your patterns are correct and do not contain\n   typos. Fortunately,
+  misspecified dependencies usually lead to test failures\n   and so can be detected
+  that way.\n1. Dependencies shouldn't form a cycle, otherwise Tasty with fail with
+  the\n   message \"Test dependencies form a loop.\" A common cause of this is a test\n
+  \  matching its own dependency pattern.\n1. Using dependencies may introduce quadratic
+  complexity. Specifically,\n   resolving dependencies is *O(number_of_tests × number_of_dependencies)*,\n
+  \  since each pattern has to be matched against each test name. As a guideline,\n
+  \  if you have up to 1000 tests, the overhead will be negligible, but if you\n   have
+  thousands of tests or more, then you probably shouldn't have more than a\n   few
+  dependencies.\n\n   Additionally, it is recommended that the dependencies follow
+  the\n   natural order of tests, i.e. that the later tests in the test tree depend
+  on\n   the earlier ones and not vice versa. If the execution order mandated by the\n
+  \  dependencies is sufficiently different from the natural order of tests in the\n
+  \  test tree, searching for the next test to execute may also have an\n   overhead
+  quadratic in the number of tests.\n\n\n## FAQ\n\n1.  When my tests write to stdout/stderr,
+  the output is garbled. Why is that and\n    what do I do?\n\n    It is not recommended
+  that you print anything to the console when using the\n    console test reporter
+  (which is the default one).\n    See [#103](https://github.com/feuerbach/tasty/issues/103)
+  for the\n    discussion.\n\n    Some ideas on how to work around this:\n\n    *
+  Use [testCaseSteps](https://hackage.haskell.org/package/tasty-hunit/docs/Test-Tasty-HUnit.html#v:testCaseSteps)
   (for tasty-hunit only).\n    * Use a test reporter that does not print to the console
   (like tasty-ant-xml).\n    * Write your output to files instead.\n\n## Press\n\nBlog
   posts and other publications related to tasty. If you wrote or just found\nsomething
