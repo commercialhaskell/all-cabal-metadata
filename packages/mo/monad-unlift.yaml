@@ -1,0 +1,143 @@
+homepage: https://github.com/fpco/monad-unlift
+changelog-type: markdown
+hash: 6ca1f7509d4044c2603de920797a90c7c124ba40fb457919655396b9474db199
+test-bench-deps: {}
+maintainer: michael@fpcomplete.com
+synopsis: Typeclasses for representing monad transformer unlifting
+changelog: ! '## 0.2.0
+
+
+  * Split out monad-unlift-ref
+
+
+  ## 0.1.1.0
+
+
+  * Add `MonadResource` instances
+
+
+  ## 0.1.0.0
+
+
+  * Initial release
+
+'
+basic-deps:
+  base: ! '>=4.6 && <5'
+  monad-control: ! '>=1.0 && <1.1'
+  constraints: -any
+  transformers-base: -any
+  transformers: -any
+all-versions:
+- 0.1.0.0
+- 0.1.0.1
+- 0.1.1.0
+- 0.1.2.0
+- 0.2.0
+author: Michael Snoyman
+latest: 0.2.0
+description-type: markdown
+description: ! "## monad-unlift\n\n[![Build Status](https://travis-ci.org/fpco/monad-unlift.svg?branch=master)](https://travis-ci.org/fpco/monad-unlift)\n\nTypeclasses
+  for providing for unlifting of monad transformers and stacks.\n\nNote that concrete
+  implementations of common transformers implementing\nthese type classes are provided
+  by the monad-unlift-ref package.\n\n## Synopsis\n\n```haskell\nimport Control.Concurrent.Async\nimport
+  Control.Monad.Trans.Unlift\nimport Control.Monad.Trans.RWS.Ref\nimport Control.Monad.IO.Class\nimport
+  Data.Mutable\n\n-- Some artbirary data type for the MonadReader\ndata SomeEnv =
+  SomeEnv Int\n\nmyFunc :: RWSRefT\n    -- The WriterT piece is contained by an IORef\n
+  \   IORef\n    -- For efficiency, we store the state in a primitive reference\n
+  \   (PRef RealWorld)\n    SomeEnv   -- Reader\n    [String]  -- Writer\n    Int
+  \      -- State\n    IO\n    (String, String)\nmyFunc = do\n    -- Get the unlift
+  function. Due to weaknesses in ImpredicativeTypes, we\n    -- need to use a newtype
+  wrapper. You can also use askRunBase.\n    --\n    -- If you want to just unwrap
+  one transformer layer, use\n    -- askUnlift/askRun/Unlift.\n    UnliftBase run
+  <- askUnliftBase\n\n    -- Note that we can use unlift to turn our transformer actions
+  into IO\n    -- actions. Unlike the standard RWST, actions from separate threads
+  are\n    -- both retained due to mutable references.\n    --\n    -- In real life:
+  you shouldn't rely on this working, as RWST is not thread\n    -- safe. This example
+  is provided as a good demonstration of the type level\n    -- functionality.\n    liftIO
+  $ concurrently (run foo) (run bar)\n  where\n    foo = do\n        tell [\"starting
+  foo\"]\n        modify (+ 1)\n        tell [\"leaving foo\"]\n        return \"foo
+  is done\"\n    bar = do\n        tell [\"starting bar\"]\n        SomeEnv e <- ask\n
+  \       modify (+ e)\n        tell [\"leaving bar\"]\n        return \"bar is done\"\n\nmain
+  :: IO ()\nmain = do\n    ((w, x), y, z) <- runRWSRefT myFunc (SomeEnv 5) 6\n    print
+  w -- foo is done\n    print x -- bar is done\n    print y -- 12 = 6 + 5 + 1\n    print
+  z -- starting and leaving statements, order ambiguous\n```\n\n## Overview\n\nA common
+  pattern is to have some kind of a monad transformer, and want to pass\nan action
+  into a function that requires actions in a base monad. That sounds a\nbit abstract,
+  so let's give a concrete example:\n\n```haskell\n-- From async\nconcurrently ::
+  IO a -> IO b -> IO (a, b)\n\nfunc1 :: ReaderT Foo IO String\nfunc2 :: ReaderT Foo
+  IO Double\n\ndoBoth :: ReaderT Foo IO (String, Double)\ndoBoth = _\n```\n\nDoing
+  this manually is possible, but a bit tedious:\n\n```haskell\ndoBoth :: ReaderT Foo
+  IO (String, Double)\ndoBoth = ReaderT $ \\foo -> concurrently\n    (runReaderT func1
+  foo)\n    (runReaderT func2 foo)\n```\n\nThis also doesn't generalize at all; you'll
+  be stuck writing `concurrently`\nvariants for every monad transformer stack. Fortunately,
+  the `monad-control`\npackage generalizes this to a large number of transformer stacks.
+  Let's\nimplement our generalized `concurrently`:\n\n```haskell\nconcurrentlyG ::
+  MonadBaseControl IO m\n              => m a -> m b -> m (StM m a, StM m b)\nconcurrentlyG
+  f g = liftBaseWith $ \\run ->\n    concurrently (run f) (run g)\n```\n\nNotice how,
+  in the signature for `concurrentlyG`, we no longer return `(a, b)`,\nbut `(StM m
+  a, StM m b)`. This is because there may be additional monadic\ncontext for each
+  thread of execution, and we have no way of merging these\ntogether in general. Some
+  examples of context are:\n\n* With `WriterT`, it's the values that you called `tell`
+  on\n* With `EitherT`, the returned value may not exist at all\n\nIn addition to
+  this difficulty, many people find the types in `monad-control`\ndifficult to navigate,
+  due to their extreme generality (which is in fact the\npower of that package!).\n\nThere
+  is a subset of these transformer stacks that are in fact [monad\nmorphisms](http://www.stackage.org/package/mmorph).
+  Simply stated, these are\ntransformer stacks that are isomorphic to `ReaderT`. For
+  these monads, there is\nnot context in the returned value. Therefore, there's no
+  need to combine\nreturned states or deal with possibly missing values.\n\nThis concept
+  is represented by the monad-unlift package, which provides a pair of typeclasses
+  for these kinds of transformer stacks. Before we dive in, let's see how we solve
+  our `concurrentlyG` problem with it:\n\n```haskell\nconcurrentlyG :: MonadBaseUnlift
+  IO m\n              => m a -> m b -> m (a, b)\nconcurrentlyG f g = do\n    UnliftBase
+  run <- askUnliftBase\n    liftBase $ concurrently (run f) (run g)\n```\n\nNotice
+  how we get `(a, b)` in the return type as desired. There's no need to\nunwrap values
+  or deal with context.\n\n### MonadTransUnlift\n\n`MonadTransUnlift` is a class for
+  any monad transformer which is isomorphic\nto `ReaderT`, in the sense that the environment
+  can be captured and applied\nlater. Some interesting cases in this space are:\n\n*
+  `IdentityT` and things isomorphic to it; in this case, you can think of the environment
+  as being `()`\n* Transformers which contain a mutable reference in their environment.
+  This allows them to behave like stateful transformers (e.g., `StateT` or `WriterT`),
+  but still obey the monad morphism laws. (See below for more details.)\n\nDue to
+  weaknesses in GHC's ImpredicativeTypes, we have a helper datatype to\nallow for
+  getting polymorphic unlift functions, appropriately named `Unlift`.\nFor many common
+  cases, you can get away with using `askRun` instead, e.g.:\n\n```haskell\nbar ::
+  ReaderT Foo IO ()\n\nbaz :: ReaderT Foo IO ()\nbaz = do\n    run <- askRun\n    liftIO
+  $ void $ forkIO $ run bar\n```\n\nUsing `Unlift`, this would instead be:\n\n```haskell\n
+  \   Unlift run <- askUnlift\n    liftIO $ void $ forkIO $ run bar\n```\n\nor equivalently:\n\n```haskell\n
+  \   u <- askUnlift\n    liftIO $ void $ forkIO $ unlift u bar\n```\n\n### MonadBaseUnlift\n\n`MonadBaseUnlift`
+  extends this concept to entire transformer stacks. This is\ntypically the typeclass
+  that people end up using. You can think of these two\ntypeclasses in exactly the
+  same way as `MonadTrans` and `MonadIO`, or more\nprecisely `MonadTrans` and `MonadBase`.\n\nFor
+  the same ImpredicativeTypes reason, there's a helper type `UnliftBase`.\nEverything
+  we just discussed should transfer directly to `MonadBaseUnlift`,\nso learning something
+  new isn't necessary. For example, you can rewrite the\nlast snippet as:\n\n```haskell\n
+  \   u <- askUnliftBase\n    liftIO $ void $ forkIO $ unliftBase u bar\n```\n\n###
+  Reference transformers\n\nWhen playing transformer stack games with a transformer
+  like `StateT`, it's\ncommon to accidentally discard state modifications. Additionally,
+  in the case\nof runtime exceptions, it's usually impossible to retain the state.
+  (Similar\nstatements apply to `WriterT` and `RWST`, both in strict and lazy variants.)\n\nAnother
+  approach is to use a `ReaderT` and hold onto a mutable reference. This\nis problematic
+  since there's no built in support for operations like `get`,\n`put`, or `tell`.
+  What we want is to have a `MonadState` and/or `MonadWriter`\ninstance.\n\nTo address
+  this case, this package includes variants of those transformers that\nuse mutable
+  references. These references are generic using the\n[mutable-containers](http://www.stackage.org/package/mutable-containers)\npackage,
+  which allows you to have highly efficient references like `PRef`\ninstead of always
+  using boxed references like `IORef`.\n\nNote that, for generality, the reference
+  transformers take type parameters\nindicating which mutable reference type to use.
+  Some examples you may use are:\n\n* `IORef` for boxed references in `IO`\n* `STRef
+  s` for boxed references in `ST`\n* `PRef RealWorld` for an unboxed reference in
+  `IO`\n\nSee the synopsis for a complete example.\n\n### conduit\n\nThe `transPipe`
+  function in conduit has caused confusion in the past due to its\nrequirement of
+  provided functions to obey monad morphism laws. This package\nmakes a good companion
+  to conduit to simplify that function's usage.\n\n### Other notable instances\n\nBoth
+  the `HandlerT` transformer from yesod-core and `LoggingT`/`NoLoggingT` are\nvalid
+  monad morphisms. `HandlerT` is in fact my first example of using the\n\"environment
+  holding a mutable reference\" technique to overcome exceptions\ndestroying state.\n\n```haskell\n{-#
+  LANGUAGE FlexibleContexts  #-}\n{-# LANGUAGE OverloadedStrings #-}\n{-# LANGUAGE
+  TemplateHaskell   #-}\nimport Control.Concurrent.Async\nimport Control.Monad.IO.Class\nimport
+  Control.Monad.Logger\nimport Control.Monad.Trans.Unlift\n\nmain :: IO ()\nmain =
+  runStdoutLoggingT foo\n\nfoo :: (MonadLogger m, MonadBaseUnlift IO m, MonadIO m)
+  => m ()\nfoo = do\n    run <- askRunBase\n    a <- liftIO $ async $ run $ $logDebug
+  \"Hello World!\"\n    liftIO $ wait a\n```\n"
+license-name: MIT

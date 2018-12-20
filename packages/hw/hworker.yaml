@@ -1,0 +1,97 @@
+homepage: http://github.com/dbp/hworker
+changelog-type: markdown
+hash: c5f32a8283ca858e67b2a49a51c41b36aa661228eca1bc6fc4c22293ddbe4b70
+test-bench-deps:
+  hspec-contrib: -any
+  bytestring: -any
+  base: ! '>=4.7 && <5'
+  time: ! '>=1.5'
+  hspec: ! '>=2'
+  text: -any
+  uuid: ! '>=1.2.6'
+  HUnit: -any
+  attoparsec: -any
+  hedis: ! '>=0.6.5'
+  aeson: -any
+maintainer: dbp@dbpmail.net
+synopsis: A reliable at-least-once job queue built on top of redis.
+changelog: ! "* 0.1.0.1 Daniel Pattersion <dbp@dbpmail.net> 2015-11-1\n\n  Add example
+  in haddocks.\n\n* 0.1.0.0 Daniel Patterson <dbp@dbpmail.net> 2015-10-25\n\n  Initial
+  release.\n"
+basic-deps:
+  bytestring: -any
+  base: ! '>=4.8 && <5'
+  time: ! '>=1.5'
+  text: -any
+  uuid: ! '>=1.2.6 && <1.4'
+  attoparsec: -any
+  hedis: ! '>=0.6.5'
+  aeson: -any
+all-versions:
+- 0.1.0.0
+- 0.1.0.1
+author: Daniel Patterson
+latest: 0.1.0.1
+description-type: markdown
+description: ! "## About\n\n`hworker` is a Redis-backed persistent at-least-once queue
+  library. It\nis vaguely inspired by `sidekiq` for Ruby. It is intended to be a\nsimple
+  reliable mechanism for processing background tasks. The jobs\ncan be created by
+  a Haskell application or any application that can\npush JSON data structures of
+  the right shape into a Redis queue. The\napplication that processes the jobs need
+  not be the same one as the\napplication that creates them (they just need to be
+  able to talk to\nthe same Redis server, and use the same serialization to/from JSON).\n\n##
+  Stability\n\nThis has been running in one application sending email (using\n`hworker-ses`)
+  for several months. This is relatively low traffic\n(transactional messages) most
+  of the time, with spikes of 10k-30k\nmessages (mailing blasts).\n\n## Important
+  Note\n\nThe expiration of jobs is really important. It defaults to 120\nseconds,
+  which may be short depending on your application (for things\nlike sending emails,
+  it may be fine). **The reason why this timeout is\nimportant is that if a job ever
+  runs longer than this, the monitor\nwill think that the job failed** in some inexplicable
+  way (like the\nserver running the job died) and will add the job back to the queue
+  to\nbe run. Based on the semantics of this job processor, jobs running\nmultiple
+  times is not a failure case, but it's obviously not something\nyou _want_ to happen,
+  so be sure to set the timeout to something\nreasonable for your application.\n\n##
+  Overview\n\nTo define jobs, you define a serialized representation of the job, and\na
+  function that runs the job, which returns a status. The behavior of\nuncaught exceptions
+  is defined when you create the worker - it can be\neither `Failure` or `Retry`.
+  Jobs that return `Failure` are removed\nfrom the queue, whereas jobs that return
+  `Retry` are added again. The\nonly difference between a `Success` and a `Failure`
+  is that a\n`Failure` returns a message that is logged (ie, neither run again).\n\n##
+  Example\n\nSee the `example` directory in the repository.\n\n## Semantics\n\nThis
+  behavior of this queue processor is at-least-once.\n\nWe rely on the defined behavior
+  of Redis for reliability. Once a job\nhas been `queue`d, it is guaranteed to be
+  run eventually, provided\nsome worker and monitor threads exist. If the worker thread
+  that was\nrunning a given job dies, the job will eventually be retried (if you\ndo
+  not want this behavior, do not start any monitor threads). Once the\njob completes,
+  provided nothing kills the worker thread in the\nintervening time, jobs that returned
+  `Success` will not be run again,\njobs that return `Failure` will have their messages
+  logged and will\nnot be run again, and jobs that return `Retry` will be queued\nagain.
+  If something kills the worker thread before these\nacknowledgements go through,
+  the job will be retried. Exceptions\ntriggered within the job cannot affect the
+  worker thread - what they\ndo to the job is defined at startup (they can cause either
+  a `Failure`\nor `Retry`).\n\nAny deviations from this behavior are considered bugs
+  that will be fixed.\n\n\n## Redis Operations\n\nUnder the hood, we will have the
+  following data structures in redis\n(`name` is set when you create the `hworker`
+  instance):\n\n`hworker-jobs-name`: list of json serialized job descriptions\n\n`hworker-progress-name`:
+  a hash of jobs that are in progress, mapping to time started\n\n`hworker-broken-name`:
+  a hash of jobs to time that couldn't be deserialized; most likely means you changed
+  the serialization format with jobs still in queue, _or_ you pointed different applications
+  at the same queues.\n\n`hworker-failed-queue`: a record of the jobs that failed
+  (limited in size based on config).\n\nIn the following pseudo-code, I'm using `MULTI`...`EXEC`
+  to indicate\natomic blocks of code. These are actually implemented with lua and\n`EVAL`,
+  but I think it's easier to read this way. If you want to see\nwhat's actually happening,
+  just read the code - it's not very long!\n\nWhen a worker wants to do work, the
+  following happens:\n\n```\nnow = TIME\nMULTI\nv = RPOP hworker-jobs-name\nif v\n
+  \ HSET hworker-progress-name v now\nEXEC\nv\n```\n\nWhen it completes the job, it
+  does the following:\n\n```\nv = JOB\nHDEL hwork-progress v\n```\n\nIf the job returned
+  `Retry`, the following occurs:\n\n```\nv = JOB\nt = START_TIME\nMULTI\nLPUSH hwork-jobs
+  v\nHDEL hwork-progress t\nEXEC\n```\n\nA monitor runs on another thread that will
+  re-run jobs that stay in\nprogress for too long (as that indicates that something
+  unknown went\nwrong). The operation that it runs periodically is:\n\n```\nkeys =
+  HKEYS (or HSCAN) hwork-progress\nfor keys as v:\n  started = HGET hwork-progress
+  v\n  if started < TIME - timeout\n    MULTI\n    RPUSH hwork-jobs v\n    HDEL hwork-progress
+  v\n    EXEC\n```\n\nNote that what the monitor does and `Retry` is slightly different
+  -\nthe monitor puts jobs on the front of the queue, whereas `Retry` puts\nthem on
+  the back.\n\n## Primary Libraries Used\n\n- hedis\n- aeson\n\n## Contributors\n\n-
+  Daniel Patterson (@dbp - dbp@dbpmail.net)\n\n## Build Status\n\n[![Circle CI](https://circleci.com/gh/dbp/hworker.svg?style=svg&circle-token=b40a5b06c599d457cbaa4d1c00824c98d4768f2f)](https://circleci.com/gh/dbp/hworker)\n"
+license-name: ISC

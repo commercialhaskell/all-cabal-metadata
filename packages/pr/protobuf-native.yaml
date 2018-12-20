@@ -1,0 +1,118 @@
+homepage: https://github.com/nicta/protobuf-native
+changelog-type: ''
+hash: 24e6d997d274a3d31156a52bf042a533c5a9c0927a201d2316b314a0ffce656f
+test-bench-deps:
+  cereal: ==0.4.1.0
+  bytestring: -any
+  cplusplus-th: -any
+  base: -any
+  protocol-buffers-fork: ==2.0.16
+  text: -any
+  protobuf-native: -any
+  criterion: ==1.0.2.0
+  protobuf: ==0.2.0.4
+  utf8-string: ==0.3.8
+  hprotoc-fork: ==2.0.16.1
+  QuickCheck: ==2.7.6
+maintainer: maxwell.swadling@nicta.com.au
+synopsis: Protocol Buffers via C++
+changelog: ''
+basic-deps:
+  bytestring: ==0.10.*
+  cplusplus-th: ==1.*
+  base: ! '>=4.6 && <4.8'
+  text: ! '>=1 && <=2'
+  protobuf-native: -any
+  template-haskell: -any
+all-versions:
+- 1.0.0.0
+- 1.0.0.1
+author: Maxwell Swadling
+latest: 1.0.0.1
+description-type: markdown
+description: ! "protobuf-native\n===============\n\n`protobuf-native` uses the code
+  generated from protobuf for C++ in Haskell\nto go between Haskell and protobuf data
+  structures.\n\nIt makes use of Template Haskell to assist in generating the interface\nbetween
+  protobuf and your data structures.\n\nObjects have finalizers so you never need
+  to worry about memory management.\n\nUsage\n-----\n\n```haskell\nprotobuf :: FilePath
+  -> Name -> Q [Dec]\n```\n\n`protobuf` is a Template Haskell splice that takes the
+  file path to a\ncompiled protobuf object file and the name of the data type you
+  want to\nbuild bindings to.\n\nThe data type must:\n\n- Have a name the same as
+  the protobuf message name with a `T` appended\n- Be a record data structure\n- Have
+  a single constructor with the name of the data type with the final `T` omitted\n-
+  If a field's name is a reserved word, it may have an `_` appended\n\nFor example,
+  if we have a Person protobuf structure in the file `person.proto`:\n\n```\nmessage
+  Name {\n  optional string firstname = 1;\n  optional string lastname = 2;\n}\n\nmessage
+  Person {\n  required Name name = 1;\n  required int32 id = 2;\n  optional string
+  email = 3;\n}\n```\n\nFirst we run `protoc --cpp_out=. person.proto` then compile
+  the `person.pb.cc`\nfile. **Unfortunately**, at this point, you need to mangle the
+  C++ header file as\nper the **Protobuf Mangling Guide** below, ideally this would
+  be automated.\nDo not re-run `protoc` unless you want to re-mangle the file.\nAlways
+  check these files in to source control.\n\nThen we can write two Haskell data structures
+  to represent these types:\n\n```haskell\n{-# LANGUAGE TemplateHaskell, MultiParamTypeClasses
+  #-}\nimport Data.Protobuf\n\ndata NameT = Name { firstname :: Maybe String, lastname
+  :: Maybe String}\n  deriving (Show, Eq)\nprotobuf \"person.pb.o\" ''NameT\n\ndata
+  PersonT = Person { name :: NameT, id :: Int, email :: String }\n  deriving (Show,
+  Eq)\nprotobuf \"person.pb.o\" ''PersonT\n```\n\nIf you get any of this wrong, you
+  will get a compiler error.\n\nNote that `NameT` is the type of the `name` field
+  in `PersonT`. With *data\nkinds* you may get confusing error messages here.\n\nNow
+  we can:\n\n1. Construct a new Haskell `PersonT` value\n2. Send the Haskell value
+  to a protobuf struct with `assign`\n3. Write it to a file using `writeProtobuf`
+  which uses `SerializeToOstream`\n4. Read that file using `loadProtobuf` which uses
+  `ParseFromIstream`\n5. Load that protobuf struct with `load`\n6. Comapre the values\n\n```haskell\nmain
+  = do\n  let val = (Person (Name (Just \"Max\") Nothing) 1 \"maxwell.swadling@nicta.com.au\")\n
+  \ person <- newPb :: IO PersonPtr\n  assign person val\n  writeProtobuf \"person.pb\"
+  person\n  \n  person2 <- new :: IO PersonPtr\n  readProtobuf \"person.pb\" person2\n
+  \ val2 <- derefPb person2\n  print $ val == val2\n```\n\nThe C++ are `ForeignPtr`s
+  with finalizers, so you do not need to free anything.\n\nWorking with **Cabal**
+  requires extra build steps. See this project's `Setup.hs`\nfor an example on how
+  to run `protoc` and `clang++` in the build phase.\n\nTesting\n-------\n\nThe property
+  above is used by QuickCheck to test the library works.\nThe tests are located in
+  `tests/Tests.hs`.\nNamely, for all types in `Protobuf` the following property holds:\n\n```haskell\ntestProtobuf
+  b = do\n  x <- run $ do\n    p <- newPb\n    assign p b\n    v <- derefPb p\n    return
+  $ b == v\n  assert x\n```\n\nBy profiling the tests you can verify the library does
+  not leak memory.\n\nProtobuf Mangling Guide\n-----------------------\n\nThis is
+  a temporary measure until we make a post-processor for protobuf header\nfiles.\n\n-
+  Inline functions need to be un-inlined so they are linkable.\n  If you see something
+  like:\n\n```\nException when trying to run compile-time code:\n  symbol \"Name::clear_firstname()\"
+  missing from object file\nCode: protobuf \"tests/person.pb.o\" ''NameT\n```\n\nThis
+  is an inline function that must be un-inlined. \n\nGo to the header file and search
+  for that function name (in this\ncase `clear_firstname`). You will find two occurances:\n\n```\ninline
+  void clear_firstname();\n...\ninline void Name::clear_firstname() {\n  if (firstname_
+  != &::google::protobuf::internal::GetEmptyStringAlreadyInited()) {\n...\n```\n\nRemove
+  the `inline` from both of these.\n\n- When you see the linker error that some function
+  could not be found, it is\n  probably still marked inline. Such as:\n\n```\nUndefined
+  symbols for architecture x86_64:\n  \"Name::set_lastname(std::__1::basic_string<char,
+  std::__1::char_traits<char>, std::__1::allocator<char> > const&)\", referenced from:\n
+  \     _c73i_info in Person.o\n```\n\nGo to the header file and find `set_lastname`
+  and remove the `inline`. It may also\nlook like an field name, such as:\n\n```\n\"Name::lastname()
+  const\", referenced from:\n      _c71z_info in Person.o\n```\n\nRemove the inline
+  from:\n```\ninline const ::std::string& lastname() const;\n```\n\nWhen dealing with
+  a string setter, you only need to un-inline the `std::string`\nfunction. I.e.\n```\n
+  \ /*inline*/ void set_email(const ::std::string& value);\n  inline void set_email(const
+  char* value);\n  inline void set_email(const char* value, size_t size);\n```\n\n-
+  We currently exchange protobuf values via \"set and delete\". If you see the linker
+  error that an `add_x(x *)` symbol is missing, then \"set and delete\" needs to\n
+  \ be implemented for that field `x`. For example, if the `Graph::add_nodes(Node*)`\n
+  \ function is missing we need to add the following function and declaration to the\n
+  \ header file:\n\n```\n// in the class\nvoid add_nodes(Node *);\n\n// in the impl\nvoid
+  Graph::add_nodes(Node *x) {\n  ::Node *n = nodes_.Add();\n  *n = *x;\n  delete x;\n}\n```\n\nThis
+  is currently another work around that is fixable.\n\nRelated Work\n------------\n\n-
+  http://hackage.haskell.org/package/protobuf lets you write Protobuf structures\n
+  \ in plain Haskell.\n- http://hackage.haskell.org/package/protocol-buffers generates
+  Haskell code from\n  the proto files.\n- `protobuf-native` requries the user to
+  both write proto files and Haskell\n  structures. It does not require the user to
+  write marshalling code.\n  The main advantage is the ability to use C++ with these
+  data structures.\n\nIf your problem has performance constraints you may want to
+  consider using this\nlibrary. When working with large protobuf files, you may want
+  to write file\niterators / network operations in C++ and process the data in Haskell.\nThis
+  library lets you only pay for converting the parts of the data\nstructure you need.
+  You can, for example, iterate over a large file 20 \nelements at a time and only
+  pull out the components of the protobuf structure\nyou need to pass to Haskell.\n\nFuture
+  work\n-----------\n\n- The C++ protobuf implementations should be mangled automatically.
+  A sufficiently\n  complex awk program would suffice.\n- Currently it is a lot of
+  manual work writing data structures to match the\n  protobuf files. We should parse
+  the protobuf files and generate the\n  data type definitions.\n- Support unknown
+  field data.\n- It should support `Text`.\n- It should use `Vector` instead of `[]`
+  for `repeated` values.\n"
+license-name: BSD-3-Clause
