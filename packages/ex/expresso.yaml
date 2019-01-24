@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: 2858267cf7882ad6652360d84e9d0ef8499bdcbf82db46d4d007252cafcc9937
+hash: 284403867bbc91b386856cfca3a66fdf5b5bbafb111204ec1b5137d2a791b22e
 test-bench-deps:
   wl-pprint: -any
   haskeline: -any
@@ -14,13 +14,21 @@ test-bench-deps:
   mtl: -any
   hashable: -any
   tasty-hunit: -any
-  terminfo: -any
   tasty: -any
   directory: -any
 maintainer: info@timphilipwilliams.com
 synopsis: A simple expressions language based on row types
 changelog: |
   # Change Log
+
+  ## 0.1.2.0
+
+  - added type synonyms
+  - let bindings can now be annotated with types
+  - support field renaming during record matches
+  - added a text append primitive
+  - added a list uncons primitive
+  - added example List and Text library modules
 
   ## 0.1.1.0
 
@@ -51,7 +59,6 @@ basic-deps:
   containers: ! '>=0.5.11 && <0.7'
   mtl: ! '>=2.2.2 && <2.3'
   hashable: ! '>=1.2.7 && <1.3'
-  terminfo: ==0.4.*
   template-haskell: ! '>=2.13.0 && <2.15'
   directory: ! '>=1.3.1 && <1.4'
 all-versions:
@@ -59,8 +66,9 @@ all-versions:
 - 0.1.0.1
 - 0.1.0.2
 - 0.1.1.0
+- 0.1.2.0
 author: Tim Williams
-latest: 0.1.1.0
+latest: 0.1.2.0
 description-type: markdown
 description: |
   # ☕ Expresso
@@ -80,9 +88,9 @@ description: |
   - Structural typing with extensible records and variants
   - Lazy evaluation
   - Convenient use from Haskell (a type class for marshalling values)
-  - Haskell-inspired syntax
+  - Whitespace insensitive syntax
   - Type annotations to support first-class modules and schema validation use cases
-  - Built-in support for ints, double, bools, chars, maybes and lists
+  - Built-in support for ints, double, bools, chars and lists
 
   ## Installation
 
@@ -162,6 +170,10 @@ description: |
 
       λ> let sqmag = r -> r.x*r.x + r.y*r.y
 
+  When matching on record arguments, sometimes it can be necessary to supply a new name to bind the values of a field to, for example:
+
+      λ> let add = {x=r, y=s} {x=u, y=v} -> {x = r + u, y = s + v}
+
   ### Record restriction
 
   We can remove a field by using the restriction primitive `\`. For example, the following will type-check:
@@ -200,21 +212,21 @@ description: |
   Records with polymorphic functions can be passed as lambda arguments and remain polymorphic using *higher-rank polymorphism*. To accomplish this, we must provide Expresso with a suitable type annotation of the argument. For example:
 
       let f = (m : forall a. { reverse : [a] -> [a] |_}) ->
-                  {l = m.reverse [True, False], r = m.reverse "abc" }
+                  {l = m.reverse [True, False], r = m.reverse [1,2,3] }
 
   The function `f` above takes a "module" `m` containing a polymorphic function `reverse`. We annotate `m` with a type by using a single colon `:` followed by the type we are expecting.
   Note the underscore `_` in the tail of the record. This is a *type wildcard*, meaning we have specified a *partial type signature*. This type wildcard allows us to pass an arbitrary module containing a `reverse` function with this signature. To see the full type signature of `f`, we can use the Expresso REPL:
 
       λ> :t f
       forall r. (r\reverse) => (forall a. {reverse : [a] -> [a] | r}) ->
-          {l : [Bool], r : [Char]}
+          {l : [Bool], r : [Int]}
 
   Note that the `r`, representing the rest of the module fields, is a top-level quantifier. The type wildcard is especially useful here, as it allows us to avoid creating a top-level signature for the entire function and explicitly naming this row variable. More generally, type wildcards allow us to leave parts of a type signature unspecified.
 
   Function `f` can now of course be applied to any module satisfying the type signature:
 
-      λ> f (import "Prelude.x")
-      {l = [False, True], r = "cba"}
+      λ> f (import "List.x")
+      {l = [False, True], r = [3,2,1]}
 
 
   ### Difference records and concatenation
@@ -272,12 +284,17 @@ description: |
 
   We will often need to create closed variant types. For example, we may want to create a structural type analogous to Haskell's `Maybe a`, having only two constructors: `Nothing` and `Just`. This can be accomplished using smart constructors with type annotations. In the Prelude, we define the equivalent constructors `just` and `nothing`, as well as a fold `maybe` over this closed set:
 
-      just        = x -> Just x  : forall a. a -> <Just : a, Nothing : {}>;
+      type Maybe a = <Just : a, Nothing : {}>;
 
-      nothing     = Nothing{}    : forall a. <Just : a, Nothing : {}>;
+      just        : forall a. a -> Maybe a
+                  = x -> Just x;
+
+      nothing     : forall a. Maybe a
+                  = Nothing{};
 
       maybe       = b f m -> case m of { Just a -> f a, Nothing{} -> b }
 
+  Note that we declare and use a type synonym `Maybe a` to avoid repeating the type `<Just : a, Nothing : {}>`. Type synonyms can be included at the top of any file and have global scope.
 
   ### Variant embedding
 
@@ -323,7 +340,7 @@ description: |
 
   A simple type annotation `<term> : <type>` , will not suffice for "schema validation". For example, consider this attempt at validating an integer against a schema that permits everything:
 
-      1 : forall a. a        -- FAILS
+      1 : forall a. a        -- DOES NOT TYPE CHECK!
 
   The above fails to type check since the left-hand-side is inferred as the most general type (here a concrete int) and the right-hand-side must be less so.
 
@@ -358,7 +375,7 @@ description: |
   Turing equivalence is introduced via a single `fix` primitive, which can be easily removed or disabled.
   `fix` can be useful to achieve open recursive records and dynamic binding (à la Nix).
 
-      λ> let r = mkOverridable (self -> {x = "foo", y = self.x ++ "bar"})
+      λ> let r = mkOverridable (self -> {x = "foo", y = self.x <> "bar"})
       λ> r
       {override_ = <Lambda>, x = "foo", y = "foobar"}
 
@@ -372,7 +389,7 @@ description: |
   Expresso can be used as a typed configuration file format from within Haskell programs. As an example, let's consider a hypothetical small config file for a backup program:
 
       let awsTemplate =
-          { location ="s3://s3-eu-west-2.amazonaws.com/atavachron-backup"
+          { location ="s3://s3-eu-west-1.amazonaws.com/tim-backup"
           , include  = []
           , exclude  = []
           }
@@ -380,8 +397,14 @@ description: |
       { cachePath   = Default{}
       , taskThreads = Override 2
       , profiles =
-         [ { name = "pictures", source = "~/Pictures" | awsTemplate }
-         , { name = "music", source = "~/Music", exclude := ["**/*.m4a"] | awsTemplate }
+         [ { name = "pictures"
+           , source = "~/Pictures"
+           | awsTemplate
+           }
+         , { name = "music"
+           , source = "~/Music"
+           , exclude := ["**/*.m4a"]
+           | awsTemplate }
          ]
       }
 
