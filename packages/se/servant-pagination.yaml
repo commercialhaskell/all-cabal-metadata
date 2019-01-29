@@ -1,6 +1,6 @@
 homepage: https://github.com/chordify/haskell-servant-pagination
 changelog-type: markdown
-hash: 605ef35e0a161d35402045c51af2884402e3e1bdba33b73bdcf5c5919deb39ab
+hash: 4f76d7e1f367afb546f0ea59e66a2aeebcc4412273c55c94218fd4ecf91d0b5f
 test-bench-deps:
   base: -any
   hspec: -any
@@ -8,11 +8,12 @@ test-bench-deps:
   servant-server: -any
   servant-pagination: -any
   QuickCheck: -any
-maintainer: ! 'Chordify <haskelldevelopers@chordify.net>
-
-  Matthias Benkort <matthias.benkort@gmail.com>'
+maintainer: |-
+  Chordify <haskelldevelopers@chordify.net>
+  Matthias Benkort <matthias.benkort@gmail.com>
 synopsis: Type-safe pagination for Servant APIs
-changelog: ! "# Changelog\n\n## v2.1.3 (2018-11-14)\n\n- Fix Haddock generation\n\n##
+changelog: "# Changelog\n\n## v2.2.0 (2018-11-14)\n\n- Use URL encoding for range
+  values to properly support strings.\n\n## v2.1.3 (2018-11-14)\n\n- Fix Haddock generation\n\n##
   v2.1.2 (2018-11-13)\n\n- Allow servant-0.15\n\n\n## v2.1.1 (2018-07-10)\n\n- Allow
   servant-0.14\n\n\n## v2.1.0 (2018-04-16) \n\n- Add some tests (QuickCheck round-up
   & control some Ranges parsing)\n- Add `Show` and `Eq` instances for Ranges\n- Expose
@@ -28,6 +29,7 @@ basic-deps:
   text: ! '>=1.2 && <2'
   servant-server: ! '>=0.11 && <0.15'
   servant: ! '>=0.11 && <0.15'
+  uri-encode: ! '>=1.5 && <1.6'
   servant-pagination: -any
   aeson: ! '>=1.2 && <2'
   safe: ! '>=0.3 && <1'
@@ -36,124 +38,262 @@ all-versions:
 - 2.1.1
 - 2.1.2
 - 2.1.3
+- 2.2.0
 author: Chordify
-latest: 2.1.3
+latest: 2.2.0
 description-type: markdown
-description: ! "# servant-pagination [![](https://img.shields.io/hackage/v/servant-pagination.svg)](https://hackage.haskell.org/package/servant-pagination)\n\n##
-  Overview\n\nThis module offers opinionated helpers to declare a type-safe and a
-  flexible pagination\nmechanism for Servant APIs. This design, inspired by [Heroku's
-  API](https://devcenter.heroku.com/articles/platform-api-reference#ranges),\nprovides
-  a small framework to communicate about a possible pagination feature of an endpoint,\nenabling
-  a client to consume the API in different fashions (pagination with offset / limit,\nendless
-  scroll using last referenced resources, ascending and descending ordering, etc.)\n\nTherefore,
-  client can provide a `Range` header with their request with the following format:\n\n-
-  `Range: <field> [<value>][; offset <o>][; limit <l>][; order <asc|desc>]`\n\nFor
-  example: `Range: createdAt 2017-01-15T23:14:67.000Z; offset 5; order desc` indicates
-  that\nthe client is willing to retrieve the next batch of document in descending
-  order that were\ncreated after the fifteenth of January, skipping the first 5.\n\nAs
-  a response, the server may return the list of corresponding document, and augment
-  the\nresponse with 3 headers:\n\n- `Accept-Ranges`: A comma-separated list of fields
-  upon which a range can be defined\n- `Content-Range`: Actual range corresponding
-  to the content being returned\n- `Next-Range`: Indicate what should be the next
-  `Range` header in order to retrieve the next range\n\nFor example:\n\n- `Accept-Ranges:
-  createdAt, modifiedAt`\n- `Content-Range: createdAt 2017-01-15T23:14:51.000Z..2017-02-18T06:10:23.000Z`\n-
-  `Next-Range: createdAt 2017-02-19T12:56:28.000Z; offset 0; limit 100; order desc`\n\n\n##
-  Getting Started\n\nCode-wise the integration is quite seamless and unobtrusive.
-  `servant-pagination` provides a\n`Ranges (fields :: [Symbol]) (resource :: *) ->
-  *` data-type for declaring available ranges\non a group of _fields_ and a target
-  _resource_. To each combination (resource + field) is\nassociated a given type `RangeType
-  (resource :: *) (field :: Symbol) -> *` as described by\nthe type-family in the
-  `HasPagination` type-class.\n\nSo, let's start with some imports and extensions
-  to get this out of the way:\n\n```hs\n{-# LANGUAGE DataKinds             #-}\n{-#
-  LANGUAGE DeriveGeneric         #-}\n{-# LANGUAGE FlexibleInstances     #-}\n{-#
-  LANGUAGE MultiParamTypeClasses #-}\n{-# LANGUAGE TypeApplications      #-}\n{-#
-  LANGUAGE TypeFamilies          #-}\n{-# LANGUAGE TypeOperators         #-}\n\nimport
-  \          Data.Aeson         (ToJSON, genericToJSON)\nimport           Data.Maybe
-  \        (fromMaybe)\nimport           Data.Proxy         (Proxy (..))\nimport           GHC.Generics
-  \      (Generic)\nimport           Servant            ((:>), GetPartialContent,
-  Handler, Header, Headers, JSON, Server)\nimport           Servant.Pagination (HasPagination
-  (..), PageHeaders, Range (..), Ranges, applyRange)\n\nimport qualified Data.Aeson
-  \              as Aeson\nimport qualified Network.Wai.Handler.Warp as Warp\nimport
-  qualified Servant.Pagination       as Pagination\nimport qualified Servant\n```\n\n\n####
-  Declaring the Resource\n\nServant APIs are rather resource-oriented, and so is `servant-pagination`.
-  This\nguide shows a basic example working with `JSON` (as you could tell from the\nimport
-  list already). To make the world a <span style='text-decoration:\nline-through'>better</span>
-  colored place, let's create an API to retrieve\ncolors -- with pagination.\n\n```hs\ndata
-  Color = Color\n  { name :: String\n  , rgb  :: [Int]\n  , hex  :: String\n  } deriving
-  (Eq, Show, Generic)\n\ninstance ToJSON Color where\n  toJSON =\n    genericToJSON
-  Aeson.defaultOptions\n\ncolors :: [Color]\ncolors =\n  [ Color \"Black\" [0, 0,
-  0] \"#000000\"\n  , Color \"Blue\" [0, 0, 255] \"#0000ff\"\n  , Color \"Green\"
-  [0, 128, 0] \"#008000\"\n  , Color \"Grey\" [128, 128, 128] \"#808080\"\n  , Color
-  \"Purple\" [128, 0, 128] \"#800080\"\n  , Color \"Red\" [255, 0, 0] \"#ff0000\"\n
-  \ , Color \"Yellow\" [255, 255, 0] \"#ffff00\"\n  ]\n```\n\n#### Declaring the Ranges\n\nNow
-  that we have defined our _resource_ (a.k.a `Color`), we are ready to declare a new
-  `Range`\nthat will operate on a \"name\" field (genuinely named after the `name`
-  fields from the `Color`\nrecord).\nFor that, we need to tell `servant-pagination`
-  two things:\n\n- What is the type of the corresponding `Range` values\n- How do
-  we get one of these values from our resource\n\nThis is done via defining an instance
-  of `HasPagination` as follows:\n\n```hs\ninstance HasPagination Color \"name\" where\n
-  \ type RangeType Color \"name\" = String\n  getFieldValue _ = name\n  -- getRangeOptions
-  :: Proxy \"name\" -> Proxy Color -> RangeOptions\n  -- getDefaultRange :: Proxy
-  Color -> Range \"name\" String\n\ndefaultRange :: Range \"name\" String\ndefaultRange
-  =\n  getDefaultRange (Proxy @Color)\n```\n\nNote that `getFieldValue :: Proxy \"name\"
-  -> Color -> String` is the minimal complete definintion\nof the class. Yet, you
-  can define `getRangeOptions` to provide different parsing options (see\nthe last
-  section of this guide). In the meantime, we've also defined a `defaultRange` as
-  it will\ncome in handy when defining our handler.\n\n#### API\n\nGood, we have a
-  resource, we have a `Range` working on that resource, we can now declare our\nAPI
-  using other Servant combinators we already know:\n\n```hs\ntype API =\n  \"colors\"\n
-  \   :> Header \"Range\" (Ranges '[\"name\"] Color)\n    :> GetPartialContent '[JSON]
-  (Headers MyHeaders [Color])\n\ntype MyHeaders =\n  Header \"Total-Count\" Int :>
-  PageHeaders '[\"name\"] Color\n```\n\n`PageHeaders` is a type alias provided by
-  the library to declare the necessary response headers\nwe mentionned in introduction.
-  Expanding the alias boils down to the following:\n\n```hs\n-- type MyHeaders\n--
-  \  =  Header \"Total-Count\"   Int\n--   :> Header \"Accept-Ranges\" (AcceptRanges
-  '[\"name\"])\n--   :> Header \"Content-Range\" (ContentRange '[\"name\"] Color)\n--
-  \  :> Header \"Next-Range\"    (Ranges '[\"name\"] Color)\n```\n\nAs a result, we
-  will need to provide all those headers with the response in our handler. Worry\nnot,
-  _servant-pagination_ provides an easy way to lift a collection of resources into
-  such handler.\n\n#### Server\n\nTime to connect the last bits by defining the server
-  implementation of our colorful API. The `Ranges`\ntype we've defined above (tight
-  to the `Range` HTTP header) indicates the server to parse any `Range`\nheader, looking
-  for the format defined in introduction with fields and target types we have just
-  declared.\nIf no such header is provided, we will end up receiving `Nothing`. Otherwise,
-  it will be possible\nto _extract_ a `Range` from our `Ranges`.\n\n```hs\nserver
-  :: Server API\nserver = handler\n  where\n    handler :: Maybe (Ranges '[\"name\"]
-  Color) -> Handler (Headers MyHeaders [Color])\n    handler mrange = do\n      let
-  range =\n            fromMaybe defaultRange (mrange >>= extractRange)\n\n      addHeader
-  (length colors) <$> returnRange range (applyRange range colors)\n\nmain :: IO ()\nmain
-  =\n  Warp.run 1442 $ Servant.serve (Proxy @API) server\n```\n\nLet's try it out
-  using different ranges to observe the server's behavior. As a reminder, here's\nthe
-  format we defined, where `<field>` here can only be `name` and `<value>` must parse
-  to a `String`:\n\n- `Range: <field> [<value>][; offset <o>][; limit <l>][; order
-  <asc|desc>]`\n\nBeside the target field, everything is pretty much optional in the
-  `Range` HTTP header. Missing parts\nare deducted from the `RangeOptions` that are
-  part of the `HasPagination` instance. Therefore, all\nfollowing examples are valid
-  requests to send to our server:\n\n- 1 - `curl http://localhost:1442/colors -vH
-  'Range: name'`\n- 2 - `curl http://localhost:1442/colors -vH 'Range: name; limit
-  2'`\n- 3 - `curl http://localhost:1442/colors -vH 'Range: name Green; order asc;
-  offset 1'`\n\nConsidering the following default options:\n\n- `defaultRangeLimit:
-  100`\n- `defaultRangeOffset: 0`\n- `defaultRangeOrder: RangeDesc`\n\nThe previous
-  ranges reads as follows:\n\n- 1 - The first 100 colors, ordered by descending names\n-
-  2 - The first 2 colors, ordered by descending names\n- 3 - The 100 colors after
-  `Green` (not included), ordered by ascending names.\n\n> See `examples/Simple.hs`
-  for a running version of this guide.\n\n## Going Forward\n\n####  Multiple Ranges\n\nNote
-  that in the simple above scenario, there's no ambiguity with `extractRange` and
-  `returnRange`\nbecause there's only one possible `Range` defined on our resource.
-  Yet, as you've most probably\nnoticed, the `Ranges` combinator accepts a list of
-  fields, each of which must declare a `HasPagination`\ninstance. Doing so will make
-  the other helper functions more ambiguous and type annotation are\nhighly likely
-  to be needed.\n\n\n```hs\ninstance HasPagination Color \"hex\" where\n  type RangeType
-  Color \"hex\" = String\n  getFieldValue _ = hex\n\n-- to then define: Ranges '[\"name\",
-  \"hex\"] Color\n```\n\n> See `examples/Complex.hs` for more complex examples.\n\n\n####
-  Parsing Options\n\nBy default, `servant-pagination` provides an implementation of
-  `getRangeOptions` for each\n`HasPagination` type-class. However, this can be overwritten
-  when defining a instance of that\nclass to provide your own options. This options
-  come into play when a `Range` header is\nreceived and isn't fully specified (`limit`,
-  `offset`, `order` are all optional) to provide\ndefault fallback values for those.\n\nFor
-  instance, let's say we wanted to change the default limit to `5` in a new range
-  on\n`\"rgb\"`, we could tweak the corresponding `HasPagination` instance as follows:\n\n```hs\ninstance
-  HasPagination Color \"rgb\" where\n  type RangeType Color \"rgb\" = String\n  getFieldValue
-  _ = sum . rgb\n  getRangeOptions _ _ = defaultOptions { defaultRangeLimit = 5 }\n```\n\n##
-  Changelog\n\n[CHANGELOG.md](CHANGELOG.md)\n\n\n## License\n\n[LGPL-3 © 2018 Chordify](LICENSE)\n"
+description: |
+  # servant-pagination [![](https://img.shields.io/hackage/v/servant-pagination.svg)](https://hackage.haskell.org/package/servant-pagination) [![Build Status](https://travis-ci.org/chordify/haskell-servant-pagination.svg?branch=master)](https://travis-ci.org/chordify/haskell-servant-pagination)
+
+  ## Overview
+
+  This module offers opinionated helpers to declare a type-safe and a flexible pagination
+  mechanism for Servant APIs. This design, inspired by [Heroku's API](https://devcenter.heroku.com/articles/platform-api-reference#ranges),
+  provides a small framework to communicate about a possible pagination feature of an endpoint,
+  enabling a client to consume the API in different fashions (pagination with offset / limit,
+  endless scroll using last referenced resources, ascending and descending ordering, etc.)
+
+  Therefore, client can provide a `Range` header with their request with the following format:
+
+  - `Range: <field> [<value>][; offset <o>][; limit <l>][; order <asc|desc>]`
+
+  For example: `Range: createdAt 2017-01-15T23%3A14%3A67.000Z; offset 5; order desc` indicates that
+  the client is willing to retrieve the next batch of document in descending order that were
+  created after the fifteenth of January, skipping the first 5.
+
+  As a response, the server may return the list of corresponding document, and augment the
+  response with 3 headers:
+
+  - `Accept-Ranges`: A comma-separated list of fields upon which a range can be defined
+  - `Content-Range`: Actual range corresponding to the content being returned
+  - `Next-Range`: Indicate what should be the next `Range` header in order to retrieve the next range
+
+  For example:
+
+  - `Accept-Ranges: createdAt, modifiedAt`
+  - `Content-Range: createdAt 2017-01-15T23%3A14%3A51.000Z..2017-02-18T06%3A10%3A23.000Z`
+  - `Next-Range: createdAt 2017-02-19T12%3A56%3A28.000Z; offset 0; limit 100; order desc`
+
+
+  ## Getting Started
+
+  Code-wise the integration is quite seamless and unobtrusive. `servant-pagination` provides a
+  `Ranges (fields :: [Symbol]) (resource :: *) -> *` data-type for declaring available ranges
+  on a group of _fields_ and a target _resource_. To each combination (resource + field) is
+  associated a given type `RangeType (resource :: *) (field :: Symbol) -> *` as described by
+  the type-family in the `HasPagination` type-class.
+
+  So, let's start with some imports and extensions to get this out of the way:
+
+  ```hs
+  {-# LANGUAGE DataKinds             #-}
+  {-# LANGUAGE DeriveGeneric         #-}
+  {-# LANGUAGE FlexibleInstances     #-}
+  {-# LANGUAGE MultiParamTypeClasses #-}
+  {-# LANGUAGE TypeApplications      #-}
+  {-# LANGUAGE TypeFamilies          #-}
+  {-# LANGUAGE TypeOperators         #-}
+
+  import           Data.Aeson         (ToJSON, genericToJSON)
+  import           Data.Maybe         (fromMaybe)
+  import           Data.Proxy         (Proxy (..))
+  import           GHC.Generics       (Generic)
+  import           Servant            ((:>), GetPartialContent, Handler, Header, Headers, JSON, Server)
+  import           Servant.Pagination (HasPagination (..), PageHeaders, Range (..), Ranges, applyRange)
+
+  import qualified Data.Aeson               as Aeson
+  import qualified Network.Wai.Handler.Warp as Warp
+  import qualified Servant.Pagination       as Pagination
+  import qualified Servant
+  ```
+
+
+  #### Declaring the Resource
+
+  Servant APIs are rather resource-oriented, and so is `servant-pagination`. This
+  guide shows a basic example working with `JSON` (as you could tell from the
+  import list already). To make the world a <span style='text-decoration:
+  line-through'>better</span> colored place, let's create an API to retrieve
+  colors -- with pagination.
+
+  ```hs
+  data Color = Color
+    { name :: String
+    , rgb  :: [Int]
+    , hex  :: String
+    } deriving (Eq, Show, Generic)
+
+  instance ToJSON Color where
+    toJSON =
+      genericToJSON Aeson.defaultOptions
+
+  colors :: [Color]
+  colors =
+    [ Color "Black" [0, 0, 0] "#000000"
+    , Color "Blue" [0, 0, 255] "#0000ff"
+    , Color "Green" [0, 128, 0] "#008000"
+    , Color "Grey" [128, 128, 128] "#808080"
+    , Color "Purple" [128, 0, 128] "#800080"
+    , Color "Red" [255, 0, 0] "#ff0000"
+    , Color "Yellow" [255, 255, 0] "#ffff00"
+    ]
+  ```
+
+  #### Declaring the Ranges
+
+  Now that we have defined our _resource_ (a.k.a `Color`), we are ready to declare a new `Range`
+  that will operate on a "name" field (genuinely named after the `name` fields from the `Color`
+  record).
+  For that, we need to tell `servant-pagination` two things:
+
+  - What is the type of the corresponding `Range` values
+  - How do we get one of these values from our resource
+
+  This is done via defining an instance of `HasPagination` as follows:
+
+  ```hs
+  instance HasPagination Color "name" where
+    type RangeType Color "name" = String
+    getFieldValue _ = name
+    -- getRangeOptions :: Proxy "name" -> Proxy Color -> RangeOptions
+    -- getDefaultRange :: Proxy Color -> Range "name" String
+
+  defaultRange :: Range "name" String
+  defaultRange =
+    getDefaultRange (Proxy @Color)
+  ```
+
+  Note that `getFieldValue :: Proxy "name" -> Color -> String` is the minimal complete definintion
+  of the class. Yet, you can define `getRangeOptions` to provide different parsing options (see
+  the last section of this guide). In the meantime, we've also defined a `defaultRange` as it will
+  come in handy when defining our handler.
+
+  #### API
+
+  Good, we have a resource, we have a `Range` working on that resource, we can now declare our
+  API using other Servant combinators we already know:
+
+  ```hs
+  type API =
+    "colors"
+      :> Header "Range" (Ranges '["name"] Color)
+      :> GetPartialContent '[JSON] (Headers MyHeaders [Color])
+
+  type MyHeaders =
+    Header "Total-Count" Int ': PageHeaders '["name"] Color
+  ```
+
+  `PageHeaders` is a type alias provided by the library to declare the necessary response headers
+  we mentionned in introduction. Expanding the alias boils down to the following:
+
+  ```hs
+  -- type MyHeaders
+  --   =  Header "Total-Count"   Int
+  --   :> Header "Accept-Ranges" (AcceptRanges '["name"])
+  --   :> Header "Content-Range" (ContentRange '["name"] Color)
+  --   :> Header "Next-Range"    (Ranges '["name"] Color)
+  ```
+
+  As a result, we will need to provide all those headers with the response in our handler. Worry
+  not, _servant-pagination_ provides an easy way to lift a collection of resources into such handler.
+
+  #### Server
+
+  Time to connect the last bits by defining the server implementation of our colorful API. The `Ranges`
+  type we've defined above (tight to the `Range` HTTP header) indicates the server to parse any `Range`
+  header, looking for the format defined in introduction with fields and target types we have just declared.
+  If no such header is provided, we will end up receiving `Nothing`. Otherwise, it will be possible
+  to _extract_ a `Range` from our `Ranges`.
+
+  ```hs
+  server :: Server API
+  server = handler
+    where
+      handler :: Maybe (Ranges '["name"] Color) -> Handler (Headers MyHeaders [Color])
+      handler mrange = do
+        let range =
+              fromMaybe defaultRange (mrange >>= extractRange)
+
+        addHeader (length colors) <$> returnRange range (applyRange range colors)
+
+  main :: IO ()
+  main =
+    Warp.run 1442 $ Servant.serve (Proxy @API) server
+  ```
+
+  Let's try it out using different ranges to observe the server's behavior. As a reminder, here's
+  the format we defined, where `<field>` here can only be `name` and `<value>` must parse to a `String`:
+
+  - `Range: <field> [<value>][; offset <o>][; limit <l>][; order <asc|desc>]`
+
+  Beside the target field, everything is pretty much optional in the `Range` HTTP header. Missing parts
+  are deducted from the `RangeOptions` that are part of the `HasPagination` instance. Therefore, all
+  following examples are valid requests to send to our server:
+
+  - 1 - `curl http://localhost:1442/colors -vH 'Range: name'`
+  - 2 - `curl http://localhost:1442/colors -vH 'Range: name; limit 2'`
+  - 3 - `curl http://localhost:1442/colors -vH 'Range: name Green; order asc; offset 1'`
+
+  Considering the following default options:
+
+  - `defaultRangeLimit: 100`
+  - `defaultRangeOffset: 0`
+  - `defaultRangeOrder: RangeDesc`
+
+  The previous ranges reads as follows:
+
+  - 1 - The first 100 colors, ordered by descending names
+  - 2 - The first 2 colors, ordered by descending names
+  - 3 - The 100 colors after `Green` (not included), ordered by ascending names.
+
+  > See `examples/Simple.hs` for a running version of this guide.
+
+  ## Going Forward
+
+  ####  Multiple Ranges
+
+  Note that in the simple above scenario, there's no ambiguity with `extractRange` and `returnRange`
+  because there's only one possible `Range` defined on our resource. Yet, as you've most probably
+  noticed, the `Ranges` combinator accepts a list of fields, each of which must declare a `HasPagination`
+  instance. Doing so will make the other helper functions more ambiguous and type annotation are
+  highly likely to be needed.
+
+
+  ```hs
+  instance HasPagination Color "hex" where
+    type RangeType Color "hex" = String
+    getFieldValue _ = hex
+
+  -- to then define: Ranges '["name", "hex"] Color
+  ```
+
+  > See `examples/Complex.hs` for more complex examples.
+
+
+  #### Parsing Options
+
+  By default, `servant-pagination` provides an implementation of `getRangeOptions` for each
+  `HasPagination` type-class. However, this can be overwritten when defining a instance of that
+  class to provide your own options. This options come into play when a `Range` header is
+  received and isn't fully specified (`limit`, `offset`, `order` are all optional) to provide
+  default fallback values for those.
+
+  For instance, let's say we wanted to change the default limit to `5` in a new range on
+  `"rgb"`, we could tweak the corresponding `HasPagination` instance as follows:
+
+  ```hs
+  instance HasPagination Color "rgb" where
+    type RangeType Color "rgb" = String
+    getFieldValue _ = sum . rgb
+    getRangeOptions _ _ = defaultOptions { defaultRangeLimit = 5 }
+  ```
+
+  ## Changelog
+
+  [CHANGELOG.md](CHANGELOG.md)
+
+
+  ## License
+
+  [LGPL-3 © 2018 Chordify](LICENSE)
 license-name: LGPL-3.0-only
