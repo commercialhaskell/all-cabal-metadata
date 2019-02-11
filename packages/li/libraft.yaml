@@ -1,12 +1,13 @@
 homepage: https://github.com/adjoint-io/raft#readme
 changelog-type: markdown
-hash: 6977cc7d763f922c766337a6b0369a7b8a52ffb2fa81b0dbdd55d068f94dd734
+hash: 041b2a9af6bf6fc3f2a99dc8e32db9734adde34cbb7535e036da73ea292700a9
 test-bench-deps:
   exceptions: -any
   cereal: -any
   bytestring: -any
   haskeline: -any
   hunit-dejafu: -any
+  stm: -any
   base: ! '>=4.7 && <5'
   time: -any
   tasty-discover: -any
@@ -17,6 +18,7 @@ test-bench-deps:
   monad-control: -any
   process: ! '>=1.6.3.0 && <1.7.0.0'
   network: -any
+  async: -any
   word8: -any
   lifted-base: -any
   parsec: -any
@@ -45,43 +47,30 @@ test-bench-deps:
   directory: -any
 maintainer: info@adjoint.io
 synopsis: Raft consensus algorithm
-changelog: |
-  # Changelog for raft
-
-  ## 0.2.0.0
-
-  - Feature: Client requests are now cached by the current leader such that duplicate
-    client requests are not serviced
-  - Bug Fix: Fix issue in concurrent timer not resetting properly when the timeout
-    was set to values under 500ms
-  - Feature: Client read requests can now query entries by index or range of
-    indices
-  - Improvement: Raft nodes now only write to disk if the state changes during
-    handling of events
-  - Feature: Users can now specify what severity of log messages should be logged
-  - Bug Fix: Receiving all data from a socket in the RaftSocketT monad
-    transformer RaftRecvX typeclass instances inducing a deadlock has been
-    rewritten
-  - Feature: A PostgreSQL backend has been added for storage of log entries
-
-  ## 0.1.2.0
-
-  - Added a heartbeat broadcast by leader on read requests from client to ensure
-    that the node is leader before responding to client
-  - Each log entry is now linked by sha256 hash to the log entry immediately
-    preceding it
-  - Fixed bug where the last log entry was not being read from disk before
-    starting the main event loop
-  - Added quickcheck-state-machine tests for black-box testing of the raft-example
-    client program
-
-  ## 0.1.1.0
-
-  - Fixed MonadFail constraints for GHC 8.6
-
-  ## 0.1.0.0
-
-  - Initial release.
+changelog: "# Changelog for raft\n\n## 0.3.0.0\n\n- API change: `runRaftNode` now
+  requires the monad it runs in to provide an\n  instance of the `MonadRaftAsync`
+  and `MonadRaftChan` in the `Raft.Monad`\n  module in lieu of the previously necessary
+  `MonadConc` instance.\n- API change: Removed the `MonadConc` constraint on all example
+  monad\n  transformers and implemented inherited `MonadRaftChan` and `MonadRaftAsync`
+  \n  instances \n- API change: Removed the `MonadConc` const\n- API change: Renamed
+  the old `Raft.Monad` module to `Raft.Transtion` and moved the \n  `RaftT` monad
+  transformer from `Raft.hs` to the `Raft.Monad` module\n- Improvement: Rework example
+  monad `RaftExampleT` for simplicity\n\n\n## 0.2.0.0\n\n- Feature: Client requests
+  are now cached by the current leader such that duplicate\n  client requests are
+  not serviced\n- Bug Fix: Fix issue in concurrent timer not resetting properly when
+  the timeout\n  was set to values under 500ms\n- Feature: Client read requests can
+  now query entries by index or range of\n  indices\n- Improvement: Raft nodes now
+  only write to disk if the state changes during\n  handling of events\n- Feature:
+  Users can now specify what severity of log messages should be logged\n- Bug Fix:
+  Receiving all data from a socket in the RaftSocketT monad\n  transformer RaftRecvX
+  typeclass instances inducing a deadlock has been\n  rewritten\n- Feature: A PostgreSQL
+  backend has been added for storage of log entries\n\n## 0.1.2.0\n\n- Added a heartbeat
+  broadcast by leader on read requests from client to ensure\n  that the node is leader
+  before responding to client\n- Each log entry is now linked by sha256 hash to the
+  log entry immediately\n  preceding it\n- Fixed bug where the last log entry was
+  not being read from disk before\n  starting the main event loop\n- Added quickcheck-state-machine
+  tests for black-box testing of the raft-example\n  client program\n\n## 0.1.1.0\n\n-
+  Fixed MonadFail constraints for GHC 8.6\n\n## 0.1.0.0\n\n- Initial release.\n"
 basic-deps:
   exceptions: -any
   cereal: -any
@@ -95,6 +84,7 @@ basic-deps:
   text: -any
   monad-control: -any
   network: -any
+  async: -any
   word8: -any
   lifted-base: -any
   parsec: -any
@@ -112,14 +102,16 @@ basic-deps:
   attoparsec: -any
   transformers: -any
   random: -any
+  dejafu: -any
   directory: -any
 all-versions:
 - 0.1.0.0
 - 0.1.1.0
 - 0.2.0.0
 - 0.2.1.0
+- 0.3.0.0
 author: Adjoint Inc.
-latest: 0.2.1.0
+latest: 0.3.0.0
 description-type: markdown
 description: "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img src=\"https://www.adjoint.io/assets/img/adjoint-logo@2x.png\"
   width=\"250\"/></a>\n</p>\n\n[![CircleCI](https://circleci.com/gh/adjoint-io/raft.svg?style=svg&circle-token=71138966721e3459d81362f6f379a4782a3f6b7d)](https://circleci.com/gh/adjoint-io/raft)\n\n#
@@ -225,11 +217,24 @@ description: "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img src
   sm v) sm\n```\n\nEverything else related to the core event handling loop is not
   exposed to\nlibrary users. All that needs to be specified is the type of the state
   machine,\nthe commands to update it, and how to perform those updates.\n\n### Effectful
-  Layers\n\nIn the protocol, there are two main components that need access to global\nstate
-  and system resources. Firstly, raft nodes must maintain some persistent\nstate for
-  efficient and correct recovery from network outages or partitions.\nSecondly, raft
-  nodes need to send messages to other raft nodes for the network\n(the replicated
-  state machine) to be operational.\n\n#### Persistent State\n\nEach node persists
+  Layers\n\nIn this Raft implementation, there are four components that need access
+  to global\nstate and system resources. Firstly, raft nodes must maintain some persistent\nstate
+  for efficient and correct recovery from network outages or partitions.\nSecondly,
+  raft nodes need to send messages to other raft nodes for the network\n(the replicated
+  state machine) to be operational. Next, library users must\nspecify what event channel
+  datastructure to use. Finally, the programmer must\nprovide a way to fork threads
+  and run a list of effectful actions concurrently.\n\nThe reasons for the latter
+  two design decisions-- requiring the programmer to\nprovide an event channel type
+  and new/read/writeChannel primitives, a way to\nfork an effectful action to run
+  concurrently, and a way to run a list of actions\nconcurrently-- is a result of
+  property based concurrency testing that we do,\nfound in `test/TestDejaFu.hs`. In
+  order to test the system as a whole, to run\nseveral nodes concurrently and test
+  invariants about the system such as the\nabsence of deadlocks, we must be able to
+  swap out the base monad for the\n`ConcIO` monad, which has implementations of concurrency
+  primitives that act\ndeterministically. This allows us to test that the raft nodes
+  run correctly in \na wide space of thread interleavings giving us more confidence
+  that our code is\ncorrect, assuming \"correct\" implementations of the `MonadRaftAsync`
+  and\n`MonadRaftChan` typeclasses.\n\n#### Persistent State\n\nEach node persists
   data to disk, including the replicated log\nentries. Since persisting data is an
   action that programmers have many opinions\nand preferences regarding, we provide
   two type classes that abstract the\nspecifics of writing log entries to disk as
@@ -257,7 +262,7 @@ description: "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img src
   log entries from a specific index onwards\n  readLogEntriesFrom\n    :: Exception
   (RaftReadLogError m)\n    => Index -> m (Either (RaftReadLogError m) (Entries v))\n
   \ -- | Read the last log entry in the log\n  readLastLogEntry\n    :: Exception
-  (RaftReadLogError m)\n    => m (Either (RaftReadLogError m) (Maybe (Entry v)))\n```\n\nTo
+  (RaftReadLogError m)\n    => m (Either (RaftReadLogError m) (Maybe (Entry v)))\n```\n\n---\n\nTo
   read and write the `PersistentData` type (the remaining persistent data that\nis
   not log entries), we ask the user to use the following `RaftPersist`\ntypeclass.\n\n```haskell\n--
   | The RaftPersist type class specifies how to read and write the persistent\n--
@@ -287,9 +292,52 @@ description: "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img src
   \ sendClient :: ClientId -> ClientResponse sm v -> m ()\n\n-- | Interface for Raft
   nodes to receive messages from clients\nclass RaftRecvClient m v where\n  type RaftRecvClientError
   m v\n  receiveClient :: m (Either (RaftRecvClientError m v) (ClientRequest v))\n```\n\nWe
-  have written a default implementation for network sockets over TCP in\n[src/Examples/Raft/Socket](https://github.com/adjoint-io/raft/blob/master/src/Examples/Raft/Socket)\n\n#
-  Run example\n\nWe provide a complete example of the library where nodes communicate
-  via network\nsockets, and they write their logs on text files. See\n[app/Main.hs](https://github.com/adjoint-io/raft/blob/master/app/Main.hs)
+  have written a default implementation for network sockets over TCP in\n[src/Examples/Raft/Socket](https://github.com/adjoint-io/raft/blob/master/src/Examples/Raft/Socket)\n\n###
+  Event Channel\n\nThe core of the effectful layers of this Raft implmentation is
+  the _event\nchannel_. Since different data channels have different performance,
+  we ask the\nprogrammer to supply an implementation of such a channel via yet another
+  type\nclass and type family:\n\n```haskell\nclass Monad m => MonadRaftChan v m where\n
+  \ type RaftEventChan v m\n  readRaftChan :: RaftEventChan v m -> m (Event v)\n  writeRaftChan
+  :: RaftEventChan v m -> Event v -> m ()\n  newRaftChan :: m (RaftEventChan v m)\n```\n\nOn
+  spawning a raft node, the program will create a new event channel using\n`newRaftChan`.
+  Then, the event producers will be forked; These event producers\nwill use the aforementioned
+  typeclasses like `RaftRecvRPC` and `RaftRecvClient`\nto wait for messages from other
+  raft nodes or clients wishing to contact the\nnode. Once a message is received,
+  a message event is constructed from the\nmessage contents and written to the main
+  event channel via `writeRaftChan`. In\nthe main thread, the core event handler will
+  be repeatedly reading events from\nthe event channel using `readRaftChan` and performing
+  the correct action in\nresponse to each event.\n\n### Concurrency\n\nThe last of
+  the type class instances the programmer must provide for the monad\nthey are running
+  the raft node in is a `MonadRaftAsync`, which provides the main\nraft loop with
+  a small set of concurrency primitives; The raft node needs to\nknow how to fork
+  actions in the monad, and how to run a list of actions\nconcurrently, waiting for
+  all to finish. The former is necessary for the raft\nnode to be able to fork its
+  event producers, and the latter is required in order\nto respond to clients and
+  other raft nodes in a timely manner. The typeclass is\ndefined as follows:\n\n```haskell\nclass
+  Monad m => MonadRaftAsync m where\n  type RaftAsync m :: * -> *\n  raftAsync ::
+  m a -> m (RaftAsync m a)\n  raftMapConcurrently :: Traversable t => (a -> m b) ->
+  t a -> m (t b)\n  raftMapConcurrently_ :: Foldable t => (a -> m b) -> t a -> m ()\n```\n\nThe
+  implementation of this typeclass is a bit subtle, and it is advised that\nprogrammers
+  do not implement it from scratch themselves. A default \nimplementation is provided
+  for the `IO` type using standard concurrency \nprimitives making it easy for the
+  programmer to simply rely on that\nimplementation. An example instance of this type
+  class for a custom monad\ntransformer stack with `IO` the bottom:\n\n```haskell\ninstance
+  MonadRaftAsync MyMonad where\n  type RaftAsync MyMonad = RaftAsync IO\n  raftAsync
+  myMonad = lift $ raftAsync (runMyMonad myMonad) \n  raftMapConcurrently f as = lift
+  (raftMapConcurrently (runMyMonad . f) as)\n  raftMapConcurrently_ f as = lift (raftMapConcurrently_
+  (runMyMonad . f) as)\n```\n\n# The Raft Example (`raft-example`)\n\nIn this library
+  we provide a full fledged, non-production ready, example\nimplementation/s of monad
+  transformers and type class instances for _all_ type\nclasses necessary to run a
+  raft node. They can be found in\n`src/Examples/Raft/...` or in `app/Main.hs`:\n\n`RaftExampleT`
+  (found in `app/Main.hs`):\n- `MonadRaftAsync`\n- `MonadRaftChan`\n- `RaftStateMachine`\n\n`RaftSocketT`
+  (found in `src/Examples/Raft/Socket/Node.hs`):\n- `RaftSendRPC`\n- `RaftRecvRPC`\n-
+  `RaftSendClient`\n- `RaftRecvClient`\n\n`RaftLogFileStoreT` (found in `src/Examples/Raft/FileStore/Log.hs`):\n-
+  `RaftReadLog`\n- `RaftWriteLog`\n- `RaftDeleteLog`\n- `RaftInitLog`\n\n`RaftPersistFileStoreT`
+  (found in `src/Examples/Raft/FileStore/Persistent.hs`):\n- `RaftPersistent`\n\nProgrammers
+  can use these files and implementations for references when implementing \nthe necessary
+  type class instances for their bespoke monads, or even use some of\nthe monad transformers
+  in their own stack!\n\nWe provide a complete example of the library where nodes
+  communicate via network\nsockets, and they write their logs on text files. See\n[app/Main.hs](https://github.com/adjoint-io/raft/blob/master/app/Main.hs)
   to\nhave further insight.\n\n1) Build the example executable:\n```$ stack build
   ```\n\n2) In separate terminals, run some raft nodes:\n\n    The format of the cmd
   line invocation is:\n    ``` \n    $ raft-example node <fresh/existing> <file/postgres>
