@@ -1,6 +1,6 @@
 homepage: https://github.com/adjoint-io/raft#readme
 changelog-type: markdown
-hash: 041b2a9af6bf6fc3f2a99dc8e32db9734adde34cbb7535e036da73ea292700a9
+hash: 02a0ce64bdf9b85b16b940a8459d75b7722088f428ca91fd91ec45d7f5911634
 test-bench-deps:
   exceptions: -any
   cereal: -any
@@ -110,8 +110,9 @@ all-versions:
 - 0.2.0.0
 - 0.2.1.0
 - 0.3.0.0
+- 0.4.0.0
 author: Adjoint Inc.
-latest: 0.3.0.0
+latest: 0.4.0.0
 description-type: markdown
 description: "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img src=\"https://www.adjoint.io/assets/img/adjoint-logo@2x.png\"
   width=\"250\"/></a>\n</p>\n\n[![CircleCI](https://circleci.com/gh/adjoint-io/raft.svg?style=svg&circle-token=71138966721e3459d81362f6f379a4782a3f6b7d)](https://circleci.com/gh/adjoint-io/raft)\n\n#
@@ -233,7 +234,7 @@ description: "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img src
   swap out the base monad for the\n`ConcIO` monad, which has implementations of concurrency
   primitives that act\ndeterministically. This allows us to test that the raft nodes
   run correctly in \na wide space of thread interleavings giving us more confidence
-  that our code is\ncorrect, assuming \"correct\" implementations of the `MonadRaftAsync`
+  that our code is\ncorrect, assuming \"correct\" implementations of the `MonadRaftFork`
   and\n`MonadRaftChan` typeclasses.\n\n#### Persistent State\n\nEach node persists
   data to disk, including the replicated log\nentries. Since persisting data is an
   action that programmers have many opinions\nand preferences regarding, we provide
@@ -308,36 +309,41 @@ description: "<p align=\"center\">\n  <a href=\"http://www.adjoint.io\"><img src
   be repeatedly reading events from\nthe event channel using `readRaftChan` and performing
   the correct action in\nresponse to each event.\n\n### Concurrency\n\nThe last of
   the type class instances the programmer must provide for the monad\nthey are running
-  the raft node in is a `MonadRaftAsync`, which provides the main\nraft loop with
-  a small set of concurrency primitives; The raft node needs to\nknow how to fork
-  actions in the monad, and how to run a list of actions\nconcurrently, waiting for
-  all to finish. The former is necessary for the raft\nnode to be able to fork its
-  event producers, and the latter is required in order\nto respond to clients and
-  other raft nodes in a timely manner. The typeclass is\ndefined as follows:\n\n```haskell\nclass
-  Monad m => MonadRaftAsync m where\n  type RaftAsync m :: * -> *\n  raftAsync ::
-  m a -> m (RaftAsync m a)\n  raftMapConcurrently :: Traversable t => (a -> m b) ->
-  t a -> m (t b)\n  raftMapConcurrently_ :: Foldable t => (a -> m b) -> t a -> m ()\n```\n\nThe
-  implementation of this typeclass is a bit subtle, and it is advised that\nprogrammers
-  do not implement it from scratch themselves. A default \nimplementation is provided
-  for the `IO` type using standard concurrency \nprimitives making it easy for the
-  programmer to simply rely on that\nimplementation. An example instance of this type
-  class for a custom monad\ntransformer stack with `IO` the bottom:\n\n```haskell\ninstance
-  MonadRaftAsync MyMonad where\n  type RaftAsync MyMonad = RaftAsync IO\n  raftAsync
-  myMonad = lift $ raftAsync (runMyMonad myMonad) \n  raftMapConcurrently f as = lift
-  (raftMapConcurrently (runMyMonad . f) as)\n  raftMapConcurrently_ f as = lift (raftMapConcurrently_
-  (runMyMonad . f) as)\n```\n\n# The Raft Example (`raft-example`)\n\nIn this library
-  we provide a full fledged, non-production ready, example\nimplementation/s of monad
-  transformers and type class instances for _all_ type\nclasses necessary to run a
-  raft node. They can be found in\n`src/Examples/Raft/...` or in `app/Main.hs`:\n\n`RaftExampleT`
-  (found in `app/Main.hs`):\n- `MonadRaftAsync`\n- `MonadRaftChan`\n- `RaftStateMachine`\n\n`RaftSocketT`
-  (found in `src/Examples/Raft/Socket/Node.hs`):\n- `RaftSendRPC`\n- `RaftRecvRPC`\n-
-  `RaftSendClient`\n- `RaftRecvClient`\n\n`RaftLogFileStoreT` (found in `src/Examples/Raft/FileStore/Log.hs`):\n-
-  `RaftReadLog`\n- `RaftWriteLog`\n- `RaftDeleteLog`\n- `RaftInitLog`\n\n`RaftPersistFileStoreT`
-  (found in `src/Examples/Raft/FileStore/Persistent.hs`):\n- `RaftPersistent`\n\nProgrammers
-  can use these files and implementations for references when implementing \nthe necessary
-  type class instances for their bespoke monads, or even use some of\nthe monad transformers
-  in their own stack!\n\nWe provide a complete example of the library where nodes
-  communicate via network\nsockets, and they write their logs on text files. See\n[app/Main.hs](https://github.com/adjoint-io/raft/blob/master/app/Main.hs)
+  the raft node in is a `MonadRaftFork`, which provides the main\nraft loop with the
+  ability to fork a concurrent action; The raft node needs to\nknow how to fork actions
+  in the monad. This is necessary for the raft node to \nbe able to fork its event
+  producers, and run other actions concurrently; e.g.\na leader responding to all
+  followers at the same time during a heartbeat RPC\nbroadcast. The typeclass is defined
+  as follows:\n\n```haskell\n-- | The typeclass encapsulating the concurrency operations
+  necessary for the\n-- implementation of the main event handling loop.\nclass Monad
+  m => MonadRaftFork m where\n  type RaftThreadId m\n  raftFork\n    :: RaftThreadRole
+  \     -- ^ The role of the current thread being forked\n    -> m ()                --
+  ^ The action to fork\n    -> m (RaftThreadId m)\n```\n\nThe implementation of this
+  typeclass is a bit subtle, and it is advised that\nprogrammers do not implement
+  it from scratch themselves. A default \nimplementation is provided for the `IO`
+  type using standard concurrency \nprimitives making it easy for the programmer to
+  simply rely on that\nimplementation. An example instance of this type class for
+  a custom monad\ntransformer stack with `IO` the bottom:\n\n```haskell\ninstance
+  MonadRaftFork MyMonad where\n  type RaftThreadId MyMonad = RaftThreadId IO\n  raftFork
+  threadRole myMonad = \n    lift $ raftFork threadRole (runMyMonad myMonad) \n```\n\nThe
+  last thing to mention about this typeclass is the `RaftThreadRole` value\nthat must
+  be passed to invocations of the `raftFork` function. In some\napplications (and,
+  noteably our concurrency testing suite) thread names can be\nused for debugging
+  and even message passing purposes. For instance of\n`MonadRaftFork` that do not
+  need to distinguish threads by name, simply ignore\nthe argument. \n\n# The Raft
+  Example (`raft-example`)\n\nIn this library we provide a full fledged, non-production
+  ready, example\nimplementation/s of monad transformers and type class instances
+  for _all_ type\nclasses necessary to run a raft node. They can be found in\n`src/Examples/Raft/...`
+  or in `app/Main.hs`:\n\n`RaftExampleT` (found in `app/Main.hs`):\n- `MonadRaftFork`\n-
+  `MonadRaftChan`\n- `RaftStateMachine`\n\n`RaftSocketT` (found in `src/Examples/Raft/Socket/Node.hs`):\n-
+  `RaftSendRPC`\n- `RaftRecvRPC`\n- `RaftSendClient`\n- `RaftRecvClient`\n\n`RaftLogFileStoreT`
+  (found in `src/Examples/Raft/FileStore/Log.hs`):\n- `RaftReadLog`\n- `RaftWriteLog`\n-
+  `RaftDeleteLog`\n- `RaftInitLog`\n\n`RaftPersistFileStoreT` (found in `src/Examples/Raft/FileStore/Persistent.hs`):\n-
+  `RaftPersistent`\n\nProgrammers can use these files and implementations for references
+  when implementing \nthe necessary type class instances for their bespoke monads,
+  or even use some of\nthe monad transformers in their own stack!\n\nWe provide a
+  complete example of the library where nodes communicate via network\nsockets, and
+  they write their logs on text files. See\n[app/Main.hs](https://github.com/adjoint-io/raft/blob/master/app/Main.hs)
   to\nhave further insight.\n\n1) Build the example executable:\n```$ stack build
   ```\n\n2) In separate terminals, run some raft nodes:\n\n    The format of the cmd
   line invocation is:\n    ``` \n    $ raft-example node <fresh/existing> <file/postgres>
