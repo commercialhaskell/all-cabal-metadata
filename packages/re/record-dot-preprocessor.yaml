@@ -1,12 +1,21 @@
 homepage: https://github.com/ndmitchell/record-dot-preprocessor#readme
 changelog-type: text
-hash: eb5d60f224a3ea7edf09c720eed87efd7df6b2f0c1de109a70e100e8ccfdefc1
-test-bench-deps: {}
+hash: 0853a90803e0353014bc44ce5a8d88f48280d833a0255c66a3396578e4a1553e
+test-bench-deps:
+  extra: -any
+  base: ==4.*
+  filepath: -any
+  record-hasfield: -any
 maintainer: Neil Mitchell <ndmitchell@gmail.com>
 synopsis: Preprocessor to allow record.field syntax
 changelog: |
   Changelog for record-dot-preprocessor
 
+  0.2, released 2019-03-29
+      Add a GHC source plugin
+      Support for e{foo.bar}
+      Support for (.foo.bar)
+      a.b{c=d} now equivalent to (a.b){c=d}, previously was a{b.c=d}
   0.1.5, released 2019-02-09
       #10, support fields named 'x'
   0.1.4, released 2018-09-07
@@ -23,9 +32,10 @@ changelog: |
   0.1, released 2018-05-06
       Initial version
 basic-deps:
+  ghc: -any
   extra: -any
   base: ! '>=4.8 && <5'
-  filepath: -any
+  uniplate: -any
 all-versions:
 - '0.1'
 - 0.1.1
@@ -33,11 +43,12 @@ all-versions:
 - 0.1.3
 - 0.1.4
 - 0.1.5
+- '0.2'
 author: Neil Mitchell <ndmitchell@gmail.com>
-latest: 0.1.5
+latest: '0.2'
 description-type: markdown
 description: |
-  # record-dot-preprocessor [![Hackage version](https://img.shields.io/hackage/v/record-dot-preprocessor.svg?label=Hackage)](https://hackage.haskell.org/package/record-dot-preprocessor) [![Stackage version](https://www.stackage.org/package/record-dot-preprocessor/badge/nightly?label=Stackage)](https://www.stackage.org/package/record-dot-preprocessor) [![Build Status](https://img.shields.io/travis/ndmitchell/record-dot-preprocessor/master.svg)](https://travis-ci.org/ndmitchell/record-dot-preprocessor)
+  # record-dot-preprocessor [![Hackage version](https://img.shields.io/hackage/v/record-dot-preprocessor.svg?label=Hackage)](https://hackage.haskell.org/package/record-dot-preprocessor) [![Stackage version](https://www.stackage.org/package/record-dot-preprocessor/badge/nightly?label=Stackage)](https://www.stackage.org/package/record-dot-preprocessor) [![Build status](https://img.shields.io/travis/ndmitchell/record-dot-preprocessor/master.svg?label=Build)](https://travis-ci.org/ndmitchell/record-dot-preprocessor)
 
   In almost every programming language `a.b` will get the `b` field from the `a` data type, and many different data types can have a `b` field. The reason this feature is ubiquitous is because it's _useful_. The `record-dot-preprocessor` brings this feature to Haskell. Some examples:
 
@@ -56,20 +67,37 @@ description: |
 
   ## How do I use this magic?
 
-  First install `record-dot-preprocessor` with either `stack install record-dot-preprocessor` or `cabal update && cabal install record-dot-preprocessor`. Then add `{-# OPTIONS_GHC -F -pgmF=record-dot-preprocessor #-}` to the top of the file. Suddenly your records will work. You must make sure that the preprocessor is applied both to the file where your records are defined, and where the record syntax is used.
+  First install `record-dot-preprocessor` with either `stack install record-dot-preprocessor` or `cabal update && cabal install record-dot-preprocessor`. Then at the top of the file add:
 
-  The resulting program will require GHC 8.2 or above and the [`lens` library](https://hackage.haskell.org/package/lens), or a module called `Control.Lens` exporting the contents of [`Lens.Micro` from `microlens`](https://hackage.haskell.org/package/microlens/docs/Lens-Micro.html) (which has significantly less dependencies).
+  * Either: `{-# OPTIONS_GHC -F -pgmF=record-dot-preprocessor #-}` for the preprocessor.
+  * Or: `{-# OPTIONS_GHC -fplugin=RecordDotPreprocessor #-}` and `{-# LANGUAGE DuplicateRecordFields, TypeApplications, FlexibleContexts, DataKinds, MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances #-}` for the GHC plugin.
+
+  The GHC plugin only runs on GHC 8.6 or higher, [doesn't work on Windows](https://gitlab.haskell.org/ghc/ghc/issues/16405) and has much better error messages. In contrast, the preprocessor runs everywhere and has more features.
+
+  You must make sure that the `OPTIONS_GHC` is applied both to the file where your records are defined, and where the record syntax is used. The resulting program will require the [`record-hasfield` library](https://hackage.haskell.org/package/record-hasfield).
 
   ## What magic is available, precisely?
 
-  * `e.b`, where `e` is an expression (not a constructor) and there are no whitespace on either side of the `.`, is translated to a record lookup. If you want to use the standard `.` function composition operator, insert a space. If you want to use a qualfied module name, then `e` will look like a constructor, so it won't clash.
-  * `e{b = c}` is a record update. Provided the record was defined in a module where `record-dot-preprocessor` was used, the meaning will be equivalent to before. If you want to use a normal unchanged record update, insert a space before the `{`.
-  * `e{b * c}`, where `*` is an arbitrary operator, is equivalent to `e{b = e.b * c}`. If you want to apply an arbitrary function as `c`, use the `&` operator. Think `e.b *= c` in C-style languages.
-  * `e.b.c{d.e * 1, f.g = 2}` also works and all variants along those lines.
+  Using the preprocessor or the GHC plugin you can write:
 
-  ## I don't believe in magic, what's the underlying science?
+  * `expr.lbl` is equivalent to `getField @"lbl" expr` (the `.` cannot have whitespace on either side).
+  * `expr{lbl = val}` is equivalent to `setField @"lbl" expr val`.
+  * `(.lbl)` is equivalent to `(\x -> x.lbl)` (the `.` cannot have whitespace after).
 
-  On the way back from [ZuriHac 2017](https://2017.zurihac.info/) [Neil Mitchell](https://ndmitchell.com) and [Mathieu Boespflug](https://www.tweag.io/contact) were discussing lenses and the sad state of records in Haskell. We both agreed that overloaded labels should be defined such that they resolve to lenses. With the right instances, you could define `a ^. #foo` to get the `foo` field from the expression `a`. This preprocessor just turns `a.foo` into `a ^. #foo`, and generates the right instances. If you really want to see the magic under the hood simply run `record-dot-preprocessor yourfile.hs` and it will print out what it generates.
+  Using the preprocessor, but _not_ the GHC plugin:
+
+  * `expr{lbl1.lbl2 = val}` is equivalent to `expr{lbl1 = (expr.lbl1){lbl2 = val}}`, performing a nested update.
+  * `expr{lbl * val}` is equivalent to `expr{lbl = expr.lbl * val}`, where `*` can be any operator.
+  * `expr{lbl1.lbl2}` is equivalent to `expr{lbl1.lbl2 = lbl2}`.
+
+  These forms combine to offer the identities:
+
+  * `expr.lbl1.lbl2` is equivalent to `(expr.lbl1).lbl2`.
+  * `(.lbl1.lbl2)` is equivalent to `(\x -> x.lbl1.lbl2)`.
+  * `expr.lbl1{lbl2 = val}` is equivalent to `(expr.lbl1){lbl2 = val}`.
+  * `expr{lbl1 = val}.lbl2` is equivalent to `(expr{lbl1 = val}).lbl2`.
+  * `expr{lbl1.lbl2 * val}` is equivalent to `expr{lbl1.lbl2 = expr.lbl1.lbl2 * val}`.
+  * `expr{lbl1 = val1, lbl2 = val2}` is equivalent to `(expr{lbl1 = val1}){lbl2 = val2}`.
 
   ## How does this magic compare to other magic?
 
