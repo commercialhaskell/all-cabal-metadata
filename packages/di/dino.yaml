@@ -1,0 +1,203 @@
+homepage: https://github.com/emilaxelsson/dino
+changelog-type: ''
+hash: cf113b8d1f15272f0807ecaf3b19c3ee887d2547d06f45ed86fd36d7b0e793c9
+test-bench-deps:
+  dino: -any
+  tasty-th: <0.2
+  base: ! '>=4.10 && <5'
+  unordered-containers: -any
+  text: -any
+  tasty-quickcheck: <0.11
+  tasty: <1.3
+maintainer: 78emil@gmail.com
+synopsis: A convenient tagless EDSL
+changelog: ''
+basic-deps:
+  exceptions: <0.11
+  ansi-wl-pprint: <0.7
+  base: <5
+  unordered-containers: <0.3
+  text: <1.3
+  monad-loops: <0.5
+  containers: <0.7
+  mtl: <2.3
+  hashable: <1.3
+  transformers: <0.6
+  errors: <2.4
+  tree-view: <0.6
+all-versions:
+- '0.1'
+author: Emil Axelsson
+latest: '0.1'
+description-type: markdown
+description: |
+  # Dino
+
+  Dino is a [tagless EDSL](http://okmij.org/ftp/tagless-final) supporting numeric and logic expressions, conditionals, explicit sharing, etc.
+
+
+
+  Syntactic conveniences
+  --------------------------------------------------------------------------------
+
+  The module [`Dino.Expression`](https://hackage.haskell.org/package/dino/docs/Dino-Expression.html) redefines many identifiers from the prelude, so users are advised to hide the prelude when importing it. This can be done, for example, using the `NoImplicitPrelude` language extension. The main module, [`Dino`](https://hackage.haskell.org/package/dino/docs/Dino.html), exports both `Dino.Expression` and `Dino.Prelude`, where the latter is a subset of the standard prelude plus a few extra definitions.
+
+  Dino provides a newtype wrapper, `Exp`, which allows EDSL terms to be used directly as numbers and strings; for example:
+
+  ```haskell
+  ex1 ::
+       (ConstExp e, NumExp e, FracExp e, CompareExp e, CondExp e)
+    => Exp e Double
+    -> Exp e Text
+  ex1 a =
+    if a > 4.5
+      then "greater"
+      else "smaller or equal"
+  ```
+
+  This example also shows the use of `RebindableSyntax` to allow Haskell's `if` syntax in EDSL expressions.
+
+  Multi-way conditionals can be expressed using `cases`; for example:
+
+  ```haskell
+  beaufortScale ::
+       (ConstExp e, NumExp e, FracExp e, CompareExp e, CondExp e)
+    => Exp e Double
+    -> Exp e Text
+  beaufortScale v = cases
+    [ (v < 0.5)  --> "calm"
+    , (v < 13.8) --> "breeze"
+    , (v < 24.5) --> "gale" ]
+    ( Otherwise  --> "storm" )
+  ```
+
+  Browse the [`Dino.Expression`](https://hackage.haskell.org/package/dino/docs/Dino-Expression.html) documentation to find different variations on `cases`, including a version for matching on enumerations without a fall-through case.
+
+  ### A `Maybe`-like monad
+
+  Similar to the function `maybe` in the standard prelude, Dino provides the following function to deconstruct `Maybe` values:
+
+  ```haskell
+  maybe ::
+       (...)
+    => e b          -- ^ Result when 'nothing'
+    -> (e a -> e b) -- ^ Result when 'just'
+    -> e (Maybe a)  -- ^ Value to deconstruct
+    -> e b
+  ```
+
+  However, it is not very convenient to use `maybe` in a nested way (i.e. when another `maybe` is needed inside the function that handles `just`). In such cases, it is much preferred to use a monadic interface. Indeed, Dino provides the type `Optional` which has a `Monad` instance and the following functions to convert to and from `e (Maybe a)`:
+
+  ```haskell
+  suppose     :: (...) => e (Maybe a) -> Optional e (e a)
+  runOptional :: (...) => Optional e (e a) -> e (Maybe a)
+  ```
+
+
+
+  Semantic conveniences
+  --------------------------------------------------------------------------------
+
+  On the interpretation side, most Dino constructs provide default implementations for monads (many just requiring `Applicative`), making it easy to derive interpretations for custom monads. There is also special support for intensional analysis of higher-order constructs (i.e. constructs that introduce local variables).
+
+  ### Standard interpretation with special cases
+
+  For example, say that we want standard evaluation of expressions but with the ability to catch division by 0. For this, we can use a newtype around `Maybe`:
+
+  ```haskell
+  newtype SafeDiv a = SafeDiv {fromSafeDiv :: Maybe a}
+    deriving (Functor, Applicative, Monad)
+  ```
+
+  Since `SafeDiv` is an applicative functor, we can derive a standard interpretation of syntactic classes by just declaring instances:
+
+  ```haskell
+  instance ConstExp   SafeDiv
+  instance NumExp     SafeDiv
+  instance LogicExp   SafeDiv
+  instance CompareExp SafeDiv
+  ```
+
+  (In this particular case, we could also have used `GeneralizedNewtypeDeriving`, since there are already instances of those classes for `Maybe`.)
+
+  In order to get special semantics for division, we have to give a manual definition of `fdiv`:
+
+  ```haskell
+  instance FracExp SafeDiv where
+    fdiv _ (SafeDiv (Just 0)) = SafeDiv Nothing
+    fdiv (SafeDiv a) (SafeDiv b) = SafeDiv (liftA2 (/) a b)
+  ```
+
+  ### Intensional analysis
+
+  Dino has special support for intensional interpretation of higher-order constructs (i.e. interpretations that inspect the syntax).
+
+  Consider the following two classes:
+
+  ```haskell
+  class LetExp e where
+    letE :: DinoType a
+         => Text         -- ^ Variable base name
+         -> e a          -- ^ Value to share
+         -> (e a -> e b) -- ^ Body
+         -> e b
+
+  class LetIntensional e where
+    letI :: DinoType a
+         => Text -- ^ Variable name
+         -> e a
+         -> e b -- ^ Body (open term)
+         -> e b
+  ```
+
+  The former is the class that is exposed to the EDSL user. It provides a convenient higher-order construct for sharing values. Here is an example of its use:
+
+  ```haskell
+  ex2 :: Exp e Double -> Exp e Double
+  ex2 a = letE "x" expensive $ \x ->
+    if a > 10
+      then x*2
+      else x*3
+    where
+      expensive = a*a*a*a*a*a*a*a
+  ```
+
+  But the higher-order interface is problematic for intensional interpretations (e.g. AST extraction). The main problem is to come up with a representation of the variable to which the body can be applied. One must make sure that the chosen variable does not lead to capturing. For such interpretations, the first-order function `letI` is more suitable.
+
+  `letI` is similar to `letE`, but with some important differences:
+
+    * The "body" argument passed to `letE` is a function while the `letI` has an open expression as body.
+    * The name passed to `letE` is just a suggested *base* of the variable name. The user does not need to worry about potential name clashing.
+    * The name passed to `letI` is the *actual* variable name. The caller must guarantee that this name does not clash with other variables.
+
+  The thing to note is this:
+
+    * `letE` is *easy* to call, but *hard* to implement.
+    * `letI` is *hard* to call, but *easy* to implement.
+
+  `letI` is hard to call, because it must be given a name that does not lead to capturing. But for an implementor, `letI` is very nice. Why? Because it gets a variable name from someone else, and it can directly inspect the body without first applying it to an argument.
+
+  The good news is that Dino provides the means to bridge the gap between `letE` and `letI`: the `Intensional` newtype wrapper. Given a `LetIntensional` instance for an interpretation, we can automatically derive `LetExp` by just wrapping it in `Intensional`, due to the following instance:
+
+  ```haskell
+  instance (VarExp e, LetIntensional e) => LetExp (Intensional e)
+  ```
+
+  In other words, you get to *define your semantics using first-order constructs and automatically derive a higher-order interface*.
+
+  As an example, the `Reified` interpretation (for AST extraction; see [Dino.Interpretation](https://hackage.haskell.org/package/dino/docs/Dino-Interpretation.html)) is an example of one that only instantiates first-order classes (`LetIntensional` and friends). But the combined type `Intensional Reified` supports a higher-order interface (`LetExp` and friends).
+
+  But what about adding new higher-order constructs? Then one must go through the work of defining an instance such as the one for `LetExp (Intensional e)` above. Fortunately, defining such instances is made very easy by the following function:
+
+  ```haskell
+  unbind
+    :: (VarExp e, DinoType a)
+    => Text                                 -- ^ Variable base name
+    -> (Intensional e a -> Intensional e b) -- ^ Body parameterized by its free variable
+    -> (Text, Intensional e b)              -- ^ Generated variable and function body
+  ```
+
+  It takes a body represented as a function, and returns a body as an open expression along with the generated variable name. This name is guaranteed not to lead to capturing, as long all binders are generated using the same method. There is also `unbind2`, for constructs that introduce two local variables.
+
+  For the curious reader, `unbind` is implemented using the technique in [Using Circular Programming for Higher-Order Syntax](https://emilaxelsson.github.io/documents/axelsson2013using.pdf).
+license-name: BSD-3-Clause
