@@ -1,17 +1,23 @@
-homepage: ''
+homepage: https://github.com/seanhess/amqp-worker#readme
 changelog-type: ''
-hash: 59d6454305e9d416a20420c65119a5b4f988d0aea69f4c0d97b5c61205313059
+hash: 94fe3215d143c87d186429972cdb29beef1e042b4248fbf5dc6028c5ac1321a6
 test-bench-deps:
+  exceptions: -any
   bytestring: -any
-  base: -any
+  split: -any
+  base: ! '>=4.9 && <5'
   amqp: -any
   text: -any
-  amqp-worker: -any
-  tasty-hunit: -any
-  tasty: -any
+  monad-loops: -any
+  monad-control: -any
+  resource-pool: -any
+  data-default: -any
+  server: -any
+  mtl: -any
+  transformers-base: -any
   aeson: -any
 maintainer: seanhess@gmail.com
-synopsis: High level functions for working with message queues
+synopsis: ''
 changelog: ''
 basic-deps:
   exceptions: -any
@@ -35,8 +41,103 @@ all-versions:
 - 0.2.3
 - 0.2.4
 - 0.2.5
+- 0.3.2
 author: Sean Hess
-latest: 0.2.5
-description-type: haddock
-description: High level functions for working with message queues
+latest: 0.3.2
+description-type: markdown
+description: |
+  AMQP Worker
+  -----------
+
+  Type-safe AMQP workers. Compatible with RabbitMQ
+
+      {-# LANGUAGE DeriveGeneric     #-}
+      {-# LANGUAGE OverloadedStrings #-}
+      module Main where
+
+      import           Control.Concurrent      (forkIO)
+      import           Control.Monad.Catch     (SomeException)
+      import           Data.Aeson              (FromJSON, ToJSON)
+      import           Data.Function           ((&))
+      import           Data.Text               (Text, pack)
+      import           GHC.Generics            (Generic)
+      import           Network.AMQP.Worker     (Connection, Message (..),
+                                                WorkerException, def, fromURI)
+      import qualified Network.AMQP.Worker     as Worker
+      import           Network.AMQP.Worker.Key
+      import           System.IO               (BufferMode (..), hSetBuffering,
+                                                stderr, stdout)
+
+      data TestMessage = TestMessage
+        { greeting :: Text }
+        deriving (Generic, Show, Eq)
+
+      instance FromJSON TestMessage
+      instance ToJSON TestMessage
+
+
+      newMessages :: Key Routing TestMessage
+      newMessages = key "messages" & word "new"
+
+      results :: Key Routing Text
+      results = key "results"
+
+      anyMessages :: Key Binding TestMessage
+      anyMessages = key "messages" & star
+
+
+
+      example :: IO ()
+      example = do
+
+        -- connect
+        conn <- Worker.connect (fromURI "amqp://guest:guest@localhost:5672")
+
+        let handleAnyMessages = Worker.topic anyMessages "handleAnyMessage"
+
+        -- initialize the queues
+        Worker.bindQueue conn (Worker.direct newMessages)
+        Worker.bindQueue conn (Worker.direct results)
+
+        -- topic queue!
+        Worker.bindQueue conn handleAnyMessages
+
+        putStrLn "Enter a message"
+        msg <- getLine
+
+        -- publish a message
+        putStrLn "Publishing a message"
+        Worker.publish conn newMessages (TestMessage $ pack msg)
+
+        -- create a worker, the program loops here
+        _ <- forkIO $ Worker.worker conn def (Worker.direct newMessages) onError (onMessage conn)
+        _ <- forkIO $ Worker.worker conn def (handleAnyMessages) onError (onMessage conn)
+
+        putStrLn "Press any key to exit"
+        _ <- getLine
+        return ()
+
+
+
+
+      onMessage :: Connection -> Message TestMessage -> IO ()
+      onMessage conn m = do
+        let testMessage = value m
+        putStrLn "Got Message"
+        print testMessage
+        Worker.publish conn results (greeting testMessage)
+
+
+      onError :: WorkerException SomeException -> IO ()
+      onError e = do
+        putStrLn "Do something with errors"
+        print e
+
+
+
+      main :: IO ()
+      main = do
+        hSetBuffering stdout LineBuffering
+        hSetBuffering stderr LineBuffering
+        example
 license-name: BSD-3-Clause
