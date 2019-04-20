@@ -1,16 +1,32 @@
 homepage: ''
 changelog-type: markdown
-hash: 9605b3d97ec4d06c40a799a7966b462fd1f2fbbaacce831b73bede5f620b45fb
+hash: ebdb79a05cf9ebfbc13cf1809937ae1a0ce78745970cc58a52fda986b4048d5a
 test-bench-deps:
   base: ! '>=4.9'
+  async: -any
+  doctest: -any
   tasty-quickcheck: -any
   tasty-hunit: -any
   tasty: -any
   shh: -any
+  directory: -any
 maintainer: lukec@themk.net
 synopsis: Simple shell scripting from Haskell
 changelog: |
   # Revision history for shh
+
+  ## 0.4.0.0 -- 2019-04-20
+
+  * Pre-compile Shell.hs for faster loading of shh shell
+  * Introduce `nativeProc` interface and related functions (`pureProc`...)
+  * Allow type-changing `|>` which enables `capture` and
+    similar "processes" to replace the less consistent `readProc`
+    family of functions.  `s <- readProc $ echo "Hello"` can now
+    be written `s <- echo "Hello" |> capture`. This allows capturing
+    within the `Proc` monad to manipulate the stream in Haskell.
+  * Introduce `xargs1` function which can replace some uses of the `xargs`
+    utility, and provides a type-checked, and spell-checked interface
+    similar to `xargs`.
 
   ## 0.3.X.X -- 2019-03-10
 
@@ -29,13 +45,12 @@ changelog: |
 basic-deps:
   unix: ! '>=2.7.2 && <2.8'
   split: ! '>=0.2.3 && <0.3'
-  base: ! '>=4.11 && <4.13'
+  base: ! '>=4.9 && <4.13'
   filepath: ! '>=1.4.2 && <1.5'
   process: ! '>=1.6.3 && <1.7'
   async: ! '>=2.2.1 && <2.3'
   containers: ! '>=0.5.11 && <0.7'
   mtl: ! '>=2.2.2 && <2.3'
-  hashable: -any
   temporary: -any
   deepseq: ! '>=1.4.3 && <1.5'
   shh: -any
@@ -58,13 +73,18 @@ all-versions:
 - 0.3.1.1
 - 0.3.1.2
 - 0.3.1.3
+- 0.4.0.0
 author: Luke Clifton
-latest: 0.3.1.3
+latest: 0.4.0.0
 description-type: markdown
-description: "# Shh\n\n[![](https://img.shields.io/hackage/v/shh.svg?colorB=%23999&label=shh)](http://hackage.haskell.org/package/shh)\n[![](https://img.shields.io/hackage/v/shh-extras.svg?colorB=%23999&label=shh-extras)](http://hackage.haskell.org/package/shh-extras)\n[![](https://builds.sr.ht/~lukec/shh/nix.yml.svg)](https://builds.sr.ht/~lukec/shh/nix.yml?)\n[![](https://travis-ci.org/luke-clifton/shh.svg?branch=master)](https://travis-ci.org/luke-clifton/shh)\n\nShh
+description: "# Shh\n\n[![](https://img.shields.io/hackage/v/shh.svg?colorB=%23999&label=shh)](http://hackage.haskell.org/package/shh)\n[![](https://img.shields.io/hackage/v/shh-extras.svg?colorB=%23999&label=shh-extras)](http://hackage.haskell.org/package/shh-extras)\n[![](https://builds.sr.ht/~lukec/shh/nix.yml.svg)](https://builds.sr.ht/~lukec/shh/nix.yml?)\n\nShh
   is a library to enable convinient shell-like programming in Haskell.\nIt works well
-  in scripts, and from GHCi, allowing you to use GHCi as a shell.\n\nIt is also a
-  wrapper tool around launching GHCi as a shell.\n\nIt supports\n\n * Automatically
+  in scripts, and from GHCi, allowing you to use GHCi as a shell.\n\nIt's primary
+  purpose is in replacing shell scripts. As such, many\nfunctions are provided to
+  mimic the shell environment, and porting shell\nscripts to shh should be fairly
+  straightforward. A simple\n[\"cargo culting\" port](docs/porting.md) should work
+  in most situations,\nand perhaps be even more robust than the original.\n\nIt is
+  also a wrapper tool around launching GHCi as a shell.\n\nIt supports\n\n * Automatically
   defining a function for each executable on your `$PATH`\n   using template Haskell,
   as well as a runtime check to ensure they all\n   exist on startup.\n\n * Redirction
   of stdout and stderr\n       \n       -- Redirect stdout\n       λ echo \"Hello\"
@@ -78,30 +98,35 @@ description: "# Shh\n\n[![](https://img.shields.io/hackage/v/shh.svg?colorB=%239
   d $ do\n       |   mapConcurrently_ (curl \"-LOJs\")\n       |     [ \"https://raw.githubusercontent.com/luke-clifton/shh/master/shell.nix\"\n
   \      |     , \"https://raw.githubusercontent.com/luke-clifton/shh/master/shh.cabal\"\n
   \      |     ]\n       |   ls\n       | :}\n\n * Capturing of process output\n\n
-  \      λ loggedIn <- nub . words <$> readProc users\n       λ putStrLn $ \"Logged
-  in users: \" ++ show loggedIn\n\n       λ mapM_ putStrLn =<< readSplit0 (Shh.Example.find
-  \"-maxdepth\" 1 \"-print0\")\n\n * Capturing infinite output of a process lazily\n\n
-  \      λ withRead (cat \"/dev/urandom\" |> xxd) $ mapM_ putStrLn . take 3 . lines\n
-  \      00000000: 8fcb ebee 9228 a897 3bfc 1d05 491d aceb  .....(..;...I...\n       00000010:
-  47de 3ea3 2788 44ac 9b85 0a0f a458 b949  G.>.'.D......X.I\n       00000020: 5308
-  ddfe 5790 5a5f 39e3 bbb6 b689 2b03  S...W.Z_9.....+.\n\n * Write strings to stdin
-  of a process.\n\n       λ writeProc cat \"Hello\\n\"\n       Hello\n\n       λ \"Hello\"
+  \      λ s <- echo \"Hello\" |> tr \"-d\" \"l\" |> capture\n\n       λ loggedIn
+  <- nub . words <$> readProc users\n       λ putStrLn $ \"Logged in users: \" ++
+  show loggedIn\n\n       λ mapM_ putStrLn =<< readSplit0 (Shh.Example.find \"-maxdepth\"
+  1 \"-print0\")\n\n * Capturing infinite output of a process lazily\n\n       λ withRead
+  (cat \"/dev/urandom\" |> xxd) $ mapM_ putStrLn . take 3 . lines\n       00000000:
+  8fcb ebee 9228 a897 3bfc 1d05 491d aceb  .....(..;...I...\n       00000010: 47de
+  3ea3 2788 44ac 9b85 0a0f a458 b949  G.>.'.D......X.I\n       00000020: 5308 ddfe
+  5790 5a5f 39e3 bbb6 b689 2b03  S...W.Z_9.....+.\n\n * Write strings to stdin of
+  a process.\n\n       λ writeProc cat \"Hello\\n\"\n       Hello\n\n       λ \"Hello\"
   >>> shasum\n       f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0  -\n\n       λ shasum
   <<< \"Hello\"\n       f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0  -\n\n * Proper exceptions,
   when a process exits with a failure code, an exception\n   is thrown. You can catch
   these normally. The exception includes the error\n   code, the command, and all
   it's arguments.\n\n       λ false \"Ha, it died\"\n       *** Exception: Command
-  `false \"Ha, it died\"` failed [exit 1]\n\n       λ catchCode false\n       1\n\n##
-  Mnemonics \n\nShh has many symbols that might seem intimidating at first, but there\nis
-  a simple mnemonic for them.\n\n    |     Piping. Looks like a pipe, same as in POSIX
-  shells.\n    &     Redirection, think of the shell `2>&1`\n    >,<   The direction
-  of flow of a command\n    !     Operate on stderr instead of stdout\n\nSo, for example,\n\n
-  \   ls |> cat      Pipe the stdout of `ls` into stdin of `cat`\n    cat <| ls      Same
-  as above\n    ls &> StdErr   Redirect stdout of `ls` to wherever stderr is going.\n
-  \   StdErr <& ls   Same as above\n    ls &!> StdOut  Redirect stderr of `ls` to
-  wherever stdout is going.\n    StdOut <!& ls  Same as above\n\n## Globbing\n\nCurrently
-  Shh does not have any built in globbing support. Rather, it is\ncurrently suggested
-  to use another library to do globbing. For example,\nusing the [Glob](http://hackage.haskell.org/package/Glob)
+  `false \"Ha, it died\"` failed [exit 1]\n\n       λ catchCode false\n       1\n\n
+  * \"Native\" processes, i.e. Haskell functions that behave like a process.\n\n       λ
+  echo \"Hello\" |> pureProc (map toUpper) |> tr \"-d\" \"L\"\n       HEO\n\n * And
+  much, much more! Look at the documentation on Hackage for a\n   comprehensive overview
+  of all the possibilities.\n\n## Mnemonics \n\nShh has many symbols that might seem
+  intimidating at first, but there\nis a simple mnemonic for them.\n\n    |     Piping.
+  Looks like a pipe, same as in POSIX shells.\n    &     Redirection, think of the
+  shell `2>&1`\n    >,<   The direction of flow of a command\n    !     Operate on
+  stderr instead of stdout\n\nSo, for example,\n\n    ls |> cat      Pipe the stdout
+  of `ls` into stdin of `cat`\n    cat <| ls      Same as above\n    ls &> StdErr
+  \  Redirect stdout of `ls` to wherever stderr is going.\n    StdErr <& ls   Same
+  as above\n    ls &!> StdOut  Redirect stderr of `ls` to wherever stdout is going.\n
+  \   StdOut <!& ls  Same as above\n\n## Globbing\n\nCurrently Shh does not have any
+  built in globbing support. Rather, it is\ncurrently suggested to use another library
+  to do globbing. For example,\nusing the [Glob](http://hackage.haskell.org/package/Glob)
   package, it is\npossible to do something like\n\n    wc =<< glob \"*.md\"\n\nCertainly
   more verbose than the Bash equivalent, however, also more explicit,\nwhich is probably
   a good thing. If this turns out to be too cumbersome, we\nmight introduce a more
@@ -128,9 +153,15 @@ description: "# Shh\n\n[![](https://img.shields.io/hackage/v/shh.svg?colorB=%239
   The use-case for this is to be able to set up the environment for `shh`.\nYou might,
   for example, wrap the execution in a `nix-shell`. Either way,\nit is up to you to
   make sure that the compiler, and packages you require are\navailable, either globally,
-  or provided by the `wrapper` script.\n\n#### Nix Wrapper Example\n\nThe following
-  snippet could act as a `wrapper` file to set up a suitable\nenvironment using `nix-shell`\n\n
+  or provided by the `wrapper` script.\n\n#### Faster Startup\n\n`shh` precompiles
+  your `Shell.hs` file so that starting up `shh` is very\nquick on subsequent launches.
+  Unfortunately, `shh` isn't quite able to detect\nthis perfectly. If you see GHCi
+  telling you that it is `Compiling Shell`,\nand you notice the delay when starting
+  `shh`, try manually forcing a rebuild\nby passing in the `--rebuild` argument to
+  `shh`.\n\nThis is particularly likely to happen if you upgrade your GHC, or installed\npackages,
+  or even `shh` itself.\n\n#### Nix Wrapper Example\n\nThe following snippet could
+  act as a `wrapper` file to set up a suitable\nenvironment using `nix-shell`\n\n
   \   #! /usr/bin/env nix-shell\n    #! nix-shell -i bash -p \"(haskellPackages.ghcWithPackages
   (p: with p; [shh shh-extras]))\"\n    exec \"$@\"\n\n### Script Usage\n\nTODO: Fill
-  this in once the user experience is better.\n    \n"
+  this in once the user experience is better.\n"
 license-name: BSD-3-Clause
