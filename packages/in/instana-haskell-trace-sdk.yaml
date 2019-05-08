@@ -1,6 +1,6 @@
 homepage: https://www.instana.com/
 changelog-type: markdown
-hash: e159e49a8b348f4432ed0b71bab5a09fc88d0205c655a201156d4e5ec9f00ce0
+hash: 6d0cec239959fd90ea52b6c326b94ca7eaac3c963849911ef628c77adbd2b255
 test-bench-deps:
   http-client: -any
   exceptions: -any
@@ -25,10 +25,42 @@ test-bench-deps:
   directory: -any
 maintainer: bastian.krol@instana.com
 synopsis: SDK for adding custom Instana tracing support to Haskell applications.
-changelog: |
-  # Changelog for instana-haskell-sdk
+changelog: |+
+  # Changelog for instana-haskell-trace-sdk
 
-  ## Unreleased changes
+  ## 0.3.0.0
+  - Honor the environment variable `INSTANA_SERVICE_NAME` to override the default service name in Instana.
+  - Add a configuration option for overriding the default service name in Instana.
+  - Add `InstanaSDK.setServiceName` to override the default service name in Instana on a per-call basis.
+  - Fix: Send correct SDK spans. This is a breaking change. Several functions were renamed or have changed their signature.
+  In detail:
+
+      - Use `InstanaSDK.addTag` instead of `InstanaSDK.addData` (for SDK
+        spans).
+      - Use `InstanaSDK.addTagAt` instead of `InstanaSDK.addDataAt` (for SDK spans).
+      - For registered spans, replace `InstanaSDK.addData` and `InstanaSDK.addDataAt` with `InstanaSDK.addRegisteredData` and `InstanaSDK.addRegisteredDataAt`. Note that you should probably not create registered spans, but only use SDK spans.
+      - Usages like `startEntry "some.span.name"` or `withEntry "some.span.name"` (that is, the span name is passed directly as a literal) will simply continue to work as expected but will require `OverloadedStrings` to be active.
+      - Usages where the span name is stored in a `Data.Text` value first and then passed to `startEntry`/`withEntry`/etc. will break. You can fix those by importing
+  ```
+  import qualified Instana.SDK.Span.SpanType as SpanType
+  ```
+  and then wrapping the span name in `SpanType.SdkSpan`. For example:
+  ```
+  spanName = T.pack "some.span.name"
+  InstanaSDK.withRootEntry instana spanName ...
+  ```
+  becomes:
+  ```
+  spanType = SpanType.SdkSpan $ T.pack "some.span.name"
+  InstanaSDK.withRootEntry instana spanType ...
+  ```
+
+  ## 0.2.0.0
+  - Add WAI middleware plug-in to trace HTTP entries automatically.
+
+  ## 0.1.0.0
+  - Initial release
+
 basic-deps:
   warp: -any
   http-client: -any
@@ -65,8 +97,9 @@ basic-deps:
 all-versions:
 - 0.1.0.0
 - 0.2.0.0
+- 0.3.0.0
 author: Bastian Krol
-latest: 0.2.0.0
+latest: 0.3.0.0
 description-type: markdown
 description: "# Instana Haskell Trace SDK &nbsp; [![Build Status](https://travis-ci.org/instana/haskell-trace-sdk.svg?branch=master)](https://travis-ci.org/instana/haskell-trace-sdk)\n\nMonitor
   your Haskell application with [Instana](https://www.instana.com/)! \U0001F389\n\nDisclaimer\n----------\n\nThe
@@ -89,7 +122,7 @@ description: "# Instana Haskell Trace SDK &nbsp; [![Build Status](https://travis
   to your dependencies (for example to the `build-depends` section of your cabal file).
   If you are using [stack](https://docs.haskellstack.org/en/stable/README/) you might
   need to add the SDK (with the version number you want to use) to the `extra-deps`
-  section in your `stack.yaml` file:\n\n```\nextra-deps:\n- instana-haskell-trace-sdk-0.2.0.0\n```\n\nUsage\n-----\n\n###
+  section in your `stack.yaml` file:\n\n```\nextra-deps:\n- instana-haskell-trace-sdk-0.3.0.0\n```\n\nUsage\n-----\n\n###
   Initialization\n\nBefore using the SDK, you need to initialize it once, usually
   during application startup.\n\n```\nimport qualified Instana.SDK.SDK as InstanaSDK\n\nmain
   :: IO ()\nmain = do\n  -- ... initialize things ...\n\n  -- initialize Instana\n
@@ -106,8 +139,9 @@ description: "# Instana Haskell Trace SDK &nbsp; [![Build Status](https://travis
   port, ...) directly in code. You only need to specify the\n  -- configuration values
   you are interested in and can omit everything else\n  -- (see https://www.yesodweb.com/book/settings-types).\n
   \ let\n    config =\n      InstanaSDK.defaultConfig\n        { InstanaSDK.agentHost
-  = Just \"127.0.0.1\"\n        , InstanaSDK.agentPort = Just 42699\n        , InstanaSDK.forceTransmissionAfter
-  = Just 1000\n        , InstanaSDK.forceTransmissionStartingAt = Just 500\n        ,
+  = Just \"127.0.0.1\"\n        , InstanaSDK.agentPort = Just 42699\n        , InstanaSDK.serviceName
+  = Just \"A Great Hakell Service\"\n        , InstanaSDK.forceTransmissionAfter =
+  Just 1000\n        , InstanaSDK.forceTransmissionStartingAt = Just 500\n        ,
   InstanaSDK.maxBufferedSpans = Just 1000\n        }\n  instana <- InstanaSDK.initConfiguredInstana
   config\n```\n\nFor configuration parameters that are omitted when creating the config
   record or are set to `Nothing`, the SDK will fall back to environment variables
@@ -118,52 +152,77 @@ description: "# Instana Haskell Trace SDK &nbsp; [![Build Status](https://travis
   here :-)\n```\n\nor, with bracket style and a configuration record:\n\n```\nimport
   qualified Instana.SDK.SDK as InstanaSDK\n\nmain :: IO ()\nmain = do\n  let\n    config
   =\n      InstanaSDK.defaultConfig\n        { InstanaSDK.agentHost = Just \"127.0.0.1\"\n
-  \       , InstanaSDK.agentPort = Just 42699\n        , InstanaSDK.forceTransmissionAfter
-  = Just 1000\n        , InstanaSDK.forceTransmissionStartingAt = Just 500\n        ,
-  InstanaSDK.maxBufferedSpans = Just 1000\n        }\n\n  InstanaSDK.withConfiguredInstana
-  config runApp\n\nrunApp :: InstanaContext -> IO ()\nrunApp instana = do\n  -- do
-  your thing here :-)\n```\n\n### Creating Spans\n\n#### Trace HTTP Entries Automatically\n\nYou
-  can let the SDK automatically create entry spans for all incoming HTTP requests
-  in a WAI application by using it as a WAI middleware plug-in. Note that exit spans
-  still need to be created manually via the withExit or startExit/stopExit functions
-  (see below).\n\n```\nimport qualified Instana.Wai.Middleware.Entry as InstanaWaiMiddleware\n\nmain
-  = do\n  Warp.run 3000 $ InstanaWaiMiddleware.traceHttpEntries instana $ app\n```\n\n####
-  Bracket Style (High Level API)\n\nAll functions starting with `with` accept (among
-  other parameters) an IO action. The SDK will start a span before, then execute the
-  given IO action and complete the span afterwards. Using this style is recommended
-  over the low level API that requires you to start and complete spans yourself.\n\n*
-  `withRootEntry`: Creates an entry span that is the root of a trace (it has no parent
-  span).\n* `withEntry`: Creates an entry span that has a parent span.\n* `withHttpEntry`:
-  A convenience function that examines an HTTP request for Instana tracing headers
-  and creates an entry span.\n* `withExit`: Creates an exit span. This can only be
-  called inside a `withRootEntry` or an `withEntry` call, as an exit span needs an
-  entry span as its parent.\n* `withHttpExit`: Creates an exit span for a given HTTP
-  client request.\n\n#### Low Level API/Explicit Start And Complete\n\n* `startRootEntry`:
-  Starts an entry span that is the beginning of a trace (has no parent span). You
-  will need to call `completeEntry` at some point.\n* `startEntry`: Starts an entry
-  span. You will need to call `completeEntry` at some point.\n* `startHttpEntry`:
-  Starts an entry span for an incoming HTTP request.\n* `startExit`: Starts an exit
-  span. You need to call `completeExit`/`completeExitWithData` at some point with
-  the partial exit span value that is returned by this function.\n* `startHttpExit`:
-  Starts an exit span for an outgoing HTTP request.\n* `completeEntry`: Finalizes
-  an entry span. This will put the span into the SDK's span buffer for transmission
+  \       , InstanaSDK.agentPort = Just 42699\n        , InstanaSDK.serviceName =
+  Just \"A Great Hakell Service\"\n        , InstanaSDK.forceTransmissionAfter = Just
+  1000\n        , InstanaSDK.forceTransmissionStartingAt = Just 500\n        , InstanaSDK.maxBufferedSpans
+  = Just 1000\n        }\n\n  InstanaSDK.withConfiguredInstana config runApp\n\nrunApp
+  :: InstanaContext -> IO ()\nrunApp instana = do\n  -- do your thing here :-)\n```\n\n###
+  Creating Spans\n\n#### Trace HTTP Entries Automatically\n\nYou can let the SDK automatically
+  create entry spans for all incoming HTTP requests in a WAI application by using
+  it as a WAI middleware plug-in. Note that exit spans still need to be created manually
+  via the `withHttpExit` or `startHttpExit`/`completeExit` functions (see below).\n\n```\nimport
+  qualified Instana.Wai.Middleware.Entry as InstanaWaiMiddleware\n\nmain = do\n  Warp.run
+  3000 $ InstanaWaiMiddleware.traceHttpEntries instana $ app\n```\n\n#### Bracket
+  Style (High Level API)\n\nAll functions starting with `with` accept (among other
+  parameters) an IO action. The SDK will start a span before, then execute the given
+  IO action and complete the span afterwards. Using this style is recommended over
+  the low level API that requires you to start and complete spans yourself.\n\n* `withRootEntry`:
+  Creates an entry span that is the root of a trace (it has no parent span).\n* `withEntry`:
+  Creates an entry span that has a parent span.\n* `withHttpEntry`: A convenience
+  function that examines an HTTP request for Instana tracing headers and creates an
+  entry span. It will automatically add the correct metadata to the span. You do not
+  need to handle incoming HTTP requests at all when using the Instana WAI middleware
+  plug-in (see above).\n* `withExit`: Creates an exit span. This can only be called
+  inside a `withRootEntry` or an `withEntry` call, as an exit span needs an entry
+  span as its parent.\n* `withHttpExit`: Creates an exit span for a given HTTP client
+  request. It will automatically add the correct metadata to the span so it should
+  be preferred to `withExit` when tracing outgoing HTTP requests.\n\n#### Low Level
+  API/Explicit Start And Complete\n\n* `startRootEntry`: Starts an entry span that
+  is the beginning of a trace (has no parent span). You will need to call `completeEntry`
+  at some point.\n* `startEntry`: Starts an entry span. You will need to call `completeEntry`
+  at some point.\n* `startHttpEntry`: Starts an entry span for an incoming HTTP request.
+  It will automatically add the correct metadata to the span. You do not need to handle
+  incoming HTTP requests at all when using the WAI middleware plug-in (see above).
+  You will need to call `completeEntry` at some point.\n* `startExit`: Starts an exit
+  span. You will need to call `completeExit` at some point.\n* `startHttpExit`: Starts
+  an exit span for an outgoing HTTP request. It will automatically add the correct
+  metadata to the span so it should be preferred to `startExit` when tracing outgoing
+  HTTP requests. You will need to call `completeExit` at some point.\n* `completeEntry`:
+  Finalizes an entry span. This will put the span into the SDK's span buffer for transmission
   to the Instana agent.\n* `completeExit`: Finalizes an exit span. This will put the
-  span into the SDK's span buffer for transmission to the Instana agent.\n\n### Configuration
-  Via Environment Variables\n\nInstead of configuring the SDK programatically, as
-  seen above, it can also be configured via environment variables:\n\n* `INSTANA_AGENT_HOST`:
-  The IP or the host of the Instana agent to connect to. Default: 127.0.0.1.\n* `INSTANA_AGENT_PORT`:
-  The port of the Instana agent to connect to. Default: 42699.\n* `INSTANA_AGENT_NAME`:
-  When establishing a connection to the Instana agent, the SDK validates the Instana
-  agent's `Server` HTTP response header. Should you have changed the Server name on
-  the agent side, you can use this environment variable to provide the name to match
-  that header against.\n* `INSTANA_FORCE_TRANSMISSION_STARTING_AFTER`: Spans are usually
-  buffered before being transmitted to the agent. This setting forces the transmission
-  of all buffered spans after the given amount of milliseconds. Default: 1000.\n*
-  `INSTANA_FORCE_TRANSMISSION_STARTING_AT`: This setting forces the transmission of
-  all buffered spans when the given number of spans has been buffered.\n* `INSTANA_MAX_BUFFERED_SPANS`:
-  Limits the number of spans to buffer. When the limit is reached, spans will be dropped.
-  This setting is a safe guard against memory leaks from buffering excessive amounts
-  of spans. It must be larger than `INSTANA_FORCE_TRANSMISSION_STARTING_AT`.\n* `INSTANA_LOG_LEVEL`:
+  span into the SDK's span buffer for transmission to the Instana agent.\n\n#### Best
+  Practices\n\nMake sure you have read Instana's [docs on custom tracing](https://docs.instana.io/quick_start/custom_tracing/#tips--best-practices)
+  and in particular the [best practices section](https://docs.instana.io/quick_start/custom_tracing/#tips--best-practices).
+  This documentation contains a lot of useful info for integrating Instana tracing
+  into your code; among other things, it explains which [metadata](https://docs.instana.io/quick_start/custom_tracing/#list-of-processed-tags)
+  can be added to spans (via `InstanaSDK.addTag` and `InstanaSDK.addTagAt`).\n\nInstana
+  differentiates between so-called registered spans and SDK spans. Registered spans
+  are usually created by automatic tracing and there is specialized handling for each
+  registered in Instana's processing pipeline. SDK spans, in contrast, are the type
+  of spans created by using a trace SDK (like the Haskell trace SDK or other, similar
+  SDKs for other runtime platforms). SDK span are processed in a more generic fashion
+  by Instana's processing pipeline.\n\nNote that nearly all spans created with this
+  SDK should be SDK spans. The are only two exceptions, for which this SDK creates
+  registered spans:\n- HTTP/WAI entry (server) spans, and\n- HTTP exit (client) spans.\n\nThe
+  SDK offers special functions to create these registered spans (`withHttpEntry`,
+  `withHttpExit` as well as the corresponding lower level functions `startHttpEntry`
+  and `startHttpExit`, see above).\n\n### Configuration Via Environment Variables\n\nInstead
+  of configuring the SDK programatically, as seen above, it can also be configured
+  via environment variables:\n\n* `INSTANA_AGENT_HOST`: The IP or the host of the
+  Instana agent to connect to. Default: 127.0.0.1.\n* `INSTANA_AGENT_PORT`: The port
+  of the Instana agent to connect to. Default: 42699.\n* `INSTANA_AGENT_NAME`: When
+  establishing a connection to the Instana agent, the SDK validates the Instana agent's
+  `Server` HTTP response header. Should you have changed the Server name on the agent
+  side, you can use this environment variable to provide the name to match that header
+  against.\n* `INSTANA_SERVICE_NAME`: Override the default service name in Instana.\n*
+  `INSTANA_FORCE_TRANSMISSION_STARTING_AFTER`: Spans are usually buffered before being
+  transmitted to the agent. This setting forces the transmission of all buffered spans
+  after the given amount of milliseconds. Default: 1000.\n* `INSTANA_FORCE_TRANSMISSION_STARTING_AT`:
+  This setting forces the transmission of all buffered spans when the given number
+  of spans has been buffered.\n* `INSTANA_MAX_BUFFERED_SPANS`: Limits the number of
+  spans to buffer. When the limit is reached, spans will be dropped. This setting
+  is a safe guard against memory leaks from buffering excessive amounts of spans.
+  It must be larger than `INSTANA_FORCE_TRANSMISSION_STARTING_AT`.\n* `INSTANA_LOG_LEVEL`:
   See section \"Configure Debug Logging\".\n* `INSTANA_LOG_LEVEL_STDOUT`: See section
   \"Configure Debug Logging\".\n* `INSTANA_OVERRIDE_HSLOGGER_ROOT_HANDLER`: See section
   \"Configure Debug Logging\".\n\n### Configure Debug Logging\n\nIf required, the
