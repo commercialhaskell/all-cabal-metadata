@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: b54fcb2a9d67706abc2ca378d7195571bca9949502e49109b43bc908974e3920
+hash: 327ef9d58337eff684ec118086714c108b5528426e648a54bc4b51aa9c3d2202
 test-bench-deps:
   aeson-gadt-th: -any
   dependent-sum: -any
@@ -14,6 +14,12 @@ synopsis: Derivation of Aeson instances for GADTs
 changelog: |
   # Revision history for aeson-gadt-th
 
+  ## 0.2.1.0
+
+  * Extend type variable substitution to handle all current cases in template-haskell.
+  * Better deal with data constructors having an index that is polymorphic, but can be determined from the other type parameters.
+  * Handle data constructors that are constrained by type classes.
+
   ## 0.2.0.0
 
   * Add changelog
@@ -23,6 +29,8 @@ basic-deps:
   aeson-gadt-th: -any
   dependent-sum: -any
   base: ! '>=4.8 && <4.13'
+  dependent-map: -any
+  containers: -any
   transformers: -any
   aeson: -any
   template-haskell: -any
@@ -32,8 +40,9 @@ all-versions:
 - 0.1.2.0
 - 0.1.2.1
 - 0.2.0.0
+- 0.2.1.0
 author: Obsidian Systems LLC
-latest: 0.2.0.0
+latest: 0.2.1.0
 description-type: text
 description: |
   # aeson-gadt-th
@@ -48,10 +57,16 @@ description: |
   {-# LANGUAGE TemplateHaskell #-}
   {-# LANGUAGE FlexibleContexts #-}
   {-# LANGUAGE FlexibleInstances #-}
+  {-# LANGUAGE UndecidableInstances #-}
   {-# LANGUAGE MultiParamTypeClasses #-}
 
   import Data.Aeson
   import Data.Aeson.GADT.TH
+
+  import Data.Dependent.Map (DMap)
+  import Data.Dependent.Sum (DSum)
+  import Data.Functor.Identity
+  import Data.GADT.Compare
 
   data A :: * -> * where
     A_a :: A a
@@ -59,10 +74,42 @@ description: |
 
   data B c :: * -> * where
     B_a :: c -> A a -> B c a
-    B_x :: B c x
+    B_x :: B c a
+
+  data C t :: * -> * where
+    C_t :: t -> C t t
 
   deriveJSONGADT ''A
   deriveJSONGADT ''B
+  deriveJSONGADT ''C
+
+  -- Some real-world-ish examples.
+
+  -- | Edit operations for `LabelledGraph`
+  data LabelledGraphEdit v vm em :: * -> * where
+    LabelledGraphEdit_ClearAll :: LabelledGraphEdit v vm em ()
+    LabelledGraphEdit_AddVertex :: vm -> LabelledGraphEdit v vm em v
+    LabelledGraphEdit_AddEdge :: v -> v -> em -> LabelledGraphEdit v vm em ()
+    LabelledGraphEdit_SetVertexProperties :: v -> vm -> LabelledGraphEdit v vm em ()
+    LabelledGraphEdit_SetEdgeProperties :: v -> v -> em -> LabelledGraphEdit v vm em ()
+
+  -- | PropertyGraphEdit operatios for `PropertyGraph`
+  data PropertyGraphEdit v vp ep r where
+    PropertyGraphEdit_ClearAll :: PropertyGraphEdit v vp ep ()
+    PropertyGraphEdit_AddVertex :: (DMap vp Identity) -> PropertyGraphEdit v vp ep v
+    PropertyGraphEdit_AddEdge :: v -> v -> (DMap ep Identity) -> PropertyGraphEdit v vp ep ()
+    PropertyGraphEdit_SetVertexProperty :: GCompare vp => v -> DSum vp Identity -> PropertyGraphEdit v vp ep ()
+    PropertyGraphEdit_SetEdgeProperty :: GCompare ep => v -> v -> DSum ep Identity -> PropertyGraphEdit v vp ep ()
+
+  -- | View operations for `LabelledGraph`
+  data LabelledGraphView v vm em :: * -> * where
+    LabelledGraphView_All :: LabelledGraphView v vm em ()
+    LabelledGraphView_GetVertexProperties :: v -> LabelledGraphView v vm em vm
+    LabelledGraphView_GetEdgeProperties :: v -> v -> LabelledGraphView v vm em em
+
+  deriveJSONGADT ''LabelledGraphEdit
+  deriveJSONGADT ''PropertyGraphEdit
+  deriveJSONGADT ''LabelledGraphView
 
   main :: IO ()
   main = return ()
