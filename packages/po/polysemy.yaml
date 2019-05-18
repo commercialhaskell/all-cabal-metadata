@@ -1,15 +1,15 @@
 homepage: https://github.com/isovector/polysemy#readme
 changelog-type: markdown
-hash: 2e5b166c2e0ed4dbc7a4e2a1558da0605e34ce360f4db6c2622f0092dc74e754
+hash: 54e405ddd0bfa66b0df1057aa68f31188e515a5524529c3f14e275aff44c7420
 test-bench-deps:
-  free: ==5.1.*
+  free: -any
   base: ! '>=4.7 && <5'
-  freer-simple: ! '>=1.2.1.0 && <1.3'
-  hspec: ! '>=2.6.0 && <2.7'
+  freer-simple: -any
+  hspec: ! '>=2.6.0 && <3'
   syb: ==0.7.*
-  criterion: ! '>=1.5.3.0 && <1.6'
+  criterion: -any
   inspection-testing: ! '>=0.4.1.1 && <0.5'
-  mtl: ! '>=2.2.2 && <2.3'
+  mtl: ! '>=2.2.2 && <3'
   polysemy: -any
   transformers: ! '>=0.5.5.0 && <0.6'
   random: ==1.1.*
@@ -18,6 +18,13 @@ maintainer: sandy@sandymaguire.me
 synopsis: Higher-order, low-boilerplate, zero-cost free monads.
 changelog: |+
   # Changelog for polysemy
+
+  ## 0.1.2.1 (2019-05-18)
+
+  - Give explicit package bounds for dependencies
+  - Haddock improvements
+  - Remove `Typeable` machinery from `Polysemy.Internal.Union` (thanks to
+      @googleson78)
 
   ## 0.1.2.0 (2019-04-26)
 
@@ -42,19 +49,20 @@ changelog: |+
 
 basic-deps:
   base: ! '>=4.7 && <5'
-  syb: ==0.7.*
-  mtl: ! '>=2.2.2 && <2.3'
+  syb: ! '>=0.7 && <0.8'
+  mtl: ! '>=2.2.2 && <3'
   transformers: ! '>=0.5.5.0 && <0.6'
-  random: ==1.1.*
+  random: ! '>=1.1 && <1.2'
   template-haskell: ! '>=2.14.0.0 && <2.15'
 all-versions:
 - 0.1.0.0
 - 0.1.1.0
 - 0.1.2.0
+- 0.1.2.1
 author: Sandy Maguire
-latest: 0.1.2.0
+latest: 0.1.2.1
 description-type: markdown
-description: |+
+description: |
   # polysemy
 
   [![Build Status](https://api.travis-ci.org/isovector/polysemy.svg?branch=master)](https://travis-ci.org/isovector/polysemy)
@@ -83,6 +91,25 @@ description: |+
 
   It's like `fused-effects` but with an order of magnitude less boilerplate.
 
+  Additionally, unlike `mtl`, `polysemy` has no functional dependencies, so you
+  can use multiple copies of the same effect. This alleviates the need for ~~ugly
+  hacks~~band-aids like [classy
+  lenses](http://hackage.haskell.org/package/lens-4.17.1/docs/Control-Lens-TH.html#v:makeClassy),
+  the [`ReaderT`
+  pattern](https://www.fpcomplete.com/blog/2017/06/readert-design-pattern) and
+  nicely solves the [trouble with typed
+  errors](https://www.parsonsmatt.org/2018/11/03/trouble_with_typed_errors.html).
+
+  Concerned about type inference? Check out
+  [polysemy-plugin](https://github.com/isovector/polysemy/tree/master/polysemy-plugin),
+  which should perform just as well as `mtl`'s! Add `polysemy-plugin` to your package.yaml
+  or .cabal file's dependencies section to use. Then turn it on with a pragma in your source-files:
+
+  ```haskell
+  {-# OPTIONS_GHC -fplugin=Polysemy.Plugin #-}
+  ```
+  Or by adding `-fplugin=Polysemy.Plugin` to your package.yaml/.cabal file `ghc-options` section.
+
 
   ## Features
 
@@ -105,23 +132,59 @@ description: |+
   Extensions](https://github.com/isovector/polysemy#necessary-language-extensions)
   before trying these yourself!
 
-  Console effect:
+  Teletype effect:
 
   ```haskell
   {-# LANGUAGE TemplateHaskell #-}
+  {-# LANGUAGE LambdaCase, BlockArguments #-}
+  {-# LANGUAGE GADTs, FlexibleContexts, TypeOperators, DataKinds, PolyKinds #-}
 
   import Polysemy
+  import Polysemy.Input
+  import Polysemy.Output
 
-  data Console m a where
-    ReadTTY  :: Console m String
-    WriteTTY :: String -> Console m ()
+  data Teletype m a where
+    ReadTTY  :: Teletype m String
+    WriteTTY :: String -> Teletype m ()
 
-  makeSem ''Console
+  makeSem ''Teletype
 
-  runConsoleIO :: Member (Lift IO) r => Sem (Console ': r) a -> Sem r a
-  runConsoleIO = interpret $ \case
+  runTeletypeIO :: Member (Lift IO) r => Sem (Teletype ': r) a -> Sem r a
+  runTeletypeIO = interpret $ \case
     ReadTTY      -> sendM getLine
     WriteTTY msg -> sendM $ putStrLn msg
+
+  runTeletypePure :: [String] -> Sem (Teletype ': r) a -> Sem r ([String], a)
+  runTeletypePure i
+    = runFoldMapOutput pure  -- For each WriteTTY in our program, consume an output by appending it to the list in a ([String], a)
+    . runListInput i         -- Treat each element of our list of strings as a line of input
+    . reinterpret2 \case     -- Reinterpret our effect in terms of Input and Output
+        ReadTTY -> maybe "" id <$> input
+        WriteTTY msg -> output msg
+
+
+  echo :: Member Teletype r => Sem r ()
+  echo = do
+    i <- readTTY
+    case i of
+      "" -> pure ()
+      _  -> writeTTY i >> echo
+
+
+  -- Let's pretend
+  echoPure :: [String] -> Sem '[] ([String], ())
+  echoPure = flip runTeletypePure echo
+
+  pureOutput :: [String] -> [String]
+  pureOutput = fst . run . echoPure
+
+  -- Now let's do things
+  echoIO :: Sem '[Lift IO] ()
+  echoIO = runTeletypeIO echo
+
+  -- echo forever
+  main :: IO ()
+  main = runM echoIO
   ```
 
 
@@ -129,31 +192,31 @@ description: |+
 
   ```haskell
   {-# LANGUAGE TemplateHaskell #-}
+  {-# LANGUAGE LambdaCase, BlockArguments #-}
+  {-# LANGUAGE GADTs, FlexibleContexts, TypeOperators, DataKinds, PolyKinds, TypeApplications #-}
 
-  import qualified Control.Exception as X
-  import           Polysemy
+  import Prelude hiding (throw, catch, bracket)
+  import Polysemy
+  import Polysemy.Input
+  import Polysemy.Output
+  import Polysemy.Error
+  import Polysemy.Resource
 
-  data Resource m a where
-    Bracket :: m a -> (a -> m ()) -> (a -> m b) -> Resource m b
+  -- Using Teletype effect from above
 
-  makeSem ''Resource
+  data CustomException = ThisException | ThatException deriving Show
 
-  runResource
-      :: forall r a
-       . Member (Lift IO) r
-      => (∀ x. Sem r x -> IO x)
-      -> Sem (Resource ': r) a
-      -> Sem r a
-  runResource finish = interpretH $ \case
-    Bracket alloc dealloc use -> do
-      a <- runT  alloc
-      d <- bindT dealloc
-      u <- bindT use
+  program :: Members '[Resource, Teletype, Error CustomException] r => Sem r ()
+  program = catch @CustomException work $ \e -> writeTTY ("Caught " ++ show e)
+    where work = bracket (readTTY) (const $ writeTTY "exiting bracket") $ \input -> do
+            writeTTY "entering bracket"
+            case input of
+              "explode"     -> throw ThisException
+              "weird stuff" -> writeTTY input >> throw ThatException
+              _             -> writeTTY input >> writeTTY "no exceptions"
 
-      let runIt :: Sem (Resource ': r) x -> IO x
-          runIt = finish .@ runResource
-
-      sendM $ X.bracket (runIt a) (runIt . d) (runIt . u)
+  main :: IO (Either CustomException ())
+  main = (runM .@ runResource .@@ runErrorInIO @CustomException) . runTeletypeIO $ program
   ```
 
   Easy.
@@ -216,5 +279,4 @@ description: |+
       - TypeOperators
       - TypeFamilies
   ```
-
 license-name: BSD-3-Clause
