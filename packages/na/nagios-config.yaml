@@ -1,0 +1,302 @@
+homepage: https://github.com/hverr/hs-nagios-config#readme
+changelog-type: ''
+hash: 515436f6323c05dade0ba5141d97f85d6fd6c5b77080cdbd4d25639a3e528fce
+test-bench-deps: {}
+maintainer: henriverroken@gmail.com
+synopsis: EDSL to specify Nagios configuration files.
+changelog: ''
+basic-deps:
+  base: ! '>=4.7 && <5'
+  nagios-config: -any
+all-versions:
+- 0.1.0.0
+author: Henri Verroken
+latest: 0.1.0.0
+description-type: markdown
+description: |
+  nagios-conf
+  ===========
+
+  EDSL to specify Nagios configuration files.
+
+  ## Example
+
+  ```haskell
+  #!/usr/bin/env stack
+  {- stack --resolver lts-9.21 --package nagios-conf script -}
+  module Main where
+
+  import Nagios.Config.EDSL
+  import Nagios.Config.EDSL.Defaults (linuxServer)
+  import Nagios.Config.EDSL.Defaults.Commands
+  import qualified Nagios.Config.EDSL.Defaults as Defaults
+
+  import Data.List (isPrefixOf)
+
+  main :: IO ()
+  main = putStr $ writeConfiguration toplevel
+
+  toplevel :: [Object]
+  toplevel = map OService
+      [ ping
+      , sshLoad, sshDisk, sshUsers, sshProcesses, sshSwap
+      , sshLxdDisk, sshRaid
+      , sshIomegaDisk
+      ] ++ map OHostGroup
+      [ allHosts
+      , linuxSshServers
+      , lxdContainers
+      , lxdHosts
+      , raidServers
+      ]
+
+  -- --------------------------------
+  -- ---------- HOSTGROUPS ----------
+  -- --------------------------------
+  allHosts :: HostGroup
+  allHosts = (hostgroup "all-servers" "All Servers")
+      { hostGroupMembers = hostGroupMembers linuxSshServers ++
+                           hostGroupMembers lxdContainers}
+
+  linuxSshServers :: HostGroup
+  linuxSshServers = (hostgroup "linux-ssh-servers" "Linux SSH Servers")
+      { hostGroupMembers = [xen, admin, dmz, nfs, lxd, lxd2] }
+
+  lxdHosts :: HostGroup
+  lxdHosts = (hostgroup "lxd-hosts" "LXD Hosts")
+      { hostGroupMembers = [lxd, lxd2] }
+
+  raidServers :: HostGroup
+  raidServers = (hostgroup "raid-servers" "RAID Servers")
+      { hostGroupMembers = [xen, lxd2] }
+
+  lxdContainers :: HostGroup
+  lxdContainers = (hostgroup "lxd-containers" "LXD Containers")
+      { hostGroupMembers = [ backups
+                           , henri
+                           , sniproxy
+                           , unigornelJenkins
+                           , gitea, giteaCaddy
+                           , jenkins, jenkinsCaddy
+                           , nagios, nagiosCaddy
+                           , openvpn
+                           ]
+      }
+
+  -- ------------------------------
+  -- ---------- SERVICES ----------
+  -- ------------------------------
+  ping :: Service
+  ping = (service "ping")
+      { serviceUse = Just localService
+      , serviceDescription = Just "PING"
+      , serviceHostGroups = [allHosts]
+      , serviceCheckCommand = Just $ apply checkPing ["100.0,20%", "500.0,60%"]
+      }
+
+  sshLoad :: Service
+  sshLoad = (service "ssh-load")
+      { serviceUse = Just localService
+      , serviceDescription = Just "Load"
+      , serviceHostGroups = [linuxSshServers]
+      , serviceCheckCommand = Just $ apply checkSshLoad ["5.0,4.0,3.0", "10.0,6.0,4.0"]
+      }
+
+  sshDisk :: Service
+  sshDisk = (service "ssh-disk")
+      { serviceUse = Just localService
+      , serviceDescription = Just "Disk"
+      , serviceHostGroups = [linuxSshServers]
+      , serviceCheckCommand = Just $ apply checkSshDisk ["20%", "10%", "/"]
+      }
+
+  sshUsers :: Service
+  sshUsers = (service "ssh-users")
+      { serviceUse = Just localService
+      , serviceDescription = Just "Users"
+      , serviceHostGroups = [linuxSshServers]
+      , serviceCheckCommand = Just $ apply checkSshUsers ["1", "5"]
+      }
+
+  sshProcesses :: Service
+  sshProcesses = (service "ssh-processes")
+      { serviceUse = Just localService
+      , serviceDescription = Just "Processes"
+      , serviceHostGroups = [linuxSshServers]
+      , serviceCheckCommand = Just $ apply checkSshProcesses ["240", "400", "RSZDT"]
+      }
+
+  sshSwap :: Service
+  sshSwap = (service "ssh-swap")
+      { serviceUse = Just localService
+      , serviceDescription = Just "Swap"
+      , serviceHostGroups = [linuxSshServers]
+      , serviceCheckCommand = Just $ apply checkSshSwap ["20", "10"]
+      }
+
+  sshLxdDisk :: Service
+  sshLxdDisk = (service "ssh-lxd-disk")
+      { serviceUse = Just localService
+      , serviceDescription = Just "LXD Disk"
+      , serviceHostGroups = [lxdHosts]
+      , serviceCheckCommand = Just $ apply checkSshDisk ["20%", "10%", "/var/lib/lxd"]
+      }
+
+  sshRaid :: Service
+  sshRaid = (service "ssh-raid")
+      { serviceUse = Just localService
+      , serviceDescription = Just "RAID"
+      , serviceHostGroups = [raidServers]
+      , serviceCheckCommand = Just checkSshRaid
+      }
+
+  sshIomegaDisk :: Service
+  sshIomegaDisk = (service "ssh-iomega-disk")
+      { serviceUse = Just localService
+      , serviceDescription = Just "Iomega Disk"
+      , serviceHosts = [nfs]
+      , serviceCheckCommand = Just $ apply checkSshDisk ["20%", "10%", "/mnt/iomega"]
+      }
+
+  -- ---------------------------
+  -- ---------- HOSTS ----------
+  -- ---------------------------
+  lanHost :: String -> Host
+  lanHost name = (host name)
+      { hostUse = Just linuxServer
+      , hostHostName = Just name
+      , hostAlias = Just name
+      , hostAddress = Just name
+      }
+
+  xen :: Host
+  xen = lanHost "xen"
+
+  admin :: Host
+  admin = lanHost "admin"
+
+  dmz :: Host
+  dmz = lanHost "dmz"
+
+  nfs :: Host
+  nfs = lanHost "nfs"
+
+  lxd :: Host
+  lxd = lanHost "lxd"
+
+  lxd2 :: Host
+  lxd2 = lanHost "lxd2"
+
+  backups :: Host
+  backups = lanHost "backups"
+
+  henri :: Host
+  henri = lanHost "henri"
+
+  sniproxy :: Host
+  sniproxy = lanHost "sniproxy"
+
+  unigornelJenkins :: Host
+  unigornelJenkins = lanHost "unigornel-jenkins"
+
+  gitea :: Host
+  gitea = lanHost "gitea"
+
+  giteaCaddy :: Host
+  giteaCaddy = lanHost "gitea-caddy"
+
+  jenkins :: Host
+  jenkins = lanHost "jenkins"
+
+  jenkinsCaddy :: Host
+  jenkinsCaddy = lanHost "jenkins-caddy"
+
+  nagios :: Host
+  nagios = lanHost "nagios"
+
+  nagiosCaddy :: Host
+  nagiosCaddy = lanHost "nagios-caddy"
+
+  openvpn :: Host
+  openvpn = lanHost "openvpn"
+
+  -- ------------------------------
+  -- ---------- COMMANDS ----------
+  -- ------------------------------
+  newSshCommand :: String -> String -> Command
+  newSshCommand name utility =
+      Command name $
+              "$USER1$/check_by_ssh -H $HOSTADDRESS$ -l nagios -C \"" ++ utility' ++ "\""
+    where
+      utility' = replace "\"" "\\\"" utility
+
+  checkSshDisk :: Command
+  checkSshDisk = newSshCommand "check-ssh-disk"
+                               "$USER1$/check_disk -w $ARG1$ -c $ARG2$ -p $ARG3$"
+
+  checkSshLoad :: Command
+  checkSshLoad = newSshCommand "check-ssh-load"
+                               "$USER1$/check_load -w $ARG1$ -c $ARG2$"
+
+  checkSshUsers :: Command
+  checkSshUsers = newSshCommand "check-ssh-users"
+                                "$USER1$/check_users -w $ARG1$ -c $ARG2$"
+
+  checkSshProcesses :: Command
+  checkSshProcesses = newSshCommand "check-ssh-processes"
+                                    "$USER1$/check_procs -w $ARG1$ -c $ARG2$ -s $ARG3$"
+
+  checkSshSwap :: Command
+  checkSshSwap = newSshCommand "check-ssh-swap"
+                               "$USER1$/check_swap -w $ARG1$ -c $ARG2$"
+
+  checkSshRaid :: CommandApp
+  checkSshRaid = flip apply [] $
+                 newSshCommand "check-ssh-raid"
+                               "$USER1$/check_md_raid"
+
+  replace :: Eq a => [a] -> [a] -> [a] -> [a]
+  replace a b = replace' []
+    where
+      replace' l [] = l
+      replace' l c@(x:xs) | a `isPrefixOf` c = replace' (l ++ b) (drop (length a) c)
+                          | otherwise = replace' (l ++ [x]) xs
+
+  -- -----------------------------------
+  -- ---------- REDEFINITIONS ----------
+  -- -----------------------------------
+  localService :: Service
+  localService = Defaults.localService
+      { serviceUse = Just genericService }
+
+  genericService :: Service
+  genericService = Defaults.genericService
+      { serviceContactGroups = [admins] }
+
+  genericContact :: Contact
+  genericContact = Defaults.genericContact
+      { contactServiceNotificationCommands = Just notifyServiceByEmail
+      , contactHostNotificationCommands = Just notifyHostByEmail }
+
+  nagiosadmin :: Contact
+  nagiosadmin = (contact "nagiosadmin")
+      { contactUse = Just genericContact
+      , contactAlias = Just "Nagios Admin"
+      , contactEmail = Just "nagios@example.com"
+      }
+
+  admins :: ContactGroup
+  admins = (contactgroup "admins" "Nagios Administrators")
+      { contactGroupMembers = [nagiosadmin] }
+
+  notifyHostByEmail :: CommandApp
+  notifyHostByEmail = flip apply [] $
+                      Command "notify-host-by-email"
+                              "/usr/bin/printf \"%b\" \"***** Nagios *****\\n\\nNotification Type: $NOTIFICATIONTYPE$\\nHost: $HOSTNAME$\\nState: $HOSTSTATE$\\nAddress: $HOSTADDRESS$\\nInfo: $HOSTOUTPUT$\\n\\nDate/Time: $LONGDATETIME$\\n\" | $USER1$/go-smtp-send -subject \"** $NOTIFICATIONTYPE$ Host Alert: $HOSTNAME$ is $HOSTSTATE$ **\" -to $CONTACTEMAIL$"
+
+  notifyServiceByEmail :: CommandApp
+  notifyServiceByEmail = flip apply [] $
+                         Command "notify-service-by-email"
+                                 "/usr/bin/printf \"%b\" \"***** Nagios *****\\n\\nNotification Type: $NOTIFICATIONTYPE$\\n\\nService: $SERVICEDESC$\\nHost: $HOSTALIAS$\\nAddress: $HOSTADDRESS$\\nState: $SERVICESTATE$\\n\\nDate/Time: $LONGDATETIME$\\n\\nAdditional Info:\\n\\n$SERVICEOUTPUT$\\n\" | $USER1$/go-smtp-send -subject \"** $NOTIFICATIONTYPE$ Service Alert: $HOSTALIAS$/$SERVICEDESC$ is $SERVICESTATE$ **\" -to $CONTACTEMAIL$"
+  ```
+license-name: GPL-3.0-only
