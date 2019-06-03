@@ -1,6 +1,6 @@
 homepage: https://github.com/robx/configurator-pg
 changelog-type: markdown
-hash: fbb5daf2d0c4d223d91992e72743770b8d955790dc14d1a005ce151cd084b0bd
+hash: 9a257a0738b6b92c07ff88ee8b64c2b7974b823bc45562eab27669db8ef92d69
 test-bench-deps:
   test-framework-hunit: ! '>=0.3.0.2 && <0.4'
   bytestring: ! '>=0.10.8.1 && <0.11'
@@ -16,6 +16,10 @@ synopsis: Reduced parser for configurator-ng config files
 changelog: |
   # Revision history for configurator-pg
 
+  ## 0.1.0.1 -- 2019-06-03
+
+  * Include README.md in release.
+
   ## 0.1.0.0 -- 2019-06-03
 
   * First version.
@@ -28,15 +32,127 @@ basic-deps:
   scientific: ! '>=0.3.5.2 && <0.4'
 all-versions:
 - 0.1.0.0
+- 0.1.0.1
 author: Robert Vollmert
-latest: 0.1.0.0
-description-type: haddock
-description: |-
-  This module provides a simplified and updated interface to the
-  configuration file format of
-  <https://hackage.haskell.org/package/configurator configurator> and
-  <https://hackage.haskell.org/package/configurator-ng configurator-ng>.
-  Its aim is primarily to allow updating programs that depend on
-  configurator-ng to new versions of GHC without changing the
-  configuration file format.
+latest: 0.1.0.1
+description-type: markdown
+description: |
+  ## What is this?
+
+  This is a simplified version of the resting
+  [configurator-ng](https://github.com/lpsmith/configurator-ng),
+  aimed particularly to offer users of configurator-ng such as
+  [PostgREST](postgrest.org) an easy path to migrate to
+  a package that compiles with modern GHC versions and that
+  continues to read existing configuration files.
+
+  ## Changes
+
+  configurator-pg skips some of configurator-ng's features, and
+  changes the API in other places:
+
+    * No configuration file reloading.
+    * Simplified parsing API:
+      - There is no type-class based value parsing; you need
+        to supply explicit value parsers.
+      - There's only `load` to read and evaluate a configuration file,
+        and `runParser` to extract configuration values.
+    * Simpler error handling.
+    * Simplified handling of configuration subsets. There's `subassocs`
+      and the unit tests pass, but the author didn't attempt to
+      understand the original implementation fully.
+
+  ## Credits
+
+  The original configurator-ng is due to MailRank, Inc., Bryan
+  O'Sullivan and Leon P Smith.
+
+  The low-level parser (Data.Configurator.Syntax) is mostly unchanged,
+  evaluation (Data.Configurator.Load) is also close to the original.
+  The high-level parser (Data.Configurator.Parser) is original.
+
+  ## File format
+
+  In short, the file format supports:
+
+  * A simple but flexible configuration language that supports several
+    of the most commonly needed types of data, along with
+    interpolation of strings from the configuration or the system
+    environment (e.g. `$(HOME)`).
+
+  * An `import` directive allows the configuration of a complex
+    application to be split across several smaller files, or common
+    configuration data to be shared across several applications.
+
+  The format is more fully documented in the packages
+  [configurator](https://hackage.haskell.org/package/configurator) and
+  [configurator-ng](https://hackage.haskell.org/package/configurator-ng).
+
+  Here's an example:
+
+  ```
+  # listen address
+  hostname = "localhost"
+  port = 8000
+
+  logdir = "$(HOME)/logs"
+  logfile = "$(logdir)/log.txt"
+  loglevels = [1, 4, 5]
+
+  users {
+    alice = "alice@example.com"
+    bob   = "bob@example.com"
+  }
+
+  # passwords.txt might contain
+  #   alice = "12345"
+  #   bob   = "sesame"
+  passwords {
+    import "secrets/passwords.txt"
+  }
+  ```
+
+  ## Usage
+
+  The following code can be used to parse the example above.
+
+  ```
+  import Data.Configurator
+
+  data Settings = Settings
+    { hostname  :: Text
+    , port      :: Int
+    , logfile   :: Maybe FilePath
+    , loglevels :: Maybe [Int]
+    , users     :: [(Text, Text)]
+    , passwords :: [(Text, Text)]
+    }
+
+  settingsParser :: Parser Config Settings
+  settingsParser =
+    Settings
+      <$> required "hostname" string
+      <*> (Maybe.withDefault 1234 <$> optional "port" int)
+      <*> optional "logfile" (pack <$> string)
+      <*> optional "loglevels" (list int)
+      <*> subassocs "users" string
+      <*> subassocs "passwords" string
+
+  loadSettings :: IO Settings
+  loadSettings = do
+    cfg <- load "settings.cfg"
+    case runParser settingsParser cfg of
+      Left err       -> die $ "reading config: " <> err
+      Right settings -> return settings
+  ```
+
+  Though note that for no apparent reason, `subassocs`
+  returns the full key, whence the parsed list of users
+  will be
+
+  ```
+      [ ("users.alice", "alice@example.com")
+      , ("users.bob", "bob@example.com")
+      ]
+  ```
 license-name: BSD-3-Clause
