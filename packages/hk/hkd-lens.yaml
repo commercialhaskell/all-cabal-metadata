@@ -1,0 +1,206 @@
+homepage: https://github.com/trevorcook/hkd-lens
+changelog-type: markdown
+hash: 4aaab252c5844b2124a8fd64fc3027eeac66b804184b43b37f44444d94890351
+test-bench-deps: {}
+maintainer: trevor.j.cook@gmail.com
+synopsis: Generic lens/prism/traversal-kinded data.
+changelog: |
+  # Revision history for hkd-lens
+
+  ## 0.0.0.1 -- 2019-06-03
+
+  * First version. Released on an unsuspecting world.
+basic-deps:
+  base: ^>=4.12.0.0
+  profunctors: -any
+all-versions:
+- 0.0.1
+author: Trevor Cook
+latest: 0.0.1
+description-type: markdown
+description: |
+  # hkd-lens
+
+  A library for creating traversals for higher kinded data (HKD)
+  following the method detailed by Sandy Maguire
+  (http://reasonablypolymorphic.com/blog/higher-kinded-data). It expands
+  on the methodology given there by including data with multiple
+  constructors and by allowing type-changing traversals, ```Traverse s t a b```.
+
+  This library currently supplies lenses, prisms, and traversals. However, the
+  methodology only allows traversals which target a single specific location
+  in a data structure. This is an inherent feature of the method and will
+  not change. Consult the package "generic-lens" for generic ways of targeting
+  multiple locations. Consult also "generic-lens" for also providing everything
+  else in this package.
+
+  ## Quick Start
+  ```haskell
+  {-# LANGUAGE StandaloneDeriving #-}
+  {-# LANGUAGE TypeApplications #-}
+  {-# LANGUAGE DeriveGeneric  #-}
+  {-# LANGUAGE DataKinds  #-}
+  {-# LANGUAGE KindSignatures  #-}
+  {-# LANGUAGE TypeFamilies  #-}
+  {-# LANGUAGE UndecidableInstances  #-}
+  {-# LANGUAGE PolyKinds #-}
+
+  module Test where
+
+  import Generics.OneLiner --package one-liner
+  import Control.Lens      --package lens, used here for operators, e.g. (^.)
+  import HKD.Lens
+  import GHC.TypeLits
+  import GHC.Generics(Generic)
+
+  ```
+  First, we define a higher kinded data. Its a data wherein every field
+  is wrapped in some control constructof `f`. The selection of `f` controls
+  how the data is expressed.
+
+  ```haskell
+  type Character = Character' Z
+  data Character' f a = Character { name :: HK f String
+                                  , role :: HK f a }
+                      deriving Generic
+  data Protagonist = Hero | Sidekick deriving Show
+  data Antagonist = Villian | Henchman deriving Show
+  deriving instance (Constraints (Character' f a) Show)  --provided by one-liner
+    => Show (Character' f a)
+
+  ```
+  This HKD is built not only with a control parameter, but with a type family,
+  `HK`, which allows reversion to a lower, or base type, for the specially
+  defined data `Z`.
+
+  ```haskell
+  data Z a
+  type family HK (f :: ( * -> * ) ) a where
+    HK Z a = a
+    HK f a = f a
+
+  ```
+  A lens is made via the `LensesOf` type family to direct exactly what lenses
+  will be made (this includes a Nat specifying the index of the control
+  parameter), and the `makeLensesOf` function which supplies a Lens Kinded Data.
+
+  ```haskell
+  lensesForCharacters :: LensesOf (Character a) (Character b) 1
+  lensesForCharacters = makeLensesOf
+  ```
+
+  What is a lens kinded data? Well, thats the original data parameterized by a
+  `f = LensOf` type (exported from HKD.Lens). So, at each data field is a lens
+  from the whole data to that field.
+
+  For instance, the "role" lens is retrieved using the `role` field and unwrapping
+  the `LensOf` data to reveal the lens.
+
+  ```haskell
+  roleLens :: Lens (Character a) (Character b) a b
+  roleLens = getLensOf $ role lensesForCharacters
+
+  ```
+  Similarly, the `name` field reveals a lens targeting the `name` field of the
+  base kinded `Character a`. Note that this lens does not involve a change in
+  type parameters.
+
+  ```haskell
+  nameLens :: Lens (Character a) (Character a) String String
+  nameLens = getLensOf $ name lensesForCharacters
+
+  ```
+  Here's an application of the role lens. It is used to turn "Villians" into
+  "Heroes"; specifically the evil henchman "Number One" changes his ways.
+
+  ```haskell
+  redemption :: Antagonist -> Protagonist
+  redemption Villian = Hero
+  redemption Henchman = Sidekick
+
+  evilNumberOne :: Character Antagonist
+  evilNumberOne = Character "Number One" Henchman
+  goodNumberOne = evilNumberOne & roleLens %~ redemption
+  -- goodNumberOne = Character {name = "Number One", role = Sidekick}
+
+
+  ```
+  To showcase traversals, a `Scene` data type is created.
+  ```haskell
+  type Scene = Scene' Z
+  data Scene' f a b = Meeting { inAttendence :: HK f [a]
+                              , meetingPlace :: HK f Place }
+                    | Confrontation { attacker :: HK f [a]
+                                    , attackee :: HK f [b]
+                                    , confrontationPlace :: HK f Place}
+                  deriving Generic
+  data Place = ARoom | TheMountainTop deriving Show
+  deriving instance (Constraints (Scene' f a b) Show) => Show (Scene' f a b)
+
+  ```
+  Here the Traversal-kinded data for the `Meeting` constructor is made.
+  ```haskell
+  meetingTraversals :: TraversalsOf (Scene a b) (Scene a b) 1
+  meetingTraversals = makeTraversalsOf @"Meeting"
+
+  ```
+  A specific `inAttendence` traversal is called out. Note that since the type
+  variable `a` is used in more than one location, we cannot change it's type.
+  ```haskell
+  meetingAttendeeTraversal :: Traversal (Scene a b) (Scene a b) [a] [a]
+  meetingAttendeeTraversal = getTraversalOf $ inAttendence meetingTraversals
+
+  someoneWalksIn :: a -> Scene a b -> Scene a b
+  someoneWalksIn a = meetingAttendeeTraversal %~ (a:)
+
+  ```
+  However, we could create a traversal that changes the type of `b`.
+  ```haskell
+  confrontationTraversals :: TraversalsOf (Scene a b) (Scene a b') 1
+  confrontationTraversals = makeTraversalsOf @"Confrontation"
+
+  ```
+  We change a scene of good and evil characters to a scene of evil and evil
+  characters through the use of a Mind Control traversal.
+  ```haskell
+  evilMindControl :: Protagonist -> Antagonist
+  evilMindControl _ = Henchman
+
+  useMindControlGun :: Scene (Character Antagonist) (Character Protagonist)
+                    -> Scene (Character Antagonist) (Character Antagonist)
+  useMindControlGun = getTraversalOf (attackee confrontationTraversals)
+                    . mapped . roleLens
+                    %~ evilMindControl
+
+  poorNumberOneTrappedInARoom
+    :: Scene (Character Antagonist) (Character Protagonist)
+  poorNumberOneTrappedInARoom = Confrontation [] [goodNumberOne] ARoom
+
+  numberOneReadyForEvilOnceAgain
+    :: Scene (Character Antagonist) (Character Antagonist)
+  numberOneReadyForEvilOnceAgain = useMindControlGun poorNumberOneTrappedInARoom
+  -- Confrontation [] [Character "Number One" Henchman}] ARoom
+
+
+  ```
+  Ok, enough of the Hero business, the library also supplies Prisms.
+  ```haskell
+  type AB = AB' Z
+  data AB' f a b = A {getA::(HK f a)} | B (HK f b) deriving Generic
+  deriving instance (Constraints (AB' f a b) Show) => Show (AB' f a b)
+  aPrism :: PrismsOf (AB a b) (AB c d) 1
+  aPrism = makePrismsOf @"A"
+
+  its1 = (A 1 :: AB Int ()) ^? getPrismOf (getA aPrism)
+
+
+  ```
+  Finally, lenses/prisms/traversals may also be provided for types whose fields
+  match their type parameters. These are the most fundamental/simplest types.
+  This is accomplished by signaling there is no HKD parameter with a 0 for the
+  Nat which targets the HKD parameter.
+  ```haskell
+  _1 :: Lens (a,b) (c,b) a c
+  _1 = getLensOf . fst $ (makeLensesOf :: LensesOf (a,b) (c,d) 0)
+  ```
+license-name: BSD-3-Clause
