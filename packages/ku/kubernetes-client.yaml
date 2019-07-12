@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: ''
-hash: 50cb21a8100b5f9b3bf0473431b9ed3930e31db64fce1aff8d47db656e7b25af
+hash: a297dca3170bb38aa73fb796fce2eab2ca69631fea2b84fe56478dc1b1afa9ba
 test-bench-deps:
   http-client: ! '>=0.5 && <0.7'
   bytestring: ! '>=0.10.0 && <0.11'
@@ -25,7 +25,9 @@ test-bench-deps:
   microlens: ! '>=0.4.3 && <0.5'
   aeson: ! '>=1.2.2 && <1.5'
   yaml: ! '>=0.11.0.0 && <0.12'
-maintainer: Shimin Guo <smguo2001@gmail.com>
+maintainer: |-
+  Shimin Guo <smguo2001@gmail.com>,
+  Akshay Mankar <itsakshaymankar@gmail.com>
 synopsis: Client library for Kubernetes
 changelog: ''
 basic-deps:
@@ -51,11 +53,59 @@ basic-deps:
   aeson: ! '>=1.2.2 && <1.5'
 all-versions:
 - 0.1.0.0
+- 0.1.0.1
 author: ''
-latest: 0.1.0.0
-description-type: haddock
-description: |-
-  Client library for interacting with a Kubernetes cluster.
-
-  This package contains hand-written code while kubernetes-client-core contains code auto-generated from the OpenAPI spec.
+latest: 0.1.0.1
+description-type: markdown
+description: "# kubernetes-client\n\n## Example\n\n```haskell\n{-# LANGUAGE OverloadedStrings
+  #-}\n\nmodule Main where\n\nimport           Data.Function                 ((&))\nimport
+  \          Kubernetes.Client             (defaultTLSClientParams,\n                                                disableServerCertValidation,\n
+  \                                               disableServerNameValidation,\n                                                disableValidateAuthMethods,\n
+  \                                               loadPEMCerts, newManager,\n                                                setCAStore,
+  setClientCert,\n                                                setMasterURI, setTokenAuth)\nimport
+  \          Kubernetes.OpenAPI            (Accept (..), MimeJSON (..),\n                                                dispatchMime,
+  newConfig)\nimport qualified Kubernetes.OpenAPI.API.CoreV1 as CoreV1\nimport           Network.TLS
+  \                  (credentialLoadX509)\n\nmain :: IO ()\nmain = do\n    -- We need
+  to first create a Kubernetes.Core.KubernetesConfig and a Network.HTTP.Client.Manager.\n
+  \   -- Currently we need to construct these objects manually. Work is underway to
+  construct these\n    -- objects automatically from a kubeconfig file. See https://github.com/kubernetes-client/haskell/issues/2.\n
+  \   kcfg <-\n        newConfig\n        & fmap (setMasterURI \"https://mycluster.example.com\")
+  \   -- fill in master URI\n        & fmap (setTokenAuth \"mytoken\")                          --
+  if using token auth\n        & fmap disableValidateAuthMethods                        --
+  if using client cert auth\n    myCAStore <- loadPEMCerts \"/path/to/ca.crt\"                  --
+  if using custom CA certs\n    myCert    <-                                                 --
+  if using client cert\n        credentialLoadX509 \"/path/to/client.crt\" \"/path/to/client.key\"\n
+  \           >>= either error return\n    tlsParams <-\n        defaultTLSClientParams\n
+  \       & fmap disableServerNameValidation -- if master address is specified as
+  an IP address\n        & fmap disableServerCertValidation -- if you don't want to
+  validate the server cert at all (insecure)\n        & fmap (setCAStore myCAStore)
+  \     -- if using custom CA certs\n        & fmap (setClientCert myCert)      --
+  if using client cert\n    manager <- newManager tlsParams\n    dispatchMime\n            manager\n
+  \           kcfg\n            (CoreV1.listPodForAllNamespaces (Accept MimeJSON))\n
+  \       >>= print\n```\n\n## Watch Example\nFollowing is a simple example which\njust
+  streams to stdout. First some setup - this assumes kubernetes is accessible\nat
+  http://localhost:8001, e.g. after running `kubectl proxy`:\n\n```haskell\n> import
+  qualified Data.ByteString.Streaming.Char8 as Q\n\n> manager <- newManager defaultManagerSettings\n>
+  defaultConfig <- newConfig\n> config = defaultConfig { configHost = \"http://localhost:8001\",
+  configValidateAuthMethods = False }\n> request = listEndpointsForAllNamespaces (Accept
+  MimeJSON)\n```\n\nLaunching 'dispatchWatch' with the above we get a stream of endpoints
+  data:\n\n```haskell\n > dispatchWatch manager config request Q.stdout\n {\"type\":\\\"ADDED\\\",\"object\":{\"kind\":\\\"Endpoints\\\",\"apiVersion\":\"v1\",\"metadata\":{\"name\":\"heapster\"
+  ....\n```\n\nA more complex example involving some ggprocessing of the stream, the
+  following\nprints out the event types of each event. First, define functions to
+  allow us apply\na parser to a stream:\n\n\n```haskell\nimport Data.Aeson \nimport
+  qualified Data.ByteString.Streaming.Char8 as Q\nimport Data.JsonStream.Parser\nimport
+  qualified Streaming.Prelude as S\n\n-- | Parse the stream using the given parser.\nstreamParse
+  ::\n  FromJSON a =>\n    Parser a\n    -> Q.ByteString IO r\n    -> Stream (Of [a])
+  IO r\nstreamParse parser byteStream = do\n  byteStream & Q.lines & parseEvent parser\n\n--
+  | Parse a single event from the stream.\nparseEvent ::\n  (FromJSON a, Monad m)
+  =>\n    Parser a\n    -> Stream (Q.ByteString m) m r\n    -> Stream (Of [a]) m r\nparseEvent
+  parser byteStream = S.map (parseByteString parser) (S.mapped Q.toStrict byteStream)\n```\n\nNext,
+  define the parser and apply it to the stream:\n\n```haskell \n> eventParser = value
+  :: Parser (WatchEvent V1Endpoints)\n> withResponseBody body = streamParse eventParser
+  body & S.map (map eventType)\n> dispatchWatch manager config request (S.print .
+  withResponseBody)\n[\\\"ADDED\\\"]\n[\\\"ADDED\\\"]\n[\\\"MODIFIED\\\"]\n...\n```\n\nPackages
+  in this example:\n  * Data.Aeson -- from [aeson](https://hackage.haskell.org/package/aeson)\n
+  \ * Data.ByteString.Streaming.Char8 from [streaming-bytestring](https://hackage.haskell.org/package/streaming-bytestring-0.1.5/docs/Data-ByteString-Streaming-Char8.html)\n
+  \ * Data.JsonStream.Parser from [json-stream](https://hackage.haskell.org/package/json-stream-0.4.1.5/docs/Data-JsonStream-Parser.html)\n
+  \ * Streaming.Prelude from [streaming](https://hackage.haskell.org/package/streaming-0.2.0.0/docs/Streaming-Prelude.html)\n"
 license-name: Apache-2.0
