@@ -1,11 +1,16 @@
 homepage: ''
 changelog-type: markdown
-hash: a17293e4c837bc307927fc5238873e5a430c353a0e3130587a8ce2ec51fc8c2e
+hash: a0afc63d414adb2e5402ed53731da2ba0f569c50f6b0cac5df5a098b465d29e9
 test-bench-deps: {}
 maintainer: me@dmwit.com
 synopsis: Reducing the pain of transformer stacks with duplicated effects
 changelog: |
   # Revision history for effect-stack
+
+  ## 0.3 -- 2019-07-13
+
+  * Rename `Control.Monad.Except` to `Control.Monad.Error` for consistency.
+  * Documentation.
 
   ## 0.2.1 -- 2019-07-07
 
@@ -33,59 +38,243 @@ all-versions:
 - 0.1.0.1
 - '0.2'
 - 0.2.1
+- '0.3'
 author: Daniel Wagner
-latest: 0.2.1
-description-type: haddock
-description: |-
-  When using monad transformer stacks, it is common to want
-  to mix effects from various layers of the stack within a
-  single block of code. The @lift@ operation can be used to
-  convert an action that uses effects at some deep layer of
-  the stack into one that works in the full stack. It
-  quickly becomes tedious to include exactly the right
-  number of calls to @lift@ each time they are needed; and
-  makes the code more fragile when the transformer stack is
-  changed (e.g. to include a new effect).
-
-  The @mtl@ package provides a convenient way to point to a
-  particular layer of the stack, under the assumption that
-  there is exactly one "kind" of each interesting effect.
-  (For example, one can only have one type of state, one
-  type of environment to read from, and so forth.) However,
-  if one wishes to have to copies of a single kind of
-  effect, there is no convenient, generic way to choose
-  anything other than the one that appears topmost in the
-  stack. For example, for a stack that contains two
-  @StateT@s in it, one can write code that accesses the
-  outermost state using a type like
-
-  @MonadState outer m => m ()@
-
-  but there is no polymorphic way to reach the inner
-  @StateT@'s state. One is back to writing fragile code that
-  depends on exactly which transformer stack was chosen.
-
-  This package provides a way to make such choices
-  generically: it introduces a separate stack for each kind
-  of effect, and provides an operation for popping one layer
-  of a given effect's stack. Continuing the @StateT@
-  example, one could write
-
-  @MonadState outer m => m ()@
-
-  as before for the outermost state, or
-
-  @(StateStack m, MonadState inner (PopState m)) => m ()@
-
-  to access the state from underneath the outermost
-  @StateT@, no matter how deep it is. A sample action of
-  that type would be @liftState get >> return ()@.
-  Equivalently, there is
-  some mild sugar that lets you write the type
-
-  @MonadStateDepth 1 m inner => m ()@
-
-  to mean the same thing as the previous type, and
-  @depthState \@1 get >> return ()@ to mean the same thing
-  as the previous action.
+latest: '0.3'
+description-type: markdown
+description: "# Table of Contents\n\n* Table of Contents\n* Why?\n* Naming conventions\n*
+  How do I...\n    * ...use the library to write monadic actions?\n    * ...use a
+  new transformer with existing kinds of effects?\n    * ...create an effect stack
+  for a new kind of effect?\n* Why not...\n    * ...type-based resolution?\n    *
+  ...type-level tags?\n\n# Why?\n\nThe `transformers` package gives us a nice library
+  for building up monad\ntransformer stacks that combine just the right mix of effects
+  for a given\napplication. For example, in a compiler, we might want to combine `IO`
+  effects\nfor reading and writing files, a scoping environment effect, the ability
+  to\nreport warnings and errors, state for generating fresh variable names or\ntracking
+  type unification information, and so on. We might cook up a quite\ncomplicated stack
+  like\n\n    type Compiler = ReaderT ScopingInformation\n                  ( StateT
+  UnificationState\n                  ( ExceptT TypeError\n                  ( WriterT
+  [Warning]\n                  ( StateT FreshNameGenerator\n                  ( IO\n
+  \                 )))))\n\nto capture all of these effects in one monad.\n\nWith
+  just the tools provided by the `transformers` package, though, this type\ncan be
+  somewhat frustrating to use. Getting access to the `WriterT [Warning]`\npart of
+  the stack, for example, involves lifting the write effect through three\nlayers
+  of the stack using something like:\n\n    warn :: Warning -> Compiler ()\n    warn
+  w = lift (lift (lift (tell [w])))\n\nBesides being tedious, this also calcifies
+  the monad stack; if later we\ndiscover we got the stack in the wrong order, or decide
+  we need to add another\neffect, we would need to revisit all the places where we
+  did such lifting and\nreconsider exactly how many occurrences of `lift` there should
+  be.\n\nThe `mtl` package addresses this problem by adding one typeclass for each
+  kind\nof effect. (Transformers which don't provide that effect pass it through.)
+  This\ngives us two benefits:\n\n1. We can write type signatures that constrict us
+  to using fewer effects than\n   our top-level application monad actually provides,
+  and get the compiler to\n   check that we have really used only those effects. These
+  actions can still\n   be used in the richer top-level application monad.\n2. The
+  need for explicitly `lift`ing is drastically reduced, with the typeclass\n   resolution
+  mechanism inferring the correct number of `lift`s for us.\n\nFor example, using
+  that library, we might write\n\n    warn :: MonadWriter [Warning] m => m ()\n    warn
+  w = tell [w]\n\nwhich now continues to work even if we change the monad stack later,
+  provided\nwe retain the property of having just one `WriterT` in the stack. The
+  three\nuses of `lift` are inferred, and will be adjusted up or down as needed as
+  the\ntop-level application monad changes.\n\nHowever, if one wishes to have two
+  or more copies of a single kind of effect,\nthere is no convenient, generic way
+  to choose anything other than the one that\nappears topmost in the stack. With our
+  `Compiler` monad above, for example, we\nmight write\n\n    unify :: MonadState
+  UnificationState m => Type -> Type -> m ()\n    unify t1 t2 = get >>= \\us -> ...\n\nto
+  get access to the unification state. But if we want to access the\n`FreshNameGenerator`,
+  we are back to writing fragile `lift`-based code:\n\n    freshName :: Compiler Name\n
+  \   freshName = lift (lift (lift (lift (modify (...)))))\n\nWe can, with some effort
+  and perhaps a confusing type signature, retain some of\nthe benefits of indicating
+  in the type exactly which effects are used by mixing\n`mtl`-style actions with `transformers`-style
+  `lift`ing, though I dare say this\nstyle is as yet not very popular:\n\n    freshName
+  :: (MonadTrans t1, MonadTrans t2, MonadState FreshNameGenerator m) => t1 (t2 m)
+  Name\n    freshName = lift (lift (modify (...)))\n\nThe fragility of `lift` remains,
+  though.\n\nThe `effect-stack` package addresses this problem, providing a way to
+  choose\nlower layers of the monad stack generically and without explicitly writing
+  the\ncorrect number of `lift`s. It introduces a separate stack for each kind of\neffect,
+  and provides an operation for popping one layer of a given effect's\nstack. For
+  example, we can still write\n\n    unify :: MonadState UnificationState m => Type
+  -> Type -> m ()\n\nfor actions that access the topmost state, but with this library
+  we can also write\n\n    freshName :: (StateStack m, MonadState FreshNameGenerator
+  (PopState m)) => m Name\n\nto access the state from underneath the outermost `StateT`,
+  no matter how deep\nit is. We can implement this type using `liftState`; for example:\n\n
+  \   freshName = liftState (modify (...))\n\nThe typeclass resolution mechanism will
+  turn `liftState` into the correct\nnumber of `lift`s to get from one `StateT` to
+  the next.\n\nOur `Compiler` monad has only two kinds of state, but one could imagine
+  needing\na third. Writing down the type for accessing the third type shows that
+  using the\nprimitive `StateStack` and `PopState` operations quickly becomes tedious
+  with\ndeep stacks:\n\n    thirdStateGet :: (StateStack m, StateStack (PopState m),
+  MonadState X (PopState (PopState m))) => m X\n    thirdStateGet = liftState (liftState
+  get)\n\nConsequently, the library also provides some type families and operations
+  that\nease this iteration. Using them, we can also write `thirdStateGet` this way:\n\n
+  \   thirdStateGet :: MonadStateDepth 2 m X => m X\n    thirdStateGet = depthState
+  @2 get\n\nOf course, and unfortunately, inferred types will still use the fully-expanded\nform,
+  but at least the human-written types can be a bit prettier.\n\n# Naming conventions\n\nThere
+  is one module per kind of effect, named `Control.Monad.Stack.<Effect>`.\nGenerally,
+  if there is a class for the effect, we drop the initial `Monad` from\nthe class
+  name and use that as the name of the effect (e.g. `MonadState` &rarr;\n`State`).
+  Otherwise we use the final part of the module name from\n`transformers` as the effect
+  name (e.g. `Control.Monad.Trans.Accum` &rarr;\n`Accum`). Each module exports the
+  following things:\n\n* A typeclass for popping one layer of that kind of effect
+  off the stack at a\n  time. This should generally be viewed as a low-level tool,
+  but it may also be\n  independently useful.\n    * The class is named `<Effect>Stack`.\n
+  \   * There is an associated type family `Pop<Effect>`; it takes a monad, and\n
+  \     removes enough transformers to drop the outermost transformer of the\n      current
+  kind of effect. For example, `PopState Compiler` would throw away\n      the outermost
+  `ReaderT` and `StateT`, leaving a new stack that began at\n      the `ExceptT`.\n
+  \   * There is a method `lift<Effect>`; it applies `lift` the appropriate\n      number
+  of times to take an action one layer down in the effect stack and\n      lift it
+  to the full monad.\n* A type alias `<Effect>Depth`. It takes a type-level number
+  and a monad, and\n  calls `Pop<Effect>` the given number of times on the monad.
+  This should\n  probably also be considered a low-level tool.\n* A type alias `<Effect>Constraints`.
+  It takes a type-level number and a monad,\n  and produces a constraint saying that
+  you are permitted to call `Pop<Effect>`\n  and `lift<Effect>` the given number of
+  times with the monad. For transformers\n  with no associated class, this will likely
+  be the most commonly-used\n  type-level export.\n* A function `depth<Effect>`. It
+  takes a type-level number and a monadic\n  action, and calls `lift<Effect>` the
+  given number of times on the action.\n  This will most likely be the most commonly-used
+  computation-level export.\n\nFor effects that are associated with a class, the module
+  will also export:\n\n* A type alias `Monad<Effect>Depth`. It takes a type-level
+  number and a monad\n  as its first two arguments. For classes which have other parameters
+  than the\n  monad, those parameters follow in the same order that the `Monad<Effect>`\n
+  \ class demands them. (But note that the monad always comes before the other\n  arguments,
+  unlike in `mtl`!) It produces a constraint saying that you can\n  call `Pop<Effect>`
+  and `lift<Effect>` the given number of times with the\n  monad, and that if you
+  call `Pop<Effect>` the given number of times then the\n  result is an instance of
+  `Monad<Effect> <args>`. This will likely be the most\n  commonly-used type-level
+  export when it is available.\n\n# How do I...\n\n## ...use the library to write
+  monadic actions?\n\nGenerally, you will mix `mtl`-style classes for identifying
+  what effect you\nwant and `effect-stack`-style classes for identifying which layer
+  of your\ntransformer should provide that effect. In what follows, we will recap
+  the\n`Compiler` example from the \"Why?\" section, including a complete, compilable\nfile
+  demonstrating simple usage of `effect-stack`. First some imports, data\ndeclarations,
+  and other standard-ish nonsense:\n\n    {-# LANGUAGE DataKinds #-}\n    {-# LANGUAGE
+  FlexibleContexts #-}\n    {-# LANGUAGE TypeApplications #-}\n\n    -- base\n    import
+  System.Exit\n\n    -- mtl\n    import Control.Monad.Reader\n    import Control.Monad.State\n
+  \   import Control.Monad.Writer\n    import Control.Monad.Except\n\n    -- effect-stack\n
+  \   import Control.Monad.Stack.State\n    import Control.Monad.Stack.Error\n\n    type
+  Compiler = ReaderT ScopingInformation\n                  ( StateT UnificationState\n
+  \                 ( ExceptT TypeError\n                  ( WriterT [Warning]\n                  (
+  StateT FreshNameGenerator\n                  ( IO\n                  )))))\n\n    type
+  Name = String\n    type ScopingInformation = [Name]\n    type UnificationState =
+  ()\n    type Type = ()\n    type TypeError = (Type, Type)\n    type Warning = String\n
+  \   type FreshNameGenerator = Int\n\n    runCompiler :: Compiler a -> IO a\n    runCompiler
+  act = do\n    \t(res, warnings) <- evalStateT (runWriterT (runExceptT (evalStateT
+  (runReaderT act []) ()))) 0\n    \ttraverse putStrLn warnings\n    \tcase res of\n
+  \   \t\tLeft err -> die (show err)\n    \t\tRight a -> pure a\n\nNow for some actual
+  good stuff. We can still use `mtl`-style polymorphism\nfreely when there is no ambiguity
+  about which part of the stack should provide\na particular effect. For example,
+  `Compiler` has only one `WriterT`, so there's\nno problem knowing which `tell` to
+  use:\n\n    warn :: MonadWriter [Warning] m => Warning -> m ()\n    warn w = tell
+  [w]\n\nSimilarly, if we want to use the top-level state, we can still use `mtl`
+  if we\nwant:\n\n    unify :: ( MonadState UnificationState m\n             , MonadError
+  TypeError m\n             ) => Type -> Type -> m ()\n    unify t1 t2 = do\n    \tus
+  <- get\n    \tif t1 == t2\n    \tthen put ()\n    \telse throwError (t1, t2)\n\nAlternately,
+  we can write the same type signature using `effect-stack` types\nexplicitly saying
+  that we want these effects to be provided by the top-most\ntransformer that can
+  provide them:\n\n    unify' :: ( MonadStateDepth 0 m UnificationState\n              ,
+  MonadErrorDepth 0 m TypeError\n              ) => Type -> Type -> m ()\n    unify'
+  t1 t2 = do\n    \tus <- get\n    \tif t1 == t2\n    \tthen put ()\n    \telse throwError
+  (t1, t2)\n\nEach kind of effect's stack is 0-indexed, so the outermost layer is
+  layer 0. If\nwe want to access effects not provided by the top-most transformer,
+  then we\nmust use `effect-stack` types (like `MonadStateDepth`) and methods (like\n`depthState`).\n\n
+  \   freshName :: MonadStateDepth 1 m FreshNameGenerator => m Name\n    freshName
+  = depthState @1 $ do\n    \tmodify (1+)\n    \tgets show\n\nWe can also mix and
+  match, both at the type level (using `mtl`, `base`, and\n`effect-stack` classes),
+  and within `do` blocks at the computation level (using\n`mtl`-style transformer
+  polymorphic methods, `base`-style polymorphic lifting\nmethods, and `effect-stack`-style
+  polymorphic lifting methods).\n\n    debug :: ( MonadStateDepth 1 m FreshNameGenerator\n
+  \            , MonadReader ScopingInformation m\n             , MonadIO m\n             )
+  => m ()\n    debug = do\n    \tn <- depthState @1 get\n    \tenv <- ask\n    \tliftIO
+  (print (n, env))\n\nHere's a `main` that exists just to show that all the pieces
+  can now be\nspecialized to the `Compiler` type as we wanted:\n\n    main :: IO ()\n
+  \   main = runCompiler $ do\n    \tunify () ()\n    \twarn \"PHP is still more popular
+  than Haskell.\"\n    \tv <- freshName\n    \tlocal (v:) $ do\n    \t\tunify' ()
+  ()\n    \t\tdebug\n\nRunning it exits successfully after printing\n\n    (1,[\"1\"])\n
+  \   PHP is still more popular than Haskell.\n\n## ...use a new transformer with
+  existing kinds of effects?\n\nYou can write new instances for the existing effect
+  stack classes for your\ntransformer. You must first decide whether the transformer
+  you are writing an\ninstance for provides the effect the class provides a stack
+  for or not. For\nexample, for the `StateStack` class, does your transformer provide
+  access to\nsome kind of stateful effect?\n\nIf it does, write an instance in which
+  the `Pop<Effect>` family immediately\nreturns the monad being transformed, and `lift<Effect>`
+  is just `lift`. For\nexample, because the `AccumT` family of transformers provides
+  the\n`Accum`ulation effect, the library provides this instance:\n\n    instance
+  (Monad m, Monoid w) => AccumStack (AccumT w m) where\n    \ttype PopAccum (AccumT
+  w m) = m\n    \tliftAccum = lift\n\nThe `(Monad m, Monoid w)` constraints are needed
+  to satisfy the `Monad`\nsuperclass of `AccumStack`; all the `<Effect>Stack` classes
+  have this\nsuperclass for user convenience.\n\nIf your transformer does not provide
+  the effect, you should write an instance\nthat passes everything down one layer:
+  `Pop<Effect>` should recurse on the\ntransformed monad, and `lift<Effect>` should
+  be `lift . lift<Effect>`. For\nexample, since `MaybeT` does not provide `Accum`ulation
+  effects, the library\nprovides this instance:\n\n    instance AccumStack m => AccumStack
+  (MaybeT m) where\n    \ttype PopAccum (MaybeT m) = PopAccum m\n    \tliftAccum =
+  lift . liftAccum\n\n## ...create an effect stack for a new kind of effect?\n\nYou
+  will want to create a new class for the effect that provides the low-level\ntools
+  for popping one layer of the stack at a time at the type level and\nlifting one
+  layer at a time at the computation level. Once you have done that,\nthere are some
+  tools in `Control.Monad.Stack.Internal` that will be helpful for\ncreating the high-level
+  interface that accepts type-level numbers and iterates\nthe low-level operations.\n\nThe
+  classes are all quite similar to each other; you should be able to follow\nthe exact
+  same pattern for each new effect. The class itself should look like\nthis:\n\n    class
+  Monad m => <Effect>Stack m where\n    \ttype Pop<Effect> m :: * -> *\n    \tlift<Effect>
+  :: Pop<Effect> m a -> m a\n\nAt this point you will need to choose a type-level
+  token that can uniquely\nidentify this kind of effect. The type families that need
+  this token as an\nargument are poly-kinded and will accept a token of any kind here.
+  For most of\nthe effects in this library, the token was chosen to be one of the
+  transformers\nthat is typically used to provide the effect. You may also simply
+  invent a new\ntype without exporting it if you are paranoid about collisions. Once
+  you have\nchosen a token, make a mapping from the token to the family created above:\n\n
+  \   type instance Pop <Token> m = Pop<Effect> m\n\nThis token may now be passed
+  to `IteratePop`, `StackConstraints`, and `depth`\nto provide the high-level interface:\n\n
+  \   type <Effect>Depth n m = IteratePop n <Token> m\n    type <Effect>Constraints
+  n m = (KnownNat n, StackConstraints n <Token> <Effect>Stack m)\n\n    depth<Effect>
+  :: forall n m a. <Effect>Constraints n m a => <Effect>Depth n m a -> m a\n    depth<Effect>
+  = depth @n @<Token> @<Effect>Stack lift<Effect>\n\nIf there is a class associated
+  with the effect, you may also want to offer a\nsuitably stackified version of that
+  class:\n\n    type Monad<Effect>Depth n m <args> =\n    \t( <Effect>Constraints
+  n m\n    \t, Monad<Effect> <args> (<Effect>Depth n m)\n    \t)\n\nYou will probably
+  also want to write a bunch of instances for existing\ntransformers. See the section
+  \"How do I...\", subsection \"...use a new\ntransformer with existing kinds of effects?\"
+  for more information on doing\nthis.\n\n# Why not...\n\n## ...type-based resolution?\n\nOne
+  alternate method of selecting which of many copies of an effect to use from\na stack
+  would be to look at the type being used for that effect. For example,\ncontinuing
+  the `Compiler` example form the \"Why?\" section, one might imagine\nthat one could
+  write a class which used type inference to decide whether the\ncurrent stateful
+  actions were mucking about with `FreshNameGenerator`s or\n`UnificationState`s, and
+  use that information to decide whether to `lift` once\nor four times.\n\nThis approach
+  has two main drawbacks:\n\n1. It turns out that type inference fails to differentiate
+  between the two\n   situations surprisingly often. This puts an unusually high type-annotation\n
+  \  burden on users. (Indeed, this is the standard justification for the\n   functional
+  dependency included in all `mtl` typeclasses.)\n2. It still leaves you open to the
+  problem of mixing effects which just happen,\n   by coincidence, to need access
+  to the same type in the effect. For example,\n   suppose your compiler is tracking
+  how many tab characters it has seen so\n   that it can issue an appropriate warning.
+  Even so, some local module might\n   want to slap a transformer on top to add an
+  effect for tracking the arity of\n   the function currently being compiled. These
+  both happen to be `Int`s, and\n   so once again we have a disambiguation problem.\n\n##
+  ...type-level tags?\n\nOne could imagine adding a tag to each transformer, and using
+  the tags to\ndifferentiate which effect is wanted. For example, with suitably modified\ntransformers,
+  one might write:\n\n    data Tag = Unification | Fresh | Other\n    type Compiler
+  = ReaderT Other ScopingInformation\n                  ( StateT Unification UnificationState\n
+  \                 ( ExceptT Other TypeError\n                  ( WriterT Other [Warning]\n
+  \                 ( StateT Fresh FreshNameGenerator\n                  ( IO\n                  )))))\n\nThen,
+  instead of using type-level numbers to indicate the depth in a stack, one\nwould
+  use the tag to indicate which part of the stack was meant; so one might\nimagine
+  writing something like:\n\n    unify :: MonadState Unification UnificationState
+  m => Type -> Type -> m ()\n    unify t1 t2 = get @Unification >>= \\us -> ...\n\n
+  \   freshName :: MonadState Fresh FreshNameGenerator m => m Name\n    freshName
+  = modify @Fresh (...)\n\nConvenient shorthands could be provided by the appropriate
+  libraries for\nselecting, say, the `()` tag by default when the stack of interest
+  was\nunambiguous about which layer should provide a given effect.\n\nUnlike choosing
+  by effect or choosing by effect+type, one need not worry about\ncollisions with
+  tags; modules which want to transform an existing monad could\nensure they use fresh
+  tags by just making a new data kind.\n\nThis approach has a lot going for it, and
+  I'd love to see a competing library\nattempt this. The main drawback is that it
+  is all-or-nothing, in that the\nexisting `transformers` transformers do not have
+  these tags. By contrast,\n`effect-stack` interoperates smoothly with existing `transformers`
+  stacks. This\nmeans that\n\n1. Existing projects can adopt this library without
+  a big migration.\n2. New projects can use just `transformers`+`mtl`, which are syntactically
+  and\n   conceptually very light, right up to the moment that they need something\n
+  \  more complicated.\n"
 license-name: BSD-3-Clause
