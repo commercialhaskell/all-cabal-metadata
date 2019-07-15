@@ -1,6 +1,6 @@
 homepage: https://github.com/fused-effects/fused-effects
 changelog-type: markdown
-hash: e9744131a9140968147389e7bbb7e4b448034af5829a27fffdbefb5688daefa3
+hash: 28ee6635ea8f01425d82f1fe019d215505a6a7ad6609ce950b187a0e35b28879
 test-bench-deps:
   base: ! '>=4.9 && <4.13'
   hspec: ! '>=2.4.1'
@@ -13,6 +13,36 @@ test-bench-deps:
 maintainer: robrix@github.com
 synopsis: A fast, flexible, fused effect system.
 changelog: |
+  # v0.5.0.0
+
+  - Derives `Generic1` instances for all non-existentially-quantified effect datatypes.
+
+  - Derives `Foldable` & `Traversable` instances for `:+:`.
+
+  - Defines `MonadFix` instances for all of the carriers.
+
+  - Re-exports `run`, `:+:`, and `Member` from `Control.Effect.Carrier`, reducing the number of imports needed when defining new effects.
+
+  - Re-exports `Carrier`, `Member`, and `run` from the various effect modules, reducing the number of imports needed when using existing effects.
+
+  ## Backwards-incompatible changes
+
+  - Replaces `runResource` with an equivalent function that uses `MonadUnliftIO` to select the correct unlifting function (a la `withResource`, which is removed in favor of `runResource`).
+
+  - Changes the signature of `eff` from `sig m (m a) -> m a` to `sig m a -> m a`, requiring effects to hold `m k` in their continuation positions instead of merely `k`. This was done in order to improve interoperability with other presentations of higher-order syntax, e.g. `bound`; syntax used with `bound` can now be given `HFunctor` and `Carrier` instances.
+
+    To upgrade effects used with previous versions, change any continuations from `k` to `m k`. If no existential type variables appear in the effect, you can derive `Generic1`, and thence `HFunctor` & `Effect` instances. Otherwise, implement the required instances by hand. Since continuation positions now occur in `m`, `hmap` definitions will have to apply the higher-order function to these as well.
+
+  - Adds `Functor` constraints to `hmap` and `Monad` constraints to `handle`, allowing a greater variety of instances to be defined (e.g. for recursively-nested syntax).
+
+  - Replaces the default definitions of `hmap` and `handle` with derivations based on `Generic1` instead of `Coercible`. Therefore, first-order effects wishing to derive these instances will require `Generic1` instances, presumably derived using `-XDeriveGeneric`.
+
+  - Moves `send` from `Control.Effect.Sum` to `Control.Effect.Carrier`. Likewise removes the re-export of `send` from `Control.Effect`.
+
+  - Deprecates `fmap'` in favour of `fmap`.
+
+  - Deprecates `handlePure` in favour of `hmap`.
+
   # v0.4.0.0
 
   ## Backwards-incompatible changes
@@ -119,13 +149,14 @@ all-versions:
 - 0.3.0.0
 - 0.3.1.0
 - 0.4.0.0
+- 0.5.0.0
 author: Nicolas Wu, Tom Schrijvers, Rob Rix, Patrick Thomson
-latest: 0.4.0.0
+latest: 0.5.0.0
 description-type: markdown
 description: |
   # A fast, flexible, fused effect system for Haskell
 
-  [![Build Status](https://travis-ci.com/fused-effects/fused-effects.svg?branch=master)](https://travis-ci.com/fused-effects/fused-effects)
+  [![Build Status](https://travis-ci.com/fused-effects/fused-effects.svg?branch=master)](https://travis-ci.com/fused-effects/fused-effects) [![hackage](https://img.shields.io/hackage/v/fused-effects.svg?color=blue&style=popout)](http://hackage.haskell.org/package/fused-effects)
 
   - [Overview][]
     - [Algebraic effects][]
@@ -237,11 +268,11 @@ description: |
   ```haskell
   example1 :: (Carrier sig m, Effect sig) => [a] -> m (Int, ())
   example1 list = runState 0 $ do
-    i <- get
+    i <- get @Int
     put (i + length list)
   ```
 
-  `runState` returns a tuple of both the computed value (the `()`) and the final state (the `Int`), visible in the result of the returned computation.
+  `runState` returns a tuple of both the computed value (the `()`) and the final state (the `Int`), visible in the result of the returned computation. The `get` function is resolved with a visible type application, due to the fact that effects can contain more than one state type (in contrast with `mtl`'s `MonadState`, which limits the user to a single state type).
 
   Since this function returns a value in some carrier `m`, effect handlers can be chained to run multiple effects. Here, we get the list to compute the length of from a `Reader` effect:
 
@@ -252,7 +283,7 @@ description: |
     put (length (list :: String))
   ```
 
-  (Note that the type annotation on `list` is necessary to disambiguate the requested value, since otherwise all the typechecker knows is that it’s an arbitrary `Foldable`. For more information, see the [comparison to `mtl`](#comparison-to--mtl-).)
+  (Note that the type annotation on `list` is necessary to disambiguate the requested value, since otherwise all the typechecker knows is that it’s an arbitrary `Foldable`. For more information, see the [comparison to `mtl`](#comparison-to-mtl).)
 
   When all effects have been handled, a computation’s final value can be extracted with `run`:
 
@@ -279,17 +310,18 @@ description: |
 
   ### Required compiler extensions
 
-  To use effects, you'll need a relatively-uncontroversial set of extensions: `-XFlexibleContexts`, `-XFlexibleInstances`, and `-XMultiParamTypeClasses`.
+  To use effects, you'll typically need `-XFlexibleContexts`.
 
-  When defining your own effects, you'll need `-XTypeOperators` to declare a `Carrier` instance over (`:+:`), and `-XUndecidableInstances` to satisfy the coverage condition for this instance. You may need `-XKindSignatures` if GHC cannot correctly infer the type of your handler; see the [documentation on common errors][common] for more information about this case.
+  When defining your own effects, you may need `-XKindSignatures` if GHC cannot correctly infer the type of your handler; see the [documentation on common errors][common] for more information about this case. `-XDeriveGeneric` can be used with many first-order effects to derive default implementations of `HFunctor` and `Effect`.
+
+  When defining carriers, you'll need `-XTypeOperators` to declare a `Carrier` instance over (`:+:`), `-XFlexibleInstances` to loosen the conditions on the instance, `-XMultiParamTypeClasses` since `Carrier` takes two parameters, and `-XUndecidableInstances` to satisfy the coverage condition for this instance.
 
   [common]: https://github.com/fused-effects/fused-effects/blob/master/docs/common_errors.md
 
-  The following invocation, taken from the teletype example, should suffice for any use or construction of effects:
+  The following invocation, taken from the teletype example, should suffice for most use or construction of effects and carriers:
 
   ```haskell
-  {-# LANGUAGE DeriveFunctor, FlexibleContexts, FlexibleInstances, GeneralizedNewtypeDeriving,
-      KindSignatures, MultiParamTypeClasses, TypeOperators, UndecidableInstances #-}
+  {-# LANGUAGE DeriveFunctor, DeriveGeneric, DerivingStrategies, FlexibleContexts, FlexibleInstances, GeneralizedNewtypeDeriving, MultiParamTypeClasses, TypeOperators, UndecidableInstances #-}
   ```
 
   ### Defining new effects
