@@ -1,7 +1,8 @@
 homepage: ''
 changelog-type: markdown
-hash: f7d8a8334a27862e98a4ce38e7bd1e54a89d98b50fb151cd6aa16afb73014100
+hash: cc0d30a2da418b93cdc129ebfdc464916b850ba64f249e37da142fe2ede2abe2
 test-bench-deps:
+  bytestring: -any
   PyF: -any
   base: -any
   hspec: -any
@@ -18,6 +19,21 @@ maintainer: guillaum.bouchard@gmail.com
 synopsis: Quasiquotations for a python like interpolated string formater
 changelog: |
   # Revision history for PyF
+
+  ## 0.8.0.0 -- 2019-08-06
+
+  - `f` (and `fWithDelimiters`) were renamed `fmt` (`fmtWithDelimiters`). `f` was causing too much shadowing in any codebase.
+  - PyF now exposes the typeclass `PyFToString` and `PyFClassify` which can be extended to support any type as input for the formatters.
+  - PyF now uses `Data.String.IsString t` as its output type if `OverloadedString` is enabled. It means that it behaves as a real haskell string literal.
+  - A caveat of the previous change is that PyF does not have instances for `IO` anymore.
+
+  ### bugfixes and general improvements
+
+  - An important amount of bugfixs
+  - Error reporting for generic formatting (i.e. formatting without a specified type) is now more robust
+  - Template haskell splices are simpler. This leads to more efficient / small generated code and in the event of this code appears in a GHC error message, it is more readable.
+  - PyF now longer emit unnecessary default typing.
+
 
   ## 0.7.3.0 -- 2019-02-28
 
@@ -103,10 +119,11 @@ all-versions:
 - 0.7.1.0
 - 0.7.2.0
 - 0.7.3.0
+- 0.8.0.0
 author: Guillaume Bouchard
-latest: 0.7.3.0
+latest: 0.8.0.0
 description-type: markdown
-description: |+
+description: |
   # PyF
 
   [![CircleCI](https://circleci.com/gh/guibou/PyF.svg?style=svg)](https://circleci.com/gh/guibou/PyF)
@@ -123,7 +140,7 @@ description: |+
   >>> name = "Dave"
   >>> age = 54
 
-  >>> [f|Person's name is {name}, age is {age:x}|]
+  >>> [fmt|Person's name is {name}, age is {age:x}|]
   "Person's name is Dave, age is 36"
   ```
 
@@ -148,25 +165,25 @@ description: |+
 
   ```haskell
   >>> name = "Guillaume"
-  >>> [f|{name:<11}|]
+  >>> [fmt|{name:<11}|]
   "Guillaume  "
-  >>> [f|{name:>11}|]
+  >>> [fmt|{name:>11}|]
   "  Guillaume"
-  >>> [f|{name:|^13}|]
+  >>> [fmt|{name:|^13}|]
   "||Guillaume||"
   ```
 
   Padding inside `=` the sign:
 
   ```haskell
-  >>> [f|{-pi:=10.3}|]
+  >>> [fmt|{-pi:=10.3}|]
   "-    3.142"
   ```
 
   ## Float rounding
 
   ```haskell
-  >>> [f|{pi:.2}|]
+  >>> [fmt|{pi:.2}|]
   "3.14"
   ```
 
@@ -174,11 +191,11 @@ description: |+
 
   ```haskell
   >>> v = 31
-  >>> [f|Binary: {v:#b}|]
+  >>> [fmt|Binary: {v:#b}|]
   "Binary: 0b11111"
-  >>> [f|Octal (no prefix): {age:o}|]
+  >>> [fmt|Octal (no prefix): {age:o}|]
   "Octal (no prefix): 37"
-  >>> [f|Hexa (caps and prefix): {age:#X}|]
+  >>> [fmt|Hexa (caps and prefix): {age:#X}|]
   "Hexa (caps and prefix): 0x1F"
   ```
 
@@ -187,9 +204,9 @@ description: |+
   Using `,` or `_`.
 
   ```haskell
-  >>> [f|{10 ^ 9 - 1:,}|]
+  >>> [fmt|{10 ^ 9 - 1:,}|]
   "999,999,999"
-  >>> [f|{2 ^ 32  -1:_b}|]
+  >>> [fmt|{2 ^ 32  -1:_b}|]
   "1111_1111_1111_1111_1111_1111_1111_1111"
   ```
 
@@ -198,9 +215,9 @@ description: |+
   Using `+` to display the positive sign (if any) or ` ` to display a space instead:
 
   ```haskell
-  >>> [f|{pi:+.3}|]
+  >>> [fmt|{pi:+.3}|]
   "+3.142"
-  >>> [f|{pi: .3}|]
+  >>> [fmt|{pi: .3}|]
   " 3.142"
   ```
 
@@ -218,9 +235,9 @@ description: |+
   First argument inside the curly braces can be a valid Haskell expression, for example:
 
   ```haskell
-  >>> [f|2pi = {2* pi:.2}|]
+  >>> [fmt|2pi = {2* pi:.2}|]
   6.28
-  >>> [f|tail "hello" = {tail "hello":->6}|]
+  >>> [fmt|tail "hello" = {tail "hello":->6}|]
   "tail \"hello\" = --ello"
   ```
 
@@ -231,7 +248,7 @@ description: |+
   Most options can be combined. This generally leads to totally unreadable format string ;)
 
   ```haskell
-  >>> [f|{pi:~>5.2}|]
+  >>> [fmt|{pi:~>5.2}|]
   "~~3.14"
   ```
 
@@ -240,7 +257,7 @@ description: |+
   You can ignore a line break with `\` if needed. For example:
 
   ```haskell
-  [f|\
+  [fmt|\
   - a
   - b\
   |]
@@ -250,17 +267,24 @@ description: |+
 
   # Output type
 
-  *PyF* main entry point `f` is polymorphic and can represents `Text`, lazy `Text`, `String`, lazy text `Builder` or `IO` operations. Most of the time, type inference will do the right thing for you, but you may need to add type annotations.
-
-  For example:
+  *PyF* aims at extending the string literal syntax. As such, it default to `String` type. However, if the `OverloadedString` is enabled, PyF will happilly generate `IsString t => t` instead. This means that you can use PyF to generate `String`, but also `Text` and why not `ByteString`, with all the caveats known to this extension.
 
   ```haskell
-  >>> [f|hello {pi.2}|] :: String
+  >>> [fmt|hello {pi.2}|] :: String
   "hello 3.14"
   ```
 
-  Note: it works in ghci without any type annotation if the extensions
-  `OverloadedStrings` and `ExtendedDefaultRules` are enabled.
+  # Custom types
+
+  PyF can format three categories of input types:
+
+  - Floating. Using the `f`, `g`, `e`, ... type specifiers. Any type instance of `RealFloat` can be formated as such.
+  - Integral. Using the `d`, `b`, `x`, `o`, ... type specifiers. Any type instance of `Integral` can be formated as such.
+  - String. Using the `s` type specifier. Any type instance of `PyFToString` can be formated as such.
+
+  See `PyF.Class` if you want to create new instances for the `PyFToString` class.
+
+  By default, if you do not provide any type specifier, PyF uses the `PyFClassify` type class to decide if your type must be formated as a Floating, Integral or String.
 
   # Caveats
 
@@ -270,7 +294,7 @@ description: |+
 
   ```haskell
   >>> v = 10 :: Double
-  >>> [f|A float: {v}|]
+  >>> [fmt|A float: {v}|]
   A float: 10
   ```
 
@@ -285,7 +309,7 @@ description: |+
   - Any parsing error on the mini language results in a clear indication of the error, for example:
 
   ```haskell
-  >>> [f|{age:.3d}|]
+  >>> [fmt|{age:.3d}|]
 
   <interactive>:77:4: error:
       • <interactive>:1:8:
@@ -298,7 +322,7 @@ description: |+
   - Error in variable name are also readable:
 
   ```haskell
-  >>> [f|{toto}|]
+  >>> [fmt|{toto}|]
   <interactive>:78:4: error: Variable not in scope: toto
   ```
 
@@ -306,7 +330,7 @@ description: |+
     too polymorphic), you will get an awful error:
 
   ```haskell
-  >>*> [f|{True:d}|]
+  >>*> [fmt|{True:d}|]
 
   <interactive>:80:10: error:
       • No instance for (Integral Bool)
@@ -314,24 +338,10 @@ description: |+
   ...
   ```
 
-  - There is also one class of error related to alignement which can be triggered, when using alignement inside sign (i.e. `=`) with string. This can fail in two flavors:
+  - There is also one class of error related to alignement which can be triggered, when using alignement inside sign (i.e. `=`) with string:
 
   ```haskell
-  >>> [f|{"hello":=10s}|]
-
-  <interactive>:88:1: error:
-      • Exception when trying to run compile-time code:
-          String Cannot be aligned with the inside `=` mode
-  CallStack (from HasCallStack):
-    error, called at src/PyF/Internal/QQ.hs:143:18 in PyF-0.4.0.0-inplace:PyF.Internal.QQ
-        Code: quoteExp f "{\"hello\":=10s}"
-      • In the quasi-quotation: [f|{"hello":=10s}|]
-  ```
-
-  And
-
-  ```haskell
-  *PyF PyF.Internal.QQ> [f|{"hello":=10}|]
+  *PyF PyF.Internal.QQ> [fmt|{"hello":=10}|]
 
   <interactive>:89:10: error:
       • String Cannot be aligned with the inside `=` mode
@@ -341,7 +351,7 @@ description: |+
   - Finally, if you make any type error inside the expression field, you are on your own:
 
   ```haskell
-  >>> [f|{3 + pi + "hello":10}|]
+  >>> [fmt|{3 + pi + "hello":10}|]
 
   <interactive>:99:10: error:
       • No instance for (Floating [Char]) arising from a use of ‘pi’
@@ -362,7 +372,7 @@ description: |+
   import PyF
 
   myCustomFormatter :: QuasiQuoter
-  myCustomFormatter = fWithDelimiters ('@','!')
+  myCustomFormatter = fmtWithDelimiters ('@','!')
   ```
 
   Later, in another module:
@@ -385,8 +395,8 @@ description: |+
 
   - Number `n` formatter is not supported. In python this formatter can format a number and use current locale information for decimal part and thousand separator. There is no plan to support that because of the impure interface needed to read the locale.
   - Python support sub variables in the formatting options, such as `{varname:.{precision}}`, we should too. However should we accept `String` parameter (such as `<`), with a possible runtime error, or should we use the `ADT` such as `AlignRight`?
-  - Python literal integers accepts binary/octal/hexa/decimal literals, PyF only accept decimal ones, hdece in to plan to support that, if you really need to format a float with a number of digit provided as a binary constant, open an issue.
-  - Python support adding custom formatters for new types, such as date. This may be really cool, for example `[f|{today:%Y-%M-%D}`. I don't know how to support that now.
+  - Python literal integers accepts binary/octal/hexa/decimal literals, PyF only accept decimal ones, I don't have a plan to support that, if you really need to format a float with a number of digit provided as a binary constant, open an issue.
+  - Python support adding custom formatters for new types, such as date. This may be really cool, for example `[fmt|{today:%Y-%M-%D}`. I don't know how to support that now.
 
   ### Difference
 
@@ -404,15 +414,6 @@ description: |+
   cabal new-test
   ```
 
-  # TODO
-
-  - Improve the error reporting with more Parsec annotation
-  - Improve the parser for sub-expression (handle the `:` and `}` cases if possible).
-  - Allow extension to others type / custom formatters (for date for example)
-  - Improve code quality. This code is really ugly, but there is a really strong test suite so, well.
-  - Work on performance, do we really care? For now, everything is internally done with `String`.
-  - Directly expose the formatter to be used as a template haskell splice
-
   # Library note
 
   `PyF.Formatters` exposes two functions to format numbers. They are type-safe (as much as possible) and comes with a combination of formatting options not seen in other formatting libraries:
@@ -425,5 +426,4 @@ description: |+
   # Conclusion
 
   Don't hesitate to make any suggestion, I'll be more than happy to work on it.
-
 license-name: BSD-3-Clause
