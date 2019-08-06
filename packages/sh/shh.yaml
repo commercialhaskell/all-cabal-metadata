@@ -1,9 +1,11 @@
 homepage: ''
 changelog-type: markdown
-hash: 6b97e2be7eaa7c27ee8032a65f1a23e732434a480436b79c0eb3ebd4388a0a87
+hash: 3b374c22cb83be605dce9342eefd05ba14cbadb8a9379d0365b618837964ac4e
 test-bench-deps:
   bytestring: -any
   base: ! '>=4.9'
+  markdown-unlit: -any
+  filepath: -any
   async: -any
   doctest: -any
   utf8-string: -any
@@ -16,6 +18,19 @@ maintainer: lukec@themk.net
 synopsis: Simple shell scripting from Haskell
 changelog: |
   # Revision history for shh
+
+  ## 0.7.0.0 -- 2019-08-06
+
+  This is a fairly major refactor which consolidates a bunch of type classes
+  and simplifies a few things.
+
+  * ExecArgs, Unit, PipeResult, PipeFailure are all gone and replaced
+    with Command and Shell type classes.
+  * Renamed various functions.
+    * catchFailure -> tryFailure
+    * catchCode    -> exitCode
+  * Remove some unnecessary utf8 decoding.
+
 
   ## 0.6.0.0 -- 2019-06-26
 
@@ -65,6 +80,7 @@ basic-deps:
   unix: ! '>=2.7.2 && <2.8'
   split: ! '>=0.2.3 && <0.3'
   base: ! '>=4.9 && <4.13'
+  stringsearch: ! '>=0.3.6.6 && <0.4'
   filepath: ! '>=1.4.2 && <1.5'
   process: ! '>=1.6.3 && <1.7'
   async: ! '>=2.2.1 && <2.3'
@@ -97,59 +113,65 @@ all-versions:
 - 0.4.0.1
 - 0.5.0.0
 - 0.6.0.0
+- 0.7.0.0
 author: Luke Clifton
-latest: 0.6.0.0
+latest: 0.7.0.0
 description-type: markdown
-description: "# Shh\n\n[![](https://img.shields.io/hackage/v/shh.svg?colorB=%23999&label=shh)](http://hackage.haskell.org/package/shh)\n[![](https://img.shields.io/hackage/v/shh-extras.svg?colorB=%23999&label=shh-extras)](http://hackage.haskell.org/package/shh-extras)\n[![](https://builds.sr.ht/~lukec/shh/nix.yml.svg)](https://builds.sr.ht/~lukec/shh/nix.yml?)\n\nShh
+description: "# Shh\n\n[![](https://img.shields.io/hackage/v/shh.svg?colorB=%23999&label=shh)](http://hackage.haskell.org/package/shh)\n[![](https://img.shields.io/hackage/v/shh-extras.svg?colorB=%23999&label=shh-extras)](http://hackage.haskell.org/package/shh-extras)\n[![](https://builds.sr.ht/~lukec/shh/nix.yml.svg)](https://builds.sr.ht/~lukec/shh/nix.yml?)\n\n<details><summary>\nShh
   is a library to enable convinient shell-like programming in Haskell.\nIt works well
-  in scripts, and from GHCi, allowing you to use GHCi as a shell.\n\nIt's primary
-  purpose is in replacing shell scripts. As such, many\nfunctions are provided to
-  mimic the shell environment, and porting shell\nscripts to shh should be fairly
+  in scripts, and from GHCi, allowing you to use GHCi as a shell.\n</summary>\n\n```haskell\n{-#
+  LANGUAGE TemplateHaskell #-}\n{-# LANGUAGE OverloadedStrings #-}\n{-# LANGUAGE ExtendedDefaultRules
+  #-}\nmodule Readme (test) where\n\nimport Shh\n\nimport Control.Concurrent.Async\nimport
+  Prelude hiding (head)\nimport Test.Tasty\nimport Test.Tasty.HUnit\nimport Test.Tasty.QuickCheck\nimport
+  qualified System.Directory\nimport qualified Data.ByteString.Lazy.Char8 as Char8\nimport
+  Data.List (nub)\nimport Data.Char\n\nload SearchPath [\"echo\", \"base64\", \"cat\",
+  \"head\", \"sleep\", \"mktemp\", \"ls\", \"wc\", \"find\", \"tr\", \"users\", \"sha256sum\",
+  \"false\", \"true\"]\n\ncurl :: Cmd\ncurl = true\n\ntest :: IO ()\ntest = do\n```\n\n</details>\n\nIt's
+  primary purpose is in replacing shell scripts. As such, many\nfunctions are provided
+  to mimic the shell environment, and porting shell\nscripts to shh should be fairly
   straightforward. A simple\n[\"cargo culting\" port](docs/porting.md) should work
   in most situations,\nand perhaps be even more robust than the original.\n\nIt is
   also a wrapper tool around launching GHCi as a shell.\n\nIt supports\n\n * Automatically
   defining a function for each executable on your `$PATH`\n   using template Haskell,
   as well as a runtime check to ensure they all\n   exist on startup.\n\n * Redirction
-  of stdout and stderr\n       \n       -- Redirect stdout\n       λ echo \"Hello\"
-  &> StdErr\n       λ echo \"Hello\" &> Truncate \".tmp_file\"\n\n       -- Redirect
-  stderr\n       λ echo \"Hello\" &!> Append \"/dev/null\"\n       λ echo \"Hello\"
-  &!> StdOut\n\n\n * Piping stdout or stderr to the input of a chained process\n       \n
-  \      λ cat \"/dev/urandom\" |> xxd |> head \"-n\" 5\n\n * Multiple processes sequentially
-  feeding a single process\n\n       λ (echo 1 >> echo 2) |> cat\n\n * Use of Haskells
-  concurrency primitives.\n\n       λ race (sleep 1) $ curl \"http://this_needs_to_timeout_after_1_second\"\n\n
-  \      λ d <- readTrim $ mktemp \"-d\"\n       λ :{\n       | System.Directory.withCurrentDirectory
-  d $ do\n       |   mapConcurrently_ (curl \"-LOJs\")\n       |     [ \"https://raw.githubusercontent.com/luke-clifton/shh/master/shell.nix\"\n
-  \      |     , \"https://raw.githubusercontent.com/luke-clifton/shh/master/shh.cabal\"\n
-  \      |     ]\n       |   ls\n       | :}\n\n * Capturing of process output\n\n
-  \      λ s <- echo \"Hello\" |> tr \"-d\" \"l\" |> capture\n\n       λ loggedIn
-  <- nub . words <$> readProc users\n       λ putStrLn $ \"Logged in users: \" ++
-  show loggedIn\n\n       λ mapM_ putStrLn =<< readSplit0 (Shh.Example.find \"-maxdepth\"
-  1 \"-print0\")\n\n * Capturing infinite output of a process lazily\n\n       λ withRead
-  (cat \"/dev/urandom\" |> xxd) $ mapM_ putStrLn . take 3 . lines\n       00000000:
-  8fcb ebee 9228 a897 3bfc 1d05 491d aceb  .....(..;...I...\n       00000010: 47de
-  3ea3 2788 44ac 9b85 0a0f a458 b949  G.>.'.D......X.I\n       00000020: 5308 ddfe
-  5790 5a5f 39e3 bbb6 b689 2b03  S...W.Z_9.....+.\n\n * Write strings to stdin of
-  a process.\n\n       λ writeProc cat \"Hello\\n\"\n       Hello\n\n       λ \"Hello\"
-  >>> shasum\n       f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0  -\n\n       λ shasum
-  <<< \"Hello\"\n       f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0  -\n\n * Proper exceptions,
-  when a process exits with a failure code, an exception\n   is thrown. You can catch
-  these normally. The exception includes the error\n   code, the command, and all
-  it's arguments.\n\n       λ false \"Ha, it died\"\n       *** Exception: Command
-  `false \"Ha, it died\"` failed [exit 1]\n\n       λ catchCode false\n       1\n\n
-  * \"Native\" processes, i.e. Haskell functions that behave like a process.\n\n       λ
-  echo \"Hello\" |> pureProc (map toUpper) |> tr \"-d\" \"L\"\n       HEO\n\n * And
-  much, much more! Look at the documentation on Hackage for a\n   comprehensive overview
-  of all the possibilities.\n\n## Mnemonics \n\nShh has many symbols that might seem
-  intimidating at first, but there\nis a simple mnemonic for them.\n\n    |     Piping.
-  Looks like a pipe, same as in POSIX shells.\n    &     Redirection, think of the
-  shell `2>&1`\n    >,<   The direction of flow of a command\n    !     Operate on
-  stderr instead of stdout\n\nSo, for example,\n\n    ls |> cat      Pipe the stdout
-  of `ls` into stdin of `cat`\n    cat <| ls      Same as above\n    ls &> StdErr
-  \  Redirect stdout of `ls` to wherever stderr is going.\n    StdErr <& ls   Same
-  as above\n    ls &!> StdOut  Redirect stderr of `ls` to wherever stdout is going.\n
-  \   StdOut <!& ls  Same as above\n\n## Globbing\n\nCurrently Shh does not have any
-  built in globbing support. Rather, it is\ncurrently suggested to use another library
-  to do globbing. For example,\nusing the [Glob](http://hackage.haskell.org/package/Glob)
+  of stdout and stderr\n       \n   ```haskell\n     -- Redirect stdout\n     echo
+  \"Hello\" &> StdErr\n     echo \"Hello\" &> Truncate \".tmp_file\"\n   \n     --
+  Redirect stderr\n     echo \"Hello\" &!> Append \"/dev/null\"\n     echo \"Hello\"
+  &!> StdOut\n   ```\n\n\n * Piping stdout or stderr to the input of a chained process\n
+  \  \n   ```haskell\n     cat \"/dev/urandom\" |> base64 |> head \"-n\" 5\n   ```\n\n
+  * Multiple processes sequentially feeding a single process\n\n   ```haskell\n     (echo
+  1 >> echo 2) |> cat\n   ```\n\n * Use of Haskells concurrency primitives.\n\n   ```haskell\n
+  \    race (sleep 1 >> echo \"Slept for 1\") (sleep 2 >> echo \"Slept for 2\")\n\n
+  \  ```\n\n   ```haskell\n     mapConcurrently_ (\\url -> curl \"-Ls\" url |> wc)\n
+  \      [ \"https://raw.githubusercontent.com/luke-clifton/shh/master/shell.nix\"\n
+  \      , \"https://raw.githubusercontent.com/luke-clifton/shh/master/README.md\"\n
+  \      ]\n   ```\n\n * Capturing of process output\n\n   ```haskell\n     s <- echo
+  \"Hello\" |> tr \"-d\" \"l\" |> capture\n     print s\n\n     loggedIn <- nub .
+  Char8.words <$> (users |> capture)\n     putStrLn $ \"Logged in users: \" ++ show
+  loggedIn\n\n     mapM_ Char8.putStrLn =<< (find \"-maxdepth\" 1 \"-print0\" |> captureEndBy0)\n
+  \  ```\n\n * Capturing infinite output of a process lazily\n\n   ```haskell\n     cat
+  \"/dev/urandom\"\n       |> base64\n       |> readInput (mapM_ Char8.putStrLn .
+  take 3 . Char8.lines)\n   ```\n\n * Write strings to stdin of a process.\n\n   ```haskell\n
+  \    writeOutput \"Hello\\n\" |> cat\n     -- Hello\n\n     \"Hello\" >>> sha256sum\n\n
+  \    sha256sum <<< \"Hello\"\n   ```\n\n * Proper exceptions, when a process exits
+  with a failure code, an exception\n   is thrown. You can catch these normally. The
+  exception includes the error\n   code, the command, and all it's arguments.\n\n
+  \  ```haskell\n     false \"Ha, it died\"\n     --  *** Exception: Command `false
+  \"Ha, it died\"` failed [exit 1]\n   ```\n   ```haskell\n     exitCode false\n     --
+  \ 1\n   ```\n\n * \"Native\" processes, i.e. Haskell functions that behave like
+  a process.\n\n   ```haskell\n     echo \"Hello\" |> pureProc (Char8.map toUpper)
+  |> tr \"-d\" \"L\"\n     -- HEO\n   ```\n\n * And much, much more! Look at the documentation
+  on Hackage for a\n   comprehensive overview of all the possibilities.\n\n## Mnemonics
+  \n\nShh has many symbols that might seem intimidating at first, but there\nis a
+  simple mnemonic for them.\n\n    |     Piping. Looks like a pipe, same as in POSIX
+  shells.\n    &     Redirection, think of the shell `2>&1`\n    >,<   The direction
+  of flow of a command\n    !     Operate on stderr instead of stdout\n\nSo, for example,\n\n
+  \   ls |> cat      Pipe the stdout of `ls` into stdin of `cat`\n    cat <| ls      Same
+  as above\n    ls &> StdErr   Redirect stdout of `ls` to wherever stderr is going.\n
+  \   StdErr <& ls   Same as above\n    ls &!> StdOut  Redirect stderr of `ls` to
+  wherever stdout is going.\n    StdOut <!& ls  Same as above\n\n## Globbing\n\nCurrently
+  Shh does not have any built in globbing support. Rather, it is\ncurrently suggested
+  to use another library to do globbing. For example,\nusing the [Glob](http://hackage.haskell.org/package/Glob)
   package, it is\npossible to do something like\n\n    wc =<< glob \"*.md\"\n\nCertainly
   more verbose than the Bash equivalent, however, also more explicit,\nwhich is probably
   a good thing. If this turns out to be too cumbersome, we\nmight introduce a more
