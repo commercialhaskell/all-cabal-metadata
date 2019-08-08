@@ -1,19 +1,20 @@
 homepage: https://github.com/bitemyapp/esqueleto
 changelog-type: markdown
-hash: efd84fd11ceaf0ae4e1b0c6236122b1f213c2c6f2f4f58e30f03eddc2ec3f423
+hash: fed89ff1425edffe0774f8c5bc8fa193e877a3e94083629f872aa0a0018da753
 test-bench-deps:
+  exceptions: -any
   bytestring: -any
   mysql: -any
   unliftio: -any
   base: ! '>=4.8 && <5.0'
   time: ! '>=1.5.0.1 && <=1.8.0.2'
-  persistent: ! '>=2.8.0 && <2.11'
+  persistent: ! '>=2.10.0 && <2.11'
   postgresql-libpq: -any
   unordered-containers: ! '>=0.2'
   hspec: -any
   text: ! '>=0.11 && <1.3'
   persistent-template: -any
-  persistent-postgresql: -any
+  persistent-postgresql: ! '>=2.10.0 && <2.11'
   conduit: ! '>=1.3'
   tagged: ! '>=0.2'
   containers: -any
@@ -25,12 +26,22 @@ test-bench-deps:
   transformers: ! '>=0.2'
   resourcet: ! '>=1.2'
   persistent-sqlite: -any
+  aeson: -any
+  vector: -any
   mysql-simple: -any
 maintainer: cma@bitemyapp.com
 synopsis: Type-safe EDSL for SQL queries on persistent backends.
 changelog: |
   Unreleased
   ========
+
+  3.1.0
+  =======
+
+  - @Vlix
+    - [#128](https://github.com/bitemyapp/esqueleto/pull/128): Added `Database.Esqueleto.PostgreSQL.JSON` module with JSON operators and `JSONB` data type.
+  - @ibarrae
+    - [#127](https://github.com/bitemyapp/esqueleto/pull/127): Added `between` and support for composite keys in `unsafeSqlBinOp`.
 
   3.0.0
   =======
@@ -85,7 +96,7 @@ basic-deps:
   unliftio: -any
   base: ! '>=4.8 && <5.0'
   time: ! '>=1.5.0.1 && <=1.8.0.2'
-  persistent: ! '>=2.8.0 && <2.11'
+  persistent: ! '>=2.10.0 && <2.11'
   unordered-containers: ! '>=0.2'
   text: ! '>=0.11 && <1.3'
   conduit: ! '>=1.3'
@@ -94,6 +105,7 @@ basic-deps:
   monad-logger: -any
   transformers: ! '>=0.2'
   resourcet: ! '>=1.2'
+  aeson: ! '>=1.0'
 all-versions:
 - '0.1'
 - '0.2'
@@ -182,111 +194,305 @@ all-versions:
 - 2.6.1
 - 2.7.0
 - 3.0.0
+- 3.1.0
 author: Felipe Lessa
-latest: 3.0.0
+latest: 3.1.0
 description-type: markdown
-description: "Esqueleto [![TravisCI](https://travis-ci.org/bitemyapp/esqueleto.svg)](https://travis-ci.org/bitemyapp/esqueleto)\n==========\n\n![Skeleton](./esqueleto.png)\n<sup>Image
-  courtesy [Chrissy Long](https://www.flickr.com/photos/chrissylong/313800029/)</sup>\n\n#
-  Esqueleto, a SQL DSL for Haskell\n\nEsqueleto is a bare bones, type-safe EDSL for
-  SQL queries that works with unmodified persistent SQL backends. The name of this
-  library means \"skeleton\" in Portuguese and contains all three SQL letters in the
-  correct order =). It was inspired by Scala's Squeryl but created from scratch. Its
-  language closely resembles SQL. Currently, SELECTs, UPDATEs, INSERTs and DELETEs
-  are supported.\n\nIn particular, esqueleto is the recommended library for type-safe
-  JOINs on persistent SQL backends. (The alternative is using raw SQL, but that's
-  error prone and does not offer any composability.). For more information read [esqueleto](http://hackage.haskell.org/package/esqueleto).\n\n##
-  Setup\n\nIf you're already using `persistent`, then you're ready to use `esqueleto`,
-  no further setup is needed.  If you're just starting a new project and would like
-  to use `esqueleto`, take a look at `persistent`'s [book](http://www.yesodweb.com/book/persistent)
-  first to learn how to define your schema.\n\nIf you need to use `persistent`'s default
-  support for queries as well, either import it qualified:\n\n```haskell\n-- For a
-  module that mostly uses esqueleto.\nimport Database.Esqueleto\nimport qualified
-  Database.Persistent as P\n```\n\nor import `esqueleto` itself qualified:\n\n```haskell\n--
-  For a module that uses esqueleto just on some queries.\nimport Database.Persistent\nimport
-  qualified Database.Esqueleto as E\n```\n\nOther than identifier name clashes, `esqueleto`
-  does not conflict with `persistent` in any way.\n\n\n## Goals\n\nThe main goals
-  of `esqueleto` are:\n\n- Be easily translatable to SQL. (You should be able to know
-  exactly how the SQL query will end up.)\n- Support the most widely used SQL features.\n-
-  Be as type-safe as possible.\n\nIt is _not_ a goal to be able to write portable
-  SQL. We do not try to hide the differences between DBMSs from you\n\n\n## Introduction\n\nFor
-  the following examples, we'll use this example schema:\n\n```haskell\nshare [mkPersist
-  sqlSettings, mkMigrate \"migrateAll\"] [persist|\n  Person\n    name String\n    age
-  Int Maybe\n    deriving Eq Show\n  BlogPost\n    title String\n    authorId PersonId\n
-  \   deriving Eq Show\n  Follow\n    follower PersonId\n    followed PersonId\n    deriving
-  Eq Show\n|]\n```\n\n## Select\n\nMost of `esqueleto` was created with `SELECT` statements
-  in mind, not only because they're the most common but also because they're the most
-  complex kind of statement.  The most simple kind of `SELECT` would be:\n\n```haskell\nputPersons
-  :: SqlPersist m ()\nputPersons = do\n  people <- select $\n              from $
-  \\person -> do\n              return person\n  liftIO $ mapM_ (putStrLn . personName
-  . entityVal) people\n```\n\nwhich generates this SQL:\n\n```sql\nSELECT *\nFROM
-  Person\n```\n\n`esqueleto` knows that we want an `Entity Person` just because of
-  the `personName` that is printed.\n\n## Where\n\nFiltering by `PersonName`:\n\n```haskell\nselect
-  $\nfrom $ \\p -> do\nwhere_ (p ^. PersonName ==. val \"John\")\nreturn p\n```\n\nwhich
-  generates this SQL:\n\n```sql\nSELECT *\nFROM Person\nWHERE Person.name = \"John\"\n```\n\nThe
-  `(^.)` operator is used to project a field from an entity. The field name is the
-  same one generated by `persistent`s Template Haskell functions.  We use `val` to
-  lift a constant Haskell value into the SQL query.\n\nAnother example:\n\nIn `esqueleto`,
-  we may write the same query above as:\n\n```haskell\nselect $\nfrom $ \\p -> do\nwhere_
-  (p ^. PersonAge >=. just (val 18))\nreturn p\n```\n\nwhich generates this SQL:\n\n```sql\nSELECT
-  *\nFROM Person\nWHERE Person.age >= 18\n```\n\nSince `age` is an optional `Person`
-  field, we use `just` to lift`val 18 :: SqlExpr (Value Int)` into `just (val 18)
-  ::SqlExpr (Value (Maybe Int))`.\n\n## Joins\n\nImplicit joins are represented by
-  tuples.\n\nFor example, to get the list of all blog posts and their authors, we
-  could write:\n\n```haskell\nselect $\nfrom $ \\(b, p) -> do\nwhere_ (b ^. BlogPostAuthorId
-  ==. p ^. PersonId)\norderBy [asc (b ^. BlogPostTitle)]\nreturn (b, p)\n```\n\nwhich
-  generates this SQL:\n\n```sql\nSELECT BlogPost.*, Person.*\nFROM BlogPost, Person\nWHERE
-  BlogPost.authorId = Person.id\nORDER BY BlogPost.title ASC\n```\n\n\nHowever, you
-  may want your results to include people who don't have any blog posts as well using
-  a `LEFT OUTER JOIN`:\n\n```haskell\nselect $\nfrom $ \\(p `LeftOuterJoin`` mb) ->
-  do\non (p ^. PersonId ==. mb ?. BlogPostAuthorId)\norderBy [asc (p ^. PersonName),
-  asc (mb ?. BlogPostTitle)]\nreturn (p, mb)\n```\n\nwhich generates this SQL:\n\n```sql\nSELECT
-  Person.*, BlogPost.*\nFROM Person LEFT OUTER JOIN BlogPost\nON Person.id = BlogPost.authorId\nORDER
-  BY Person.name ASC, BlogPost.title ASC\n```\n\n## Left Outer Join\n\nOn a `LEFT
-  OUTER JOIN` the entity on the right hand side may not exist (i.e. there may be a
-  `Person` without any `BlogPost`s), so while `p :: SqlExpr (Entity Person)`, we have
-  `mb :: SqlExpr (Maybe (Entity BlogPost))`.  The whole expression above has type
-  `SqlPersist m [(Entity Person, Maybe (Entity BlogPost))]`.  Instead of using `(^.)`,
-  we used `(?.)` to project a field from a `Maybe (Entity a)`.\n\nWe are by no means
-  limited to joins of two tables, nor by joins of different tables.  For example,
-  we may want a list of the `Follow` entity:\n\n```haskell\nselect $\nfrom $ \\(p1
-  `InnerJoin` f `InnerJoin` p2) -> do\non (p2 ^. PersonId ==. f ^. FollowFollowed)\non
-  (p1 ^. PersonId ==. f ^. FollowFollower)\nreturn (p1, f, p2)\n```\n\nwhich generates
-  this SQL:\n\n```sql\nSELECT P1.*, Follow.*, P2.*\nFROM Person AS P1\nINNER JOIN
-  Follow ON P1.id = Follow.follower\nINNER JOIN Person AS P2 ON P2.id = Follow.followed\n```\n\nNote
-  carefully that the order of the ON clauses is reversed! You're required to write
-  your `on`s in reverse order because that helps composability (see the documentation
-  of `on` for more details). \n\n## Update and Delete\n\n```haskell\ndo update $ \\p
-  -> do\n     set p [ PersonName =. val \"João\" ]\n     where_ (p ^. PersonName ==.
-  val \"Joao\")\n   delete $\n     from $ \\p -> do\n     where_ (p ^. PersonAge <.
-  just (val 14))\n```\n\nThe results of queries can also be used for insertions. In
-  `SQL`, we might write the following, inserting a new blog post for every user:\n\n```haskell\n
-  insertSelect $ from $ \\p->\n return $ BlogPost <# \"Group Blog Post\" <&> (p ^.
-  PersonId)\n```\n\nwhich generates this SQL:\n\n```sql\nINSERT INTO BlogPost\nSELECT
-  ('Group Blog Post', id)\nFROM Person\n```\n\nIndividual insertions can be performed
-  through Persistent's `insert` function, reexported for convenience.\n\n### Re-exports\n\nWe
-  re-export many symbols from `persistent` for convenience:\n- \"Store functions\"
-  from \"Database.Persist\".\n- Everything from \"Database.Persist.Class\" except
-  for `PersistQuery` and `delete` (use `deleteKey` instead).\n- Everything from \"Database.Persist.Types\"
-  except for `Update`, `SelectOpt`, `BackendSpecificFilter` and `Filter`.\n- Everything
-  from \"Database.Persist.Sql\" except for `deleteWhereCount` and `updateWhereCount`.\n\n###
-  RDBMS Specific\n\nThere are many differences between SQL syntax and functions supported
-  by different RDBMSs.  Since version 2.2.8, `esqueleto` includes modules containing
-  functions that are specific to a given RDBMS.\n\n- PostgreSQL: `Database.Esqueleto.PostgreSQL`\n\nIn
-  order to use these functions, you need to explicitly import their corresponding
-  modules.\n\n\n### Tests and Postgres\n\nTo ```stack test``` with Postgresql you'll
-  need to set the Postgres flag for [esqueleto.cabal](esqueleto.cabal)\nDo this from
-  the command line with: ```stack test --flag esqueleto:postgresql```\n\nIf you don't
-  have Postgres install it. \nUsing apt-get it's just:\n\n```\nsudo apt-get install
-  postgresql postgresql-contrib\nsudo apt-get install libpq-dev\n```\n\nUsing homebrew
-  on OSx \n\n```\nbrew install postgresql\nbrew install libpq\n```\n\nDetailed instructions
-  on the Postgres wiki [here](https://wiki.postgresql.org/wiki/Detailed_installation_guides)\n\nThe
-  connection details are located near the bottom of the [test/Test.hs](test/Test.hs)
-  file:\n\n```\n#if defined(WITH_POSTGRESQL)\n  withPostgresqlConn \"host=localhost
-  port=5432 user=esqutest password=esqutest dbname=esqutest\"\n```\n\nYou can change
-  these if you like but to just get them working set up as follows on linux:\n\n```$
-  sudo -u postgres createuser esqutest```\n\n```$ sudo -u postgres createdb esqutest```\n\n```\n$
-  sudo -u postgres psql\npostgres=# \\password esqutest\n```\n\n\nAnd on osx\n\n```$
-  createuser esqutest```\n\n```$ createdb esqutest```\n\n```\n$ psql postgres\npostgres=#
-  \\password esqutest\n```\n\n\nNow ```stack test --flag esqueleto:postgresql``` should
-  invoke and pass all the Postgres tests.\n"
+description: |
+  Esqueleto [![TravisCI](https://travis-ci.org/bitemyapp/esqueleto.svg)](https://travis-ci.org/bitemyapp/esqueleto)
+  ==========
+
+  ![Skeleton](./esqueleto.png)
+  <sup>Image courtesy [Chrissy Long](https://www.flickr.com/photos/chrissylong/313800029/)</sup>
+
+  # Esqueleto, a SQL DSL for Haskell
+
+  Esqueleto is a bare bones, type-safe EDSL for SQL queries that works with unmodified persistent SQL backends. The name of this library means "skeleton" in Portuguese and contains all three SQL letters in the correct order =). It was inspired by Scala's Squeryl but created from scratch. Its language closely resembles SQL. Currently, SELECTs, UPDATEs, INSERTs and DELETEs are supported.
+
+  In particular, esqueleto is the recommended library for type-safe JOINs on persistent SQL backends. (The alternative is using raw SQL, but that's error prone and does not offer any composability.). For more information read [esqueleto](http://hackage.haskell.org/package/esqueleto).
+
+  ## Setup
+
+  If you're already using `persistent`, then you're ready to use `esqueleto`, no further setup is needed.  If you're just starting a new project and would like to use `esqueleto`, take a look at `persistent`'s [book](http://www.yesodweb.com/book/persistent) first to learn how to define your schema.
+
+  If you need to use `persistent`'s default support for queries as well, either import it qualified:
+
+  ```haskell
+  -- For a module that mostly uses esqueleto.
+  import Database.Esqueleto
+  import qualified Database.Persistent as P
+  ```
+
+  or import `esqueleto` itself qualified:
+
+  ```haskell
+  -- For a module that uses esqueleto just on some queries.
+  import Database.Persistent
+  import qualified Database.Esqueleto as E
+  ```
+
+  Other than identifier name clashes, `esqueleto` does not conflict with `persistent` in any way.
+
+
+  ## Goals
+
+  The main goals of `esqueleto` are:
+
+  - Be easily translatable to SQL. (You should be able to know exactly how the SQL query will end up.)
+  - Support the most widely used SQL features.
+  - Be as type-safe as possible.
+
+  It is _not_ a goal to be able to write portable SQL. We do not try to hide the differences between DBMSs from you
+
+
+  ## Introduction
+
+  For the following examples, we'll use this example schema:
+
+  ```haskell
+  share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persist|
+    Person
+      name String
+      age Int Maybe
+      deriving Eq Show
+    BlogPost
+      title String
+      authorId PersonId
+      deriving Eq Show
+    Follow
+      follower PersonId
+      followed PersonId
+      deriving Eq Show
+  |]
+  ```
+
+  ## Select
+
+  Most of `esqueleto` was created with `SELECT` statements in mind, not only because they're the most common but also because they're the most complex kind of statement.  The most simple kind of `SELECT` would be:
+
+  ```haskell
+  putPersons :: SqlPersist m ()
+  putPersons = do
+    people <- select $
+                from $ \person -> do
+                return person
+    liftIO $ mapM_ (putStrLn . personName . entityVal) people
+  ```
+
+  which generates this SQL:
+
+  ```sql
+  SELECT *
+  FROM Person
+  ```
+
+  `esqueleto` knows that we want an `Entity Person` just because of the `personName` that is printed.
+
+  ## Where
+
+  Filtering by `PersonName`:
+
+  ```haskell
+  select $
+  from $ \p -> do
+  where_ (p ^. PersonName ==. val "John")
+  return p
+  ```
+
+  which generates this SQL:
+
+  ```sql
+  SELECT *
+  FROM Person
+  WHERE Person.name = "John"
+  ```
+
+  The `(^.)` operator is used to project a field from an entity. The field name is the same one generated by `persistent`s Template Haskell functions.  We use `val` to lift a constant Haskell value into the SQL query.
+
+  Another example:
+
+  In `esqueleto`, we may write the same query above as:
+
+  ```haskell
+  select $
+  from $ \p -> do
+  where_ (p ^. PersonAge >=. just (val 18))
+  return p
+  ```
+
+  which generates this SQL:
+
+  ```sql
+  SELECT *
+  FROM Person
+  WHERE Person.age >= 18
+  ```
+
+  Since `age` is an optional `Person` field, we use `just` to lift`val 18 :: SqlExpr (Value Int)` into `just (val 18) ::SqlExpr (Value (Maybe Int))`.
+
+  ## Joins
+
+  Implicit joins are represented by tuples.
+
+  For example, to get the list of all blog posts and their authors, we could write:
+
+  ```haskell
+  select $
+  from $ \(b, p) -> do
+  where_ (b ^. BlogPostAuthorId ==. p ^. PersonId)
+  orderBy [asc (b ^. BlogPostTitle)]
+  return (b, p)
+  ```
+
+  which generates this SQL:
+
+  ```sql
+  SELECT BlogPost.*, Person.*
+  FROM BlogPost, Person
+  WHERE BlogPost.authorId = Person.id
+  ORDER BY BlogPost.title ASC
+  ```
+
+
+  However, you may want your results to include people who don't have any blog posts as well using a `LEFT OUTER JOIN`:
+
+  ```haskell
+  select $
+  from $ \(p `LeftOuterJoin`` mb) -> do
+  on (p ^. PersonId ==. mb ?. BlogPostAuthorId)
+  orderBy [asc (p ^. PersonName), asc (mb ?. BlogPostTitle)]
+  return (p, mb)
+  ```
+
+  which generates this SQL:
+
+  ```sql
+  SELECT Person.*, BlogPost.*
+  FROM Person LEFT OUTER JOIN BlogPost
+  ON Person.id = BlogPost.authorId
+  ORDER BY Person.name ASC, BlogPost.title ASC
+  ```
+
+  ## Left Outer Join
+
+  On a `LEFT OUTER JOIN` the entity on the right hand side may not exist (i.e. there may be a `Person` without any `BlogPost`s), so while `p :: SqlExpr (Entity Person)`, we have `mb :: SqlExpr (Maybe (Entity BlogPost))`.  The whole expression above has type `SqlPersist m [(Entity Person, Maybe (Entity BlogPost))]`.  Instead of using `(^.)`, we used `(?.)` to project a field from a `Maybe (Entity a)`.
+
+  We are by no means limited to joins of two tables, nor by joins of different tables.  For example, we may want a list of the `Follow` entity:
+
+  ```haskell
+  select $
+  from $ \(p1 `InnerJoin` f `InnerJoin` p2) -> do
+  on (p2 ^. PersonId ==. f ^. FollowFollowed)
+  on (p1 ^. PersonId ==. f ^. FollowFollower)
+  return (p1, f, p2)
+  ```
+
+  which generates this SQL:
+
+  ```sql
+  SELECT P1.*, Follow.*, P2.*
+  FROM Person AS P1
+  INNER JOIN Follow ON P1.id = Follow.follower
+  INNER JOIN Person AS P2 ON P2.id = Follow.followed
+  ```
+
+  Note carefully that the order of the ON clauses is reversed! You're required to write your `on`s in reverse order because that helps composability (see the documentation of `on` for more details).
+
+  ## Update and Delete
+
+  ```haskell
+  do update $ \p -> do
+       set p [ PersonName =. val "João" ]
+       where_ (p ^. PersonName ==. val "Joao")
+     delete $
+       from $ \p -> do
+       where_ (p ^. PersonAge <. just (val 14))
+  ```
+
+  The results of queries can also be used for insertions. In `SQL`, we might write the following, inserting a new blog post for every user:
+
+  ```haskell
+   insertSelect $ from $ \p->
+   return $ BlogPost <# "Group Blog Post" <&> (p ^. PersonId)
+  ```
+
+  which generates this SQL:
+
+  ```sql
+  INSERT INTO BlogPost
+  SELECT ('Group Blog Post', id)
+  FROM Person
+  ```
+
+  Individual insertions can be performed through Persistent's `insert` function, reexported for convenience.
+
+  ### Re-exports
+
+  We re-export many symbols from `persistent` for convenience:
+  - "Store functions" from "Database.Persist".
+  - Everything from "Database.Persist.Class" except for `PersistQuery` and `delete` (use `deleteKey` instead).
+  - Everything from "Database.Persist.Types" except for `Update`, `SelectOpt`, `BackendSpecificFilter` and `Filter`.
+  - Everything from "Database.Persist.Sql" except for `deleteWhereCount` and `updateWhereCount`.
+
+  ### RDBMS Specific
+
+  There are many differences between SQL syntax and functions supported by different RDBMSs.  Since version 2.2.8, `esqueleto` includes modules containing functions that are specific to a given RDBMS.
+
+  - PostgreSQL: `Database.Esqueleto.PostgreSQL`
+  - MySQL: `Database.Esqueleto.MySQL`
+  - SQLite: `Database.Esqueleto.SQLite`
+
+  In order to use these functions, you need to explicitly import their corresponding modules.
+
+
+  ### Tests and Postgres
+
+  To run the tests, do `stack test`. This tests all the backends, so you'll need
+  to have MySQL and Postgresql installed.
+
+  Using apt-get, you should be able to do:
+
+  ```
+  sudo apt-get install postgresql postgresql-contrib
+  sudo apt-get install libpq-dev
+  ```
+
+  Using homebrew on OSx
+
+  ```
+  brew install postgresql
+  brew install libpq
+  ```
+
+  Detailed instructions on the Postgres wiki [here](https://wiki.postgresql.org/wiki/Detailed_installation_guides)
+
+  The connection details are located near the bottom of the [test/PostgreSQL/Test.hs](test/PostgreSQL/Test.hs) file:
+
+  ```
+  withConn =
+    R.runResourceT . withPostgresqlConn "host=localhost port=5432 user=esqutest password=esqutest dbname=esqutest"
+  ```
+
+  You can change these if you like but to just get them working set up as follows on linux:
+
+  ```$ sudo -u postgres createuser esqutest```
+
+  ```$ sudo -u postgres createdb esqutest```
+
+  ```
+  $ sudo -u postgres psql
+  postgres=# \password esqutest
+  ```
+
+
+  And on osx
+
+  ```$ createuser esqutest```
+
+  ```$ createdb esqutest```
+
+  ```
+  $ psql postgres
+  postgres=# \password esqutest
+  ```
 license-name: BSD-3-Clause
