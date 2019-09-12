@@ -1,6 +1,6 @@
 homepage: https://github.com/ChrisPenner/astar-monad#readme
 changelog-type: markdown
-hash: 3aedac7890ac4f911596cd13ea4f105982f3df60f240aa567e761754b5f0ec97
+hash: 8871d04a65f0b59ffb51560fd03c79353cb196b62a055c8ae93746b9a97415d8
 test-bench-deps:
   logict: -any
   base: ! '>=4.7 && <5'
@@ -22,47 +22,61 @@ all-versions:
 - 0.1.0.0
 - 0.2.0.0
 - 0.2.1.0
+- 0.3.0.0
 author: Chris Penner
-latest: 0.2.1.0
+latest: 0.3.0.0
 description-type: markdown
 description: "A\\* Monad\n=========\n\n[Hackage](http://hackage.haskell.org/package/astar-monad)\n\n**Caveat
   Emptor**; this hasn't been *battle-tested* yet; it should work, but make sure to
-  test it out if you're doing anything serious.\n\nEasily do A\\* searches with use
-  of arbitrary monadic effects!\n\n## Basics\n\n* Use `<|>` or `asum` (anything using
-  `Alternative`) to branch into multiple possible choices.\n* Use `updateCost myCost`
-  to set the value of your 'heuristic' function whenever you've done enough work to
-  change your estimate.  Remember that A\\* heuristics should always be pessimistic
-  (e.g. can over-estimate cost, but shouldn't UNDER estimate). \n* Every call to `updateCost`
-  creates a branch; Branches with LOWER costs will run before those with higher costs.\n*
-  Call `done mySolution` to short circuit ALL running branches and immediately return
-  your result.\n* `AStarT` has a built-in State monad which can store branch-local
+  test it out if you're doing anything serious.\n\nEasily do [A\\* searches](https://en.wikipedia.org/wiki/A*_search_algorithm)
+  with use of arbitrary monadic effects!\n\n> A* Search is widely used in pathfinding
+  and graph traversal, which is the process of finding a path between multiple points,
+  called \"nodes\".\n> A* can be used to find optimal paths for any problem with an
+  appropriate heuristic cost-measure.\n\n## Basics\n\n* Use `<|>` or `asum` (anything
+  using `Alternative`) to branch into multiple possible choices.\n* Use `estimate
+  myCost` to **set** the value of your 'heuristic' function for the current branch.
+  Do this whenever you've done enough work to change your estimate.  Remember that
+  A\\* heuristics should always be pessimistic (e.g. can over-estimate cost, but shouldn't
+  UNDER estimate). \n* Use `spend myCost` to **add** a cost to the branch's CUMULATIVE
+  cost. Do this when some cost has been incurred, e.g. we've moved the state from
+  one node to another.\n* Every call to `spend` or `estimate` creates a branch; Branches
+  with LOWER costs will run before those with higher costs. Note that this branching
+  is expensive, so try to consolidate calls to these functions in your actions when
+  possible.\n* Call `done mySolution` to short circuit ALL running branches and immediately
+  return your result.\n* `AStarT` has a built-in State monad which can store branch-local
   states for you. You can store your current branch's solution-space for instance,
   or the path you've followed to get to the current solution; or both!\n\nHere's an
   example of using A\\* to find a path to a location in a 2 dimensional grid.\n\n```haskell\n--
   Track which moves we've made, up, down, left or right\ndata Move = U | D | L | R\n
   \   deriving (Show, Eq)\n\n-- Track our current position, the goal we're moving
-  towards, and the moves we've taken so far.\ndata Context =\n    Context { _currentPos
-  :: (Int, Int)\n            , _goal    :: (Int, Int)\n            , _moves   :: [Move]\n
-  \           }\n    deriving (Show, Eq)\nmakeLenses ''Context\n\n-- The Manhattan
-  distance between two points\n-- This is our A* heuristic\ndistanceTo :: (Int, Int)
-  -> (Int, Int) -> Int\ndistanceTo (x, y) (x', y') = abs (x - x') + abs (y - y')\n\n--
-  Move around the space looking for the destination point.\nfindPoint :: AStar Context
-  Int () ()\nfindPoint = do\n    c <- use currentPos\n    gl <- use goal\n    -- I
-  could return the moves we took, \n    -- but our State is automatically returned
-  when we run AStar\n    when (c == gl) $ done ()\n    -- We have more work to do,
-  we should update the cost estimate and continue\n    updateCost $ distanceTo gl
-  c\n    if c == gl \n       then done ()\n       else updateCost $ distanceTo gl
-  c\n    -- Non-deterministically choose a direction to move, \n    -- store that
-  move in our state, and edit our current position.\n    asum\n        [ moves <>=
-  [R] >> currentPos . _1 += 1 >> findPoint\n        , moves <>= [L] >> currentPos
-  . _1 -= 1 >> findPoint\n        , moves <>= [D] >> currentPos . _2 += 1 >> findPoint\n
-  \       , moves <>= [U] >> currentPos . _2 -= 1 >> findPoint\n        ]\n\n-- We
-  only care about the ending state, so we use `execAStar`\n-- `runAStarT` is the most
-  powerful and runs a monad-transformer version\n-- and returns both the state and
-  result type.\nrun :: Maybe Context\nrun = execAStar findPoint\n             Context
-  { _current = (5, 5)\n                     , _goal    = (7, 4)\n                     ,
-  _moves   = []\n                     }\n\n-- run it to see if we found a solution;
-  it returns the state of the the 'winning' branch.\n>>> run \nJust (Context { _current
-  = (7, 4)\n              , _goal    = (7, 4)\n              , _moves   = [U, R, R]\n
-  \             })\n```\n"
+  towards, and the locations we've crossed along the way.\ndata Context =\n    Context
+  { _current   :: (Int, Int)\n            , _goal      :: (Int, Int)\n            ,
+  _locations :: [(Int, Int)]\n            }\n    deriving (Show, Eq)\nmakeLenses ''Context\n\n--
+  The Manhattan distance between two points serves as our heuristic estimate.\n--
+  It's *conservative*; it may cost MORE than this, but it won't cost LESS\ndistanceTo
+  :: (Int, Int) -> (Int, Int) -> Int\ndistanceTo (x, y) (x', y') = abs (x - x') +
+  abs (y - y')\n\n-- To make things more interesting we'll say that moving through
+  coordinates\n-- where either 'x' or 'y' are divisible by the other is 3X more expensive!\naddCost
+  :: MonadAStar (Sum Int) r m => (Int, Int) -> m ()\n-- Don't divide by zero!\naddCost
+  (0, _) = spend 1\naddCost (_, 0) = spend 1\naddCost (x, y)\n    | mod x y == 0 ||
+  mod y x == 0 = spend 3\naddCost _ = spend 1\n\n-- Move around the space looking
+  for the destination point.\nmineField :: AStar Context (Sum Int) (Int, Int) ()\nmineField
+  = do\n    -- Get the current position\n    (x, y) <- use current\n    -- Add the
+  current location to our list\n    locations <>= [(x, y)]\n    -- If we're at the
+  goal we're done!\n    gl <- use goal\n    when ((x, y) == gl)\n      $ done gl\n
+  \   -- Add the cost of the current position\n    addCost (x, y)\n    -- Estimate
+  steps to completion\n    estimate . Sum $ distanceTo gl (x, y)\n    asum\n        [
+  move L >> mineField\n        , move R >> mineField\n        , move U >> mineField\n
+  \       , move D >> mineField\n        ]\n\n-- We only care about the ending state,
+  so we use `execAStar`\n-- `runAStarT` is the most powerful and runs a monad-transformer
+  version\n-- and returns both the state and result type.\nrun :: Maybe Context\nrun
+  = execAStar findPoint\n             Context { _current = (5, 5)\n                     ,
+  _goal    = (7, 4)\n                     , _moves   = []\n                     }\n\n--
+  Execute it to see if we found a solution; \n-- We only care about the state, so
+  we use 'execAStar' it returns the state of the the 'winning' branch.\n--\n-- We
+  can see from the results that the optimal path with these costs involves a bit of
+  moving around to avoid coordinates which divide each other!\n>>> execAStar mineField
+  (context (1, 1) (3, 4))\nJust (Context\n      { _current   = (3, 4)\n      , _goal
+  \     = (3, 4)\n      , _locations = \n          [(1, 1), (0, 1), (0, 2), (0, 3),
+  (0, 4), (0, 5), (1, 5), (2, 5), (3, 5), (3, 4)]\n      })\n\n```\n"
 license-name: BSD-3-Clause
