@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: text
-hash: c3100b035e41a3a623ce09905e1d0ca7fb5b5e61f76d5e20812321253aff6115
+hash: 7a9a56f767a8e47b361af855fea0b4a8d18e7b029734957a65dcd5c0c1abef16
 test-bench-deps:
   genvalidity-property: ! '>=0.0 && <0.1'
   bytestring: -any
@@ -15,7 +15,7 @@ test-bench-deps:
   aeson: -any
 maintainer: Chris Done <chrisdone@fpcomplete.com>
 synopsis: Support for well-typed paths
-changelog: ! "0.6.1:\n\t* Add 'addFileExtension' function and its operator form: (<.>).\n\t*
+changelog: "0.6.1:\n\t* Add 'addFileExtension' function and its operator form: (<.>).\n\t*
   Derive 'Eq' instance for 'PathException'.\n\n0.6.0:\n\n\t* Deprecate PathParseException
   and rename it to PathException\n\t* Allow 'parent' to work on relative paths as
   well\n\t* Deprecate isParentOf and stripDir and rename them to isProperPrefixOf
@@ -40,7 +40,7 @@ basic-deps:
   exceptions: ! '>=0.4 && <0.11'
   base: ! '>=4.7 && <5'
   filepath: <1.2.0.1 || >=1.3
-  hashable: ! '>=1.2 && <1.3'
+  hashable: ! '>=1.2 && <1.4'
   deepseq: -any
   aeson: -any
   template-haskell: -any
@@ -70,205 +70,539 @@ all-versions:
 author: Chris Done <chrisdone@fpcomplete.com>
 latest: 0.6.1
 description-type: markdown
-description: ! "# Path\n\n[![Travis Build Status](https://travis-ci.org/commercialhaskell/path.svg)](https://travis-ci.org/commercialhaskell/path)\n[![AppVeyor
-  Build Status](https://ci.appveyor.com/api/projects/status/github/commercialhaskell/path?svg=true)](https://ci.appveyor.com/project/chrisdone/path)\n[![Hackage](https://img.shields.io/hackage/v/path.svg)](https://hackage.haskell.org/package/path)\n[![Stackage
-  LTS](http://stackage.org/package/path/badge/lts)](http://stackage.org/lts/package/path)\n[![Stackage
-  Nightly](http://stackage.org/package/path/badge/nightly)](http://stackage.org/nightly/package/path)\n\nSupport
-  for well-typed paths in Haskell.\n\n* [Motivation](#motivation)\n* [Approach](#approach)\n*
-  [Solution](#solution)\n* [Implementation](#implementation)\n    * [The data types](#the-data-types)\n
-  \   * [Parsers](#parsers)\n    * [Smart constructors](#smart-constructors)\n    *
-  [Overloaded stings](#overloaded-strings)\n    * [Operations](#operations)\n* [Review](#review)\n
-  \   * [Relative vs absolute confusion](#relative-vs-absolute-confusion)\n    * [The
-  equality problem](#the-equality-problem)\n    * [Unpredictable concatenation issues](#unpredictable-concatenation-issues)\n
-  \   * [Confusing files and directories](#confusing-files-and-directories)\n    *
-  [Self-documentation](#self-documentation)\n* [In practice](#in-practice)\n* [Doing
-  I/O](#doing-io)\n* [Doing textual manipulations](#doing-textual-manipulations)\n*
-  [Accepting user input](#accepting-user-input)\n* [Comparing with existing path libraries](#comparing-with-existing-path-libraries)\n
-  \   * [filepath and system-filepath](#filepath-and-system-filepath)\n    * [system-canonicalpath,
-  canonical-filepath, directory-tree](#system-canonicalpath-canonical-filepath-directory-tree)\n
-  \   * [pathtype](#pathtype)\n    * [data-filepath](#data-filepath)\n* [Summary](#summary)\n\n##
-  Motivation\n\nIt was after working on a number of projects at FP Complete that use
-  file\npaths in various ways. We used the system-filepath package, which was\nsupposed
-  to solve many path problems by being an opaque path type. It\noccurred to me that
-  the same kind of bugs kept cropping up:\n\n* Expected a path to be absolute but
-  it was relative, or vice-versa.\n\n* Expected two equivalent paths to be equal or
-  order the same, but they did\n  not (`/home//foo` vs `/home/foo/` vs `/home/bar/../foo`,
-  etc.).\n\n* Unpredictable behaviour with regards to concatenating paths.\n\n* Confusing
-  files and directories.\n\n* Not knowing whether a path was a file or directory or
-  relative or absolute\n  based on the type alone was a drag.\n\nAll of these bugs
-  are preventable.\n\n## Approach\n\nMy approach to problems like this is to make
-  a type that encodes the\nproperties I want and then make it impossible to let those
-  invariants be\nbroken, without compromise or backdoors to let the wrong value “slip\nin”.
-  Once I have a path, I want to be able to trust it fully. This theme\nwill be seen
-  throughout the things I lay out below.\n\n## Solution\n\nAfter having to fix bugs
-  due to these in our software, I put my foot down\nand made:\n\n* An opaque `Path`
-  type (a newtype wrapper around `String`).\n\n* Smart constructors which are very
-  stringent in the parsing.\n\n* Make the parsers highly normalizing.\n\n* Leave equality
-  and concatenation to basic string equality and\n  concatenation.\n\n* Include relativity
-  (absolute/relative) and type (directory/file) in the\n  type itself.\n\n* Use the
-  already cross-platform\n  [filepath](http://hackage.haskell.org/package/filepath)
-  package for\n  implementation details.\n\n## Implementation\n\n### The data types\n\nHere
-  is the type:\n\n```haskell\nnewtype Path b t = Path FilePath\n  deriving (Typeable)\n```\n\nThe
-  type variables are:\n\n* `b` — base, the base location of the path; absolute or
-  relative.\n* `t` — type, whether file or directory.\n\nThe base types can be filled
-  with these:\n\n```haskell\ndata Abs deriving (Typeable)\ndata Rel deriving (Typeable)\n```\n\nAnd
-  the type can be filled with these:\n\n```haskell\ndata File deriving (Typeable)\ndata
-  Dir deriving (Typeable)\n```\n\n(Why not use data kinds like `data Type = File |
-  Dir`? Because that imposes\nan extension overhead of adding `{-# LANGUAGE DataKinds
-  #-}` to every module\nyou might want to write out a path type in. Given that one
-  cannot construct\npaths of types other than these, via the operations in the module,
-  it’s not\na concern for me.)\n\nThere is a conversion function to give you back
-  the filepath:\n\n```haskell\ntoFilePath :: Path b t -> FilePath\ntoFilePath (Path
-  l) = l\n```\n\nBeginning from version 0.5.3, there are type-constrained versions
-  of\n`toFilePath` with the following signatures:\n\n```haskell\nfromAbsDir  :: Path
-  Abs Dir -> FilePath\nfromRelDir  :: Path Rel Dir -> FilePath\nfromAbsFile :: Path
-  Abs File -> FilePath\nfromRelFile :: Path Rel File -> FilePath\n```\n\n### Parsers\n\nTo
-  get a `Path` value, you need to use one of the four parsers:\n\n```haskell\nparseAbsDir
-  \ :: MonadThrow m => FilePath -> m (Path Abs Dir)\nparseRelDir  :: MonadThrow m
-  => FilePath -> m (Path Rel Dir)\nparseAbsFile :: MonadThrow m => FilePath -> m (Path
-  Abs File)\nparseRelFile :: MonadThrow m => FilePath -> m (Path Rel File)\n```\n\nThe
-  following properties apply:\n\n* Absolute parsers will reject non-absolute paths.\n\n*
-  The only delimiter syntax accepted is the path separator; `/` on POSIX and\n  `\\`
-  on Windows.\n\n* Any other delimiter is rejected; `..`, `~/`, `/./`, etc.\n\n* All
-  parsers normalize into single separators: `/home//foo` → `/home/foo`.\n\n* Directory
-  parsers always normalize with a final trailing `/`. So `/home/foo`\n  parses into
-  the string `/home/foo/`.\n\nIt was discussed briefly whether we should just have
-  a class for parsing\nrather than four separate parsing functions. In my experience
-  so far, I have\nhad type errors where I wrote something `like x <- parseAbsDir\nsomeAbsDirString`
-  because `x` was then passed to a place that expected a\nrelative directory. In this
-  way, overloading the return value would’ve just\nbeen accepted. So I don’t think
-  having a class is a good idea. Being\nexplicit here doesn’t exactly waste our time,
-  either.\n\nWhy are these functions in `MonadThrow`? Because it means I can have
-  it\nreturn an `Either`, or a `Maybe`, if I’m in pure code, and if I’m in `IO`,\nand
-  I don’t expect parsing to ever fail, I can use it in IO like this:\n\n```haskell\ndo
-  x <- parseRelFile (fromCabalFileName x)\n   foo x\n   …\n```\n\nThat’s really convenient
-  and we take advantage of this at FP Complete a lot.\nThe instances\n\nEquality,
-  ordering and printing are simply re-using the `String` instances:\n\n```haskell\ninstance
-  Eq (Path b t) where\n  (==) (Path x) (Path y) = x == y\n\ninstance Ord (Path b t)
-  where\n  compare (Path x) (Path y) = compare x y\n\ninstance Show (Path b t) where\n
-  \ show (Path x) = show x\n```\n\nWhich gives us for free the following equational
-  properties:\n\n```haskell\ntoFilePath x == toFilePath y        ≡ x == y           --
-  Eq instance\ntoFilePath x `compare` toFilePath y ≡ x `compare` y    -- Ord instance\ntoFilePath
-  x == toFilePath y        ≡ show x == show y -- Show instance\n```\n\nIn other words,
-  the representation and the path you get out at the end are\nthe same. Two paths
-  that are equal will always give you back the same thing.\n\n### Smart constructors\n\nFor
-  when you know what a path will be at compile-time, there are\nconstructors for that:\n\n```haskell\n$(mkAbsDir
-  \"/home/chris\")\n$(mkRelDir \"chris\")\n$(mkAbsFile \"/home/chris/x.txt\")\n$(mkRelFile
-  \"chris/x.txt\")\n```\n\nWith the [QuasiQuotes](https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/glasgow_exts.html#ghc-flag--XQuasiQuotes)\nlanguage
-  extension, paths can be written as follows:\n\n```haskell\n[absdir|/home/chris|]\n[reldir|chris|]\n[absfile|/home/chris/x.txt|]\n[relfile|chris/x.txt|]\n```\n\nThese
-  will run at compile-time and underneath use the appropriate parser.\n\n### Overloaded
-  strings\n\nNo `IsString` instance is provided, because that has no way to statically\ndetermine
-  whether the path is correct, and would otherwise have to be a\npartial function.\n\nIn
-  practice I have written the wrong path format in a `$(mk… \"\")` and been\nthankful
-  it was caught early.\n\n### Operations\n\nThere is path concatenation:\n\n```haskell\n(</>)
-  :: Path b Dir -> Path Rel t -> Path b t\n```\n\nGet the parent directory of a path:\n\n```haskell\nparent
-  :: Path Abs t -> Path Abs Dir\n```\n\nGet the filename of a file path:\n\n```haskell\nfilename
-  :: Path b File -> Path Rel File\n```\n\nGet the directory name of a directory path:\n\n```haskell\ndirname
-  :: Path b Dir -> Path Rel Dir\n```\n\nStripping the parent directory from a path:\n\n```haskell\nstripDir
-  :: MonadThrow m => Path b Dir -> Path b t -> m (Path Rel t)\n```\n\n## Review\n\nLet’s
-  review my initial list of complaints and see if they’ve been\nsatisfied.\n\n###
-  Relative vs absolute confusion\n\nPaths now distinguish in the type system whether
-  they are relative or\nabsolute. You can’t append two absolute paths, for example:\n\n```haskell\nλ>
-  [absdir|/home/chris|]</>[absdir|/home/chris|]\n<interactive>:23:31-55:\n    Couldn't
-  match type ‘Abs’ with ‘Rel’\n```\n\n### The equality problem\n\nPaths are now stringently
-  normalized. They have to be a valid path, and they\nonly support single path separators,
-  and all directories are suffixed with a\ntrailing path separator:\n\n```haskell\nλ>
-  $(mkAbsDir \"/home/chris//\") == $(mkAbsDir \"/./home//chris\")\nTrue\nλ> toFilePath
-  $(mkAbsDir \"/home/chris//\") ==\n   toFilePath $(mkAbsDir \"/./home//chris\")\nTrue\nλ>
-  ($(mkAbsDir \"/home/chris//\"),toFilePath $(mkAbsDir \"/./home//chris\"))\n(\"/home/chris/\",\"/home/chris/\")\n```\n\n###
-  Unpredictable concatenation issues\n\nBecause of the stringent normalization, path
-  concatenation, as seen above,\nis simply string concatenation. This is about as
-  predictable as it can get:\n\n```haskell\nλ> toFilePath $(mkAbsDir \"/home/chris//\")\n\"/home/chris/\"\nλ>
-  toFilePath $(mkRelDir \"foo//bar\")\n\"foo/bar/\"\nλ> [absdir|/home/chris//|]</>[reldir|foo//bar|]\n\"/home/chris/foo/bar/\"\n```\n\n###
-  Confusing files and directories\n\nNow that the path type is encoded in the type
-  system, our `</>` operator\nprevents improper appending:\n\n```haskell\nλ> [absdir|/home/chris/|]</>[relfile|foo//bar|]\n\"/home/chris/foo/bar\"\nλ>
-  [absfile|/home/chris|]</>[relfile|foo//bar|]\n<interactive>:35:1-26:\n    Couldn't
-  match type ‘File’ with ‘Dir’\n```\n\n### Self-documentation\n\nNow I can read the
-  path like:\n\n```haskell\n{ fooPath :: Path Rel Dir, ... }\n```\n\nAnd know that
-  this refers to the directory relative to some other path,\nmeaning I should be careful
-  to consider the current directory when using\nthis in IO, or that I’ll probably
-  need a parent to append to it at some\npoint.\n\n## In practice\n\nWe’ve been using
-  this at FP Complete in a number of packages for some months\nnow, it’s turned out
-  surprisingly sufficient for most of our path work with\nonly one bug found. We weren’t
-  sure initially whether it would just be too\nmuch of a pain to use, but really it’s
-  quite acceptable given the\nadvantages. You can see its use all over the\n[`stack`](https://github.com/commercialhaskell/stack)
-  codebase.\n\n## Doing I/O\n\nCurrently any operations involving I/O can be done
-  by using the existing I/O\nlibrary:\n\n```haskell\ndoesFileExist (toFilePath fp)\nreadFile
-  (toFilePath fp)\n```\n\netc. This has problems with respect to accidentally running
-  something like:\n\n```haskell\ndoesFileExist $(mkRelDir \"foo\")\n```\n\nBut I/O
-  is currently outside the scope of what this package solves. Once you\nleave the
-  realm of the `Path` type invariants are back to your responsibility.\n\nAs with
-  the original version of this library, we’re currently building up a\nset of functions
-  in a `Path.IO` module over time that fits our real-world\nuse-cases. It may or may
-  not appear in the path package eventually. It’ll\nneed cleaning up and considering
-  what should really be included.\n\n**Edit:** There is now\n[`path-io`](https://hackage.haskell.org/package/path-io)
-  package that\ncomplements the `path` library and includes complete well-typed interface
-  to\n[`directory`](https://hackage.haskell.org/package/directory) and\n[`temporary`](https://hackage.haskell.org/package/temporary).
-  There is work\nto add more generally useful functions from Stack's `Path.IO` to
-  it and make\nStack depend on the `path-io` package.\n\n## Doing textual manipulations\n\nOne
-  problem that crops up sometimes is wanting to manipulate\npaths. Currently the way
-  we do it is via the filepath library and re-parsing\nthe path:\n\n```haskell\nparseAbsFile
-  . addExtension \"/directory/path\" \"ext\" . toFilePath\n```\n\nIt doesn’t happen
-  too often, in our experience, to the extent this needs to\nbe more convenient.\n\n##
-  Accepting user input\n\nSometimes you have user input that contains `../`. The solution
-  we went with\nis to have a function like `resolveDir`:\n\n```haskell\nresolveDir
-  :: (MonadIO m, MonadThrow m)\n           => Path Abs Dir -> FilePath -> m (Path
-  Abs Dir)\n```\n\nWhich will call `canonicalizePath` which collapses and normalizes
-  a path and\nthen we parse with regular old `parseAbsDir` and we’re cooking with\ngas.
-  This and others like it might get added to the `path` package.\n\n## Comparing with
-  existing path libraries\n\n### filepath and system-filepath\n\nThe [filepath](http://hackage.haskell.org/package/filepath)
-  package is\nintended as the complimentary package to be used before parsing into
-  a Path\nvalue, and/or after printing from a Path value. The package itself contains\nno
-  type-safety, instead contains a range of cross-platform textual\noperations. Definitely
-  reach for this library when you want to do more\ninvolved manipulations.\n\nThe
-  `system-filepath` package is deprecated in favour of `filepath`.\n\n### system-canonicalpath,
-  canonical-filepath, directory-tree\n\nThe\n[`system-canonicalpath`](http://hackage.haskell.org/package/system-canonicalpath)\nand
-  the\n[`canonical-filepath`](http://hackage.haskell.org/package/canonical-filepath)\npackages
-  both are a kind of subset of `path`. They canonicalize a string\ninto an opaque
-  path, but neither distinguish directories from files or\nabsolute/relative. Useful
-  if you just want a canonical path but doesn’t do\nanything else.\n\nThe [`directory-tree`](http://hackage.haskell.org/package/directory-tree)\npackage
-  contains a sum type of dir/file/etc but doesn’t distinguish in its\noperations relativity
-  or path type.\n\n### pathtype\n\nFinally, we come to a path library that path is
-  similar to: the\n[`pathtype`](http://hackage.haskell.org/package/pathtype) library.
-  There are\nthe same types of `Path Abs File` / `Path Rel Dir`, etc.\n\nThe points
-  where this library isn’t enough for me are:\n\n* There is an `IsString` instance,
-  which means people will use it, and will\n  make mistakes.\n\n* Paths are not normalized
-  into a predictable format, leading to me being\n  unsure when equality will succeed.
-  This is the same problem I encountered\n  in `system-filepath`. The equality function
-  normalizes, but according to\n  what properties I can reason about? I don’t know.\n\n```haskell\nSystem.Path.Posix>
-  (\"/tmp//\" :: Path a Dir) == (\"/tmp\" :: Path a Dir)\nTrue\nSystem.Path.Posix>
-  (\"tmp\" :: Path a Dir) == (\"/tmp\" :: Path a Dir)\nTrue\nSystem.Path.Posix> (\"/etc/passwd/\"
-  :: Path a b) == (\"/etc/passwd\" :: Path a b)\nTrue\nSystem.Path.Posix> (\"/tmp//\"
-  :: Path Abs Dir) == (\"/tmp/./\" :: Path Abs Dir)\nFalse\nSystem.Path.Posix> (\"/tmp/../\"
-  :: Path Abs Dir) == (\"/\" :: Path Abs Dir)\nFalse\n```\n* Empty string should not
-  be allowed, and introduction of `.` due to that\n  gets weird:\n\n```haskell\nSystem.Path.Posix>
-  fmap getPathString (Right (\".\" :: Path Rel File))\nRight \".\"\nSystem.Path.Posix>
-  fmap getPathString (mkPathAbsOrRel \"\")\nRight \".\"\nSystem.Path.Posix> (Right
-  (\".\" :: Path Rel File)) == (mkPathAbsOrRel \"\")\nFalse\nSystem.Path.Posix> takeDirectory
-  (\"tmp\" :: Path Rel Dir)\n.\nSystem.Path.Posix> (getPathString (\".\" :: Path Rel
-  File) ==\n                    getPathString (\"\" :: Path Rel File))\nTrue\nSystem.Path.Posix>
-  ((\".\" :: Path Rel File) == (\"\" :: Path Rel File))\nFalse\n```\n\n* It has functions
-  like `<.>/addExtension` which lets you insert an\n  arbitrary string into a path.\n\n*
-  Some functions let you produce nonsense (could be prevented by a stricter\n  type),
-  for example:\n\n```haskell\nSystem.Path.Posix> takeFileName (\"/tmp/\" :: Path Abs
-  Dir)\ntmp\n```\n\nI’m being a bit picky here, a bit unfair. But the point is really
-  to show\nthe kind of things I tried to avoid in `path`. In summary, it’s just hard
-  to\nknow where things can go wrong, similar to what was going on in\n`system-filepath`.\n\n###
-  data-filepath\n\nThe [`data-filepath`](https://hackage.haskell.org/package/data-filepath)
-  is\nalso very similar, I discovered it after writing my own at work and was\npleased
-  to see it’s mostly the same. The main differences are:\n\n* Uses `DataKinds` for
-  the relative/absolute and file/dir distinction which\n  as I said above is an overhead.\n\n*
-  Uses a GADT for the path type, which is fine. In my case I wanted to\n  retain the
-  original string which functions that work on the `FilePath`\n  (`String`) type already
-  deal with well. It does change the parsing step\n  somewhat, because it parses into
-  segments.\n\n* It’s more lenient at parsing (allowing `..` and trailing `.`).\n\nThe
-  API is a bit awkward to just parse a directory, requires a couple\nfunctions to
-  get it (going via `WeakFilePath`), returning only an `Either`,\nand there are no
-  functions like parent. But there’s not much to complain\nabout. It’s a fine library,
-  but I didn’t feel the need to drop my own in\nfavor of it. Check it out and decide
-  for yourself.\n\n## Summary\n\nThere’s a growing interest in making practical use
-  of well-typed file path\nhandling. I think everyone’s wanted it for a while, but
-  few people have\nreally committed to it in practice. Now that I’ve been using `path`
-  for a\nwhile, I can’t really go back. It’ll be interesting to see what new packages\ncrop
-  up in the coming year, I expect there’ll be more.\n"
+description: |
+  # Path
+
+  [![Travis Build Status](https://travis-ci.org/commercialhaskell/path.svg)](https://travis-ci.org/commercialhaskell/path)
+  [![AppVeyor Build Status](https://ci.appveyor.com/api/projects/status/github/commercialhaskell/path?svg=true)](https://ci.appveyor.com/project/chrisdone/path)
+  [![Hackage](https://img.shields.io/hackage/v/path.svg)](https://hackage.haskell.org/package/path)
+  [![Stackage LTS](http://stackage.org/package/path/badge/lts)](http://stackage.org/lts/package/path)
+  [![Stackage Nightly](http://stackage.org/package/path/badge/nightly)](http://stackage.org/nightly/package/path)
+
+  Support for well-typed paths in Haskell.
+
+  * [Motivation](#motivation)
+  * [Approach](#approach)
+  * [Solution](#solution)
+  * [Implementation](#implementation)
+      * [The data types](#the-data-types)
+      * [Parsers](#parsers)
+      * [Smart constructors](#smart-constructors)
+      * [Overloaded stings](#overloaded-strings)
+      * [Operations](#operations)
+  * [Review](#review)
+      * [Relative vs absolute confusion](#relative-vs-absolute-confusion)
+      * [The equality problem](#the-equality-problem)
+      * [Unpredictable concatenation issues](#unpredictable-concatenation-issues)
+      * [Confusing files and directories](#confusing-files-and-directories)
+      * [Self-documentation](#self-documentation)
+  * [In practice](#in-practice)
+  * [Doing I/O](#doing-io)
+  * [Doing textual manipulations](#doing-textual-manipulations)
+  * [Accepting user input](#accepting-user-input)
+  * [Comparing with existing path libraries](#comparing-with-existing-path-libraries)
+      * [filepath and system-filepath](#filepath-and-system-filepath)
+      * [system-canonicalpath, canonical-filepath, directory-tree](#system-canonicalpath-canonical-filepath-directory-tree)
+      * [pathtype](#pathtype)
+      * [data-filepath](#data-filepath)
+  * [Summary](#summary)
+
+  ## Motivation
+
+  It was after working on a number of projects at FP Complete that use file
+  paths in various ways. We used the system-filepath package, which was
+  supposed to solve many path problems by being an opaque path type. It
+  occurred to me that the same kind of bugs kept cropping up:
+
+  * Expected a path to be absolute but it was relative, or vice-versa.
+
+  * Expected two equivalent paths to be equal or order the same, but they did
+    not (`/home//foo` vs `/home/foo/` vs `/home/bar/../foo`, etc.).
+
+  * Unpredictable behaviour with regards to concatenating paths.
+
+  * Confusing files and directories.
+
+  * Not knowing whether a path was a file or directory or relative or absolute
+    based on the type alone was a drag.
+
+  All of these bugs are preventable.
+
+  ## Approach
+
+  My approach to problems like this is to make a type that encodes the
+  properties I want and then make it impossible to let those invariants be
+  broken, without compromise or backdoors to let the wrong value “slip
+  in”. Once I have a path, I want to be able to trust it fully. This theme
+  will be seen throughout the things I lay out below.
+
+  ## Solution
+
+  After having to fix bugs due to these in our software, I put my foot down
+  and made:
+
+  * An opaque `Path` type (a newtype wrapper around `String`).
+
+  * Smart constructors which are very stringent in the parsing.
+
+  * Make the parsers highly normalizing.
+
+  * Leave equality and concatenation to basic string equality and
+    concatenation.
+
+  * Include relativity (absolute/relative) and type (directory/file) in the
+    type itself.
+
+  * Use the already cross-platform
+    [filepath](http://hackage.haskell.org/package/filepath) package for
+    implementation details.
+
+  ## Implementation
+
+  ### The data types
+
+  Here is the type:
+
+  ```haskell
+  newtype Path b t = Path FilePath
+    deriving (Typeable)
+  ```
+
+  The type variables are:
+
+  * `b` — base, the base location of the path; absolute or relative.
+  * `t` — type, whether file or directory.
+
+  The base types can be filled with these:
+
+  ```haskell
+  data Abs deriving (Typeable)
+  data Rel deriving (Typeable)
+  ```
+
+  And the type can be filled with these:
+
+  ```haskell
+  data File deriving (Typeable)
+  data Dir deriving (Typeable)
+  ```
+
+  (Why not use data kinds like `data Type = File | Dir`? Because that imposes
+  an extension overhead of adding `{-# LANGUAGE DataKinds #-}` to every module
+  you might want to write out a path type in. Given that one cannot construct
+  paths of types other than these, via the operations in the module, it’s not
+  a concern for me.)
+
+  There is a conversion function to give you back the filepath:
+
+  ```haskell
+  toFilePath :: Path b t -> FilePath
+  toFilePath (Path l) = l
+  ```
+
+  Beginning from version 0.5.3, there are type-constrained versions of
+  `toFilePath` with the following signatures:
+
+  ```haskell
+  fromAbsDir  :: Path Abs Dir -> FilePath
+  fromRelDir  :: Path Rel Dir -> FilePath
+  fromAbsFile :: Path Abs File -> FilePath
+  fromRelFile :: Path Rel File -> FilePath
+  ```
+
+  ### Parsers
+
+  To get a `Path` value, you need to use one of the four parsers:
+
+  ```haskell
+  parseAbsDir  :: MonadThrow m => FilePath -> m (Path Abs Dir)
+  parseRelDir  :: MonadThrow m => FilePath -> m (Path Rel Dir)
+  parseAbsFile :: MonadThrow m => FilePath -> m (Path Abs File)
+  parseRelFile :: MonadThrow m => FilePath -> m (Path Rel File)
+  ```
+
+  The following properties apply:
+
+  * Absolute parsers will reject non-absolute paths.
+
+  * The only delimiter syntax accepted is the path separator; `/` on POSIX and
+    `\` on Windows.
+
+  * Any other delimiter is rejected; `..`, `~/`, `/./`, etc.
+
+  * All parsers normalize into single separators: `/home//foo` → `/home/foo`.
+
+  * Directory parsers always normalize with a final trailing `/`. So `/home/foo`
+    parses into the string `/home/foo/`.
+
+  It was discussed briefly whether we should just have a class for parsing
+  rather than four separate parsing functions. In my experience so far, I have
+  had type errors where I wrote something `like x <- parseAbsDir
+  someAbsDirString` because `x` was then passed to a place that expected a
+  relative directory. In this way, overloading the return value would’ve just
+  been accepted. So I don’t think having a class is a good idea. Being
+  explicit here doesn’t exactly waste our time, either.
+
+  Why are these functions in `MonadThrow`? Because it means I can have it
+  return an `Either`, or a `Maybe`, if I’m in pure code, and if I’m in `IO`,
+  and I don’t expect parsing to ever fail, I can use it in IO like this:
+
+  ```haskell
+  do x <- parseRelFile (fromCabalFileName x)
+     foo x
+     …
+  ```
+
+  That’s really convenient and we take advantage of this at FP Complete a lot.
+  The instances
+
+  Equality, ordering and printing are simply re-using the `String` instances:
+
+  ```haskell
+  instance Eq (Path b t) where
+    (==) (Path x) (Path y) = x == y
+
+  instance Ord (Path b t) where
+    compare (Path x) (Path y) = compare x y
+
+  instance Show (Path b t) where
+    show (Path x) = show x
+  ```
+
+  Which gives us for free the following equational properties:
+
+  ```haskell
+  toFilePath x == toFilePath y        ≡ x == y           -- Eq instance
+  toFilePath x `compare` toFilePath y ≡ x `compare` y    -- Ord instance
+  toFilePath x == toFilePath y        ≡ show x == show y -- Show instance
+  ```
+
+  In other words, the representation and the path you get out at the end are
+  the same. Two paths that are equal will always give you back the same thing.
+
+  ### Smart constructors
+
+  For when you know what a path will be at compile-time, there are
+  constructors for that:
+
+  ```haskell
+  $(mkAbsDir "/home/chris")
+  $(mkRelDir "chris")
+  $(mkAbsFile "/home/chris/x.txt")
+  $(mkRelFile "chris/x.txt")
+  ```
+
+  With the [QuasiQuotes](https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/glasgow_exts.html#ghc-flag--XQuasiQuotes)
+  language extension, paths can be written as follows:
+
+  ```haskell
+  [absdir|/home/chris|]
+  [reldir|chris|]
+  [absfile|/home/chris/x.txt|]
+  [relfile|chris/x.txt|]
+  ```
+
+  These will run at compile-time and underneath use the appropriate parser.
+
+  ### Overloaded strings
+
+  No `IsString` instance is provided, because that has no way to statically
+  determine whether the path is correct, and would otherwise have to be a
+  partial function.
+
+  In practice I have written the wrong path format in a `$(mk… "")` and been
+  thankful it was caught early.
+
+  ### Operations
+
+  There is path concatenation:
+
+  ```haskell
+  (</>) :: Path b Dir -> Path Rel t -> Path b t
+  ```
+
+  Get the parent directory of a path:
+
+  ```haskell
+  parent :: Path Abs t -> Path Abs Dir
+  ```
+
+  Get the filename of a file path:
+
+  ```haskell
+  filename :: Path b File -> Path Rel File
+  ```
+
+  Get the directory name of a directory path:
+
+  ```haskell
+  dirname :: Path b Dir -> Path Rel Dir
+  ```
+
+  Stripping the parent directory from a path:
+
+  ```haskell
+  stripDir :: MonadThrow m => Path b Dir -> Path b t -> m (Path Rel t)
+  ```
+
+  ## Review
+
+  Let’s review my initial list of complaints and see if they’ve been
+  satisfied.
+
+  ### Relative vs absolute confusion
+
+  Paths now distinguish in the type system whether they are relative or
+  absolute. You can’t append two absolute paths, for example:
+
+  ```haskell
+  λ> [absdir|/home/chris|]</>[absdir|/home/chris|]
+  <interactive>:23:31-55:
+      Couldn't match type ‘Abs’ with ‘Rel’
+  ```
+
+  ### The equality problem
+
+  Paths are now stringently normalized. They have to be a valid path, and they
+  only support single path separators, and all directories are suffixed with a
+  trailing path separator:
+
+  ```haskell
+  λ> $(mkAbsDir "/home/chris//") == $(mkAbsDir "/./home//chris")
+  True
+  λ> toFilePath $(mkAbsDir "/home/chris//") ==
+     toFilePath $(mkAbsDir "/./home//chris")
+  True
+  λ> ($(mkAbsDir "/home/chris//"),toFilePath $(mkAbsDir "/./home//chris"))
+  ("/home/chris/","/home/chris/")
+  ```
+
+  ### Unpredictable concatenation issues
+
+  Because of the stringent normalization, path concatenation, as seen above,
+  is simply string concatenation. This is about as predictable as it can get:
+
+  ```haskell
+  λ> toFilePath $(mkAbsDir "/home/chris//")
+  "/home/chris/"
+  λ> toFilePath $(mkRelDir "foo//bar")
+  "foo/bar/"
+  λ> [absdir|/home/chris//|]</>[reldir|foo//bar|]
+  "/home/chris/foo/bar/"
+  ```
+
+  ### Confusing files and directories
+
+  Now that the path type is encoded in the type system, our `</>` operator
+  prevents improper appending:
+
+  ```haskell
+  λ> [absdir|/home/chris/|]</>[relfile|foo//bar|]
+  "/home/chris/foo/bar"
+  λ> [absfile|/home/chris|]</>[relfile|foo//bar|]
+  <interactive>:35:1-26:
+      Couldn't match type ‘File’ with ‘Dir’
+  ```
+
+  ### Self-documentation
+
+  Now I can read the path like:
+
+  ```haskell
+  { fooPath :: Path Rel Dir, ... }
+  ```
+
+  And know that this refers to the directory relative to some other path,
+  meaning I should be careful to consider the current directory when using
+  this in IO, or that I’ll probably need a parent to append to it at some
+  point.
+
+  ## In practice
+
+  We’ve been using this at FP Complete in a number of packages for some months
+  now, it’s turned out surprisingly sufficient for most of our path work with
+  only one bug found. We weren’t sure initially whether it would just be too
+  much of a pain to use, but really it’s quite acceptable given the
+  advantages. You can see its use all over the
+  [`stack`](https://github.com/commercialhaskell/stack) codebase.
+
+  ## Doing I/O
+
+  Currently any operations involving I/O can be done by using the existing I/O
+  library:
+
+  ```haskell
+  doesFileExist (toFilePath fp)
+  readFile (toFilePath fp)
+  ```
+
+  etc. This has problems with respect to accidentally running something like:
+
+  ```haskell
+  doesFileExist $(mkRelDir "foo")
+  ```
+
+  But I/O is currently outside the scope of what this package solves. Once you
+  leave the realm of the `Path` type invariants are back to your responsibility.
+
+  As with the original version of this library, we’re currently building up a
+  set of functions in a `Path.IO` module over time that fits our real-world
+  use-cases. It may or may not appear in the path package eventually. It’ll
+  need cleaning up and considering what should really be included.
+
+  **Edit:** There is now
+  [`path-io`](https://hackage.haskell.org/package/path-io) package that
+  complements the `path` library and includes complete well-typed interface to
+  [`directory`](https://hackage.haskell.org/package/directory) and
+  [`temporary`](https://hackage.haskell.org/package/temporary). There is work
+  to add more generally useful functions from Stack's `Path.IO` to it and make
+  Stack depend on the `path-io` package.
+
+  ## Doing textual manipulations
+
+  One problem that crops up sometimes is wanting to manipulate
+  paths. Currently the way we do it is via the filepath library and re-parsing
+  the path:
+
+  ```haskell
+  parseAbsFile . addExtension "/directory/path" "ext" . toFilePath
+  ```
+
+  It doesn’t happen too often, in our experience, to the extent this needs to
+  be more convenient.
+
+  ## Accepting user input
+
+  Sometimes you have user input that contains `../`. The solution we went with
+  is to have a function like `resolveDir`:
+
+  ```haskell
+  resolveDir :: (MonadIO m, MonadThrow m)
+             => Path Abs Dir -> FilePath -> m (Path Abs Dir)
+  ```
+
+  Which will call `canonicalizePath` which collapses and normalizes a path and
+  then we parse with regular old `parseAbsDir` and we’re cooking with
+  gas. This and others like it might get added to the `path` package.
+
+  ## Comparing with existing path libraries
+
+  ### filepath and system-filepath
+
+  The [filepath](http://hackage.haskell.org/package/filepath) package is
+  intended as the complimentary package to be used before parsing into a Path
+  value, and/or after printing from a Path value. The package itself contains
+  no type-safety, instead contains a range of cross-platform textual
+  operations. Definitely reach for this library when you want to do more
+  involved manipulations.
+
+  The `system-filepath` package is deprecated in favour of `filepath`.
+
+  ### system-canonicalpath, canonical-filepath, directory-tree
+
+  The
+  [`system-canonicalpath`](http://hackage.haskell.org/package/system-canonicalpath)
+  and the
+  [`canonical-filepath`](http://hackage.haskell.org/package/canonical-filepath)
+  packages both are a kind of subset of `path`. They canonicalize a string
+  into an opaque path, but neither distinguish directories from files or
+  absolute/relative. Useful if you just want a canonical path but doesn’t do
+  anything else.
+
+  The [`directory-tree`](http://hackage.haskell.org/package/directory-tree)
+  package contains a sum type of dir/file/etc but doesn’t distinguish in its
+  operations relativity or path type.
+
+  ### pathtype
+
+  Finally, we come to a path library that path is similar to: the
+  [`pathtype`](http://hackage.haskell.org/package/pathtype) library. There are
+  the same types of `Path Abs File` / `Path Rel Dir`, etc.
+
+  The points where this library isn’t enough for me are:
+
+  * There is an `IsString` instance, which means people will use it, and will
+    make mistakes.
+
+  * Paths are not normalized into a predictable format, leading to me being
+    unsure when equality will succeed. This is the same problem I encountered
+    in `system-filepath`. The equality function normalizes, but according to
+    what properties I can reason about? I don’t know.
+
+  ```haskell
+  System.Path.Posix> ("/tmp//" :: Path a Dir) == ("/tmp" :: Path a Dir)
+  True
+  System.Path.Posix> ("tmp" :: Path a Dir) == ("/tmp" :: Path a Dir)
+  True
+  System.Path.Posix> ("/etc/passwd/" :: Path a b) == ("/etc/passwd" :: Path a b)
+  True
+  System.Path.Posix> ("/tmp//" :: Path Abs Dir) == ("/tmp/./" :: Path Abs Dir)
+  False
+  System.Path.Posix> ("/tmp/../" :: Path Abs Dir) == ("/" :: Path Abs Dir)
+  False
+  ```
+  * Empty string should not be allowed, and introduction of `.` due to that
+    gets weird:
+
+  ```haskell
+  System.Path.Posix> fmap getPathString (Right ("." :: Path Rel File))
+  Right "."
+  System.Path.Posix> fmap getPathString (mkPathAbsOrRel "")
+  Right "."
+  System.Path.Posix> (Right ("." :: Path Rel File)) == (mkPathAbsOrRel "")
+  False
+  System.Path.Posix> takeDirectory ("tmp" :: Path Rel Dir)
+  .
+  System.Path.Posix> (getPathString ("." :: Path Rel File) ==
+                      getPathString ("" :: Path Rel File))
+  True
+  System.Path.Posix> (("." :: Path Rel File) == ("" :: Path Rel File))
+  False
+  ```
+
+  * It has functions like `<.>/addExtension` which lets you insert an
+    arbitrary string into a path.
+
+  * Some functions let you produce nonsense (could be prevented by a stricter
+    type), for example:
+
+  ```haskell
+  System.Path.Posix> takeFileName ("/tmp/" :: Path Abs Dir)
+  tmp
+  ```
+
+  I’m being a bit picky here, a bit unfair. But the point is really to show
+  the kind of things I tried to avoid in `path`. In summary, it’s just hard to
+  know where things can go wrong, similar to what was going on in
+  `system-filepath`.
+
+  ### data-filepath
+
+  The [`data-filepath`](https://hackage.haskell.org/package/data-filepath) is
+  also very similar, I discovered it after writing my own at work and was
+  pleased to see it’s mostly the same. The main differences are:
+
+  * Uses `DataKinds` for the relative/absolute and file/dir distinction which
+    as I said above is an overhead.
+
+  * Uses a GADT for the path type, which is fine. In my case I wanted to
+    retain the original string which functions that work on the `FilePath`
+    (`String`) type already deal with well. It does change the parsing step
+    somewhat, because it parses into segments.
+
+  * It’s more lenient at parsing (allowing `..` and trailing `.`).
+
+  The API is a bit awkward to just parse a directory, requires a couple
+  functions to get it (going via `WeakFilePath`), returning only an `Either`,
+  and there are no functions like parent. But there’s not much to complain
+  about. It’s a fine library, but I didn’t feel the need to drop my own in
+  favor of it. Check it out and decide for yourself.
+
+  ## Summary
+
+  There’s a growing interest in making practical use of well-typed file path
+  handling. I think everyone’s wanted it for a while, but few people have
+  really committed to it in practice. Now that I’ve been using `path` for a
+  while, I can’t really go back. It’ll be interesting to see what new packages
+  crop up in the coming year, I expect there’ll be more.
 license-name: BSD-3-Clause
