@@ -1,15 +1,16 @@
 homepage: https://github.com/adjoint-io/bulletproofs#readme
 changelog-type: markdown
-hash: 63ff6bbe84c45b8d5d2027c58f7e00ee30b38046a6672b21c721f7288dd8bb0e
+hash: 866a6543e13fd0ba7b237140ee4fa9cf54eb00ee077472f33acb3490d13f7835
 test-bench-deps:
+  bytestring: -any
+  SHA: -any
   MonadRandom: -any
   base: ! '>=4.7 && <5'
   tasty-discover: -any
   text: -any
-  galois-field: ==0.4.0
+  galois-field: ==1.*
   criterion: ! '>=1.5.1.0'
   protolude: ! '>=0.2'
-  random-shuffle: -any
   memory: -any
   bulletproofs: -any
   containers: -any
@@ -17,12 +18,18 @@ test-bench-deps:
   arithmoi: ! '>=0.8'
   tasty-quickcheck: -any
   tasty-hunit: -any
+  elliptic-curve: ==0.3.*
   tasty: -any
   QuickCheck: -any
 maintainer: Adjoint Inc (info@adjoint.io)
 synopsis: ''
 changelog: |+
   # Changelog for bulletproofs
+
+  ## 1.1
+
+  * Use elliptic-curve library as dependency
+  * Update to galois-field-1.0
 
   ## 1.0.1
 
@@ -64,16 +71,18 @@ changelog: |+
   * Support for SECp256k1 curve
 
 basic-deps:
+  bytestring: -any
+  SHA: -any
   MonadRandom: -any
   base: ! '>=4.7 && <5'
   text: -any
-  galois-field: ==0.4.0
+  galois-field: ==1.*
   protolude: ! '>=0.2'
-  random-shuffle: -any
   memory: -any
+  bulletproofs: -any
   containers: -any
-  cryptonite: -any
   arithmoi: ! '>=0.8'
+  elliptic-curve: ==0.3.*
   QuickCheck: -any
 all-versions:
 - 0.1.0
@@ -83,8 +92,9 @@ all-versions:
 - 0.4.0
 - 1.0.0
 - 1.0.1
+- 1.1.0
 author: ''
-latest: 1.0.1
+latest: 1.1.0
 description-type: markdown
 description: |
   <p align="center">
@@ -187,14 +197,13 @@ description: |
   -------------------
 
   ```haskell
+  import Data.Curve.Weierstrass.SECP256K1 (Fr)
   import qualified Bulletproofs.RangeProof as RP
+  import Bulletproofs.Utils (commit)
 
-  testSingleRangeProof :: (Fq, Fq) -> IO Bool
-  testSingleRangeProof (v, vBlinding) = do
+  testSingleRangeProof :: Integer -> (Fr, Fr) -> IO Bool
+  testSingleRangeProof upperBound (v, vBlinding) = do
     let vCommit = commit v vBlinding
-        -- n needs to be a power of 2
-        n = 2 ^ 8
-        upperBound = 2 ^ n
 
     -- Prover
     proofE <- runExceptT $ RP.generateProof upperBound (v, vBlinding)
@@ -202,7 +211,7 @@ description: |
     -- Verifier
     case proofE of
       Left err -> panic $ show err
-      Right (proof@RP.RangeProof{..})
+      Right proof@RP.RangeProof{..}
         -> pure $ RP.verifyProof upperBound vCommit proof
   ```
 
@@ -210,14 +219,13 @@ description: |
   ------------------
 
   ```haskell
+  import Data.Curve.Weierstrass.SECP256K1 (Fr)
   import qualified Bulletproofs.MultiRangeProof as MRP
+  import Bulletproofs.Utils (commit)
 
-  testMultiRangeProof :: [(Fq, Fq)] -> IO Bool
-  testMultiRangeProof vsAndvBlindings = do
+  testMultiRangeProof :: Integer -> [(Fr, Fr)] -> IO Bool
+  testMultiRangeProof upperBound vsAndvBlindings = do
     let vCommits = fmap (uncurry commit) vsAndvBlindings
-        -- n needs to be a power of 2
-        n = 2 ^ 8
-        upperBound = 2 ^ n
 
     -- Prover
     proofE <- runExceptT $ MRP.generateProof upperBound vsAndvBlindings
@@ -225,15 +233,15 @@ description: |
     -- Verifier
     case proofE of
       Left err -> panic $ show err
-      Right (proof@RP.RangeProof{..})
+      Right proof@RP.RangeProof{..}
         -> pure $ MRP.verifyProof upperBound vCommits proof
   ```
 
 
-  The dimension _n_ needs to be a power of 2.
-  This implementation offers support for SECp256k1, a Koblitz curve.
-  Further information about this curve can be found in the Uplink docs:
-  [SECp256k1 curve](https://www.adjoint.io/docs/cryptography.html#id1 "SECp256k1 curve")
+  Note that the upper bound _u_ must be such that `u = 2 ^ n`, where _n_ is also a power of 2.
+  This implementation uses the elliptic curve secp256k1, a Koblitz curve, which
+  has 128 bit security.
+  See [Range proofs examples](./example/Example/RangeProof.hs) for further details.
 
 
   Zero-knowledge proof for Arithmetic Circuits
@@ -251,7 +259,10 @@ description: |
   The input values _v_ used to generate the proof are then committed and shared with the Verifier.
 
   ```haskell
-  import qualified Bulletproofs.ArithmeticCircuit
+  import Data.Curve.Weierstrass.SECP256K1 (Fr)
+  import Data.Field.Galois (rnd)
+  import Bulletproofs.ArithmeticCircuit
+  import Bulletproofs.Utils (hadamard, commit)
 
   --  Example:
   --  2 linear constraints (q = 2):
@@ -266,7 +277,7 @@ description: |
   --
   --  2 input values (m = 2)
 
-  arithCircuitExample :: ArithCircuit Fq
+  arithCircuitExample :: ArithCircuit Fr
   arithCircuitExample = ArithCircuit
     { weights = GateWeights
       { wL = [[1, 1, 1, 1]
@@ -281,20 +292,18 @@ description: |
     , cs = [0, 0]
     }
 
-  testArithCircuitProof :: ([Fq], [Fq]) -> ArithCircuit Fq -> IO Bool
+  testArithCircuitProof :: ([Fr], [Fr]) -> ArithCircuit Fr -> IO Bool
   testArithCircuitProof (aL, aR) arithCircuit = do
-    let n = 4
-        m = 2
-        q = 2
+    let m = 2
 
     -- Multiplication constraints
-    let aO = aL `hadamardp` aR
+    let aO = aL `hadamard` aR
 
     -- Linear constraints
         v0 = sum aL
         v1 = sum aR
 
-    commitBlinders <- replicateM m fqRandom
+    commitBlinders <- replicateM m rnd
     let commitments = zipWith commit [v0, v1] commitBlinders
 
     let arithWitness = ArithWitness
@@ -307,6 +316,7 @@ description: |
 
     pure $ verifyProof commitments proof arithCircuit
   ```
+  See [Aritmetic circuit example](./example/Example/ArithmeticCircuit.hs) for further details.
 
   **References**:
 
