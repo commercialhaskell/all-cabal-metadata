@@ -1,6 +1,6 @@
 homepage: https://morpheusgraphql.com
 changelog-type: markdown
-hash: 6be221dda00209f0e47e694e5bc2c8eec0caaa2c509239890e792a0effddd442
+hash: 660bf46f7d1610528c87fee59a8585b9ff9345b5c0dc1c21dae9e22f0972ef89
 test-bench-deps:
   wai-websockets: ! '>=1.0 && <=3.5'
   bytestring: ! '>=0.10.4 && <0.11'
@@ -26,36 +26,120 @@ test-bench-deps:
 maintainer: d.nalchevanidze@gmail.com
 synopsis: Morpheus GraphQL
 changelog: |
+  ## [0.3.0] - 04.10.2019
+
+  ### Added
+
+  - user can import GraphQL Document and generate types with it.
+
+    ```haskell
+      importGQLDocument "API.gql"
+    ```
+
+    this will generate types defined in `API.gql`
+
+  ### Fixed
+
+  - `String` defined in GQLDcoument will be converted to `Text` by template haskell
+
+  - `importGQLDocument` and `gqlDocument` supports Mutation, Subscription and Resolvers with custom Monad
+
+    for example. if we have:
+
+    ```gql
+    type Deity {
+      name: String!
+      power: Power!
+    }
+    ```
+
+    where `Power` is another object defined by gql schema.
+    template haskell will represent this type as:
+
+    ```haskell
+       data Deity m = Deity {
+         name :: () -> m String
+         power :: () -> m (Power m)
+       }
+    ```
+
+    where `m` is resolver Monad.
+
+  - `importGQLDocumentWithNamespace` generates namespaced haskell records. so that you have no more problem with name collision.
+    from this gql type:
+
+    ```gql
+    type Deity {
+      name: (id:Int)String!
+      power: Power!
+    }
+    ```
+
+    will be generated.
+
+    ```haskell
+    $(importGQLDocumentWithNamespace "examples/Sophisticated/api.gql")
+
+    data Deity m = Deity {
+      DeityName :: DeityNameArgs -> m String
+      DeityPower :: () -> m (Power m)
+    }
+
+    data DeityNameArgs = DeityNameArgs {
+      deityNameId :: Int
+    }
+    ```
+
+  ### Changed
+
+  - `GQLType` is mandatory for every GQL Type (including Query, Mutation and Subscription)
+  - subscription Resolver changed
+
+    from:
+
+    ```haskell
+      Subscription {newDeity = \args -> Event {channels = [ChannelA], content = newDeityResolver } }
+    ```
+
+    to:
+
+    ```haskell
+      Subscription {newDeity = \args -> SubResolver {subChannels = [ChannelA], subResolver = newDeityResolver } }
+    ```
+
   ## [0.2.2] - 30.08.2019
 
   ### Fixed
+
   - Parser Supports GraphQL multiline comments
   - Morpheus GraphQL Client: Support GraphQL Alias
   - Support of GraphQL Interfaces on GraphQL Document:
-      ```gql
-      # simple.gql
-      interface Node {
-        nodeId: ID!
-      }
 
-      type SimpleType implements Node {
-        nodeId: ID!
-        name: String!
-      }
-      ```
+    ```gql
+    # simple.gql
+    interface Node {
+      nodeId: ID!
+    }
 
-      morpheus compiler will read interfaces and validate implements.
-      template haskell will generate haskell types only for types not for interfaces.
+    type SimpleType implements Node {
+      nodeId: ID!
+      name: String!
+    }
+    ```
 
-      haskell type from `simple.gql`:
-      ```haskell
-       data SimpleType = SimpleType {
-          nodeId :: ID!
-          name   :: Text!
-        }  deriving (Generic)
-      ```
+    morpheus compiler will read interfaces and validate implements.
+    template haskell will generate haskell types only for types not for interfaces.
 
-      at the time compiler does not validates field Arguments by interface
+    haskell type from `simple.gql`:
+
+    ```haskell
+     data SimpleType = SimpleType {
+        nodeId :: ID!
+        name   :: Text!
+      }  deriving (Generic)
+    ```
+
+    at the time compiler does not validates field Arguments by interface
 
   ## [0.2.1] - 23.08.2019
 
@@ -307,11 +391,12 @@ all-versions:
 - 0.2.0
 - 0.2.1
 - 0.2.2
+- 0.3.0
 author: Daviti Nalchevanidze
-latest: 0.2.2
+latest: 0.3.0
 description-type: markdown
 description: |
-  # Morpheus GraphQL [![Hackage](https://img.shields.io/hackage/v/morpheus-graphql.svg)](https://hackage.haskell.org/package/morpheus-graphql) [![Build Status](https://api.travis-ci.com/morpheusgraphql/morpheus-graphql.svg?branch=master)](https://travis-ci.com/morpheusgraphql/morpheus-graphql)
+  # Morpheus GraphQL [![Hackage](https://img.shields.io/hackage/v/morpheus-graphql.svg)](https://hackage.haskell.org/package/morpheus-graphql) [![CircleCI](https://circleci.com/gh/morpheusgraphql/morpheus-graphql.svg?style=svg)](https://circleci.com/gh/morpheusgraphql/morpheus-graphql)
 
   Build GraphQL APIs with your favourite functional language!
 
@@ -327,7 +412,7 @@ description: |
 
   To get started with Morpheus, you first need to add it to your project's dependencies, as follows (assuming you're using hpack):
 
-  package.yml
+  _package.yml_
 
   ```yaml
   dependencies:
@@ -336,53 +421,77 @@ description: |
 
   Additionally, you should tell stack which version to pick:
 
-  stack.yml
+  _stack.yml_
 
   ```yaml
-  resolver: lts-12.0 # or greater
+  resolver: lts-13.24
+
   extra-deps:
     - megaparsec-7.0.5
     - aeson-1.4.4.0
     - time-compat-1.9.2.2
-    - morpheus-graphql-0.2.2
   ```
 
   As Morpheus is quite new, make sure stack can find morpheus-graphql by running `stack update`
 
   ### Building your first GrqphQL API
 
-  ### with GraphQL syntax and Haskell QuasiQuotes
+  ### with GraphQL syntax
+
+  _schema.gql_
+
+  ```gql
+  type Query {
+    deity(name: String!): Deity!
+  }
+
+  type Deity {
+    name: String!
+    power: String
+  }
+  ```
+
+  _API.hs_
 
   ```haskell
+  {-# LANGUAGE DeriveGeneric         #-}
+  {-# LANGUAGE FlexibleContexts      #-}
+  {-# LANGUAGE FlexibleInstances     #-}
+  {-# LANGUAGE MultiParamTypeClasses #-}
+  {-# LANGUAGE NamedFieldPuns        #-}
+  {-# LANGUAGE OverloadedStrings     #-}
+  {-# LANGUAGE ScopedTypeVariables   #-}
+  {-# LANGUAGE TemplateHaskell       #-}
+  {-# LANGUAGE TypeFamilies          #-}
 
-  [gqlDocument|
-    type Query {
-      deity (uid: Text!): Deity!
-    }
+  module API (api) where
 
-    type Deity {
-      name  : Text!
-      power : Text
-    }
-  |]
+  import qualified Data.ByteString.Lazy.Char8 as B
 
-  rootResolver :: GQLRootResolver IO () () Query () ()
+  import           Data.Morpheus              (interpreter)
+  import           Data.Morpheus.Document     (importGQLDocumentWithNamespace)
+  import           Data.Morpheus.Types        (GQLRootResolver (..), IORes)
+  import           Data.Text                  (Text)
+
+  importGQLDocumentWithNamespace "schema.gql"
+
+  rootResolver :: GQLRootResolver IO () () (Query IORes) () ()
   rootResolver =
-    GQLRootResolver {queryResolver = return Query {deity}, mutationResolver = pure (), subscriptionResolver = pure ()}
+    GQLRootResolver
+      {queryResolver = return Query {queryDeity}, mutationResolver = pure (), subscriptionResolver = pure ()}
     where
-      deity DeityArgs {uid} = pure Deity {name, power}
+      queryDeity QueryDeityArgs {queryDeityArgsName} = pure Deity {deityName, deityPower}
         where
-          name _ = pure "Morpheus"
-          power _ = pure (Just "Shapeshifting")
+          deityName _ = pure "Morpheus"
+          deityPower _ = pure (Just "Shapeshifting")
 
-  gqlApi :: ByteString -> IO ByteString
-  gqlApi = interpreter rootResolver
+  api :: ByteString -> IO ByteString
+  api = interpreter rootResolver
   ```
 
   Template Haskell Generates types: `Query` , `Deity`, `DeityArgs`, that can be used by `rootResolver`
 
-  generated types are not compatible with `Mutation`, `Subscription`,
-  they can be used only in `Query`, but this issue will be fixed in next release
+  `importGQLDocumentWithNamespace` will generate Types with namespaced fields. if you don't need napespacing use `importGQLDocument`
 
   ### with Native Haskell Types
 
@@ -392,7 +501,7 @@ description: |
   ```haskell
   data Query = Query
     { deity :: DeityArgs -> IORes Deity
-    } deriving (Generic)
+    } deriving (Generic, GQLType)
 
   data Deity = Deity
     { fullName :: Text         -- Non-Nullable Field
@@ -573,7 +682,7 @@ description: |
   ```haskell
   newtype Mutation = Mutation
     { createDeity :: Form -> IOMutRes Deity
-    } deriving (Generic)
+    } deriving (Generic, GQLType)
 
   createDeityMutation :: Form -> IOMutRes Deity
   createDeityMutation = ...
@@ -611,15 +720,15 @@ description: |
 
   newtype Query = Query
     { deity :: () -> IORes Deity
-    } deriving (Generic)
+    } deriving (Generic, GQLType)
 
   newtype Mutation = Mutation
     { createDeity :: () -> IOMutRes Channel Content Deity
-    } deriving (Generic)
+    } deriving (Generic, GQLType)
 
   newtype Subscription = Subscription
     { newDeity :: () -> IOSubRes Channel Content Deity
-    } deriving (Generic)
+    } deriving (Generic, GQLType)
 
   rootResolver :: GQLRootResolver IO Channel Content Query Mutation Subscription
   rootResolver =
@@ -631,11 +740,11 @@ description: |
     where
       fetchDeity = resolver $ dbDeity "" Nothing
       createDeity _args = toMutResolver [Event {channels = [ChannelA], content = ContentA 1}] fetchDeity
-      newDeity _args = Event {channels = [ChannelA], content}
+      newDeity _args = SubResolver {subChannels = [ChannelA], subResolver}
         where
-          content (Event [ChannelA] (ContentA _value)) = resolver $ dbDeity "" Nothing -- resolve New State
-          content (Event [ChannelA] (ContentB value))  = resolver $ dbDeity value Nothing -- resolve New State
-          content _                                    = fetchDeity -- Resolve Old State
+          subResolver (Event [ChannelA] (ContentA _value)) = resolver $ dbDeity "" Nothing -- resolve New State
+          subResolver (Event [ChannelA] (ContentB value))  = resolver $ dbDeity value Nothing -- resolve New State
+          subResolver _                                    = fetchDeity -- Resolve Old State
   ```
 
   ## Morpheus `GraphQL Client` with Template haskell QuasiQuotes
@@ -710,7 +819,6 @@ description: |
 
   - Medium future:
     - Stabilize API
-    - Specification-isomorphic introspection
     - Specification-isomorphic error handling
   - Long term:
     - Support all possible GQL features
