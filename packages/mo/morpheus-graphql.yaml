@@ -1,6 +1,6 @@
 homepage: https://morpheusgraphql.com
 changelog-type: markdown
-hash: 830f6d7671bb11818817d7512d95a03827fc60e2835732dc96d01c0ae541a5bb
+hash: 73420c02c2807c9861d2fc52ed31691cae68a11e40051a1db99071e68507e625
 test-bench-deps:
   bytestring: ! '>=0.10.4 && <0.11'
   morpheus-graphql: -any
@@ -11,7 +11,6 @@ test-bench-deps:
   megaparsec: ! '>=7.0.0 && <8.0'
   websockets: ! '>=0.11.0 && <=0.12.5.3'
   containers: ! '>=0.4.2.1 && <0.7'
-  lens: -any
   mtl: ! '>=2.0 && <=2.2.2'
   tasty-hunit: -any
   transformers: ! '>=0.3.0.0 && <0.6'
@@ -23,6 +22,102 @@ test-bench-deps:
 maintainer: d.nalchevanidze@gmail.com
 synopsis: Morpheus GraphQL
 changelog: |
+  ## [0.4.0] - 09.10.2019
+
+  ## Changed
+
+  - support of Default Value:
+
+    - on query: Parsing Validating and resolving
+    - on Document: only Parsing
+
+  - 'lens' is removed from Library, client field collision can be handled with GraphQL `alias`:
+    ```gql
+    {
+      user {
+        name
+        friend {
+          friendName: name
+        }
+      }
+    }
+    ```
+
+  ### Fixed:
+
+  - `Data.Morpheus.Document.toGraphQLDocument` generates only my user defined types. #259
+  - Morpheus Client Namespaces Input Type Fields, they don't collide anymore:
+    example:
+    schema:
+
+    ```gql
+    input Person {
+      name: String!
+    }
+    ```
+
+    query:
+
+    ```gql
+    query GetUser (parent: Person!) {
+      ....
+    }
+    ```
+
+    wil generate:
+
+    ```hs
+    data GetUserArgs = GetUserArgs {
+      getUserArgsParent: Person
+    } deriving ...
+
+    data Person = Person {
+      personName: Person
+    } deriving ...
+    ```
+
+  - Morpheus Client Generated Output Object And Union Types don't collide:
+
+    ```gql
+    type Person {
+      name: String!
+      parent: Person!
+      friend: Person!
+    }
+    ```
+
+    And we select
+
+    ```gql
+    {
+      user {
+        name
+        friend {
+          name
+        }
+        parent {
+          name
+        }
+        bestFriend: friend {
+          name
+          parent {
+            name
+          }
+        }
+      }
+    }
+    ```
+
+    client will Generate:
+
+    - `UserPerson` from `{user`
+    - `UserFriendPerson`: from `{user{freind`
+    - `UserParentPerson`: from `{user{parent`
+    - `UserBestFriendPerson`: from `{user{bestFrend`
+    - `UserBestFriendParentPerson`: from `{user{bestFrend{parent`
+
+  - GraphQL Client Defines enums and Input Types only once per query and they don't collide
+
   ## [0.3.1] - 05.10.2019
 
   ### Changed
@@ -375,7 +470,6 @@ basic-deps:
   filepath: ! '>=1.1 && <1.5'
   websockets: ! '>=0.11.0 && <=0.12.5.3'
   containers: ! '>=0.4.2.1 && <0.7'
-  lens: -any
   mtl: ! '>=2.0 && <=2.2.2'
   transformers: ! '>=0.3.0.0 && <0.6'
   optparse-applicative: ! '>=0.12 && <0.15'
@@ -393,8 +487,9 @@ all-versions:
 - 0.2.2
 - 0.3.0
 - 0.3.1
+- 0.4.0
 author: Daviti Nalchevanidze
-latest: 0.3.1
+latest: 0.4.0
 description-type: markdown
 description: |
   # Morpheus GraphQL [![Hackage](https://img.shields.io/hackage/v/morpheus-graphql.svg)](https://hackage.haskell.org/package/morpheus-graphql) [![CircleCI](https://circleci.com/gh/morpheusgraphql/morpheus-graphql.svg?style=svg)](https://circleci.com/gh/morpheusgraphql/morpheus-graphql)
@@ -428,13 +523,14 @@ description: |
   resolver: lts-13.30
 
   extra-deps:
+    - morpheus-graphql-0.4.0
     - aeson-1.4.4.0
     - time-compat-1.9.2.2
   ```
 
   As Morpheus is quite new, make sure stack can find morpheus-graphql by running `stack update`
 
-  ### Building your first GrqphQL API
+  ### Building your first GraphQL API
 
   ### with GraphQL syntax
 
@@ -749,48 +845,84 @@ description: |
 
   ## Morpheus `GraphQL Client` with Template haskell QuasiQuotes
 
-  ```haskell
+  ```hs
   defineByDocumentFile
       "./schema.gql"
     [gql|
-      query GetHero ($byRealm: Realm)
+      query GetHero ($character: Character)
         {
-          deity (realm:$byRealm) {
+          deity (fatherOf:$character) {
+            name
             power
-            fullName
+            worships {
+              deity2Name: name
+            }
           }
         }
     |]
   ```
 
+  with schema:
+
+  ```gql
+  input Character {
+    name: String!
+  }
+
+  type Deity {
+    name: String!
+    worships: Deity
+  }
+  ```
+
   will validate query and Generate:
 
-  - response type `GetHero`, `Deity` with `Lens` Instances
-  - input types: `GetHeroArgs` , `Realm`
+  - namespaced response and variable types
   - instance for `Fetch` typeClass
 
-  so that
+  ```hs
+  data GetHero = GetHero {
+    deity: DeityDeity
+  }
+
+  -- from: {user
+  data DeityDeity = DeityDeity {
+    name: Text,
+    worships: Maybe DeityWorshipsDeity
+  }
+
+  -- from: {deity{worships
+  data DeityWorshipsDeity = DeityWorshipsDeity {
+    name: Text,
+  }
+
+  data GetHeroArgs = GetHeroArgs {
+    getHeroArgsCharacter: Character
+  }
+
+  data Character = Character {
+    characterName: Person
+  }
+  ```
+
+  as you see, response type field name collision can be handled with GraphQL `alias`.
+
+  with `fetch` you can fetch well typed response `GetHero`.
 
   ```haskell
     fetchHero :: Args GetHero -> m (Either String GetHero)
     fetchHero = fetch jsonRes args
         where
-          args = GetHeroArgs {byRealm = Just Realm {owner = "Zeus", surface = Just 10}}
+          args = GetHeroArgs {getHeroArgsCharacter = Person {characterName = "Zeus"}}
           jsonRes :: ByteString -> m ByteString
           jsonRes = <GraphQL APi>
   ```
 
-  resolves well typed response `GetHero`.
-
-  except: `defineByDocumentFile` you can use:
+  types can be generatet from `introspection` too:
 
   ```haskell
   defineByIntrospectionFile "./introspection.json"
   ```
-
-  or
-
-  `defineByIntrospection` where you can directly connect it to server
 
   ## Morpheus CLI for Code Generating
 
