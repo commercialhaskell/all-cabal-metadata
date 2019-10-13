@@ -1,6 +1,6 @@
 homepage: https://github.com/ocheron/cryptostore
 changelog-type: markdown
-hash: 9fcc48b25b7989b9697afb3899387620b3d75b5d995ee2111e7cc942a4c27601
+hash: 9896e2984f36a1c8790f057fd5ce3da4cbcaf8aa73eb2d9277916886978c5b19
 test-bench-deps:
   bytestring: -any
   hourglass: -any
@@ -18,6 +18,18 @@ maintainer: olivier.cheron@gmail.com
 synopsis: Serialization of cryptographic data types
 changelog: |
   # Revision history for cryptostore
+
+  ## 0.2.1.0 - 2019-10-13
+
+  * Added CMS fuctions `contentInfoToDER` and `berToContentInfo` in order to
+    generate and parse raw ASN.1.
+
+  * Implementation of AES key wrap had some optimizations.
+
+  * SHAKE hash algorithms now allow arbitrary output lengths.  Lengths that are
+    very small decrease security.  A protection is added so that attempts to use
+    lengths which are too small fail, although the criteria are conservative.
+    Generating and parsing content has no restriction.
 
   ## 0.2.0.0 - 2019-03-24
 
@@ -63,13 +75,14 @@ basic-deps:
   asn1-types: ! '>=0.3.1 && <0.4'
   memory: -any
   x509: ! '>=1.7.5'
-  cryptonite: ! '>=0.25'
+  cryptonite: ! '>=0.26'
   asn1-encoding: ! '>=0.9 && <0.10'
 all-versions:
 - 0.1.0.0
 - 0.2.0.0
+- 0.2.1.0
 author: Olivier Chéron
-latest: 0.2.0.0
+latest: 0.2.1.0
 description-type: markdown
 description: |
   # cryptostore
@@ -267,10 +280,12 @@ description: |
   * and S/MIME external format (only PEM is supported, i.e. the textual encoding
     of [RFC 7468](https://tools.ietf.org/html/rfc7468))
 
+  ### Enveloped data
+
   The following examples generate a CMS structure enveloping some data to a
   password recipient, then decrypt the data to recover the content.
 
-  ### Generating enveloped data
+  #### Generating enveloped data
 
   ```haskell
   > :set -XOverloadedStrings
@@ -298,7 +313,7 @@ description: |
   > writeCMSFile "/path/to/enveloped.pem" [envelopedCI]
   ```
 
-  ### Opening the enveloped data
+  #### Opening the enveloped data
 
   ```haskell
   > :set -XOverloadedStrings
@@ -310,6 +325,60 @@ description: |
   > envelopedData <- fromAttached envelopedEncapData
   > openEnvelopedData (withRecipientPassword "mypassword") envelopedData
   Right (DataCI "Hi, what will you need from the cryptostore?")
+  ```
+
+  ### Signed data
+
+  The following examples generate a CMS structure signing data with an RSA key
+  and certificate, then verify the signature and recover the content.
+
+  #### Signing data
+
+  ```haskell
+  > :set -XOverloadedStrings
+  > :m Crypto.Store.CMS Data.X509 Crypto.Store.X509 Crypto.Store.PKCS8
+
+  -- Input content info
+  > let info = DataCI "Some trustworthy content"
+
+  -- Read signer certificate and private key
+  > (key : _) <- readKeyFile "/path/to/privkey.pem" -- assuming single key
+  > let Right priv = recover "mypassword" key
+  > chain <- readSignedObject "/path/to/cert.pem" :: IO [SignedCertificate]
+  > let cert = CertificateChain chain
+
+  -- Signature will use RSASSA-PSS and SHA-256
+  > let sha256 = DigestAlgorithm SHA256
+  > let params = PSSParams sha256 (MGF1 sha256) 16
+
+  -- Generate the signed structure with a single signer.  Signed content is
+  -- kept attached in the structure.
+  > let signer = certSigner (RSAPSS params) priv cert (Just []) []
+  > Right signedData <- signData [signer] info
+  > let signedCI = toAttachedCI signedData
+  > writeCMSFile "/path/to/signed.pem" [signedCI]
+  ```
+
+  #### Verifying signed data
+
+  ```haskell
+  -- Read certificate authorities to be trusted for validation
+  > :m Crypto.Store.X509 Data.X509.CertificateStore
+  > store <- makeCertificateStore <$> readSignedObject "/path/to/cacert.pem"
+
+  -- Assume we will not verify the signer FQHN.  Instead the certificate could be
+  -- related to an identity from which we received the signed data.
+  > :m Data.Default.Class Data.X509 Data.X509.Validation
+  > let validateNoFQHN = validate HashSHA256 def def { checkFQHN = False }
+  > let noServiceID = (undefined, undefined)
+
+  -- Read the signed data and validate it to recover the content
+  > :m Crypto.Store.CMS Data.Default.Class
+  > [SignedDataCI signedEncapData] <- readCMSFile "/path/to/signed.pem"
+  > signedData <- fromAttached signedEncapData
+  > let doValidation chain = null <$> validateNoFQHN store def noServiceID chain
+  > verifySignedData (withSignerCertificate doValidation) signedData
+  Right (DataCI "Some trustworthy content")
   ```
 
   ## Algorithms and security
