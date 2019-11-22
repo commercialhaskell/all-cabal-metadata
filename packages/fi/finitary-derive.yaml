@@ -1,20 +1,31 @@
 homepage: https://notabug.org/koz.ross/finitary-derive
 changelog-type: markdown
-hash: 6b918f0a0d6222d9883179c3c8f69926e8fc33a27398d7ca0ce19208dc1e5ead
+hash: df8bfd3dedb51129c43278eebd966518f5a0b88efa52eadfcb8480cdaae9724b
 test-bench-deps:
   base: ! '>=4.12 && <4.14'
-  monad-loops: ! '>=0.4.3 && <0.5.0'
   hedgehog: ! '>=1.0.1 && <1.1'
+  binary: -any
   finitary-derive: -any
+  hashable: -any
+  deepseq: -any
   finitary: -any
   finite-typelits: -any
   hedgehog-classes: ! '>=0.2.4 && <0.3.0'
 maintainer: koz.ross@retro-freedom.nz
 synopsis: |-
-  Easy and efficient Unbox, Storable, Binary and Hashable
-  instances for Finitary types.
+  Flexible and easy deriving of type classes for finitary
+  types.
 changelog: |
   # Revision history for finitary-derive
+
+  ## 2.0.0.0 -- 2019-11-23
+
+  * Remove ``Data.Finitary.Pack``.
+  * Add ``Data.Finitary.PackBits``, ``Data.Finitary.PackWords``,
+    ``Data.Finitary.PackBytes``, ``Data.Finitary.PackBits.Unsafe`` and
+    ``Data.Finitary.PackInto``
+  * Refactor 'packing-agnostic' functionality into ``Data.Finitary.Finiteness``.
+  * A lot of documentation changes.
 
   ## 1.0.0.1 -- 2019-09-21
 
@@ -26,22 +37,25 @@ changelog: |
 
   * First version. Released on an unsuspecting world.
 basic-deps:
+  bitvec: ! '>=1.0.2.0 && <1.1.0.0'
   base: ! '>=4.11 && <4.14'
-  vector-sized: ! '>=1.4.0.0 && <1.5.0.0'
+  vector-instances: ! '>=3.4 && <3.5'
   ghc-typelits-knownnat: ! '>=0.7 && <0.8'
+  vector-binary-instances: ! '>=0.2.5.1 && <0.3.0.0'
   ghc-typelits-extra: ! '>=0.3.1 && <0.4.0'
   binary: ! '>=0.8.5.1 && <0.9.0.0'
-  mtl: ! '>=2.2.2 && <2.3'
   hashable: ! '>=1.3.0.0 && <1.4.0.0'
   coercible-utils: ! '>=0.0.0 && <0.1.0'
+  transformers: ! '>=0.5.5.0 && <0.6.0.0'
   deepseq: ! '>=1.4.3.0 && <1.5.0.0'
-  finitary: ! '>=1.1.0.0 && <1.2.0.0'
+  finitary: ! '>=1.2.0.0 && <1.3.0.0'
   finite-typelits: ! '>=0.1.4.2 && <0.2.0.0'
   vector: ! '>=0.12.0.3 && <0.13.0.0'
 all-versions:
 - 1.0.0.1
+- 2.0.0.0
 author: Koz Ross
-latest: 1.0.0.1
+latest: 2.0.0.0
 description-type: markdown
 description: "# ``finitary-derive``\n\n## What's this all about, then?\n\nHave you
   ever written an ``Unbox`` instance for a user-defined type? I hope not,\nbecause
@@ -49,30 +63,76 @@ description: "# ``finitary-derive``\n\n## What's this all about, then?\n\nHave y
   fiddly, and frustrating. ``Storable`` is not much better. This\nis the kind of 'work'
   that we as Haskellers ought not to put up with.\n\nNow, you don't have to! As long
   as your type is [``Finitary``][2], you can now\nget ``Unbox`` and ``Storable`` (as
-  well as ``Binary`` and ``Hashable``, because \nwe could) instances _almost_ automagically:\n\n```haskell\n{-#
+  well as a whole bunch of other) instances \n_almost_ automagically:\n\n```haskell\n{-#
   LANGUAGE DeriveAnyClass #-}\n{-# LANGUAGE DeriveGeneric #-}\n{-# LANGUAGE DerivingVia
-  #-}\n\nimport Data.Finitary\nimport Data.Finitary.Pack\nimport Data.Word\nimport
-  Data.Hashable\n\nimport qualified Data.Vector.Unboxed as VU\n\ndata Foo = Bar |
-  Baz (Word8, Word8) | Quux Word16\n  deriving (Eq, Generic, Finitary)\n  deriving
-  (Storable, Binary, Hashable) via (Pack Foo)\n\nsomeVector :: VU.Vector (Pack Foo)\nsomeVector
-  = VU.fromList . fmap Pack $ [Bar, Baz 0x0 0xf, Quux 0x134]\n```\n\nIf you don't
-  have access to ``DerivingVia``, you can still get the benefits of\nthis library
-  -- just use ``Pack a`` instead of ``a`` in all cases where you need\nany such instances.
-  As it is a ``newtype``, you can ``coerce`` through it if you\ncare about efficiency.\n\n##
-  Why can't I automagic up ``Unbox`` too?\n\nThe short answer is 'role restrictions
-  on unboxed vectors'. If you want a more\ndetailed explanation, check out the [GHC
-  wiki on roles][3], as well as the\n[implementation of ``Data.Vector.Unboxed``][4].
-  You might also want to check out\n[stuff about data families][5], as it ties into
-  this rather aggravating\nlimitation closely too.\n\n## Sounds good! Can I use it?\n\nCertainly
-  - we've tested on GHC 8.4.4, 8.6.5 and 8.8.1, on GNU/Linux only. If\nyou would like
-  support for any additional GHC versions, let us know.\nUnfortunately, while the
-  library will _build_ on 8.4.4, due to\n``hedgehog-classes`` being limited to 8.6+,
-  tests cannot be run on this version.\n\nIf you build and use this library successfully
+  #-}\n\nimport Data.Finitary\nimport Data.Finitary.Finiteness\nimport Data.Finitary.PackInto\nimport
+  Data.Word\nimport Data.Hashable\n\nimport qualified Data.Vector.Unboxed as VU\nimport
+  qualified Data.Vector.Storable as VS\n\ndata Foo = Bar | Baz (Word8, Word8) | Quux
+  Word16\n  deriving (Eq, Generic, Finitary)\n  deriving (Ord, Bounded, Hashable,
+  NFData, Binary) via (Finiteness Foo)\n\nsomeVector :: VU.Vector (PackInto Foo Word64)\nsomeVector
+  = VU.fromList . fmap Packed $ [Bar, Baz 0x0 0xf, Quux 0x134]\n\nsomeStorableVector
+  :: VS.Vector (PackInto Foo Word64)\nsomeStorableVector = VS.fromList . fmap Packed
+  $ [Bar, Baz 0x0 0xf, Quux 0x134]\n```\n\nIf you don't have access to ``DerivingVia``,
+  you can still get the benefits of\nthis library -- just use ``Finitary a`` instead
+  of ``a``. As it is a ``newtype``, \nyou can ``coerce`` through it if you care about
+  efficiency.\n\n## What's the deal with ``Unbox`` and ``Storable`` exactly? What's
+  with all the ``Pack`` types?\n\nEssentially, being ``Finitary`` means that there's
+  a finite set of indexes, one\nfor each inhabitant. That means we can essentially
+  represent any inhabitant as a\nfixed-length number. It's on the basis of this that
+  we can 'magic up'\n``Storable`` and ``Unbox``.\n\nHowever, how we _represent_ this
+  fixed-length number isn't immediately obvious.\nWe have a couple of options:\n\n-
+  A string of bits\n- A string of bytes\n- An array of machine words\n\nAdditionally,
+  if we have _another_ finitary type whose cardinality is not\nsmaller, we could potentially
+  'borrow' its instances as well. Which of these\nchoices is appropriate isn't obvious
+  in general: it depends on whether you care\nabout space or speed, the cardinality
+  of the type, and a bunch of other things\ntoo. As we believe that the best people
+  to judge tradeoffs like these are the\npeople using our library, we provide _all_
+  of these options for you to choose\nfrom, so that you can choose the one that best
+  suits you.\n\n## So... what's the difference exactly?\n\n``PackBits`` represents
+  indexes as strings of bits. This is the most compact\nrepresentation possible (honestly,
+  [maths says so][6]), but the least efficient, \nas accessing individual bits is
+  slower on most architectures than whole bytes or words.\nUnless you've got large
+  ``Vector``s, you probably don't need this encoding, but\nif space is at an absolute
+  premium, this is the best choice. \n\n``PackBytes`` instead represents indexes as
+  byte strings. This is a more\nefficient choice than a string of bits, but can still
+  be slow for architectures\nwhich prefer whole-word access. It's also fairly compact,
+  especially if your\narchitecture has big ``Word``s.\n\n``PackWords`` represents
+  indexes as fixed-length arrays of ``Word``s. This is\nthe most efficient encoding
+  from the point of view of random reads and writes,\nbut will likely waste a lot
+  of space, unless your type is _extremely_ large (as\nin, multiple copies of ``Word``
+  large).  \n\nLastly, ``PackInto`` lets you choose another finitary type whose instances
+  you\nwant to 'borrow', and will use that type as a representation. This is the most\nflexible,
+  and should be preferred whenever possible. However, it requires that a\ntype of
+  appropriate cardinality (at least as big as the one you want to encode)\nexists,
+  and has the appropriate instances. \n\n## Why can't I ``DerivingVia`` through these
+  ``Pack`` types?\n\nFor ``Unbox``, the short answer is 'role restrictions on unboxed
+  vectors'. If\nyou want a more detailed explanation, check out the [GHC wiki on roles][3],
+  as\nwell as the [implementation of ``Data.Vector.Unboxed``][4]. You might also want\nto
+  check out [stuff about data families][5]. \n\nAdditionally, there is some tension
+  in the design. We could have made one of two\nchoices: either define ``Pack`` types
+  as transparent ``newtype``s, and encode or\ndecode whenever a type class method
+  required it; or define ``Pack`` types as\nopaque, and encode or decode only when
+  the values were constructed or\ndeconstructed. Ultimately, we went with the second
+  option, as it makes the\noccurences of encodes and decodes explicit to the user.
+  Had we gone with the\nfirst choice, it would be unclear where encodes and decodes
+  occur, especially\nwhen using functions built from type class methods. We believe
+  this clarity is\nworth the inability to use ``DerivingVia`` to define ``Storable``
+  instances.\n\n## Why do ``PackBytes``, ``PackWords`` and ``PackInto`` have ``Storable``
+  instances, but not ``PackBits``?\n\nBecause it's not clear what they should be.
+  Let's suppose you want to bit-pack a\ntype ``Giraffe`` with cardinality 11 - what
+  should ``sizeOf`` for ``PackBits\nGiraffe`` be? How about ``alignment``? The only
+  obvious solution is padding, but\nin this case, you might as well use ``PackBytes``,
+  ``PackWords`` or\n``PackInto``, since then you'll at least know what you're getting,
+  and are\nexplicit about it.\n\n## Sounds good! Can I use it?\n\nCertainly - we've
+  tested on GHC 8.4.4, 8.6.5 and 8.8.1, on GNU/Linux only. If\nyou would like support
+  for any additional GHC versions, let us know.\nUnfortunately, while the library
+  will _build_ on 8.4.4, due to\n``hedgehog-classes`` being limited to 8.6+, tests
+  cannot be run on this version.\n\nIf you build and use this library successfully
   on any other platforms, we'd like\nto know too - it'd be beneficial even if nothing
   breaks, and _especially_ if\nsomething does.\n\n## License\n\nThis library is under
   the GNU General Public License, version 3 or later (SPDX\ncode ``GPL-3.0-or-later``).
   For more details, see the ``LICENSE.md`` file.\n\n[1]: http://hackage.haskell.org/package/vector-0.12.0.3/docs/Data-Vector-Unboxed.html\n[2]:
   https://hackage.haskell.org/package/finitary-1.0.0.1/docs/Data-Finitary.html#t:Finitary\n[3]:
   https://gitlab.haskell.org/ghc/ghc/wikis/roles\n[4]: http://hackage.haskell.org/package/vector-0.12.0.3/docs/src/Data.Vector.Unboxed.Base.html\n[5]:
-  https://wiki.haskell.org/GHC/Type_families\n"
+  https://wiki.haskell.org/GHC/Type_families\n[6]: https://en.wikipedia.org/wiki/Kraft%E2%80%93McMillan_inequality\n"
 license-name: GPL-3.0-or-later
