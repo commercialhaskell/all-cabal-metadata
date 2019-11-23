@@ -1,6 +1,6 @@
 homepage: https://morpheusgraphql.com
 changelog-type: markdown
-hash: 10f85311c04af4a67526d36e899d154ff5dd01ff619282f024b44f6dd63e0817
+hash: 5a91c9ef753d089512d8e00a9fefcc3290ab3b0345f9279920a5d37d6ffc66e8
 test-bench-deps:
   bytestring: ! '>=0.10.4 && <0.11'
   morpheus-graphql: -any
@@ -10,6 +10,7 @@ test-bench-deps:
   uuid: ! '>=1.0 && <=1.4'
   megaparsec: ! '>=7.0.0 && <8.0'
   websockets: ! '>=0.11.0 && <=0.13'
+  th-lift-instances: ! '>=0.1.1 && <=0.2.0'
   containers: ! '>=0.4.2.1 && <0.7'
   mtl: ! '>=2.0 && <=2.3'
   tasty-hunit: -any
@@ -22,6 +23,139 @@ test-bench-deps:
 maintainer: d.nalchevanidze@gmail.com
 synopsis: Morpheus GraphQL
 changelog: |
+  ## [0.7.0] - 24.11.2019
+
+  ## Removed
+
+  - `toMorpheusHaskellAPi` from `Data.Morpheus.Document` functionality will be migrated in `morpheus-graphql-cli`
+
+  ## Changed
+
+  - `liftM` to `MonadTrans` instance method `lift`
+
+  - `liftEitherM` to `liftEither`
+
+  - `Resolver operation m event value` -> `Resolver operation event m value` , monad trans needs that last 2 type arguments are monad and value that why it was necessary
+
+  - exposed `Data.Morpheus.Types.Internal.AST`
+
+  - Mutation Resolver was changed from
+
+  ```
+  resolver :: () -> ResolveM EVENT IO Address
+  resolver = MutResolver  {
+    mutEvents = [someEventForSubscription],
+    mutResolver = lift setDBAddress
+  }
+  ```
+
+  ```haskell
+  -- Mutation Wit Event Triggering : sends events to subscription
+  resolver :: () -> ResolveM EVENT IO Address
+  resolver = MutResolver \$ do
+    value <- lift setDBAddress
+    pure ([someEventForSubscription], value)
+  -- or
+  -- Mutation Without Event Triggering
+  resolver :: () -> ResolveM EVENT IO Address
+  resolver _args = lift setDBAddress
+  ```
+
+  ### Added
+
+  - added `parseDSL` to `Data.Morpheus.Document`
+
+  - GraphQL SDL support fully supports descriptions: onTypes, fields , args ...
+    with (enums, inputObjects , union, object)
+    for example :
+
+    ```gql
+    """
+    Description for Type Address
+    """
+    type Address {
+      """
+      Description for Field city
+      """
+      city: String!
+      street(
+        """
+        Description argument id
+        """
+        id: ID!
+      ): Int!
+    }
+    ```
+
+    ###### GraphQL SDL
+
+    ```gql
+    type User {
+      name: String! @deprecated(reason: "some reason")
+    }
+    ```
+
+    will displayed in introspection
+
+    ###### introspection.json
+
+    ```json
+    {
+      "data": {
+        "__type": {
+          "fields": [
+            {
+              "name": "city",
+              "isDeprecated": true,
+              "deprecationReason": "test deprecation field with reason"
+            }
+          ]
+        }
+      }
+    }
+    ```
+
+  - basic support of directive `@deprecated` on `enumValue` and object `field`, only on introspection
+
+  - GraphQL Client deprecation warnings
+
+    on type
+
+    ```gql
+    type Human {
+      humanName: String!
+      lifetime: Lifetime! @deprecated(reason: "some reason")
+      profession: Profession
+    }
+    ```
+
+    compiler output:
+
+    ```
+    warning:
+      Morpheus Client Warning:
+      {
+        "message":"the field \"Human.lifetime\" is deprecated. some reason",
+        "locations":[{"line":24,"column":15}]
+      }
+    ```
+
+  - new helper resolver types aliases:
+
+    - ResolveQ : for Query
+    - ResolveM : for Mutation
+    - ResolveS : for Subscription
+
+    `ResolveM EVENT IO Address` is same as `MutRes EVENT IO (Address (MutRes EVENT IO))`
+
+    is helpfull wenn you want to resolve GraphQL object
+
+  ### Fixed
+
+  - added missing Monad instance for Mutation resolver
+  - `defineByIntrospectionFile` does not breaks if schema contains interfaces
+  - Morpheus Client supports `Subscription` and `Mutation`operations
+
   ## [0.6.2] - 2.11.2019
 
   ## Added
@@ -549,6 +683,7 @@ basic-deps:
   uuid: ! '>=1.0 && <=1.4'
   megaparsec: ! '>=7.0.0 && <8.0'
   websockets: ! '>=0.11.0 && <=0.13'
+  th-lift-instances: ! '>=0.1.1 && <=0.2.0'
   containers: ! '>=0.4.2.1 && <0.7'
   mtl: ! '>=2.0 && <=2.3'
   transformers: ! '>=0.3.0.0 && <0.6'
@@ -570,8 +705,9 @@ all-versions:
 - 0.6.0
 - 0.6.1
 - 0.6.2
+- 0.7.0
 author: Daviti Nalchevanidze
-latest: 0.6.2
+latest: 0.7.0
 description-type: markdown
 description: |
   # Morpheus GraphQL [![Hackage](https://img.shields.io/hackage/v/morpheus-graphql.svg)](https://hackage.haskell.org/package/morpheus-graphql) [![CircleCI](https://circleci.com/gh/morpheusgraphql/morpheus-graphql.svg?style=svg)](https://circleci.com/gh/morpheusgraphql/morpheus-graphql)
@@ -605,7 +741,7 @@ description: |
   resolver: lts-14.8
 
   extra-deps:
-    - morpheus-graphql-0.6.2
+    - morpheus-graphql-0.7.0
   ```
 
   As Morpheus is quite new, make sure stack can find morpheus-graphql by running `stack upgrade` and `stack update`
@@ -621,9 +757,15 @@ description: |
     deity(name: String!): Deity!
   }
 
+  """
+  Description for Deity
+  """
   type Deity {
+    """
+    Description for name
+    """
     name: String!
-    power: String
+    power: String String! @deprecated(reason: "some reason for")
   }
   ```
 
@@ -671,6 +813,8 @@ description: |
 
   Template Haskell Generates types: `Query` , `Deity`, `DeityArgs`, that can be used by `rootResolver`
 
+  `descriptions` and `deprecations` will be displayed in intropsection.
+
   `importGQLDocumentWithNamespace` will generate Types with namespaced fields. if you don't need napespacing use `importGQLDocument`
 
   ### with Native Haskell Types
@@ -714,7 +858,7 @@ description: |
 
   ```haskell
   resolveDeity :: DeityArgs -> IORes e Deity
-  resolveDeity DeityArgs { name, mythology } = liftEitherM $ dbDeity name mythology
+  resolveDeity DeityArgs { name, mythology } = liftEither $ dbDeity name mythology
 
   askDB :: Text -> Maybe Text -> IO (Either String Deity)
   askDB = ...
@@ -857,25 +1001,23 @@ description: |
   ### Mutations
 
   In addition to queries, Morpheus also supports mutations. The behave just like regular queries and are defined similarly:
-  Just exchange deriving `GQLQuery` for `GQLMutation` and declare them separately at the `GQLRootResolver` definition
 
   ```haskell
   newtype Mutation m = Mutation
-    { createDeity :: Form -> m Deity
+    { createDeity :: MutArgs -> m Deity
     } deriving (Generic, GQLType)
 
-  createDeityMutation :: Form -> m (Deity m)
-  createDeityMutation = ...
-
-  rootResolver :: GQLRootResolver IO Query Mutation Undefined
+  rootResolver :: GQLRootResolver IO  () Query Mutation Undefined
   rootResolver =
     GQLRootResolver
       { queryResolver = Query {...}
-      , mutationResolver = Mutation {
-         createDeity = createDeityMutation
-      }
+      , mutationResolver = Mutation { createDeity }
       , subscriptionResolver = Undefined
       }
+      where
+        -- Mutation Without Event Triggering
+        createDeity :: MutArgs -> ResolveM () IO Deity
+        createDeity_args = lift setDBAddress
 
   gqlApi :: ByteString -> IO ByteString
   gqlApi = interpreter rootResolver
@@ -897,6 +1039,8 @@ description: |
     = ContentA Int
     | ContentB Text
 
+  type MyEvent = Event Channel Content
+
   newtype Query m = Query
     { deity :: () -> m Deity
     } deriving (Generic)
@@ -905,29 +1049,33 @@ description: |
     { createDeity :: () -> m Deity
     } deriving (Generic)
 
-  newtype Subscription m = Subscription
+  newtype Subscription (m ::  * -> * ) = Subscription
     { newDeity :: () -> m  Deity
     } deriving (Generic)
 
   type APIEvent = Event Channel Content
 
   rootResolver :: GQLRootResolver IO APIEvent Query Mutation Subscription
-  rootResolver =
-    GQLRootResolver
-      { queryResolver = Query {deity = const fetchDeity}
-      , mutationResolver = Mutation {createDeity}
-      , subscriptionResolver = Subscription {newDeity}
-      }
-    where
-      createDeity _args = MutResolver events updateDeity
-          where
-          events = [Event {channels = [ChannelA], content = ContentA 1}]
-          updateDeity = updateDBDeity
-      newDeity _args = SubResolver [ChannelA] subResolver
-        where
-          subResolver (Event [ChannelA] (ContentA _value)) = fetchDeity  -- resolve New State
-          subResolver (Event [ChannelA] (ContentB _value)) = fetchDeity   -- resolve New State
-          subResolver _                                    = fetchDeity -- Resolve Old State
+  rootResolver = GQLRootResolver
+    { queryResolver        = Query { deity }
+    , mutationResolver     = Mutation { createDeity }
+    , subscriptionResolver = Subscription { newDeity }
+    }
+   where
+    deity _args = fetchDeity
+    -- Mutation Without Event Triggering
+    createDeity :: () -> ResolveM EVENT IO Address
+    createDeity _args = MutResolver \$ do
+        value <- lift dbCreateDeity
+        pure (
+          [Event { channels = [ChannelA], content = ContentA 1 }],
+          value
+        )
+    newDeity _args = SubResolver [ChannelA] subResolver
+     where
+      subResolver (Event [ChannelA] (ContentA _value)) = fetchDeity  -- resolve New State
+      subResolver (Event [ChannelA] (ContentB _value)) = fetchDeity   -- resolve New State
+      subResolver _ = fetchDeity -- Resolve Old State
   ```
 
   ## Morpheus `GraphQL Client` with Template haskell QuasiQuotes
