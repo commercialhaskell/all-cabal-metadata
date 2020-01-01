@@ -1,7 +1,8 @@
 homepage: https://github.com/jfischoff/postgresql-simple-opts#readme
-changelog-type: ''
-hash: edcfc73127898705826598bf2d37fee5a08a3560542e5652d54fcf1003fe2b78
+changelog-type: markdown
+hash: d5bcb408dfce180f5a65804145a73a6d15ff2436e02c61efa82a4af75353aa5a
 test-bench-deps:
+  envy: -any
   bytestring: -any
   base: -any
   hspec: -any
@@ -12,18 +13,19 @@ test-bench-deps:
   postgresql-simple: -any
   optparse-applicative: -any
 maintainer: jonathangfischoff@gmail.com
-synopsis: An optparse-applicative and envy parser for postgresql-simple's connection
-  options
-changelog: ''
+synopsis: An optparse-applicative and envy parser for postgres options
+changelog: |
+  - 0.6.0.0
+    - #4 Update to latest version of `envy` and `postgres-options`.
 basic-deps:
-  envy: <2.0.0.0
+  envy: -any
   either: -any
   bytestring: -any
   optparse-generic: -any
   split: -any
   base: ! '>=4.6 && <5'
   generic-deriving: -any
-  postgres-options: ! '>=0.1.0.1'
+  postgres-options: ! '>=0.2.0.0'
   data-default: -any
   uri-bytestring: -any
   postgresql-simple: -any
@@ -43,9 +45,248 @@ all-versions:
 - 0.4.0.0
 - 0.5.0.0
 - 0.5.0.1
+- 0.6.0.0
 author: Jonathan Fischoff
-latest: 0.5.0.1
-description-type: haddock
-description: This package exports a optparse-applicative and envy parser and type
-  for postgresql-simple's Options and connection string.
+latest: 0.6.0.0
+description-type: markdown
+description: |
+  [![Hackage](https://img.shields.io/hackage/v/postgresql-simple-opts.svg)](https://hackage.haskell.org/package/postgresql-simple-opts)
+  [![Travis CI Status](https://travis-ci.org/jfischoff/postgresql-simple-opts.svg?branch=master)](http://travis-ci.org/jfischoff/postgresql-simple-opts)
+
+  ### Composable Command Line Parsing with `optparse-applicative`
+
+  There are many solutions for parsing command line arguments in Haskell. Personally I like [`optparse-applicative`](https://hackage.haskell.org/package/optparse-applicative-0.12.1.0/), because, like the title suggests, you can compose parsers out of smaller pieces.
+
+  I have written command line parsers for [`postgresql-simple's`](https://hackage.haskell.org/package/postgresql-simple-0.5.2.1/) database connection info many times. Faced with the prospect of doing it again I opted to make this library, which is also a single literate Haskell file. This way I could reuse it in web servers, db migrators, db job runners ... those are all the examples I could think of ... just trust me, it's worth it.
+
+  ### Outline
+  - [The "Partial" Option Types](#partial)
+  - [The Composable Parser](#parser)
+  - [The Complete Option](#option)
+  - [Option "completion"](#completion)
+  - [The Option Parser](#option-parser)
+  - [The Runner](#runner)
+  - [The Tests](#tests)
+
+  ### Standard Intro Statements to Ignore
+
+  ```haskell
+  {-| A resuable optparse-applicative parser for creating a postgresql-simple
+     'Connection'
+  -}
+  {-# LANGUAGE RecordWildCards, LambdaCase, DeriveGeneric, DeriveDataTypeable #-}
+  {-# LANGUAGE GeneralizedNewtypeDeriving, CPP, ApplicativeDo #-}
+  module Database.PostgreSQL.Simple.Options where
+  import Database.PostgreSQL.Simple
+  import Options.Applicative
+  import Text.Read
+  import Data.ByteString (ByteString)
+  import qualified Data.ByteString.Char8 as BSC
+  import GHC.Generics
+  import Options.Generic
+  import Data.Typeable
+  import Data.String
+  import Data.Monoid
+  import Data.Either.Validation
+  import Data.Default
+  ```
+
+  ### <a name="partial"> The "Partial" Option Types
+
+  In general, options types are built from many optional fields. Additionally, multiple options sets can be combined (i.e. command line options, config file, environment vars, defaults, etc). The easiest way to handle this is to create a "partial" option family that can be monoidally composed and is "completed" with a default option value.
+
+  ```haskell
+  -- | An optional version of 'Options'. This includes an instance of
+  -- | 'ParseRecord' which provides the optparse-applicative Parser.
+  data PartialOptions = PartialOptions
+    { host     :: Last String
+    , port     :: Last Int
+    , user     :: Last String
+    , password :: Last String
+    , database :: Last String
+    } deriving (Show, Eq, Read, Ord, Generic, Typeable)
+  ```
+
+  We will utilize a boilerplate prevention library by Gabriel Gonzalez called [`optparse-generic`](https://hackage.haskell.org/package/optparse-generic-1.1.3) which generates a parser from the record field names.
+
+  To create the parser we have to merely declare an instance of `ParseRecord`.
+
+  ```haskell
+  instance ParseRecord PartialOptions
+  ```
+
+  Now we make `PartialOptions` an instance of `Monoid` so we can combine multiple options together.
+
+  ```haskell
+  instance Monoid PartialOptions where
+    mempty = PartialOptions (Last Nothing) (Last Nothing)
+                                (Last Nothing) (Last Nothing)
+                                (Last Nothing)
+    mappend x y = PartialOptions
+      { host     = host     x <> host     y
+      , port     = port     x <> port     y
+      , user     = user     x <> user     y
+      , password = password x <> password y
+      , database = database x <> database y
+      }
+  ```
+
+  As it so happens there are two ways to create a db connection with `postgresql-simple`: `Options` and a `ByteString` connection string. We have a partial version of `Options` but we need something for the connection string.
+
+  ```haskell
+  newtype ConnectString = ConnectString
+    { connectString :: ByteString
+    } deriving ( Show, Eq, Read, Ord, Generic, Typeable, IsString )
+  ```
+
+  I don't like the default option parsing for `String` in `optparse-applicative`. I want something that will escape double quotes, remove single quotes or just use the string unaltered. The function `parseString` does this.
+
+  ```haskell
+  unSingleQuote :: String -> Maybe String
+  unSingleQuote (x : xs@(_ : _))
+    | x == '\'' && last xs == '\'' = Just $ init xs
+    | otherwise                    = Nothing
+  unSingleQuote _                  = Nothing
+
+  parseString :: String -> Maybe String
+  parseString x = readMaybe x <|> unSingleQuote x <|> Just x
+  ```
+
+  We use `parseString` to make a custom instance of `ParseRecord`.
+
+  ```haskell
+  instance ParseRecord ConnectString where
+    parseRecord =  fmap (ConnectString . BSC.pack)
+                $  option ( eitherReader
+                          $ maybe (Left "Impossible!") Right
+                          . parseString
+                          )
+                          (long "connectString")
+  ```
+  Thus, my `PartialOptions` type is either the `ConnectString` or the `PartialOptions` type.
+
+  ```haskell
+  data PartialOptions
+    = POConnectString      ConnectString
+    | POPartialOptions PartialOptions
+    deriving (Show, Eq, Read, Generic, Typeable)
+
+  instance Monoid PartialOptions where
+      mempty = POPartialOptions mempty
+      mappend a b = case (a, b) of
+          (POConnectString x, _) -> POConnectString x
+          (POPartialOptions x, POPartialOptions y) ->
+              POPartialOptions $ x <> y
+          (POPartialOptions _, POConnectString x) -> POConnectString x
+  ```
+
+  There is one wrinkle. `optparse-generic` treats sum types as "commands". This makes sense as a default, but it is not what we want. We want to choose one record or another based on the non-overlapping flags. This is easy enough to do by hand.
+
+  ```haskell
+  instance ParseRecord PartialOptions where
+    parseRecord
+      =  fmap POConnectString      parseRecord
+     <|> fmap POPartialOptions parseRecord
+  ```
+
+  ### <a name="parser"> The Composable Parser
+
+  We can use `PartialOptions` as the type of a field in a larger options record defined elsewhere. When defining this more complicated parser, we reuse the work we did here by calling `parseRecord`. To make it even clearer we create an alias called `parser` so clients will know what to use.
+
+  ```haskell
+  -- | The main parser to reuse.
+  parser :: Parser PartialOptions
+  parser = parseRecord
+  ```
+
+  ### <a name="option"> The Complete Option
+
+  The connection option for `postgresql-simple` is either the record `Options` or a connection string
+
+  ```haskell
+  data Options
+    = OConnectString ByteString
+    | OOptions   Options
+    deriving (Show, Eq, Read, Generic, Typeable)
+  ```
+
+  ### <a name="completion"> Option "completion"
+
+  `postgresql-simple` provides sensible defaults for `Options` via `defaultOptions`. We use these as the defaults when parsing. We create a `PartialOptions` with these defaults.
+
+  ```haskell
+  mkLast :: a -> Last a
+  mkLast = Last . Just
+
+  -- | The 'PartialOptions' version of 'defaultOptions'
+  instance Default PartialOptions where
+      def = PartialOptions
+        { host     = mkLast $                connectHost     defaultOptions
+        , port     = mkLast $ fromIntegral $ connectPort     defaultOptions
+        , user     = mkLast $                connectUser     defaultOptions
+        , password = mkLast $                connectPassword defaultOptions
+        , database = mkLast $                connectDatabase defaultOptions
+        }
+
+  instance Default PartialOptions where
+      def = POPartialOptions def
+  ```
+
+  We can now complete the `PartialOptions` to get a `Options`.
+
+  ```haskell
+  getOption :: String -> Last a -> Validation [String] a
+  getOption optionName = \case
+      Last (Just x) -> pure x
+      Last Nothing  -> Data.Either.Validation.Failure
+          ["Missing " ++ optionName ++ " option"]
+
+  completeOptions :: PartialOptions -> Either [String] Options
+  completeOptions PartialOptions {..} = validationToEither $ do
+    connectHost     <- getOption "host"     host
+    connectPort     <- fromIntegral
+                   <$> getOption "port"     port
+    connectUser     <- getOption "user"     user
+    connectPassword <- getOption "password" password
+    connectDatabase <- getOption "database" database
+    return $ Options {..}
+  ```
+
+  Completing a `PartialOptions` to get an `Options` follows straightforwardly ... if you've done this a bunch I suppose.
+
+  ```haskell
+  -- | mappend with 'defaultPartialOptions' if necessary to create all
+  --   options
+  completeOptions :: PartialOptions -> Either [String] Options
+  completeOptions = \case
+    POConnectString   (ConnectString x) -> Right $ OConnectString x
+    POPartialOptions x              -> OOptions <$> completeOptions x
+  ```
+
+  ### <a name="option-parser"> The Option Parser
+
+  Parse a `PartialOptions` and then complete it. This is **not** composable but is convient for testing and if you only need a `Option` type
+
+  ```haskell
+  -- | Useful for testing or if only Options are needed.
+  completeParser :: Parser Options
+  completeParser =
+      fmap (either (error . unlines) id . completeOptions . mappend def) parseRecord
+  ```
+
+  ### <a name="runner"> The Runner
+
+  As a convenience, we export the primary use of parsing connection options ... making a connection.
+
+  ```haskell
+  -- | Create a connection with an 'Option'
+  run :: Options -> IO Connection
+  run = \case
+    OConnectString connString -> connectPostgreSQL connString
+    OOptions   connInfo   -> connect           connInfo
+  ```
+
+  ### <a name="tests"> The tests
+
+  Testing is pretty straightforward using `System.Environment.withArgs`. See the [Spec.hs](/test/Spec.hs) for examples of how to test the parsers.
 license-name: BSD-3-Clause
