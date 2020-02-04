@@ -1,6 +1,6 @@
 homepage: https://github.com/fused-effects/fused-effects
 changelog-type: markdown
-hash: 45119e0982e27aeda95aecb47a900ffe1e590a3f22c5c75ce05a2c775180a3fd
+hash: efbee8b3a7e1e8efdaaaa28208d1537b33a82518b86e2f945d3b5c1a5025f6c0
 test-bench-deps:
   base: -any
   tasty-hedgehog: ! '>=1 && <1.1'
@@ -17,6 +17,10 @@ test-bench-deps:
 maintainer: robrix@github.com
 synopsis: A fast, flexible, fused effect system.
 changelog: |
+  # v1.0.0.1
+
+  - Adds passthrough `Algebra` instances for `Ap` and `Alt`, allowing the invocation of effects inside these structures without extraneous constructor applications.
+
   # v1.0.0.0
 
   - Adds an `Empty` effect, modelling nondeterminism without choice ([#196](https://github.com/fused-effects/fused-effects/pull/196)).
@@ -232,8 +236,9 @@ all-versions:
 - 0.5.0.0
 - 0.5.0.1
 - 1.0.0.0
+- 1.0.0.1
 author: Nicolas Wu, Tom Schrijvers, Rob Rix, Patrick Thomson
-latest: 1.0.0.0
+latest: 1.0.0.1
 description-type: markdown
 description: |
   # A fast, flexible, fused effect system for Haskell
@@ -312,7 +317,6 @@ description: |
   import Control.Carrier.Reader
   import Control.Carrier.State.Strict
   import Control.Monad.IO.Class (liftIO)
-  import qualified Control.Monad.State.Class as MTL
 
   main :: IO ()
   main = pure ()
@@ -510,12 +514,18 @@ description: |
   * [`fused-effects-lens`][felens] provides combinators to use the [`lens`][lens] library fluently inside effectful computations.
   * [`fused-effects-exceptions`][exc] provides handlers for exceptions thrown in the `IO` monad.
   * [`fused-effects-resumable`][] provides resumable exceptions, which can also serve as a limited form of coroutines.
-  * [`fused-effects-random`][] provides a `Random` effect integrated into a `fused-effects` stack.
+  * [`fused-effects-mwc-random`][] provides a performant, high-quality source of random data, as well as values from common numerical distributions.
+  * [`fused-effects-readline`][] provides a REPL effect that interfaces with [`haskeline`][] for its UI.
+  * [`fused-effects-parser`][] provides parser-combinator style effects similar to parsing libraries such as [`trifecta`][].
 
   [exc]: https://github.com/fused-effects/fused-effects-exceptions
   [felens]: http://hackage.haskell.org/package/fused-effects-lens
-  [`fused-effects-random`]: https://github.com/fused-effects/fused-effects-random
+  [`fused-effects-mwc-random`]: https://github.com/fused-effects/fused-effects-mwc-random
   [`fused-effects-resumable`]: https://github.com/fused-effects/fused-effects-resumable
+  [`fused-effects-readline`]: https://github.com/fused-effects/fused-effects-readline
+  [`haskeline`]: https://hackage.haskell.org/package/haskeline
+  [`fused-effects-parser`]: https://github.com/fused-effects/fused-effects-parser
+  [`trifecta`]: https://hackage.haskell.org/package/trifecta
   [lens]: http://hackage.haskell.org/package/lens
 
 
@@ -534,30 +544,11 @@ description: |
 
   Also like `mtl`, `fused-effects` allows scoped operations like `local` and `catchError` to be given different interpretations. As with first-order operations, `mtl` achieves this with a final tagless encoding via methods, whereas `fused-effects` achieves this with an initial algebra encoding via `Carrier` instances.
 
+  In addition, `mtl` and `fused-effects` are similar in that they provide instances for the monad types defined in the `transformers` package (`Control.Monad.Reader`, `Control.Monad.Writer`, etc). This means that applications using `mtl` can migrate many existing `transformers`-based monad stacks to `fused-effects` with minimal code changes. `fused-effects` provides its own hierarchy of carrier monads (under the `Control.Carrier` namespace) that provide a more fluent interface for new code, though it may be useful to use `transformers` types when working with third-party libraries.
+
   Unlike `mtl`, effects are automatically available regardless of where they occur in the signature; in `mtl` this requires instances for all valid orderings of the transformers (O(n²) of them, in general).
 
-  Also unlike `mtl`, there can be more than one `State` or `Reader` effect in a signature. This is a tradeoff: `mtl` is able to provide excellent type inference for effectful operations like `get`, since the functional dependencies can resolve the state type from the monad type. On the other hand, this behaviour can be recovered in `fused-effects` using `newtype` wrappers with phantom type parameters and helper functions, e.g.:
-
-  ```haskell
-  newtype Wrapper s m a = Wrapper { runWrapper :: m a }
-    deriving (Applicative, Functor, Monad)
-
-  instance Algebra sig m => Algebra sig (Wrapper s m) where
-    alg = Wrapper . alg . handleCoercible
-
-  getState :: Has (State s) sig m => Wrapper s m s
-  getState = get
-  ```
-
-  Indeed, `Wrapper` can now be made an instance of `MonadState`:
-
-  ```haskell
-  instance Has (State s) sig m => MTL.MonadState s (Wrapper s m) where
-    get = Control.Carrier.State.Strict.get
-    put = Control.Carrier.State.Strict.put
-  ```
-
-  Thus, the approaches aren’t mutually exclusive; consumers are free to decide which approach makes the most sense for their situation.
+  Also unlike `mtl`, there can be more than one `State` or `Reader` effect in a signature. This is a tradeoff: `mtl` is able to provide excellent type inference for effectful operations like `get`, since the functional dependencies can resolve the state type from the monad type.
 
   Unlike `fused-effects`, `mtl` provides a `ContT` monad transformer; however, it’s worth noting that many behaviours possible with delimited continuations (e.g. resumable exceptions) are directly encodable as effects.
 
@@ -583,7 +574,7 @@ description: |
 
   Like [`polysemy`](http://hackage.haskell.org/package/polysemy), `fused-effects` is a batteries-included effect system capable of scoped, reinterpretable algebraic effects.
 
-  As of GHC 8.8, `fused-effects` outperforms `polysemy`, though new effects take more code to define in `fused-effects` than `polysemy` (though the `Control.Effect.Interpret` effect is suitable for rapid prototyping of new effects). Like `freer-simple` and unlike `fused-effects`, polysemy provides custom type errors if a given effect invocation is ambigous or invalid in the current context.
+  As of GHC 8.8, `fused-effects` outperforms `polysemy`, though new effects take more code to define in `fused-effects` than `polysemy` (though the `Control.Carrier.Interpret` module provides a low-friction API for rapid prototyping of new effects). Like `freer-simple` and unlike `fused-effects`, polysemy provides custom type errors if a given effect invocation is ambigous or invalid in the current context.
 
 
   #### Comparison to `eff`
