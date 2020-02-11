@@ -1,6 +1,6 @@
 homepage: https://github.com/mstksg/mutable#readme
 changelog-type: markdown
-hash: e01c32d840067da93184bccd2f9686e49ececd7f09cb6b9ec164c6e16d453fe8
+hash: 495f4c58882e1ef238f4e1465d645cc1f7491edf3d53a6592a04afd227904a9e
 test-bench-deps:
   microlens-th: -any
   base: ! '>=4.12 && <5'
@@ -19,6 +19,15 @@ changelog: |
   Changelog
   =========
 
+  Version 0.1.0.1
+  ---------------
+
+  *February 11, 2020*
+
+  <https://github.com/mstksg/mutable/releases/tag/v0.1.0.1>
+
+  *   Update to work with *generic-lens-2.0.0.0* and *generic-lens-core-2.0.0.0*.
+
   Version 0.1.0.0
   ---------------
 
@@ -32,14 +41,16 @@ basic-deps:
   base: ! '>=4.11 && <5'
   constraints: -any
   vinyl: -any
-  generic-lens: ! '>=1.1'
+  generic-lens: ! '>=2.0'
   transformers: -any
+  generic-lens-core: ! '>=2.0'
   primitive: ! '>=0.6.4'
   vector: -any
 all-versions:
 - 0.1.0.0
+- 0.1.0.1
 author: Justin Le
-latest: 0.1.0.0
+latest: 0.1.0.1
 description-type: markdown
 description: |
   [mutable][docs]
@@ -48,9 +59,13 @@ description: |
   [![mutable on Hackage](https://img.shields.io/hackage/v/mutable.svg?maxAge=86400)](https://hackage.haskell.org/package/mutable)
   [![Build Status](https://travis-ci.org/mstksg/mutable.svg?branch=master)](https://travis-ci.org/mstksg/mutable)
 
-  [**Documentation and Walkthrough**][docs]
+  **[Documentation and Walkthrough][docs]**
 
   [docs]: https://mutable.jle.im
+
+  **[Introductory Blog Post][blog]**
+
+  [blog]: https://blog.jle.im/entry/introducing-the-mutable-library.html
 
   Beautiful Mutable Values
   ------------------------
@@ -76,8 +91,9 @@ description: |
   one field), and also efficient entire-datatype copies/updates, as well, in many
   cases.
 
-  Check out the [documentation home page][docs], [haddock reference][haddock], or
-  read below for motivation and high-level descriptions.
+  Check out the [documentation home page][docs], [haddock reference][haddock],
+  [introductory blog post on insights and lessons learned][blog], or read below
+  for motivation and high-level descriptions.
 
   [haddock]: https://hackage.haskell.org/package/mutable
 
@@ -124,8 +140,7 @@ description: |
   functions that each modify different items in a vector in sequence, and you
   want to run them many times interleaved, or one after the other.)
 
-  Composite Datatype
-  ------------------
+  ### Composite Datatype
 
   That all works for `MVector`, but let's say you have a simple composite data
   type that is two vectors:
@@ -202,6 +217,47 @@ description: |
   This is a type of composition and interleaving that cannot be achieved by
   simply breaking down `TwoVec` and running functions that work purely on each of
   the two vectors individually.
+
+  Mutable Sum Types
+  -----------------
+
+  There is also support for mutable sum types, as well.  Here is the automatic
+  definition of a *[mutable linked list][ll]*:
+
+  [ll]: https://en.wikipedia.org/wiki/Linked_list
+
+  ```haskell
+  data List a = Nil | Cons a (List a)
+    deriving (Show, Generic)
+  infixr 5 `Cons`
+
+  instance (Mutable m a, PrimMonad m) => Mutable m (List a) where
+      type Ref m (List a) = GRef m (List a)
+  ```
+
+  We can write a function to "pop" out the top value and shift the rest of the
+  list up:
+
+  ```haskell
+  popStack
+      :: (PrimMonad m, Mutable m a)
+      => Ref m (List a)
+      -> m (Maybe a)
+  popStack xs = do
+      c <- projectBranch (constrMB #_Cons) xs
+      forM c $ \(y, ys) -> do
+        o <- freezeRef y
+        moveRef xs ys
+        pure o
+  ```
+
+  ```haskell
+  ghci> runST $ do
+      r <- thawRef $ 1 `Cons` 2 `Cons` 3 `Cons` Nil
+      y <- popStack r
+      (y,) <$> freezeRef r
+  -- => (Just 1, 2 `Cons` 3 `Cons` Nil)
+  ```
 
   Show me the numbers
   -------------------
