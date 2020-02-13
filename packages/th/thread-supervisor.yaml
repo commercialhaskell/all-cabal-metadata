@@ -1,0 +1,394 @@
+homepage: https://github.com/nshimaza/thread-supervisor#readme
+changelog-type: markdown
+hash: 7caa1e12415fd015749a94acc5ff1c86003f5cddac5976f2b541957c10807862
+test-bench-deps:
+  unliftio: -any
+  base: ! '>=4.7 && <5'
+  hspec: -any
+  clock: -any
+  data-default: -any
+  thread-supervisor: -any
+  QuickCheck: -any
+maintainer: Naoto.Shimazaki@gmail.com
+synopsis: A simplified implementation of Erlang/OTP like supervisor over thread
+changelog: |
+  # Changelog for thread-supervisor
+
+  ## Version 0.1.0.0
+
+  * First release
+basic-deps:
+  unliftio: -any
+  base: ! '>=4.7 && <5'
+  clock: -any
+  data-default: -any
+  containers: -any
+all-versions:
+- 0.1.0.0
+author: Naoto Shimazaki
+latest: 0.1.0.0
+description-type: markdown
+description: "# thread-supervisor\n\n[![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)\n[![Build
+  Status](https://travis-ci.org/nshimaza/thread-supervisor.svg?branch=master)](https://travis-ci.org/nshimaza/thread-supervisor)\n\nA
+  simplified implementation of Erlang/OTP like supervisor over thread.\n\n\n# Overview\n\nThis
+  package provides Erlang/OTP like thread supervision.\nIt provides automatic restart,
+  escalation of intense crash, guaranteed cleanup\nof child threads on supervisor
+  termination.\n\n## Motivation\n\nUnlike Unix process, plain Haskell thread, created
+  by forkIO, has no\nparent-child relation each other in its lifecycle management.
+  \ This means\ntermination of parent thread doesn't result its children also terminated.\nThis
+  is good design as a low level API because it gives user greatest\nflexibility.  However,
+  it also means managing entire lifecycle of thread is\ntotally a responsibility of
+  user.\n\nHere one thing you need to be aware.  Garbage collection doesn't work on
+  living\nthread.  When you lost reference to an object, garbage collector frees up
+  the\nobject for you.  However, even though you lost the thread ID of your child\nthread,
+  Haskell runtime doesn't consider the thread is orphaned.  The child\nthread continues
+  running.\n\nThis is prone to create thread leakage.  You can accidentally lose thread
+  ID of\nchild thread by crash of parent thread.  Now you no longer have way to kill\norphaned
+  child thread.  This is thread leakage.\n\nThe low level forkIO API requires you
+  keep track and manage entire thread\nlifecycle including accidental case like the
+  above.  Hand crafting it might be\npainful.\n\nThis package is intended to provide
+  better wrapper API over plain forkIO.  Not\njust providing parent-child thread lifecycle
+  management, this package provides\nErlang/OTP like API so that user can leverage
+  well proven practices from\nErlang/OTP.\n\nIf you need to keep your child running
+  after parent terminated, this package is\nnot for you.\n\n### Why not withAsync?\n\nIn
+  short, `withAsync` addresses different problem than this package.\n\n* `withAsync`:
+  Accessing multiple REST server concurrently then gather all\n  responses with guarantee
+  of cancellation of all the request on termination\n  of calling thread.\n* `thread-supervisor`:
+  Implementing server where unknown number of independent,\n  concurrent, and indeterministic
+  lifecycle requests will arrive.\n\nA typical use case for this package is TCP server
+  style use case.  In such use\ncase, you have to create unpredictable number of threads
+  in order to serve to\nclients and those threads finish in random timings.\n\nThe
+  `withAsync` coming with `async` package solves different problem than this\npackage.
+  \ It is good for taking actions asynchronously but eventually you need\ntheir return
+  values.  Or, even you aren't care of return values, you only need\nto take several
+  finite number of actions concurrently.\n\nBelow is explanation why `withAsync` is
+  not good for managing large number of\nthreads.\n\n`withAsync` is essentially a
+  sugar over bracket pattern like this.\n\n```haskell\nwithAsync action inner = bracket
+  (async action) uninterruptibleCancel inner\n```\n\nIt guarantees execution of `uninterruptibleCancel`
+  to the `action` on\nasynchronous exception occurrence at parent thread where withAsync
+  itself is\nliving.  However it also guarantees the `uninterruptibleCancel` is executed
+  on\nnormal exit from `inner` too.  Thus, the `action` can only live within the\nlifecycle
+  of the `withAsync` call.  If you want to keep your `action` alive, you\nhave to
+  keep `inner` continue running until your `action` finishes.\n\nSo, what if you kick
+  async action go and make recursive call form `inner` back\nto your loop?  It is
+  a bad idea.  Because `withAsync` is a `bracket`, recursive\ncall from `inner` makes
+  non-tail-recurse call.  It consumes stack every time you\nmake recurring.\n\nIn
+  other words, the difference between `withAsync` and `thread-supervisor` is\nstrategy
+  of installing / un-installing cleanup handler.  `withAsync` installs\ncleanup handler
+  on stack so it uninstalls handler based on its lexical scope.\n`thread-supervisor`
+  installs cleanup handler surrounding user supplied action so\nit uninstalls handlers
+  at actual dynamic thread termination.\n\n\n\n# Quick Start\n\n## High level steps
+  to use\n\n1. Create a `MonitoredAction` from your IO action\n1. Create a `ChildSpec`
+  from the `MonitoredAction`\n1. Let a supervisor run the `ChildSpec` in a supervised
+  thread\n\nDetail will be different whether you create static child thread or dynamic
+  child\nthread.\n\n## Create a static child\n\nStatic child is thread automatically
+  spawned when supervisor starts.  Following\nprocedure makes your IO action a static
+  child.\n\n1. Create a `MonitoredAction` from your IO action\n1. Create a `ChildSpec`
+  from the `MonitoredAction`\n1. Give the `ChildSpec` to `newSupervisor`\n1. Run generated
+  supervisor\n\nStatic children are automatically forked when supervisor started or
+  one-for-all\nsupervisor performed restarting action. When IO action inside of static
+  child\nterminated, regardless normal completion or exception, supervisor checks
+  if\nrestart operation needed based on combination of restart type of terminated\nchild
+  and reason of termination.  If supervisor decides restart is needed, it\nperforms
+  restarting operation based on its restart strategy, which can be\none-for-one or
+  one-for-all.\n\nA supervisor can have any number of static children.  Static children
+  must be\ngiven when supervisor is created by `newSupervisor`.\n\n## Static child
+  example\n\nFollowing code creates a supervisor actor with two static children and
+  run it in\nnew thread.\n\n```haskell\nrunYourSupervisorWithStaticChildren = do\n
+  \   Actor svQ svAction <- newActor . newSupervisor $ OneForAll def\n        [ newChildSpec
+  Permanent yourIOAction1\n        , newChildSpec Permanent yourIOAction2\n        ]\n
+  \   async svAction\n```\n\nThe idiom `newActor . newSupervisor` returns `Actor svQ
+  svAction` where `svQ` is\nwrite-end of message queue for the supervisor actor, which
+  we don't use here,\nand `svAction` is body IO action of the supervisor.  When the
+  `svAction` is\nactually evaluated, it automatically forks two threads.  One is for\n`yourIOAction1`
+  and the other is for `yourIOAction2`.  Because restart type of\ngiven static children
+  are both `Permanent`, the supervisor always kicks\nrestarting operation when one
+  of `yourIOAction1` or `yourIOAction2` is\nterminated.  When restarting operation
+  is kicked, the supervisor kills remaining\nthread and restarts all children again
+  because its restarting strategy is\none-for-all.\n\nWhen the supervisor is terminated,
+  both `yourIOAction1` and `yourIOAction2` are\nautomatically killed by the supervisor.
+  \ To kill the supervisor, apply `cancel`\nto the async object returned by `async
+  svAction`.\n\n## Create a dynamic child\n\nDynamic child is thread explicitly forked
+  via `newChild` function.  Following\nprocedure runs your IO action as a dynamic
+  child.\n\n1. Run a supervisor\n1. Create a `ChildSpec` from your IO action\n1. Request
+  the supervisor to create a dynamic child based on the `ChildSpec` by\n   calling
+  `newChild`\n\nDynamic children are explicitly forked to each thread via `newChild`
+  request to\nrunning supervisor.  Supervisor never restarts dynamic child.  It ignores\nrestart
+  type defined in `ChildSpec` of dynamic child.\n\n## Dynamic child example\n\nFollowing
+  code runs a supervisor in different thread then request it to run a\ndynamic child.\n\n```haskell\n
+  \   -- Run supervisor in another thread\n    Actor svQ svAction <- newActor $ newSimpleOneForOneSupervisor\n
+  \   asyncSv <- async svAction\n    -- Request to run your action under the supervisor\n
+  \   let yourChildSpec = newChildSpec Temporary yourIOAction\n    maybeChildThreadId
+  <- newChild def svQ yourChildSpec\n```\n\nThe idiom `newActor $ newSimpleOneForOneSupervisor`
+  returns `Actor svQ svAction`\nwhere `svQ` is write-end of message queue for the
+  supervisor actor and\n`svAction` is body IO action of the supervisor.  When the
+  `svAction` is actually\nevaluated, it listens `svQ` and wait for request to run
+  dynamic child.\n\nWhen `newChild` is called with `svQ`, it sends request to the
+  supervisor to run\na dynamic child with given `ChildSpec`.\n\nWhen the supervisor
+  is terminated, requested children are automatically killed\nby the supervisor if
+  they are still running.\n\nTo kill the supervisor, apply `cancel` to `asyncSv`.\n\n\n\n#
+  Building Blocks\n\nThis package consists of following building blocks.\n\n* Actor
+  and Message queue\n* Monitored IO action and supervisable IO action\n* Behaviors
+  (state machine, server, and supervisor)\n\nActor and message queue is lowest layer
+  block of this package.  Behaviors are\nbuilt upon this block.  It is exposed to
+  user so that you can use it for\nimplementing actor style concurrent program.\n\nMonitored
+  IO action is the heart of this package.  It implements most sensitive\npart of dealing
+  with asynchronous exception.  Monitored IO action provides\nguaranteed notification
+  on thread termination so that supervisor can provide\nguaranteed supervision on
+  threads.\n\nBehaviors - state machine, server, and supervisor - implement simplified\nErlang/OTP
+  behaviors so that user can leverage best practice of concurrent\nprogramming from
+  Erlang/OTP.\n\n## Actor and Message queue\n\nActor is restartable IO action with
+  inbound message queue.  Actor is designed to\nallow other threads sending messages
+  to an actor keep using the same write-end\nof the queue before and after restart
+  of the actor.  Actor consists of message\nqueue and its handler.  `Inbox` is a message
+  queue designed for actor's message\ninbox.  It is thread-safe, bounded or unbounded,
+  and selectively readable queue.\n\nTo protect read-end of the queue, it has different
+  type for read-end and\nwrite-end.  Message handler of actor can access to both end
+  but only write-end\nis accessible from outside of message handler.  To realize this,
+  constructor of\n`Inbox` is not exposed.  The only way to create a new `Inbox` object
+  is creating\na new actor using `newActor` function.\n\n```haskell\nnewActor :: (Inbox
+  message -> IO result) -> IO (Actor message result)\n```\n\nThis package provides
+  type synonym for message handler as below.\n\n```haskell\ntype ActorHandler message
+  result = (Inbox message -> IO result)\n```\n\n`newActor` receives an user supplied
+  message handler, creates a new `Inbox`\nvalue, then returns write-end of actor's
+  message queue and IO action of the\nactor's body wrapped by `Actor`.  `Actor` is
+  defined as following.\n\n```haskell\ndata Actor message result = Actor\n    { actorQueue
+  \ :: ActorQ message -- ^ Write end of message queue of 'Actor'\n    , actorAction
+  :: IO result      -- ^ IO action to execute 'Actor'\n    }\n```\n\nThe `ActorQ message`
+  in the `Actor` is the write-end of created `Inbox`.  While\nuser supplied message
+  handler receives `Inbox`, which is read-end of created\nqueue, caller of `newActor`
+  gets write-end only.\n\n### Message Queue\n\n`Inbox` is specifically designed queue
+  for implementing actor.  All behaviors\navailable in this package depend on it.
+  \ It provides following capabilities.\n\n* Thread-safe read/pull/receive and write/push/send.\n*
+  Blocking and non-blocking read operation.\n* Selective read operation.\n* Current
+  queue length.\n* Bounded queue.\n\nThe type `Inbox` is intended to be used only
+  for pulling side as inbox of actor.\nSingle Inbox object is only readable from single
+  actor.  In order to avoid from\nother actors, no Inbox constructor is exposed but
+  instead you can get it only\nvia `newActor` or `newBoundedActor`.\n\n#### Read an
+  oldest message from `Inbox`\n\nTo read a message at the head of message queue, apply
+  `receive` to `Inbox`.  If\none or more message is available, `receive` returns oldest
+  one.  If no message\nis available, `receive` blocks until at least one message arrives.
+  \ A skeleton\nof actor message handler will look like this.\n\n```haskell\nmyActorHandler
+  :: Inbox YourMessageType -> IO ()\nmyActorHandler inbox = do\n    newMessage <-
+  receive inbox\n    doSomethingWith newMessage\n    myActorHandler inbox\n```\n\n####
+  Send a message to an actor\n\nTo send a message to an actor, call `send` with write-end
+  of the actor's inbox\nand the message.\n\n```haskell\n    send :: ActorQ message
+  -> message -> IO ()\n```\n\n`ActorQ` is write-end of actor's message queue.  `ActorQ`
+  is actually just a\nwrapper of `Inbox`.  Its role is hiding read-end API of Inbox.
+  \ From outside of\nactor, only write-end is exposed via ActorQ.  From inside of
+  actor, both\nread-end and write-end are available.  You can read from given inbox
+  directly.\nYou need to wrap the inbox by Actor when you write to the inbox.\n\n####
+  Send a message from an actor to itself\n\nWhen you need to send a message to your
+  inbox, do this.\n\n```haskell\n    send (ActorQ yourInbox) message\n```\n\nYou can
+  convert `Inbox` (read-end) to `ActorQ` (write-end) by wrapping `Inbox`\nby `ActorQ`
+  so that you can send a message from an actor to itself.\n\n```haskell\nmyActorHandler
+  :: Inbox YourMessageType -> IO ()\nmyActorHandler inbox = do\n    newMessage <-
+  receive inbox\n    doSomethingWith newMessage\n\n    send (ActorQ inbox) messageToMyself
+  -- Send a message to itself.\n\n    myActorHandler inbox\n```\n\n### Actor\nActor
+  is IO action emulating Erlang's actor.  It has a dedicated `Inbox` and\nprocesses
+  incoming messages until reaching end state.\n\nActor is restartable without replacing
+  message queue.  When actor's IO action\ncrashed and restarted, the new execution
+  of the IO action continue referring the\nsame message queue.  Thus, threads sending
+  messages to the actor can continue\nusing the same write-end of the queue.\n\n`newActor`
+  and `newBoundedActor` create an actor with new Inbox.  It is the only\nexposed way
+  to create a new Inbox.  This limitation is intended.  It prevents\nany code other
+  than message handler of the actor from reading the inbox.\n\nFrom perspective of
+  outside of actor, user supplies an IO action with type\n`ActorHandler` to `newActor`
+  or `newBoundedActor` then user gets IO action of\ncreated actor and write-end of
+  message queue of the actor, which is `ActorQ`\ntype value.\n\nFrom perspective of
+  inside of actor, in other word, from perspective of user\nsupplied message handler,
+  it has a message queue both read and write side\navailable.\n\n#### Shared Inbox\n\nYou
+  can run created actor multiple time simultaneously with different thread\neach.
+  \ In such case, each actor instances share single `Inbox`.  This would be\nuseful
+  to distribute task stream to multiple worker actor instances, however,\nkeep in
+  mind there is no way to control which message is routed to what actor.\n\n## Monitored
+  IO action\n\nThis package provides facility for supervising IO actions.  With types
+  and\nfunctions described in this section, you can run IO action with its own thread\nand
+  receive notification on its termination at another thread with reason of\ntermination.
+  \ Functions in this section provides guaranteed supervision of your\nthread.\n\nIt
+  looks something similar to `UnliftIO.bracket`.  What distinguishes from\nbracket
+  is guaranteed work through entire lifetime of thread.\n\nUse `UnliftIO.bracket`
+  when you need guaranteed cleanup of resources acquired\nwithin the same thread.
+  \ It works as you expect.  However, installing callback\nfor thread supervision
+  using bracket (or `UnliftIO.finally` or even low level\n`UnliftIO.catch`) within
+  a thread has *NO* guarantee.  There is a little window\nwhere asynchronous exception
+  is thrown after the thread is started but callback\nis not yet installed.  We will
+  discuss this later in this section.\n\nNotification is delivered via user supplied
+  callback.  Helper functions\ndescribed in this section install your callback to
+  your IO action.  Then the\ncallback will be called on termination of the IO action.\n\n####
+  Important:  Callback is called in terminated thread\n\nCallback is called in terminated
+  thread.  You have to use inter-thread\ncommunication in order to notify to another
+  thread.\n\nUser supplied callback receives `ExitReason` and `UnliftIO.Concurrent.ThreadId`\nso
+  that user can determine witch thread was terminated and why it was\nterminated.
+  \ In order to receive those parameters, user supplied callback must\nhave type signature
+  `Monitor`, which is following.\n\n```haskell\nExitReason -> ThreadId -> IO ()\n```\n\nFunction
+  `watch` installs your callback to your plain IO action then returns\nmonitored action.\n\nCallback
+  can be nested.  Use `nestWatch` to install another callback to already\nmonitored
+  action.\n\nHelper functions return IO action with signature `MonitoredAction` instead
+  of\nplain `IO ()`.  From here to the end of this section it will be a little\ntechnical
+  deep dive for describing why it has such signature.\n\nThe signature of `MonitoredAction`
+  is this.\n\n```haskell\n(IO () -> IO ()) -> IO ()\n```\n\nIt requires an extra function
+  argument.  It is because `MonitoredAction` will be\ninvoked with `UnliftIO.Concurrent.forkIOWithUnmask`.\n\nIn
+  order to ensure callback on termination works in any timing, the callback\nmust
+  be installed under asynchronous exception masked.  At the same time, in\norder to
+  allow killing the tread from another thread, body of IO action must be\nexecuted
+  under asynchronous exception *unmasked*.  In order to satisfy both\nconditions,
+  the IO action and callback must be called using\n`UnliftIO.Concurrent.forkIOWithUnmask`.
+  \ Typically it looks like following.\n\n```haskell\nmask_ $ forkIOWithUnmask $ \\unmask
+  -> unmask action `finally` callback\n```\n\nThe extra function parameter in the
+  signature of `MonitoredAction` is used for\naccepting the @unmask@ function which
+  is passed by\n`UnliftIO.Concurrent.forkIOWithUnmask`.  Functions defined in this
+  section help\ninstalling callback and converting type to fit to\n`UnliftIO.Concurrent.forkIOWithUnmask`.\n\n\n##
+  Child specification - supervisable process\n\n`ChildSpec` is casting mold of child
+  thread IO action which supervisor spawns\nand manages.  It is passed to supervisor,
+  then supervisor let it run with its\nown thread, monitor it, and restart it if needed.
+  \ ChildSpec provides additional\nattributes to `MonitoredAction` for controlling
+  restart on thread termination.\nThat is `Restart`.  `Restart` represents restart
+  type concept came from\nErlang/OTP.  The value of `Restart` defines how restart
+  operation by supervisor\nis triggered on termination of the thread.  `ChildSpec`
+  with `Permanent` restart\ntype triggers restart operation regardless its reason
+  of termination.  It\ntriggers restarting even by normal exit.  `Transient` triggers
+  restarting only\nwhen the thread is terminated by exception.  `Temporary` never
+  triggers\nrestarting.\n\nRefer to Erlang/OTP for more detail of restart type concept.\n\n`newMonitoredChildSpec`
+  creates a new `ChildSpec` from a `MonitoredAction` and a\nrestart type value.  `newChildSpec`
+  is short cut function creating a `ChildSpec`\nfrom a plain IO action and a restart
+  type value.  `addMonitor` adds another\nmonitor to existing `ChildSpec`.\n\n\n\n#
+  Behaviors\n\nThis package provides state machine, server, and supervisor behavior
+  from\nErlang/OTP with slight modifications.\n\nAll behaviors available in this package
+  are defined as `ActorHandler` so that\nthey can be easily supervised by converting
+  them to actor using `newActor`.\n\nServer behavior is built upon state machine behavior.
+  \ Supervisor is built on\ntop of server behavior.\n\n## State Machine behavior\n\nState
+  machine behavior is most essential behavior in this package.  It provides\nframework
+  for creating IO action of finite state machine running on its own\nthread.  State
+  machine has single `Inbox`, its local state, and a user supplied\nmessage handler.
+  \ State machine is created with initial state value, waits for\nincoming message,
+  passes received message and current state to user supplied\nhandler, updates state
+  to returned value from user supplied handler, stops or\ncontinue to listen message
+  queue based on what the handler returned.\n\nTo create a new state machine, prepare
+  initial state of your state machine and\ndefine your message handler driving your
+  state machine, apply `newStateMachine`\nto the initial state and handler.  You will
+  get a `ActorHandler` so you can get\nan actor of the state machine by applying `newActor`
+  to it.\n\n```haskell\nActor queue action <-  newActor $ newStateMachine initialState
+  handler\n```\n\nOr you can use short-cut helper.\n\n```haskell\nActor queue action
+  <-  newStateMachineActor initialState handler\n```\n\nThe `newStateMachine` returns
+  write-end of message queue for the state machine\nand IO action to run.  You can
+  run the IO action by `Control.Concurrent.forkIO`\nor `Control.Concurrent.async`,
+  or you can let supervisor run it.\n\nUser supplied message handler must have following
+  type signature.\n\n```haskell\nhandler :: (state -> message -> IO (Either result
+  state))\n```\n\nWhen a message is sent to state machine's queue, it is automatically
+  received by\nstate machine framework, then the handler is called with current state
+  and the\nmessage.  The handler must return either result or next state.  When `Left\nresult`
+  is returned, the state machine stops and returned value of the IO action\nis `IO
+  result`.  When `Right state` is returned, the state machine updates\ncurrent state
+  with the returned state and wait for next incoming message.\n\n## Server behavior\n\nServer
+  behavior provides synchronous request-response style communication,\na.k.a. ask
+  pattern, with actor.  Server behavior allows user to send a request\nto an actor
+  then wait for response form the actor.  This package provides a\nframework for implementing
+  such actor.\n\nServer behavior in this package is actually a set of helper functions
+  and type\nsynonym to help implementing ask pattern over actor.  User need to follow
+  some\nof rules described below to utilize those helpers.\n\n### Define ADT type
+  for messages\n\nFirst, user need to define an algebraic data type for message to
+  the server in\nfollowing form.\n\n```haskell\ndata myServerCommand\n    = ReqWithoutResp1\n
+  \   | ReqWithoutResp2 Arg1\n    | ReqWithoutResp3 Arg2 Arg3\n    | ReqWithResp1
+  (ServerCallback Result1)\n    | ReqWithResp1 ArgX (ServerCallback Result2)\n    |
+  ReqWithResp2 ArgY ArgZ (ServerCallback Result3)\n```\n\nThe rule is this:\n\n* Define
+  an ADT containing all requests.\n* If a request doesn't return response, define
+  a value type for the request as\n  usual element of sum type.\n* If a request returns
+  a response, put `(ServerCallback ResultType)` at the last\n  argument of the constructor
+  for the request where `ResultType` is type of\n  returned value.\n\n`ServerCallback`
+  is type synonym of a function type as following.\n\n```haskell\ntype ServerCallback
+  a = (a -> IO ())\n```\n\nSo real definition of your `myServerCommand` is:\n\n```haskell\ndata
+  MyServerCommand\n    = ReqWithoutResp1\n    | ReqWithoutResp2 Arg1\n    | ReqWithoutResp3
+  Arg2 Arg3\n    | ReqWithResp1 (Result1 -> IO ())\n    | ReqWithResp2 ArgX (Result2
+  -> IO ())\n    | ReqWithResp3 ArgY ArgZ (Result3 -> IO ())\n```\n\n### Define message
+  handler\n\nNext, user need to define an actor handling the message.  In this example,
+  we\nwill use state machine behavior so that we can focus on core message handling\npart.
+  \ For simplicity, this example doesn't have internal state and it never\nfinishes.\n\nDefine
+  a state machine message handler handling `myServerCommand`.  \n\n```haskell\nmyHandler
+  :: () -> MyServerCommand -> IO (Either () ())\nmyHandler _  ReqWithoutResp1                  =
+  doJob1 $> Right ()\nmyHandler _ (ReqWithoutResp2 arg1)            = doJob2 arg1
+  $> Right ()\nmyHandler _ (ReqWithoutResp3 arg2 arg3)       = doJob3 arg2 arg3 $>
+  Right ()\nmyHandler _ (ReqWithResp1 cont1)              = (doJob4 >>= cont1) $>
+  Right ()\nmyHandler _ (ReqWithResp2 argX cont2)         = (doJob5 argX >>= cont2)
+  $> Right ()\nmyHandler _ (ReqWithResp3 argY argZ cont3)    = (doJob6 argY argZ >>=
+  cont3) $> Right ()\n```\n\nThe core idea here is implementing request handler in
+  CPS style.  If a request\nreturns a response, the request message comes with callback
+  function (a.k.a.\ncontinuation).  You can send back response for the request by
+  calling the\ncallback.\n\n### Requesting to server\n\nFunction `call`, `callAsync`,
+  and `callIgnore` are helper functions to implement\nrequest-response communication
+  with server.  They install callback to message,\nsend the message, returns response
+  to caller.  They receive partially applied\nserver message constructor, apply it
+  to callback function, then send it to\nserver.  The installed callback handles response
+  from the server.  You can use\n`call` like following.\n\n```haskell\n    maybeResult1
+  <- call def myServerActor ReqWithResp1\n    maybeResult2 <- call def myServerActor
+  $ ReqWithResp2 argX\n    maybeResult3 <- call def myServerActor $ ReqWithResp3 argY
+  argZ\n```\n\nWhen you send a request without response, use `cast`.\n\n```haskell\n
+  \   cast myServerActor ReqWithoutResp1\n    cast myServerActor $ ReqWithoutResp2
+  arg1\n    cast myServerActor $ ReqWithoutResp3 arg2 arg3\n```\n\nWhen you send a
+  request with response but ignore it, use `callIgnore`.\n\n```haskell\n    callIgnore
+  myServerActor ReqWithResp1\n    callIgnore myServerActor $ ReqWithResp2 argX\n    callIgnore
+  myServerActor $ ReqWithResp3 argY argZ\n```\n\nGenerally, ask pattern, or synchronous
+  request-response communication is not\nrecommended in actor model.  It is because
+  synchronous request blocks entire\nactor until it receives response or timeout.
+  \ You can mitigate the situation by\nwrapping the synchronous call with `async`.
+  \ Use `callAsync` for such purpose.\n\n## Supervisor behavior\n\nWIP\n\nSupervisor
+  behavior provides Erlang/OTP like thread supervision with some\nsimplification.
+  \ \n\n\n\n# Design Considerations\n\n## Separate role of threads\n\nWhen you design
+  thread hierarchy with this package, you have to follow design\nrule of Erlang/OTP
+  where only supervisor can have children threads.\n\nIn Erlang/OTP, there are two
+  type of Erlang process.\n\n* Supervisor\n* Worker\n\nSupervisor has children processes
+  and supervise them.  Worker does real task but\nnever has child process.\n\nWithout
+  this rule, you have to have both supervision functionality and real\ntask processing
+  functionality within single process.  That leads more complex\nimplementation of
+  process.\n\nWith this rule, worker no longer have to take care of supervising children.
+  \ But\nat the same time you cannot create child process directly from worker.\n\n\n##
+  Key Difference from Erlang/OTP Supervisor\n\n* Mutable variables are shared\n* Dynamic
+  children are always `Temporary`\n* No `shutdown` method to terminate child\n* No
+  `RestForOne` strategy\n* Every actor has dedicated Haskell thread\n\n\n### Mutable
+  variables are shared\n\nWhile \"share nothing\" is a key concept of Erlang, there
+  is no such guarantee in\nthis package.  Message passed from one Haskell thread to
+  another thread is\nshared between both threads.  This isn't a problem as long as
+  message content is\nnormal Haskell object.  Normal Haskell object is immutable.
+  \ Nobody mutates its\nvalue.  So, in normal Haskell object, sharing is identical
+  to copying.\n\nHowever, when you pass mutable object like IORef, MVar, or TVar,
+  do it with\ncare.  Those object can be mutated by other thread.\n\n### Dynamic children
+  are always `Temporary`\n\nChild thread created by `newChild` always created as `Temporary`
+  child\nregardless which restart type is designated in its spec.  `Temporary` children\nare
+  never been restarted by supervisor.  `Permanent` or `Transient` child must\nbe a
+  part of `ChildSpec` list given to supervisor spec.\n\n### No `shutdown` method to
+  terminate child\n\nWhen supervisor terminates its children, supervisor always throw
+  asynchronous\nexception to children.  There is no option like `exit(Child, shutdown)`
+  found in\nErlang/OTP.\n\nYou must implement appropriate resource cleanup on asynchronous
+  exception.\nYou can implement graceful shutdown by yourself but it does not arrow
+  you escape\nfrom dealing with asynchronous exception.\n\n### No `RestForOne` strategy\n\nOnly
+  `OneForOne` and `OneForAll` restart strategy is supported.\n\n### Every actor has
+  dedicated Haskell thread\n\nUnlike some of other actor implementations, each actor
+  in this package has its\nown Haskell thread.  It means every actor has dedicated
+  stack for each.  Thus\ncalling blocking API in middle of message handling does *NOT*
+  prevent other\nactor running.\n\nSome actor implementation give thread and stack
+  to an actor only when it handles\nincoming message.  In such implementation, actor
+  has no thread and stack when\nit is waiting for next message.  This maximizes scalability.
+  \ Even though there\nare billions of actors, you only need *n* threads and stacks
+  while you have *n*\ncore micro processor.\n\nA downside of such implementation is
+  it strictly disallows blocking operation in\nmiddle of message handling.  In such
+  implementation, calling a blocking API in\nan actor system running with single thread
+  causes stall of entire actor system\nuntil the blocking API returns.\n\nThat doesn't
+  happen in this package.  Though you call any blocking API in middle\nof actor message
+  handler, other Haskell threads continue running.\n\nGiving dedicated thread to each
+  actor requires giving dedicated stack frame to\neach actor too.  It consumes more
+  memory than the above design.  However, in\nHaskell, it won't be a serious problem.
+  \ These are the reason why.\n\n* In Haskell, size of stack frame starts from 1KB
+  and grows as needed.\n* It can be moved by GC so no continuous address space is
+  required at beginning.\n\nIt is one of the greatest characteristic of GHC's runtime.
+  \ This package decided\nto leverage it.\n\n\n## Resource management\n\nThe word
+  *resource* in this context means object kept in runtime but not\ngarbage collected.
+  \ For example, file handles, network sockets, and threads are\nresources.  In Haskell,
+  losing reference to those objects does *NOT* mean those\nobjects will be closed
+  or terminated.  You have to explicitly close handles and\nsockets, terminate threads
+  before you lose reference to them.\n\nThis becomes more complex under threaded GHC
+  environment.  Under GHC, thread\ncan receive asynchronous exception in any timing.
+  \ You have to cleanup resources\nwhen your thread received asynchronous exception
+  as well as in case of normal\nexit and synchronous exception scenario.\n\nThis package
+  does take care of threads managed by supervisor but you have to\ntake care of any
+  other resources.\n"
+license-name: MIT
