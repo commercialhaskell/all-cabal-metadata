@@ -1,6 +1,6 @@
 homepage: https://github.com/jamesdbrock/replace-megaparsec
 changelog-type: markdown
-hash: ce54a2b349f96513341ef26012a8ecbb7523d91e2c872fcc681704fb8038d69b
+hash: e87e558f83e87889dfffba9b091006a493ecb932d76d9830cf16b06e28fd1e94
 test-bench-deps:
   bytestring: -any
   Cabal: -any
@@ -12,6 +12,17 @@ maintainer: James Brock <jamesbrock@gmail.com>
 synopsis: Find, replace, and edit text patterns with Megaparsec parsers
 changelog: |+
   # Revision history for replace-megaparsec
+
+  ## 1.3.0.0 -- 2020-03-06
+
+  `sepCap` won't throw.
+
+  Don't throw an exception on an unreachable error case, just bottom.
+  Remove type constraints for `Exception`.
+
+  ## 1.2.1.0 -- 2020-01-01
+
+  Allow any error parameter, not just `Void`.
 
   ## 1.2.0.0 -- 2019-10-31
 
@@ -71,8 +82,10 @@ all-versions:
 - 1.1.5.0
 - 1.2.0.0
 - 1.2.1.0
+- 1.3.0.0
+- 1.3.1.0
 author: James Brock <jamesbrock@gmail.com>
-latest: 1.2.1.0
+latest: 1.3.1.0
 description-type: markdown
 description: |
   # replace-megaparsec
@@ -141,6 +154,8 @@ description: |
     string-to-number conversion function fails. A typed parser will perform both
     the pattern match and the conversion, so it will never be in that situation.
 
+    [Parse, don't validate.](https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/)
+
   * Regular expressions are only able to pattern-match
     [regular](https://en.wikipedia.org/wiki/Chomsky_hierarchy#The_hierarchy)
     grammers.
@@ -164,6 +179,7 @@ description: |
   The examples depend on these imports.
 
   ```haskell
+  import Data.Void
   import Replace.Megaparsec
   import Text.Megaparsec
   import Text.Megaparsec.Char
@@ -262,7 +278,8 @@ description: |
   Replace all carriage-return-newline instances with newline.
 
   ```haskell
-  streamEdit (chunk "\r\n") (const "\n") "1\r\n2\r\n"
+  let crnl = chunk "\r\n" :: Parsec Void String String
+  streamEdit crnl (const "\n") "1\r\n2\r\n"
   ```
   ```haskell
   "1\n2\n"
@@ -273,7 +290,8 @@ description: |
   Replace alphabetic characters with the next character in the alphabet.
 
   ```haskell
-  streamEdit (some letterChar) (fmap succ) "HAL 9000"
+  let somelet = some letterChar :: Parsec Void String String
+  streamEdit somelet (fmap succ) "HAL 9000"
   ```
   ```haskell
   "IBM 9000"
@@ -302,7 +320,8 @@ description: |
 
   ```haskell
   import System.Environment
-  streamEditT (char '{' *> manyTill anySingle (char '}')) getEnv "- {HOME} -"
+  let bracevar = char '{' *> manyTill anySingle (char '}') :: ParsecT Void String IO String
+  streamEditT bracevar getEnv "- {HOME} -"
   ```
   ```haskell
   "- /home/jbrock -"
@@ -347,18 +366,19 @@ description: |
   #!/usr/bin/env stack
   {- stack
     script
-    --resolver nightly-2019-09-13
+    --resolver lts-15
     --package megaparsec
     --package replace-megaparsec
   -}
   -- https://docs.haskellstack.org/en/stable/GUIDE/#script-interpreter
 
+  import Data.Void
   import Text.Megaparsec
   import Text.Megaparsec.Char
   import Text.Megaparsec.Char.Lexer
   import Replace.Megaparsec
 
-  main = interact $ streamEdit decimal (show . (*2))
+  main = interact $ streamEdit (decimal :: Parsec Void String Int) (show . (*2))
   ```
 
   If you have
@@ -433,27 +453,28 @@ description: |
 
   | Program                                           | dense     | sparse   |
   | :---                                              |      ---: |     ---: |
-  | Python `re.sub`¹                                  | 89.23ms   | 23.98ms  |
-  | Perl `s///ge`²                                    | 180.65ms  | 5.60ms   |
-  | [`Replace.Megaparsec.streamEdit`][m] `String`     | 454.95ms  | 375.04ms |
+  | [Python 3.7.4 `re.sub`][sub] *repl* function      | 89.23ms   | 23.98ms  |
+  | [Perl 5 `s///ge`][s]                              | 180.65ms  | 5.02ms   |
+  | [`Replace.Megaparsec.streamEdit`][m] `String`     | 441.94ms  | 375.04ms |
   | [`Replace.Megaparsec.streamEdit`][m] `ByteString` | 529.99ms  | 73.76ms  |
   | [`Replace.Megaparsec.streamEdit`][m] `Text`       | 547.47ms  | 139.21ms |
   | [`Replace.Attoparsec.ByteString.streamEdit`][ab]  | 394.12ms  | 41.13ms  |
   | [`Replace.Attoparsec.Text.streamEdit`][at]        | 515.26ms  | 46.10ms  |
   | [`Text.Regex.Applicative.replace`][ra] `String`   | 1083.98ms | 646.40ms |
-  | [`Text.Regex.PCRE.Heavy.gsub`][ph] `Text`         | ⊥³        | 14.76ms  |
+  | [`Text.Regex.PCRE.Heavy.gsub`][ph] `Text`         | > 10min   | 14.29ms  |
+  | [`Control.Lens.Regex.ByteString.match`][lb]       | > 10min   | 4.27ms   |
+  | [`Control.Lens.Regex.Text.match`][lt]             | > 10min   | 14.74ms  |
 
-  ¹ Python 3.7.4
-
-  ² This is perl 5, version 28, subversion 2 (v5.28.2) built for x86_64-linux-thread-multi
-
-  ³ Does not finish.
-
+  [sub]: https://docs.python.org/3/library/re.html#re.sub
+  [s]: https://perldoc.perl.org/functions/s.html
   [m]: https://hackage.haskell.org/package/replace-megaparsec/docs/Replace-Megaparsec.html#v:streamEdit
   [ab]: https://hackage.haskell.org/package/replace-attoparsec/docs/Replace-Attoparsec-ByteString.html#v:streamEdit
   [at]: https://hackage.haskell.org/package/replace-attoparsec/docs/Replace-Attoparsec-Text.html#v:streamEdit
   [ra]: http://hackage.haskell.org/package/regex-applicative/docs/Text-Regex-Applicative.html#v:replace
-  [ph]: http://hackage.haskell.org/package/pcre-heavy/docs/Text-Regex-PCRE-Heavy.html
+  [ss]: http://hackage.haskell.org/package/stringsearch/docs/Data-ByteString-Search.html#v:replace
+  [ph]: http://hackage.haskell.org/package/pcre-heavy/docs/Text-Regex-PCRE-Heavy.html#v:gsub
+  [lb]: https://hackage.haskell.org/package/lens-regex-pcre/docs/Control-Lens-Regex-ByteString.html#v:match
+  [lt]: https://hackage.haskell.org/package/lens-regex-pcre/docs/Control-Lens-Regex-Text.html#v:match
 
 
   # Hypothetically Asked Questions
@@ -467,19 +488,22 @@ description: |
 
   2. *Is this a good idea?*
 
-     You may have heard it suggested that monadic parsers are better when
+     You may have
+     [heard it suggested](https://stackoverflow.com/questions/57667534/how-can-i-use-a-parser-in-haskell-to-find-the-locations-of-some-substrings-in-a/57712672#comment101804063_57667534)
+     that monadic parsers are better for pattern-matching when
      the input stream is mostly signal, and regular expressions are better
      when the input stream is mostly noise.
 
-     The premise of this library is:
-     that sentiment is outdated; monadic parsers are great for finding
-     small patterns in a stream of otherwise uninteresting text; and the
-     reluctance to forego the speedup opportunities afforded by restricting
-     ourselves to regular grammars is an old superstition about
+     The premise of this library is that monadic parsers are great for finding
+     small signal patterns in a stream of otherwise noisy text.
+
+     There is a reluctance to forego the speedup opportunities afforded by restricting
+     ourselves to regular grammars, but this is an old superstition about
      opportunities which
      [remain mostly unexploited anyway](https://swtch.com/~rsc/regexp/regexp1.html).
-     The performance compromise of allowing stack memory allocation (a.k.a pushdown
-     automata, a.k.a context-free grammar) was once considered
-     [controversial for *general-purpose* programming languages](https://vanemden.wordpress.com/2014/06/18/how-recursion-got-into-programming-a-comedy-of-errors-3/). I think we
+     The performance compromise of allowing stack memory allocation (a.k.a. pushdown
+     automata, a.k.a. context-free grammar) was once considered
+     [controversial for *general-purpose* programming languages](https://vanemden.wordpress.com/2014/06/18/how-recursion-got-into-programming-a-comedy-of-errors-3/).
+     I think we
      can now resolve that controversy the same way for pattern matching languages.
 license-name: BSD-2-Clause
