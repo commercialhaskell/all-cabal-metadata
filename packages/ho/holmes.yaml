@@ -1,0 +1,254 @@
+homepage: https://github.com/i-am-tom/holmes/
+changelog-type: ''
+hash: 71a1d7b0579234fb0d1e19a43b0ce2635fc9985628e813748fcc0fbdf00c3d03
+test-bench-deps:
+  split: ! '>=0.2 && <0.3'
+  base: -any
+  tasty-hedgehog: -any
+  tasty-discover: -any
+  unordered-containers: ! '>=0.2 && <0.3'
+  hspec: ==2.7.*
+  tasty-hspec: -any
+  hedgehog: ! '>=1.0 && <1.1'
+  containers: ! '>=0.6 && <0.7'
+  relude: ! '>=0.6 && <0.7'
+  holmes: -any
+  hashable: ==1.3.*
+  transformers: ! '>=0.5 && <0.6'
+  tasty: ==1.2.*
+  primitive: ! '>=0.7 && <0.8'
+maintainer: i.am.tom.harding@gmail.com
+synopsis: Tools and combinators for solving constraint problems.
+changelog: ''
+basic-deps:
+  logict: ! '>=0.7 && <0.8'
+  base: ! '>=4.13 && <4.14'
+  unordered-containers: ! '>=0.2 && <0.3'
+  hedgehog: ! '>=1.0 && <1.1'
+  mtl: ! '>=2.2 && <2.3'
+  hashable: ! '>=1.3 && <1.4'
+  transformers: ! '>=0.5 && <0.6'
+  primitive: ! '>=0.7 && <0.8'
+all-versions:
+- 0.1.0.0
+author: Tom Harding
+latest: 0.1.0.0
+description-type: markdown
+description: "# \U0001F575️‍♂️ Holmes\n\n**Holmes** is a library for computing **constraint-solving**
+  problems. Under\nthe hood, it uses **propagator networks** and **conflict-directed
+  clause\nlearning** to optimise the search over the parameter space.\n\n<!--\n\n```haskell\n{-#
+  OPTIONS_GHC -Wno-missing-methods -Wno-unused-top-binds #-}\n\n{-# LANGUAGE BlockArguments
+  #-}\n{-# LANGUAGE DeriveAnyClass #-}\n{-# LANGUAGE DeriveGeneric #-}\n{-# LANGUAGE
+  DerivingStrategies #-}\n{-# LANGUAGE RankNTypes #-}\n\nimport Data.List (transpose)\nimport
+  GHC.Generics (Generic)\nimport Data.Hashable (Hashable)\nimport Test.Hspec (describe,
+  hspec, it, shouldBe)\n```\n\n-->\n\n## \U0001F45F Example\n\n[Dinesman's\nproblem](https://rosettacode.org/wiki/Dinesman%27s_multiple-dwelling_problem)\nis
+  a nice first example of a constraint problem. In this problem, we imagine\n**five**
+  people — Baker, Cooper, Fletcher, Miller, and Smith —  living in a\nfive-story apartment
+  block, and we must figure out the floor on which each\nperson lives. Here's how
+  we state the problem with `Holmes`:\n\n```haskell\nimport Data.Holmes\n\ndinesman
+  :: IO (Maybe [ Defined Int ])\ndinesman = do\n  let guesses = 5 `from` [1 .. 5]\n\n
+  \ guesses `satisfying` \\[ baker, cooper, fletcher, miller, smith ] -> and'\n    [
+  distinct [ baker, cooper, fletcher, miller, smith ]\n    , baker ./= 5\n    , cooper
+  ./= 1\n    , fletcher ./= 1 .&& fletcher ./= 5\n    , miller .> cooper\n    , abs'
+  (smith .- fletcher) ./= 1\n    , abs' (fletcher .- cooper) ./= 1\n    ]\n```\n\n##
+  \U0001F463 Step-by-step problem-solving\n\nNow we've written the poster example,
+  how do we go about **stating** and\n**solving** our own constraint problems?\n\n###
+  ⚖️ 0. Pick a parameter type\n\nRight now, there are **two** parameter type constructors:
+  `Defined` and\n`Intersect`. The choice of type determines the **strategy** by which
+  we solve\nthe problem:\n\n- `Defined` only permits two levels of knowledge about
+  a value: **nothing** and\n  **everything**. In other words, it doesn't support a
+  notion of _partial_\n  information; we either know a value, or we don't. This is
+  fine for small\n  problem spaces, particularly when few branches are likely to fail,
+  but\n  we can usually achieve faster results using another type.\n\n- `Intersect`
+  stores a set of \"possible answers\", and attempts to eliminate\n  possibilities
+  as the computation progresses. For problems with many\n  constraints, this will
+  produce **significantly faster** results than\n  `Defined` as we can hopefully discover
+  failures much earlier.\n\nIt would seem that `Intersect` would be the best choice
+  in most cases, but\nbeware: it will only work for **small** enum types. An `Intersect
+  Int` for\nwhich we have no knowledge will contain every possible `Int`, and will\ntherefore
+  take an **intractable** time to compute. `Defined` has no such\nrestrictions.\n\n###
+  \U0001F5FA 1. State the parameter space\n\nNext, we need to produce a `Config` stating
+  the search space we want to explore\nwhen looking for satisfactory inputs. The simplest
+  way to do this is with the\n`from` function:\n\n```hs\nfrom :: Int -> [ x ] -> Config
+  Holmes (Defined x)\n```\n\n```hs\nfrom :: Int -> [ x ] -> Config Holmes (Intersect
+  x)\n```\n\nIf, for example, we wanted to solve a Sudoku problem, we might say something\nlike
+  this:\n\n```haskell\ndefinedConfig :: Config Holmes (Defined Int)\ndefinedConfig
+  = 81 `from` [ 1 .. 9 ]\n```\n\nWe read this as, \"`81` variables whose values must
+  all be numbers between `1`\nand `9`\". At this point, we place no constraints (such
+  as uniqueness of rows or\ncolumns); we're just stating the possible range of values
+  that could exist in\neach parameter.\n\nWe could do the same for `Intersect`, but
+  we'd first need to produce some\n**enum** type to represent our parameter space:\n\n```haskell\ndata
+  Value = V1 | V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9\n  deriving stock (Eq, Ord, Show,
+  Enum, Bounded, Generic)\n  deriving anyclass (Hashable)\n\ninstance Num Value where
+  -- Syntactic sugar for numeric literals.\n  fromInteger = toEnum . pred . fromInteger\n```\n\n_Now_,
+  we can produce an `Intersect` parameter space. Because we can now work\nwith a type
+  who has only `9` values, rather than all possible `Int` values,\nproducing the initial
+  possibilities list becomes tractable:\n\n```haskell\nintersectConfig :: Config Holmes
+  (Intersect Value)\nintersectConfig = 81 `from` [ 1 .. 9 ]\n```\n\nThere's one more
+  function that lets us do slightly better with an `Intersect`\nstrategy, and that's
+  `using`:\n\n```hs\nusing :: [ Intersect Value ] -> Config Holmes (Intersect Value)\n```\n\nWith
+  `using`, we can give a precise \"initial state\" for all the `Intersect`\nvariables
+  in our system. This, it turns out, is very convenient when we're\ntrying to state
+  sudoku problems:\n\n```haskell\nsquares :: Config Holmes (Intersect Value)\nsquares
+  = let x = mempty in using\n    [ x, 5, 6,   x, x, 3,   x, x, x\n    , 8, 1, x,   x,
+  x, x,   x, x, x\n    , x, x, x,   5, 4, x,   x, x, x\n\n    , x, x, 4,   x, x, x,
+  \  x, 8, 2\n    , 6, x, 8,   2, x, 4,   3, x, 7\n    , 7, 2, x,   x, x, x,   4,
+  x, x\n\n    , x, x, x,   x, 7, 8,   x, x, x\n    , x, x, x,   x, x, x,   x, 9, 3\n
+  \   , x, x, x,   3, x, x,   8, 2, x\n    ]\n```\n\nNow, let's write some **constraints**!\n\n###
+  \U0001F4EF 2. Declare your constraints\n\nTypically, your constraints should be
+  stated as a **predicate** on the input\n**parameters**, with a type that, when specialised
+  to your problem, should look\nsomething like `[Prop Holmes (Defined Int)] -> Prop
+  Holmes (Defined Bool)`.\nNow, what's this `Prop` type?\n\n#### \U0001F578 Propagators\n\nIf
+  this library has done its job properly, this predicate shouldn't look too\ndissimilar
+  to regular predicates. However, behind the scenes, the `Prop` type\nis wiring up
+  a lot of **relationships**.\n\nAs an example, consider the `(+)` function. This
+  has two inputs and one output,\nand the output is the sum of the two inputs. This
+  is totally fixed, and there's\nnothing we can do about it. This is fine when we
+  write normal programs, because\nwe only have **one-way information flow**: input
+  flows to output, and it's as\nsimple as that.\n\nWhen we come to constraint problems,
+  however, we have **multi-way information\nflow**: we might know the output before
+  we know the inputs! Ideally, it'd be\nnice in these situations if we could \"work
+  backwards\" to the information we're\nmissing.\n\nWhen we say `x .+ y .== z`, we
+  actually wire up **multiple** relationships:\n`x + y = z`, `z - y = x`, and `z -
+  x = y`. That way, as soon as we learn\n**two** of the three values involved in addition,
+  we can infer the other!\n\nThe operators provided by this library aim to **maximise**
+  information flow\naround a propagator network by automatically wiring up all the
+  different\n**identities** for all the different operators. We'll see later that
+  this\nallows us to write seemingly-magical functions like `backwards`: given a\nfunction
+  and an **output**, we can produce the function's input!\n\n#### \U0001F6E0 The problem-solving
+  toolkit\n\nWith all this in mind, the following functions are available to us for\nmulti-directional
+  information flow. We'll leave the type signatures to Haddock,\nand instead just
+  run through the functions and either their analogous regular\nfunctions _or_ a brief
+  explanation of what they do:\n\n##### \U0001F39A Boolean functions\n\n| Function
+  | Analogous function / notes |\n| --:|:-- |\n| `(.&&)` | `(&&)` |\n| `all'` | `all`
+  |\n| `allWithIndex'` | `all'`, but the predicate _also_ receives the list index
+  |\n| `and'` | `and` |\n| `(.\\|\\|)` | `(\\|\\|)` |\n| `any'` | `any` |\n| `anyWithIndex'`
+  | `any'`, but the predicate _also_ receives the list index |\n| `or'` | `or` |\n|
+  `not'` | `not` |\n| `false` | `False` |\n| `true` | `True` |\n\n##### \U0001F3F3️‍\U0001F308
+  Equality functions\n\n| Function | Analogous function / notes |\n| --:|:-- |\n|
+  `(.==)` | `(==)` |\n| `(./=)` | `(/=)` |\n| `distinct` | Are all list elements _different_
+  (according to `(./=)`)? |\n\n##### \U0001F948 Comparison functions\n\n| Function
+  | Analogous function / notes |\n| --:|:-- |\n| `(.<)` | `(<)` |\n| `(.<=)` | `(<=)`
+  |\n| `(.>)` | `(>)` |\n| `(.>=)` | `(>=)` |\n\n##### \U0001F393 Arithmetic functions\n\n|
+  Function | Analogous function / notes |\n| --:|:-- |\n| `(.*)` | `(*)` |\n| `(./)`
+  | `(/)` |\n| `(.+)` | `(+)` |\n| `(.-)` | `(-)` |\n| `(.%.)` | `mod` |\n| `(.*.)`
+  | `(*)` for _integral_ functions |\n| `(./.)` | `div` |\n| `abs'` | `abs` |\n| `negate'`
+  | `negate` |\n| `recip'` | `recip` |\n\n##### \U0001F331 Information-generating
+  functions\n\n| Function | Analogous function / notes |\n| --:|:-- |\n| `(.$)` |
+  Apply a function to the value _within_ the parameter type.\n| `zipWith'` | Similar
+  to `liftA2`; generate results from the parameters. |\n| `(.>>=)` | Turn each value
+  within the parameter type into the parameter type. |\n\nThe analogy gets stretched
+  a bit here, unfortunately. It's perhaps helpful to\nthink of these functions in
+  terms of `Intersect`:\n\n- `(.$)` maps over the remaining candidates in an `Intersect`.\n\n-
+  `zipWith'` creates an `Intersect` of the **cartesian product** of the two\n  given
+  `Intersect`s, with the pairs applied to the given function.\n\n- `(.>>=)` takes
+  every remaining candidate, applies the given function, then\n  **unions** the results
+  to produce an `Intersect` of all possible results.\n\n---\n\nUsing the above toolkit,
+  we could express the constraints of our **sudoku**\nexample. After we establish
+  some less interesting functions for splitting up\nour `81` inputs into helpful chunks...\n\n```haskell\nrows
+  :: [ x ] -> [[ x ]]\nrows [] = []\nrows xs = take 9 xs : rows (drop 9 xs)\n\ncolumns
+  :: [ x ] -> [[ x ]]\ncolumns = transpose . rows\n\nsubsquares :: [ x ] -> [[ x ]]\nsubsquares
+  xs = do\n  x <- [ 0 .. 2 ]\n  y <- [ 0 .. 2 ]\n\n  let subrows = take 3 (drop (y
+  * 3) (rows xs))\n      values  = foldMap (take 3 . drop (x * 3)) subrows\n\n  pure
+  values\n```\n\n... we can use the **propagator toolkit** to specify our constraints
+  in a\ndelightfully straightforward way:\n\n```haskell\nconstraints :: forall m.
+  MonadCell m => [ Prop m (Intersect Value) ] -> Prop m (Intersect Bool)\nconstraints
+  board = and'\n  [ all' distinct (columns    board)\n  , all' distinct (rows       board)\n
+  \ , all' distinct (subsquares board)\n  ]\n```\n\n> _The type signature looks a
+  little bit **ugly** here, but the polymorphism is\nto guarantee that predicate computations
+  are totally generic propagator\nnetworks that can be run in any interpretation strategy.
+  As we'll see later,\n`Holmes` isn't the only one capable of solving a mystery!_\n>\n>
+  _Typically, we write the constraint predicate inline (as we did for the\n> Dinesman
+  example above), so we never usually write this signature anyway!)_\n\nWe've explained
+  all the rules and **constraints** of the sudoku puzzle, and\ndesigned a propagator
+  network to solve it! Now, why don't we get ourselves a\n**solution**?\n\n### \U0001F4A1
+  3. Solving the puzzle\n\nCurrently, `Holmes` only exposes two strategies for solving
+  constraint\nproblems:\n\n- `satisfying`, which returns the **first** valid configuration
+  that is found,\n  **if one exists**. As soon as this result has been found, computation
+  will\n  cease, and this program will return the result.\n\n- `whenever`, which returns
+  **all** valid configurations in the search space.\n  This function could potentially
+  run for a long time, depending on the size of\n  the search space, so you might
+  find better results by sticking to\n  `satisfying` and simply adding more constraints
+  to eliminate the results you\n  don't want!\n\nThese functions are named to be written
+  as **infix** functions, which hopefully\nmakes our programs a lot easier to read:\n\n```haskell\nsudoku
+  :: IO (Maybe [ Intersect Value ])\nsudoku = squares `satisfying` constraints\n```\n\nAt
+  last, we combine the three steps to solve our problem. This README is a\n**literate
+  Haskell file** containing a **complete sudoku solver**, so feel free\nto run `cabal
+  new-test readme` and see for yourself!\n\n## \U0001F381 Bonus surprises\n\nWe've
+  now covered almost the **full API** of the library. However, there are a\ncouple
+  extra little surprises in there for the curious few:\n\n### \U0001F4D6 `Control.Monad.Watson`\n\n`Watson`
+  knows `Holmes`' methods, and can apply them to compute results. Unlike\n`Holmes`,
+  however, `Watson` is built on top of `ST` rather than `IO`, and is\nthus is a much
+  purer soul.\n\nUsers can import `Control.Monad.Watson` and use the equivalent `satisfying`
+  and\n`whenever` functions to return results _without_ the `IO` wrapper, thus making\nthese
+  computations **observably pure**! For most computations — certainly those\noutlined
+  in this README — `Watson` is more than capable of deducing results.\n\n### \U0001F3B2
+  Random restart with `shuffle`\n\n`Watson` isn't quite as capable as `Holmes`, however.
+  Consider a typical\n`Config`:\n\n```haskell\nexample :: Config Holmes (Defined Int)\nexample
+  = 1 `from` [1 .. 10]\n```\n\nWith this `Config`, a program will run with a single
+  parameter. For the _first_\nrun, that parameter will be set to `Exactly 1`. For
+  the _second_ run, it will\nbe set to `Exactly 2`. In other words, it tries each
+  value **in order**.\n\nFor many problems, however, we can get to results faster
+  — or produce more\ndesirable results — by applying some **randomness** to this order.
+  This is\nespecially useful in problems such as **procedural generation**, where\nrandomness
+  tends to lead to more **natural**-seeming outputs. See the\n`WaveFunctionCollapse`
+  example for more details!\n\n### ♻️ Running functions forwards _and_ backwards\n\nWith
+  `satisfying` and `whenever`, we build a **predicate** on the input\nparameters we
+  supply. However, we can use propagators to create normal\nfunctions, too! Consider
+  the following function:\n\n```haskell\ncelsius2fahrenheit :: MonadCell m => Prop
+  m (Defined Double) -> Prop m (Defined Double)\ncelsius2fahrenheit c = c .* (9 ./
+  5) .+ 32\n```\n\nThis function converts a temperature written in **celsius** to
+  **fahrenheit**.\nThe _interesting_ part of this, however, is that this is a function
+  over\n**propagator networks**. This means that, while we can use it as a _regular_\nfunction...\n\n```haskell\nfahrenheit
+  :: Maybe (Defined Double)\nfahrenheit = forward celsius2fahrenheit 40.0 -- Just
+  104.0\n```\n\n... the \"input\" and \"output\" labels are meaningless! In fact,
+  we can just as\neasily pass a value to the function as the **output** and get back
+  the\n**input**!\n\n```haskell\ncelsius :: Maybe (Defined Double)\ncelsius = backward
+  celsius2fahrenheit 104.0 -- Just 40.0\n```\n\n> _Because neither `forward` nor `backward`
+  require any parameter search, they\n> are both computed by `Watson`, so the results
+  are **pure**!_\n\n<!--\n\n```haskell\nmain :: IO ()\nmain = hspec do\n  describe
+  \"Dinesman's Multiple Dwellings problem\" do\n    it \"should be solved successfully\"
+  do\n      dinesman >>= \\result ->\n        result `shouldBe` Just [ 3, 2, 4, 5,
+  1 ]\n\n  describe \"Sudoku\" do\n    it \"should be solved successfully\" do\n      sudoku
+  >>= \\result ->\n        result `shouldBe` Just solution\n\n  describe \"forward
+  / backward\" do\n    it \"works forwards\"  do fahrenheit `shouldBe` Just 104.0\n
+  \   it \"works backwards\" do celsius    `shouldBe` Just  40.0\n\nsolution :: [Intersect
+  Value]\nsolution\n  = [ 4, 5, 6,   1, 8, 3,   2, 7, 9\n    , 8, 1, 2,   6, 9, 7,
+  \  5, 3, 4\n    , 3, 7, 9,   5, 4, 2,   6, 1, 8\n\n    , 1, 3, 4,   7, 6, 5,   9,
+  8, 2\n    , 6, 9, 8,   2, 1, 4,   3, 5, 7\n    , 7, 2, 5,   8, 3, 9,   4, 6, 1\n\n
+  \   , 2, 6, 3,   9, 7, 8,   1, 4, 5\n    , 5, 8, 1,   4, 2, 6,   7, 9, 3\n    ,
+  9, 4, 7,   3, 5, 1,   8, 2, 6\n    ]\n```\n\n-->\n\n## \U0001F682 Exploring the
+  code\n\nNow we've covered the **what**, maybe you're interested in the **how**!
+  If\nyou're new to the **code** and want to get a feel for how the library works:\n\n-
+  The best place to start is probably in `Data/JoinSemilattice/Class/*`\n  (we can
+  ignore `Merge` until the next step). These will give you an idea of\n  how we represent
+  **relationships** (as opposed to **functions**) in `Holmes`.\n\n- After that, `Control/Monad/Cell/Class.hs`
+  gives an overview of the\n  primitives for building a propagator network. In particular,
+  see `unary` and\n  `binary` for an idea of how we lift our **relationships** into
+  a network.\n  Here's where `src/Data/JoinSemilattice/Class/Merge` gets used, too,
+  so the\n  `write` primitive should give you an idea of why it's useful.\n\n- `src/Data/Propagator.hs`
+  introduces the high-level user-facing abstraction\n  for stating constraints. Most
+  of these functions are just wrapped calls to\n  the aforementioned `unary` or `binary`,
+  and really just add some syntactic\n  sugar.\n\n- Finally, `Control/Monad/MoriarT.hs`
+  is a full implementation of the interface\n  including support for **provenance**
+  and **backtracking**. It also uses the\n  functions in `Data/CDCL.hs` to optimise
+  the parameter search. This is the\n  base transformer on top of which we build `Control/Monad/Holmes.hs`
+  _and_\n  `Control/Monad/Watson.hs`.\n\nThus concludes our **whistle-stop tour**
+  of my favourite sights in the\nrepository!\n\n## ☎️ Questions?\n\nIf anything isn't
+  clear, feel free to open an issue, or just message [me on\nTwitter](https://twitter.com/am_i_tom);
+  it's where you'll most likely get a\nreply! I want this project to be an accessible
+  way to approach the fields of\n**propagators**, **constraint-solving**, and **CDCL**.
+  If there's anything I\ncan do to improve this repository towards that goal, please
+  **let me know**!\n\n## \U0001F490 Acknowledgements\n\n- [Edward Kmett](https://twitter.com/kmett),
+  whose\n  [propagators repository](https://github.com/ekmett/propagators)\\* gave
+  us the\n  `Prop` abstraction. I spent several months looking for alternative ways
+  to\n  represent computations, and never came close to something as neat.\n\n- [Marco
+  Sampellegrini](https://twitter.com/_alpacaaa), [Alex\n  Peitsinis](https://twitter.com/alexpeits),
+  [Irene\n  Papakonstantinou](https://twitter.com/futumorphism), and plenty others
+  who\n  have helped me figure out how to present this library in a\n  maximally-accessible
+  way.\n\n\\* _This repository also approaches propagator network computations using
+  Andy\nGill's [observable sharing](http://hackage.haskell.org/package/data-reify)\nmethods,
+  which may be of interest! Neither `Holmes` nor `Watson` implement\nthis, as it requires
+  some small breaks to purity and referential transparency,\nof which users must be
+  aware. We sacrifice some performance gains for ease of\nuse._\n"
+license-name: MIT
