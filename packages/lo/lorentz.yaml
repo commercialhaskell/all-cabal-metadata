@@ -1,6 +1,6 @@
 homepage: https://gitlab.com/morley-framework/morley
 changelog-type: markdown
-hash: 29c3b3ee6425e9d6eabdc4ab70cc89e9d40a94496de97ff666a2d30f34ce6237
+hash: 94492f1546191c3a4cc0763189aa3313473aa5175ff0c7329fbedf9de0240126
 test-bench-deps:
   first-class-families: -any
   bimap: -any
@@ -11,8 +11,9 @@ test-bench-deps:
   text: -any
   morley: -any
   type-spec: -any
+  filepath: -any
   constraints: -any
-  base-noprelude: ! '>=4.7 && <5'
+  base-noprelude: '>=4.7 && <5'
   data-default: -any
   HUnit: -any
   containers: -any
@@ -30,23 +31,51 @@ synopsis: EDSL for the Michelson Language
 changelog: |
   Unreleased
   ==========
+  <!-- Append new entries here -->
+
+  0.2.0
+  =====
+  * [!346](https://gitlab.com/morley-framework/morley/-/merge_requests/346)
+    Added `docStorage` and `contractGeneralDefault`.
+  * [!306](https://gitlab.com/morley-framework/morley/-/merge_requests/306)
+    Deprecated `mapMigrationCode` in favor of `MapLorentzInstr`.
+  * [!326](https://gitlab.com/morley-framework/morley/-/merge_requests/326)
+  Updated contract registry (`Lorentz.ContractRegistry`):
+    + Now it can print initial storage apart from contract and documentation.
+    + Some extra fields were added to `ContractInfo`.
+    + Logic is captured in the `runContractRegistry` function.
+    + If you don't specify output file, we will use a file with name constructed from contract name. Pass `-` if you want `stdout`.
+  * [!245](https://gitlab.com/morley-framework/morley/-/merge_requests/245) Added `HasTypeAnn` instance for `FutureContract arg`.
+  * [!294](https://gitlab.com/morley-framework/morley/-/merge_requests/294)
+    + Added `Paths_*` modules to `autogen-modules` in cabal files.  Removed `-O0`
+    + from default GHC options. Please set `ghc-options` in your `stack.yaml` or
+    `cabal.project.local`.
+  * [!271](https://gitlab.com/morley-framework/morley/merge_requests/271) Renamed
+    'Contract' to 'ContractCode', and appended "Code" to the names of two functions:
+    'convertContract' and 'printTypedContract'
+  * [!267](https://gitlab.com/morley-framework/morley/-/merge_requests/267)
+    + Retain type annotations in entrypoints derivation.
+    + Remove overlappable `HasTypeAnn` instance defined for nearly each type.
+      Add `default` `getTypeAnn` method definition instead and manually define `HasTypeAnn` instance for each type instead (trivially).
+      When you create a new data type with `IsoValue` instance, you usually have to derive `HasTypeAnn` as well.
 
   0.1.0
   =====
 
   Initial release extracted from the [morley](https://hackage.haskell.org/package/morley) package.
 basic-deps:
-  first-class-families: ! '>=0.5.0.0'
+  tezos-bake-monitor-lib: -any
+  first-class-families: '>=0.5.0.0'
   bimap: -any
   fmt: -any
   bytestring: -any
-  morley-prelude: ! '>=0.3.0'
+  morley-prelude: '>=0.3.0'
+  aeson-pretty: -any
   unordered-containers: -any
-  hspec: -any
   text: -any
   morley: -any
-  constraints: ! '>=0.11'
-  base-noprelude: ! '>=4.7 && <5'
+  constraints: '>=0.11'
+  base-noprelude: '>=4.7 && <5'
   data-default: -any
   HUnit: -any
   containers: -any
@@ -57,27 +86,224 @@ basic-deps:
   ghc-prim: -any
   interpolate: -any
   formatting: -any
+  mtl: -any
   optparse-applicative: -any
-  tasty: -any
   named: -any
   QuickCheck: -any
   template-haskell: -any
 all-versions:
 - 0.1.0
+- 0.2.0
 author: camlCase, Serokell, Tocqueville Group
-latest: 0.1.0
+latest: 0.2.0
 description-type: markdown
 description: |
   # Morley Lorentz EDSL
+
+  ## Table of contents
+
+  * [Overview](#overview)
+  * [Writing contracts in Lorentz](#writing-contracts-in-lorentz)
+  * [Lorentz contract example](#lorentz-example)
+  * [FAQ](#faq)
+
+  ## Overview
 
   Lorentz is a powerful meta-programming tool which allows one to write Michelson contracts directly in Haskell.
 
   Haskell's type checker and automatic type inference facilitate contracts implementation and reduce boilerplate related to types.
   Adoption of Algebraic Data Types makes work with complex objects safe and convenient.
-  Later Lorentz contract can be dumped as a plain textual Michelson contract using functions from [`Michelson.Printer`](/src/Michelson/Printer.hs).
+  Later Lorentz contract can be dumped as a plain textual Michelson contract using functions from [`Michelson.Printer`](../morley/src/Michelson/Printer.hs).
+
+  As an addition, you can optimize the transpiled Michelson contract before printing
+  using functions from [`Michelson.Optimizer`](../morley/src/Michelson/Optimizer.hs).
+  E.g. this optimizer will replace `IF {} {}` with `DROP`. For more possible optimizations
+  please refer to the module mentioned earlier.
 
   You can find Lorentz instructions in [`Lorentz`](src/Lorentz.hs) modules.
 
-  Examples of using Lorentz eDSL reside in the [`morley-ledgers`](/morley-ledgers) package.
-  For more information, refer to that package's [README](/morley-ledgers/README.md).
+  Examples of using Lorentz eDSL reside in the [`morley-ledgers`](../morley-ledgers) package.
+  For more information, refer to that package's [README](/code/morley-ledgers/README.md).
+
+  Also, to get more information about Lorentz you can read our [blogpost](https://serokell.io/blog/lorentz-implementing-smart-contract-edsl-in-haskell).
+
+  ## Writing contracts in Lorentz
+
+  Basically, Lorentz function is just the haskell function that transforms one
+  stack to another, this can be presented as the following operator:
+  ```haskell
+  (inp :: [Kind.Type]) :-> (out :: [Kind.Type])
+  ```
+
+  In order to list types on the stack, we will use `&` operator:
+  ```haskell
+  (a :: Kind.Type) & (b :: [Kind.Type]) = a ': b
+  ```
+  For example, `Natural & Integer & Bool & '[]`.
+
+  Such design provides a nice code decomposition ability.
+
+  Contract code in Lorentz is Lorentz function with specific type:
+  ```haskell
+  type ContractOut storage = '[([Operation], storage)]
+  type ContractCode parameter storage = '[(parameter, storage)] :-> ContractOut storage
+  ```
+
+  Lorentz reimplements all existing [instructions](./src/Lorentz/Instr.hs) and
+  [macros](./src/Lorentz/Macro.hs) from Michelson.
+
+  Apart from reimplementing existing Michelson functionality, Lorentz provides bunch of
+  additional features:
+
+  * Pattern-matching on ADTs.
+  ```haskell
+  data TrafficLight
+    = Red
+    | Yellow
+    | Green
+    deriving stock Generic
+    deriving anyclass IsoValue
+
+  showTrafficLight :: TrafficLight & s :-> MText & s
+  showTrafficLight = caseT
+    ( #cRed /-> push [mt|Red|]
+    , #cYellow /-> push [mt|Yellow|]
+    , #cGreen /-> push [mt|Green|]
+    )
+  ```
+  * `RebindableSyntax` for Lorentz instructions, including `do` notation and `if` operator
+
+  ```haskell
+  sumIsGt10 :: Integer & Integer & s :-> Bool & s
+  sumIsGt10 = do
+    add
+    dip $ push @Integer 10
+    gt
+
+  foo :: Integer & s :-> Integer & s
+  foo = do
+    dup
+    sumIsGt10
+    if Holds
+    then do push @Integer 1
+    else do push @Integer -1
+  ```
+  * Records with getters.
+
+  ```haskell
+  data UserInfo = UserInfo
+    { firstName :: MText
+    , secondName :: MText
+    , userId :: Natural
+    } deriving stock Generic
+      deriving anyclass IsoValue
+
+  getFullName :: UserInfo & s :-> MText & s
+  getFullName = do
+    getField #firstName
+    dip $ toField #secondName
+    concat
+  ```
+
+  * Automatic contracts documentation generation.
+
+    Lorentz provides primitives for embedding documentation in the contract code and
+    functions to produce documentation in Markdown, they can be found in
+    [`Lorentz.Doc`](./src/Lorentz/Doc.hs) and [`Michelson.Doc`](../morley/src/Michelson/Doc.hs) modules.
+    Documentation examples can be found [here](https://gitlab.com/morley-framework/morley/-/tree/autodoc/master/morley-ledgers/autodoc)
+    and [here](https://gitlab.com/morley-framework/morley/-/tree/autodoc/master/morley-multisig/autodoc).
+
+  <a name="lorentz-example"></a>
+  ## Sample smart contract written in Lorentz
+
+  Example contract with autodoc:
+  ```haskell
+  data MeasurementMethod
+    = ParrotStep
+    | MonkeyStep
+    | ElephantStep
+    deriving stock Generic
+    deriving anyclass (IsoValue, HasTypeAnn)
+
+
+  instance TypeHasDoc MeasurementMethod where
+    typeDocName _ = "MeasurmentMethod"
+    typeDocMdDescription =
+      "This type defines the way of measuring boa length. \
+      \Single boa constrictor corresponds to 38 parrot steps, 31 monkey step \
+      \and 9 elephant steps."
+
+  data Parameter
+    = MeasureBoaConstrictor ("method" :! MeasurementMethod)
+    | Zero ()
+    deriving stock Generic
+    deriving anyclass IsoValue
+
+  instance ParameterHasEntryPoints Parameter where
+    type ParameterEntryPointsDerivation Parameter = EpdPlain
+
+  type Storage = Natural
+
+  measureBoaConstrictor :: ContractCode Parameter Storage
+  measureBoaConstrictor = contractName "Boa constrictor measurement" $ do
+    doc $ DDescription "This contract measures boa constrictor."
+    unpair
+    dip drop
+    entryCase @Parameter (Proxy @PlainEntryPointsKind)
+      ( #cMeasureBoaConstrictor /-> do
+          doc $ DDescription "Measure the boa constrictor with given method."
+          fromNamed #method
+          caseT @MeasurementMethod
+            ( #cParrotStep /-> push @Natural 38
+            , #cMonkeyStep /-> push @Natural 31
+            , #cElephantStep /-> push @Natural 9
+            )
+      , #cZero /-> do
+          doc $ DDescription "Put zero to the storage."
+          drop; push @Natural 0
+      )
+    nil; pair
+  ```
+
+  ### Generated documentation
+
+  Generated documentation for this contract can be found [here](./doc/sampleAutodoc.md).
+
+  ### Transpiled Michelson contract
+
+  ```
+  parameter (or (or :method %measureBoaConstrictor unit
+                                                   (or unit
+                                                       unit))
+                (unit %zero));
+  storage nat;
+  code { CAST (pair (or (or unit (or unit unit)) unit) nat);
+         DUP;
+         CAR;
+         DIP { CDR };
+         DIP { DROP };
+         IF_LEFT { IF_LEFT { DROP;
+                             PUSH nat 38 }
+                           { IF_LEFT { DROP;
+                                       PUSH nat 31 }
+                                     { DROP;
+                                       PUSH nat 9 } } }
+                 { DROP;
+                   PUSH nat 0 };
+         NIL operation;
+         PAIR };
+  ```
+
+  ## FAQ
+
+  <!-- This question should be removed once https://gitlab.com/morley-framework/morley/issues/79 is resolved -->
+  * Q: I added a new parameter case to contract and GHC went mad.
+
+    A: Ensure that your number of entry points does not exceed the limit set in [`Util.TypeTuple.Instances`](../morley/src/Util/TypeTuple/Instances.hs).
+
+  * Q: I added one more datatype that is used in the contract and GHC reports with errors related
+       to `Rep` type family.
+
+    A: Make sure your datatype derives `Generic` instance and all primitive types used in it have `IsPrimitiveValue`
+       set to `True`.
 license-name: AGPL-3.0-or-later
