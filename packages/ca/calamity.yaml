@@ -1,36 +1,43 @@
 homepage: https://github.com/nitros12/calamity
 changelog-type: markdown
-hash: 53c92d943fbf196a5e91a58b73ca55120075a8dad994a3d8962a6b02e25ebd49
+hash: 4b6fd060c9c56dd9c830da1c9ba844abec5b1c44c43b6147c6d7b9e471e7a574
 test-bench-deps: {}
 maintainer: ben@bensimms.moe
 synopsis: A library for writing discord bots
 changelog: |
   # Changelog for Calamity
 
+  ## 0.1.2.0
+
+  *2020-04-27*
+
+  * Calamity.Client: runBotIO now has a `Polysemy.Fail` effect
+
   ## Unreleased changes
 basic-deps:
   focus: '>=1.0 && <2'
-  polysemy-plugin: ==0.2.*
-  exceptions: ==0.10.*
-  fmt: ==0.6.*
-  bytestring: ==0.10.*
+  polysemy-plugin: '>=0.2 && <0.3'
+  exceptions: '>=0.10 && <0.11'
+  fmt: '>=0.6 && <0.7'
+  bytestring: '>=0.10 && <0.11'
   reflection: '>=2.1 && <3'
   lens-aeson: '>=1.1 && <2'
   stm: '>=2.5 && <3'
   base: '>=4.12 && <5'
-  data-default-class: ==0.1.*
+  data-default-class: '>=0.1 && <0.2'
   time: '>=1.8 && <1.11'
-  unordered-containers: ==0.2.*
+  unordered-containers: '>=0.2 && <0.3'
   text: '>=1.2 && <2'
-  deque: ==0.4.*
-  di-polysemy: ==0.1.*
+  deque: '>=0.4 && <0.5'
+  di-polysemy: '>=0.1.1 && <0.2'
   generic-override-aeson: '>=0.0.0.0 && <0.0.1'
   text-show: '>=3.8 && <4'
   async: '>=2.2 && <3'
-  websockets: ==0.12.*
+  websockets: '>=0.12 && <0.13'
   http-date: '>=0.0.8 && <0.1'
+  containers: '>=0.6 && <0.7'
   lens: '>=4.18 && <5'
-  concurrent-extra: ==0.7.*
+  concurrent-extra: '>=0.7 && <0.8'
   wuss: '>=1.1 && <2'
   mtl: '>=2.2 && <3'
   wreq-patchable: '>=1.0 && <2'
@@ -40,17 +47,18 @@ basic-deps:
   polysemy: '>=1.3 && <2'
   generic-lens: '>=2.0 && <3'
   deepseq: '>=1.4.4.0 && <2'
-  df1: ==0.3.*
-  scientific: ==0.3.*
+  df1: '>=0.3 && <0.4'
+  scientific: '>=0.3 && <0.4'
   stm-containers: '>=1.1 && <2'
-  http-types: ==0.12.*
-  typerep-map: ==0.3.*
+  http-types: '>=0.12 && <0.13'
+  typerep-map: '>=0.3 && <0.4'
   aeson: '>=1.4 && <2'
-  vector: ==0.12.*
+  vector: '>=0.12 && <0.13'
 all-versions:
 - 0.1.0.0
+- 0.1.2.0
 author: Ben Simms
-latest: 0.1.0.0
+latest: 0.1.2.0
 description-type: markdown
 description: |
   # Calamity
@@ -78,6 +86,7 @@ description: |
 
   import           Calamity
   import           Calamity.Cache.InMemory
+  import           Calamity.Metrics.Noop
 
   import           Control.Concurrent
   import           Control.Concurrent.STM.TVar
@@ -110,10 +119,16 @@ description: |
     P.runAtomicStateTVar var $ P.reinterpret (\case
                                                 GetCounter -> P.atomicState (\v -> (v + 1, v))) m
 
-  handleErrorByLogging m = do
+  handleFailByLogging m = do
     r <- P.runFail m
     case r of
       Left e -> DiP.error (e ^. packed)
+      _      -> pure ()
+
+  handleFailByPrinting m = do
+    r <- P.runFail m
+    case r of
+      Left e -> P.embed $ print (show e)
       _      -> pure ()
 
   info = DiP.info @Text
@@ -121,25 +136,26 @@ description: |
 
   main :: IO ()
   main = do
-    P.runFinal . P.embedToFinal . runCounterAtomic . runCacheInMemory $ runBotIO (BotToken "") $ do
-      react @"messagecreate" $ \msg -> handleErrorByLogging $ do
-        when (msg ^. #content == "!count") $ replicateM_ 3 $ do
-          val <- getCounter
-          info $ "the counter is: " <> fromStrict (showt val)
-          void . invokeRequest $ CreateMessage (msg ^. #channelID) ("The value is: " <> showt val)
-        when (msg ^. #content == "!say hi") $ replicateM_ 3 . P.async $ do
-          info "saying heya"
-          Right msg' <- invokeRequest $ CreateMessage (msg ^. #channelID) "heya"
-          info "sleeping"
-          P.embed $ threadDelay (5 * 1000 * 1000)
-          info "slept"
-          void . invokeRequest $ EditMessage (msg ^. #channelID) msg' (Just "lol") Nothing
-          info "edited"
-        when (msg ^. #content == "!explode") $ do
-          Just x <- pure Nothing
-          debug "unreachable!"
-        when (msg ^. #content == "!bye") $ do
-          void . invokeRequest $ CreateMessage (msg ^. #channelID) "bye!"
-          stopBot
+    P.runFinal . P.embedToFinal . handleFailByPrinting . runCounterAtomic . runCacheInMemory . runMetricsNoop $ runBotIO
+      (BotToken "") $ do
+        react @"messagecreate" $ \msg -> handleFailByLogging $ do
+          when (msg ^. #content == "!count") $ replicateM_ 3 $ do
+            val <- getCounter
+            info $ "the counter is: " <> fromStrict (showt val)
+            void . invokeRequest $ CreateMessage (msg ^. #channelID) ("The value is: " <> showt val)
+          when (msg ^. #content == "!say hi") $ replicateM_ 3 . P.async $ do
+            info "saying heya"
+            Right msg' <- invokeRequest $ CreateMessage (msg ^. #channelID) "heya"
+            info "sleeping"
+            P.embed $ threadDelay (5 * 1000 * 1000)
+            info "slept"
+            void . invokeRequest $ EditMessage (msg ^. #channelID) msg' (Just "lol") Nothing
+            info "edited"
+          when (msg ^. #content == "!explode") $ do
+            Just x <- pure Nothing
+            debug "unreachable!"
+          when (msg ^. #content == "!bye") $ do
+            void . invokeRequest $ CreateMessage (msg ^. #channelID) "bye!"
+            stopBot
   ```
 license-name: MIT
