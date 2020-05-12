@@ -1,26 +1,32 @@
 homepage: ''
 changelog-type: markdown
-hash: 428eb42a4f528705242d18a13ffc7d1f3d72e8a9f0a9bfd73f0e9b391a15e484
+hash: 72fcc4a708520ef7f3d21aa498d6a6214998a82a73c4200ef9a08b6cb307830d
 test-bench-deps: {}
 maintainer: dan.firth@homotopic.tech
 synopsis: Re-export of Shake using well-typed paths and ReaderT.
-changelog: "# Changelog for shake-plus\n\n## v0.0.2.1\n\n* Add functions based on
-  [Within](https://hackage.haskell.org/package/path) to better\n  keep track of source
-  and target directories.\n* Reexport more shake functions to remove need to import
-  vanilla shake qualified.\n* Add convenience functions `loadSortFilterApply` and
-  `loadSortFilterApplyW` for batch\n  loading via `MonadAction`.\n* Add more of the
-  API surface with `Path` and `Within` including variants of `need`, `want`\n  `readFile`,
-  `writeFile`. \n\n## v0.0.1.0\n\n* Initial sketch of shake-plus with reexported functions.
-  Mostly oracles,\n  filepaths and directory functions using\n  [Path](https://hackage.haskell.org/package/path),
-  and `MonadAction`,\n  `MonadUnliftAction` and `MonadRules` with `ReaderT` transformers
-  in a similar\n  style to [RIO](https://hackage.haskell.org/package/rio)\n"
+changelog: "# Changelog for shake-plus\n\n## v0.1.0.0\n\n* Update to `within-0.1.1.0`
+  which changes the data type to an `Env` comonad.\n* Drop the `loadSortFilterApply`
+  loader functions in favour of a simpler\n  `batchLoad` set of functions which accepts
+  a loading function which can be\n  cached.\n* Add enough documentation to get started.\n\n##
+  v0.0.2.1\n\n* Add functions based on [Within](https://hackage.haskell.org/package/path)
+  to better\n  keep track of source and target directories.\n* Reexport more shake
+  functions to remove need to import vanilla shake qualified.\n* Add convenience functions
+  `loadSortFilterApply` and `loadSortFilterApplyW` for batch\n  loading via `MonadAction`.\n*
+  Add more of the API surface with `Path` and `Within` including variants of `need`,
+  `want`\n  `readFile`, `writeFile`. \n\n## v0.0.1.0\n\n* Initial sketch of shake-plus
+  with reexported functions. Mostly oracles,\n  filepaths and directory functions
+  using\n  [Path](https://hackage.haskell.org/package/path), and `MonadAction`,\n
+  \ `MonadUnliftAction` and `MonadRules` with `ReaderT` transformers in a similar\n
+  \ style to [RIO](https://hackage.haskell.org/package/rio)\n"
 basic-deps:
   shake: -any
   rio: -any
   extra: -any
   path: -any
   base: '>=4.7 && <5'
+  comonad: -any
   within: -any
+  hashable: -any
 all-versions:
 - 0.0.1.0
 - 0.0.1.1
@@ -28,8 +34,9 @@ all-versions:
 - 0.0.2.0
 - 0.0.2.1
 - 0.0.2.2
+- 0.1.0.0
 author: Daniel Firth
-latest: 0.0.2.2
+latest: 0.1.0.0
 description-type: markdown
 description: |
   # Shake+ - Super Powered Shake
@@ -38,22 +45,112 @@ description: |
   utility functions of Shake with the following adjustments whereever possible.
 
   * Well-typed paths using the [path](https://hackage.haskell.org/package/path)
-  * New type classes `MonadAction`,`MonadUnliftAction` and `MonadRules` with
-    stock `ReaderT` transformers.
+  * New type classes `MonadAction`, `MonadUnliftAction` and `MonadRules` with
+    concrete `ReaderT` transformers:
+    * `RAction r a = RAction (ReaderT r Action a)` and
+    * `ShakePlus r a = ShakePlus (ReaderT r Rules a)`
   * `Text` instead of `String` wherever it is appropriate.
+  * `within` style variants of the standard file and directory operations that
+    in some cases return or accept `Within b (Path Rel File)` values to keep tags
+  of parent directories.
 
-  Unlifting `Action`s is a challenge when we cross monad boundaries (from
-  `Action` to `Rules`), and so some functions are hard coded against the
-  `RAction` type, which is a hardcoded newtype `ReaderT r Action a`. This is
-  annoying, but it's sufficient to add your own logging and reader lenses.  It
-  may be possible to generalize this with some unlifting contortion but so far I
-  haven't been able to figure it out.
+  This is an early release and some things may be missing or broken, but so
+  far the conveniences have been worth it. Some notes on the approach are
+  detailed below.
 
-  The main entry point ot this library is the `runShakePlus` function, which
+  ## Paths
+
+  Using the [path](https://hackage.haskell.org/package/path) library is kind of a
+  no brainer. I lose a lot of time to problems that could be avoided by using
+  this library, so it's everywhere. The names for these functions shadow the
+  existing names, so you may want to `import qualified Development.Shake` while
+  this library progresses if you have other `FilePath` based Shake rules that
+  you want to mix into your build.
+
+  The standard `Development.Shake.FilePath` functions for directory manipulation
+  are not re-exported in full, and you should use the functions in the path
+  library (such as `replaceExtension`) and other path-based libraries. This will
+  probably change.
+
+  `FilePattern`s are kept as-is, as `Path` is strongly normalizing it makes
+  sense to keep these as `Strings`.
+
+  ## RAction
+
+  The `ReaderT r Action a` transformer (called `RAction`) is similar to the
+  [RIO](https://hackage.haskell.org/package/rio) type and should be used
+  similarly. In fact, you can reuse the logging functions from `RIO` within any
+  `RAction` block, which is one of the main motivators for having an `Action`
+  which is also a `MonadReader`. If you need to reuse an existing shake
+  `Action` in an `RAction`, use `liftAction`.
+
+  ## Using Within
+
+  One common complaint about Shake is having to keep track of source and output
+  directories and translating `FilePath`s when using the input to an `Action`,
+  leading to lots of repetition of the form `(sourceFolder </>) . (-<.> ".ext") .
+  dropDirectory1` which is prone to breakage. Using `Path` helps this to some
+  degree, but in some cases is even more annoying because lots of `Path`
+  functions use `MonadThrow`, leading to lots of monadic steps inside an
+  `RAction`.
+
+  To alleviate this somewhat, we use `Within b (Path Rel File)` as a standard
+  pattern for representing a file within a directory. `Within` is a type
+  available in the [within](https://hackage.haskell.org/package/within) package
+  that is simply a newtype wrapper over an `Env` comonad with the environment
+  specialized to `Path b Dir`. We provide variants of the file operations and
+  rules that typically accept or return `Path`s or contain callbacks that expect
+  paths and change these to `Within` values. These functions are generally
+  suffixed `within`. Here is the variant of `getDirectoryFiles` variant which
+  produces `Within` values.
+
+  ```{.haskell}
+  getDirectoryFilesWithin :: MonadAction m => Path b Dir -> [FilePattern] -> m (Within b [(Path Rel File)])
+  ```
+
+  You can convert to and from this within-style using `within` and `fromWithin`.
+
+  ```{.haskell}
+  let x = $(mkRelFile "a.txt") `within` $(mkRelDir "foo") -- Within Rel (Path Rel File)
+  fromWithin x -- produces a `Path Rel File`
+  ```
+
+  and you can assert that an existing path lies in a directory by using `asWithin`, which throws
+  if the directory is not a proper prefix of the `Path`.
+
+  ```{.haskell}
+  $(mkRelFile "foo/a.txt") `asWithin` $(mkRelDir "foo") -- fine
+  $(mkRelFile "a.txt") `asWithin` $(mkRelDir "foo") -- throws error
+  ```
+
+  Filerules such as `(%>)` have within-style variants that accept an ` (Path b
+  Dir) FilePattern` on the left and carry that env to the callback.
+
+  ```{.haskell}
+  (%^>) :: (Partial, MonadReader r m, MonadRules m) => Within Rel FilePattern -> (Within Rel (Path Rel File) -> RAction r ()) -> m ()
+  ```
+
+  You change the underlying filepath with `fmap` or `mapM`, whilst you can move
+  to a new parent directory by using `localDir, or `localDirM` which is defined
+  in the `Within` library for when the map between parent directories may throw.
+  The `Within` library also contains more functions and instances for more
+  precise changes between output and source directories.
+
+  ## runShakePlus
+
+  The main entry point to this library is the `runShakePlus` function, which
   collapses a `ReaderT r Rules ()` to a `Rules ()` and passes the environment to
-  each underlying `RAction`.
+  each underlying `RAction`. The `r`s in `ShakePlus` and the underlying
+  `RAction`s have to match. A typical setup might look like this.
 
-  This is an early release and a lot of things may be missing or broken, but so
-  far the conveniences have been worth it. Until it's stable/complete you probaly
-  want to `import qualified Development.Shake` to deal with any missing parts.
+  ```{.haskell}
+  let r = --setup env here
+  shake shakeOptions $ do
+
+      -- include some regular shake rules.
+
+      runShakePlus r $ do
+
+        -- some shake-plus rules.
+  ```
 license-name: MIT
