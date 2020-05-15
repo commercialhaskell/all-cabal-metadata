@@ -1,11 +1,18 @@
 homepage: https://github.com/nitros12/calamity
 changelog-type: markdown
-hash: e8cc11420b2c0ca261ef58dbb1c585e25de2480de55447a8bf7861acfc60a4c6
+hash: 25ea58492ad12f91afb901bd7d581e1f29cfc2724f117994daa7c9125a92a0c0
 test-bench-deps: {}
 maintainer: ben@bensimms.moe
 synopsis: A library for writing discord bots
 changelog: |
   # Changelog for Calamity
+
+  ## 0.1.8.0
+
+  *2020-05-15*
+
+  * Did a large rework of how event handlers are stored internally.
+  * introduced `waitUntil`
 
   ## 0.1.4.0
 
@@ -94,8 +101,9 @@ all-versions:
 - 0.1.6.1
 - 0.1.6.2
 - 0.1.7.0
+- 0.1.8.0
 author: Ben Simms
-latest: 0.1.7.0
+latest: 0.1.8.0
 description-type: markdown
 description: |
   <h1 align="center">Calamity</h1>
@@ -183,7 +191,7 @@ description: |
 
   P.makeSem ''Counter
 
-  runCounterAtomic :: P.Member (P.Embed IO) r => P.Sem (Counter ': r) () -> P.Sem r ()
+  runCounterAtomic :: P.Member (P.Embed IO) r => P.Sem (Counter ': r) a -> P.Sem r a
   runCounterAtomic m = do
     var <- P.embed $ newTVarIO (0 :: Int)
     P.runAtomicStateTVar var $ P.reinterpret (\case
@@ -195,27 +203,23 @@ description: |
       Left e -> DiP.error (e ^. packed)
       _      -> pure ()
 
-  handleFailByPrinting m = do
-    r <- P.runFail m
-    case r of
-      Left e -> P.embed $ print (show e)
-      _      -> pure ()
-
   info = DiP.info @Text
   debug = DiP.info @Text
 
+  tellt :: (BotC r, Tellable t) => t -> Text -> P.Sem r (Either RestError Message)
   tellt = tell @Text
 
   main :: IO ()
   main = do
     token <- view packed <$> getEnv "BOT_TOKEN"
-    P.runFinal . P.embedToFinal . handleFailByPrinting . runCounterAtomic . runCacheInMemory . runMetricsNoop
-      $ runBotIO (BotToken token) $ react @'MessageCreateEvt $ \msg -> handleFailByLogging $ do
-        when (msg ^. #content == "!count") $ replicateM_ 3 $ do
+    void . P.runFinal . P.embedToFinal . runCounterAtomic . runCacheInMemory . runMetricsPrometheusIO
+      $ runBotIO (BotToken token) $ do
+      react @'MessageCreateEvt $ \msg -> handleFailByLogging $ case msg ^. #content of
+        "!count" -> replicateM_ 3 $ do
           val <- getCounter
           info $ "the counter is: " <> showt val
           void $ tellt msg ("The value is: " <> showt val)
-        when (msg ^. #content == "!say hi") $ replicateM_ 3 . P.async $ do
+        "!say hi" -> replicateM_ 3 . P.async $ do
           info "saying heya"
           Right msg' <- tellt msg "heya"
           info "sleeping"
@@ -223,11 +227,19 @@ description: |
           info "slept"
           void . invoke $ EditMessage (msg ^. #channelID) msg' (Just "lol") Nothing
           info "edited"
-        when (msg ^. #content == "!explode") $ do
+        "!explode" -> do
           Just x <- pure Nothing
           debug "unreachable!"
-        when (msg ^. #content == "!bye") $ do
+        "!bye" -> do
           void $ tellt msg "bye!"
           stopBot
+        "!fire-evt" -> fire $ customEvt @"my-event" ("aha" :: Text, msg)
+        "!wait" -> do
+          void $ tellt msg "waiting for !continue"
+          waitUntil @'MessageCreateEvt (\msg -> (debug $ "got message: " <> showt msg) >> (pure $ msg ^. #content == "!continue"))
+          void $ tellt msg "got !continue"
+        _ -> pure ()
+      react @('CustomEvt "my-event" (Text, Message)) $ \(s, m) ->
+        void $ tellt m ("Somebody told me to tell you about: " <> s)
   ```
 license-name: MIT
