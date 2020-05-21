@@ -1,48 +1,23 @@
 homepage: https://github.com/nitros12/calamity
 changelog-type: markdown
-hash: 7a158d259e7479eb87dad3569a8b94cdbbde7583264e851f4e2258237d7b8d24
+hash: f2ba57c037bfb78a8be83baf4d447853145273cebd436421d1623890399918c7
 test-bench-deps: {}
 maintainer: ben@bensimms.moe
 synopsis: A library for writing discord bots
-changelog: |
-  # Changelog for Calamity
-
-  ## 0.1.8.0
-
-  *2020-05-15*
-
-  * Did a large rework of how event handlers are stored internally.
-  * introduced `waitUntil`
-
-  ## 0.1.4.0
-
-  * Added back extra exports of `Calamity.Types.Partial` from
-    `Calamity.Types.Model.Guild.Guild`, `Calamity.Type.Model.Guild.Emoji`, and
-    `Calamity.Types.Model.Channel`. There is now way to export the constructor
-    without also exporting Partial apparently?
-
-
-  ## 0.1.3.0
-
-  *2020-04-27*
-
-  * Removed extra exports of `Calamity.Types.Partial` from
-    `Calamity.Types.Model.Guild.Guild`, `Calamity.Type.Model.Guild.Emoji`, and
-    `Calamity.Types.Model.Channel`
-
-  * Added missing exports of `CreateGuildEmojiOptions` and
-    `ModifyGuildEmojiOptions` from `Calamity.HTTP.Emoji`
-
-  * Added missing exports of `CreateGuildData` and `ModifyGuildData` from
-    `Calamity.HTTP.Guild`
-
-  ## 0.1.2.0
-
-  *2020-04-27*
-
-  * Calamity.Client: runBotIO now has a `Polysemy.Fail` effect
-
-  ## Unreleased changes
+changelog: "# Changelog for Calamity\n\n## 0.1.9.0\n\n*2020-05-22*\n\n* Added commands,
+  located in `Calamity.Commands`, along with a DSL for declaring\n  commands nicely.\n
+  \ \n* Renamed `waitUntil` to `waitUntilM`, and introduced a variant with a pure\n
+  \ check function that takes the original name of `waitUntil`.\n\n## 0.1.8.0\n\n*2020-05-15*\n\n*
+  Did a large rework of how event handlers are stored internally.\n* introduced `waitUntil`\n\n##
+  0.1.4.0\n\n* Added back extra exports of `Calamity.Types.Partial` from\n  `Calamity.Types.Model.Guild.Guild`,
+  `Calamity.Type.Model.Guild.Emoji`, and\n  `Calamity.Types.Model.Channel`. There
+  is now way to export the constructor\n  without also exporting Partial apparently?\n\n\n##
+  0.1.3.0\n\n*2020-04-27*\n\n* Removed extra exports of `Calamity.Types.Partial` from\n
+  \ `Calamity.Types.Model.Guild.Guild`, `Calamity.Type.Model.Guild.Emoji`, and\n  `Calamity.Types.Model.Channel`\n\n*
+  Added missing exports of `CreateGuildEmojiOptions` and\n  `ModifyGuildEmojiOptions`
+  from `Calamity.HTTP.Emoji`\n\n* Added missing exports of `CreateGuildData` and `ModifyGuildData`
+  from\n  `Calamity.HTTP.Guild`\n\n## 0.1.2.0\n\n*2020-04-27*\n\n* Calamity.Client:
+  runBotIO now has a `Polysemy.Fail` effect\n\n## Unreleased changes\n"
 basic-deps:
   focus: '>=1.0 && <2'
   polysemy-plugin: '>=0.2 && <0.3'
@@ -59,6 +34,7 @@ basic-deps:
   text: '>=1.2 && <2'
   deque: '>=0.4 && <0.5'
   safe-exceptions: '>=0.1 && <2'
+  megaparsec: '>=8 && <9'
   di-polysemy: '>=0.1.3 && <0.2'
   generic-override-aeson: '>=0.0.0.0 && <0.0.1'
   text-show: '>=3.8 && <4'
@@ -103,8 +79,9 @@ all-versions:
 - 0.1.7.0
 - 0.1.8.0
 - 0.1.8.1
+- 0.1.9.0
 author: Ben Simms
-latest: 0.1.8.1
+latest: 0.1.9.0
 description-type: markdown
 description: |
   <h1 align="center">Calamity</h1>
@@ -165,6 +142,8 @@ description: |
 
   import           Calamity
   import           Calamity.Cache.InMemory
+  import           Calamity.Commands
+  import qualified Calamity.Commands.Context                  as CommandContext
   import           Calamity.Metrics.Noop
 
   import           Control.Concurrent
@@ -204,22 +183,45 @@ description: |
       Left e -> DiP.error (e ^. packed)
       _      -> pure ()
 
-  info = DiP.info @Text
-  debug = DiP.info @Text
+  info, debug :: BotC r => Text -> P.Sem r ()
+  info = DiP.info
+  debug = DiP.info
 
   tellt :: (BotC r, Tellable t) => t -> Text -> P.Sem r (Either RestError Message)
-  tellt = tell @Text
+  tellt t m = tell t $ L.toStrict m
 
   main :: IO ()
   main = do
     token <- view packed <$> getEnv "BOT_TOKEN"
-    void . P.runFinal . P.embedToFinal . runCounterAtomic . runCacheInMemory . runMetricsPrometheusIO
+    void . P.runFinal . P.embedToFinal . runCounterAtomic . runCacheInMemory . runMetricsPrometheusIO . useConstantPrefix "!"
       $ runBotIO (BotToken token) $ do
+      addCommands $ do
+        command @'[Text, Snowflake User] "test" $ \ctx something aUser -> do
+          info $ "something = " <> showt something <> ", aUser = " <> showt aUser
+        command @'[] "hello" $ \ctx -> do
+          void $ tellt ctx "heya"
+        group "testgroup" $ do
+          command @'[[Text]] "test" $ \ctx l -> do
+            void $ tellt ctx ("you sent: " <> showtl l)
+          command @'[] "count" $ \ctx -> do
+            val <- getCounter
+            void $ tellt ctx ("The value is: " <> showtl val)
+          group "say" $ do
+            command @'[KleeneConcat Text] "this" $ \ctx msg -> do
+              void $ tellt ctx msg
+        command @'[] "explode" $ \ctx -> do
+          Just x <- pure Nothing
+          debug "unreachable!"
+        command @'[] "bye" $ \ctx -> do
+          void $ tellt ctx "bye!"
+          stopBot
+        command @'[] "fire-evt" $ \ctx -> do
+          fire $ customEvt @"my-event" ("aha" :: Text, ctx ^. #message)
+        command @'[Text] "wait-for" $ \ctx s -> do
+          void $ tellt ctx ("waiting for !" <> s)
+          waitUntil @'MessageCreateEvt (\msg -> msg ^. #content == ("!" <> s))
+          void $ tellt ctx ("got !" <> s)
       react @'MessageCreateEvt $ \msg -> handleFailByLogging $ case msg ^. #content of
-        "!count" -> replicateM_ 3 $ do
-          val <- getCounter
-          info $ "the counter is: " <> showt val
-          void $ tellt msg ("The value is: " <> showt val)
         "!say hi" -> replicateM_ 3 . P.async $ do
           info "saying heya"
           Right msg' <- tellt msg "heya"
@@ -228,18 +230,11 @@ description: |
           info "slept"
           void . invoke $ EditMessage (msg ^. #channelID) msg' (Just "lol") Nothing
           info "edited"
-        "!explode" -> do
-          Just x <- pure Nothing
-          debug "unreachable!"
-        "!bye" -> do
-          void $ tellt msg "bye!"
-          stopBot
-        "!fire-evt" -> fire $ customEvt @"my-event" ("aha" :: Text, msg)
-        "!wait" -> do
-          void $ tellt msg "waiting for !continue"
-          waitUntil @'MessageCreateEvt (\msg -> (debug $ "got message: " <> showt msg) >> (pure $ msg ^. #content == "!continue"))
-          void $ tellt msg "got !continue"
         _ -> pure ()
+      react @('CustomEvt "command-error" (CommandContext.Context, CommandError)) $ \(ctx, e) -> do
+        info $ "Command failed with reason: " <> showt e
+        case e of
+          ParseError t r -> void . tellt ctx $ "Failed to parse parameter: " <> L.fromStrict t <> ", with reason: ```\n" <> r <> "```"
       react @('CustomEvt "my-event" (Text, Message)) $ \(s, m) ->
         void $ tellt m ("Somebody told me to tell you about: " <> s)
   ```
