@@ -1,14 +1,16 @@
 homepage: https://github.com/jrp2014/smuggler2
 changelog-type: markdown
-hash: 4483b015a09edd8e4f14d112c9ec4a4436910f09695c34c6f8774aa4504ed8ff
+hash: c1aba5644a14d95e3f32a584b83f2f2bfa9bf39a5d71a3ad8dfe79f87eb8c166
 test-bench-deps:
   base: '>=4.9 && <4.16'
-  tasty-golden: -any
+  tasty-golden: ^>=2.3.4
   filepath: -any
+  containers: -any
   ghc-paths: -any
   typed-process: -any
   smuggler2: -any
   tasty: -any
+  directory: -any
 maintainer: jrp2014
 synopsis: GHC Source Plugin that helps to minimise imports and generate explicit exports
 changelog: |
@@ -19,8 +21,9 @@ changelog: |
   `smuggler2` uses [PVP Versioning][1].
   The change log is available [on GitHub][2].
 
-  ## [Unreleased]
-  - Nothing to report
+  ##  [0.3.3.2]: --  8 June 2020
+  - pattern synonyms and type families are handled
+  - ghc-smuggler2 wrapper for ghc
 
   ##  [0.3.2.2]: --  31 May 2020
   - Documentation only
@@ -38,13 +41,15 @@ basic-deps:
   ghc-exactprint: ^>=0.6.3
   filepath: ^>=1.4.2
   containers: ^>=0.6.0
-  smuggler2: -any
+  ghc-paths: ^>=0.1.0
+  typed-process: ^>=0.2.6
   directory: ^>=1.3.3
 all-versions:
 - 0.3.2.1
 - 0.3.2.2
+- 0.3.3.2
 author: jrp2014, Dmitrii Kovanikov, Veronika Romashkina
-latest: 0.3.2.2
+latest: 0.3.3.2
 description-type: markdown
 description: |
   # smuggler2
@@ -72,6 +77,10 @@ description: |
 
   ## How to use
 
+  Install `smuggler2` using `cabal install --lib smuggler2`.
+
+  If you also want the `ghc` wrapper, install it using `cabal install exe:smuggler2`.
+
   ### Adding Smuggler2 to your dependencies
 
   Add `smuggler2` to the dependencies of your project and to your compiler flags.
@@ -86,7 +95,7 @@ description: |
 
   common smuggler-options
     if flag(smuggler2)
-      ghc-options: -fplugin:Smuggler2.Plugin
+      ghc-options: -fplugin=Smuggler2.Plugin
       build-depends: smuggler2 >= 0.3
   ```
 
@@ -108,21 +117,28 @@ description: |
   ### Alternatively, using a local version
 
   If you have installed `smuggler2` from a local copy of this repository, you may
-  only need to add `-package smuggler2` to your `ghc-options`.
+  need to add `-package smuggler2` to your `ghc-options` if you did not
+  install using the `--lib` flag to `cabal install`.
 
-  ```Cabal
-  common smuggler-options
-    if flag(smuggler2)
-      ghc-options: -fplugin:Smuggler2.Plugin --package smuggler22
+  ### Or use a `ghc` wrapper
+
+  The `smuggler2` package provides an executable `ghc-smuggler2` that calls `ghc`
+  with the `-fplugin=Smuggler2.Plugin` argument (followed by any others that you
+  supply). This allows you to run the plugin over your sources without modifying
+  your `.cabal` file:
+
+  ```bash
+  $ cabal build -with-compiler=ghc-smuggler2
   ```
-
-  (You may need to install from a local copy using `cabal v1-install` for
-  `smuggler2` to be recognised, perhaps depending on your version of `cabal`.)
+  or just
+  ```bash
+  $ cabal build -w ghc-smuggler2
+  ```
 
   ### Options
 
-  `Smuggler2` has several (case-insensitive) options, which can be set by adding a
-  `-fplugin-opt=Smuggler2.Plugin:` to your `ghc-options`
+  `Smuggler2` has several (case-insensitive) options, which can be set by adding
+  `-fplugin-opt=Smuggler2.Plugin:` flags to your `ghc-options`
 
   - `NoImportProcessing` - do no import processing
   - `PreserveInstanceImports` - remove unused imports, but preserve a library
@@ -148,28 +164,32 @@ description: |
   original file.
 
   ```Cabal
-      ghc-options: -fplugin:Smuggler2.Plugin -fplugin-opt=Smuggler2.Plugin:new
+      ghc-options: -fplugin=Smuggler2.Plugin -fplugin-opt=Smuggler2.Plugin:new
   ```
 
   This will create output files with a `.new` suffix rather the overwriting the
   originals.
 
-  Smuggler2 tries not to perform file changes when there are no unused imports or
-  exports to be added or replaced. So you can just run `ghcid` as usual:
+  Smuggler2 tries not to change files when there is no work to do.
+  So you can just run `ghcid` as usual:
 
   ```bash
   $ ghcid --command='cabal repl'
   ```
 
-  If you add `-v` to your `ghc-options`
 
   ## Caveats
 
+  - Because `cabal` and `ghc` don't have full support for distinguishing dependent
+    packages from plug-ins you will probably want to ensure that the build
+    dependencies for your project are installed into your local package db first,
+    before enabling sumuggler, otherwise they will all be processed by it too,
+    as your project builds, which should do no harm, but will increase your build time.
+
   `Smugggler2` is robust -- it can chew through the
-  [agda](https://github.com/agda/agda) codebase of over 370 modules with complex
+  [Agda](https://github.com/agda/agda) codebase of over 370 modules with complex
   interdependencies and be tripped over by only
 
-  - a handful of pattern synonym imports,
   - a couple of ambiguous exports (are we trying to export something defined in
     the current module or something with the same name from an imported module)
   - and a couple of imports where both qualifed and unqualifed version of the
@@ -177,7 +197,7 @@ description: |
     version of the same names
 
   But there are some caveats, most of which are either easy enough to work around
-  (and still benefit from a great reduction in keyboard work):
+  (and still offer the benefit of a great reduction in keyboard work):
 
   - `Smuggler2` rewrites the existing imports, rather than attempting to prune
     them. (This is a more aggressive approach than `smuggler` which focuses on
@@ -222,9 +242,6 @@ description: |
   - `hiding` clauses may not be properly analysed. So hiding things that are not
     used may not be spotted.
 
-  - Certain syntax pattern imports may not be imported correctly (the `pattern`
-    keyword is missing)
-
   - The test suite does not seem to run reliably on Windows. This is probably more
     of an issue with the way that the tests are run, than `Smuggler2` itself.
 
@@ -255,7 +272,7 @@ description: |
   To build with debugging:
 
   ```shell
-  $ cabal bulid -fdebug
+  $ cabal build -fdebug
   ```
 
   Curently this just adds an `-fdump-minimal-imports` parameter to GHC
@@ -293,14 +310,23 @@ description: |
   variable. This may be helpful for certain workflows where `cabal` is not in the
   current path, or you want to add extra flags to the `cabal` command.
 
-  The test suite does not run reliably on Windows
+  The test suite does not seem to run reliably on Windows
+
+  Importing a test module from another test module in the same directory is likely
+  to lead to race conditions as 'Tasty' runs tests in parallel and so will try to
+  generate the same `smuggler2` output both when the imported module is being
+  tested directly and when it is being processed when the importing module is
+  being tested. Put the imported module in a subdirectory to avoid this issue, as
+  the test harness only looks for tests in `test\tests` and not its
+  subdirectories.
 
   ## Implementation approach
 
   `smuggler2` uses the `ghc-exactprint`
   [library](https://hackage.haskell.org/package/ghc-exactprint) to modiify the
   source code. The documentation for the library is fairly spartan, and the
-  library is not widely used, so the use here can, no doubt, be optimised.
+  library is not widely used, at least in publicly available code, so the use here
+  can, no doubt, be optimised.
 
   The library is needed because the annotated AST that GHC generates does not have
   enough information to reconstitute the original source. Some parts of the
@@ -336,10 +362,9 @@ description: |
   - `exactPrint`s the result back over the original file (or one with a different
     suffix, if that was specified as option to `smuggler2`)
 
-  This round tripping is needed because the AST provided by GHC to `smuggler2` is
-  of a different type from the AST that `ghc-exactprint` uses. (It is the product
-  of the renaming phase of the compiler, while `ghc-exactprint` uses a parse phase
-  AST.)
+  This round tripping is needed because the AST that `ghc` provides does not have
+  enough information in it to reconstitute the source (which is why
+  `ghc-exactprint` exists).
 
   ### Exports
 
