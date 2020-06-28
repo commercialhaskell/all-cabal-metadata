@@ -1,11 +1,34 @@
 homepage: https://github.com/ollef/rock#readme
 changelog-type: markdown
-hash: 2988ee83076c9938dd2a07613db9d98a9aeaff5cae097570bf58203779c4784d
-test-bench-deps: {}
+hash: 62acd56010ea6669a7c110153c262a4b29c0dae049d3dc5028e6dd9cf20dc49f
+test-bench-deps:
+  dependent-sum: -any
+  dependent-hashmap: -any
+  constraints-extras: -any
+  base: '>=4.7 && <5'
+  rock: -any
+  unordered-containers: -any
+  hedgehog: -any
+  constraints: -any
+  mtl: -any
+  hashable: -any
 maintainer: fredriksson.olle@gmail.com
 synopsis: A build system for incremental, parallel, and demand-driven computations
 changelog: |
   # Unreleased
+
+  - Add `memoiseWithCycleDetection` and `Cycle`, enabling cycle detection
+  - Implement `Task` using `ReaderT`, improving performance
+  - Make buildable with GHC 8.2.2 through 8.8.3
+  - Switch from the `dependent-map` package to the `dependent-hashmap` for caches
+  - Remove support for Haxl-style automatic parallelisation
+    * Remove strategy parameter from `runTask`
+    * Add `MonadBaseControl`, which allows manual parallelisation using e.g. lifted-async
+    * Remove `Sequential` type
+  - Use `IORef`s instead of `MVar`s
+  - Add `trackM` function
+  - Remove `invalidateReverseDependencies` in favour of `reachableReverseDependencies`
+  - Generalise `verifyTraces` to verify using user-supplied data
 
   # 0.2.0.0
 
@@ -20,27 +43,32 @@ changelog: |
 
   - Initial release
 basic-deps:
-  dependent-sum: -any
+  dependent-sum: '>=0.6'
+  dependent-hashmap: '>=0.1'
+  constraints-extras: '>=0.3'
   dependent-sum-template: -any
-  base: ! '>=4.7 && <5'
-  deriving-compat: -any
+  base: '>=4.7 && <5'
+  deriving-compat: '>=0.5'
   rock: -any
-  dependent-map: -any
-  protolude: -any
-  containers: -any
-  mtl: -any
-  transformers: -any
+  unordered-containers: '>=0.2'
+  monad-control: '>=1.0'
+  lifted-base: '>=0.2'
+  mtl: '>=2.2'
+  hashable: '>=1.3'
+  transformers-base: '>=0.4'
+  transformers: '>=0.5'
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
 - 0.2.0.0
+- 0.3.0.0
 author: Olle Fredriksson
-latest: 0.2.0.0
+latest: 0.3.0.0
 description-type: markdown
 description: |
-  # rock [![Hackage](https://img.shields.io/hackage/v/rock.svg)](https://hackage.haskell.org/package/rock)
+  # rock [![Build Status](https://travis-ci.com/ollef/rock.svg?branch=master)](https://travis-ci.com/ollef/rock) [![Hackage](https://img.shields.io/hackage/v/rock.svg)](https://hackage.haskell.org/package/rock)
 
-  A build system inspired by [Build systems à la carte](https://www.microsoft.com/en-us/research/publication/build-systems-la-carte/) and [Haxl](http://hackage.haskell.org/package/haxl).
+  A build system inspired by [Build systems à la carte](https://www.microsoft.com/en-us/research/publication/build-systems-la-carte/).
 
   Used in [Sixten](https://github.com/ollef/sixten) and
   [Sixty](https://github.com/ollef/sixty) to achieve incremental and query driven
@@ -49,15 +77,16 @@ description: |
   # Example
 
   ```haskell
+  {-# language FlexibleInstances #-}
   {-# language GADTs #-}
-  {-# language NoImplicitPrelude #-}
-  {-# language OverloadedStrings #-}
   {-# language StandaloneDeriving #-}
   {-# language TemplateHaskell #-}
 
-  import Protolude
-
-  import Data.GADT.Compare.TH (deriveGEq, deriveGCompare)
+  import Control.Monad.IO.Class
+  import Data.GADT.Compare.TH (deriveGEq)
+  import Data.Hashable
+  import Data.Some
+  import Data.IORef
   import qualified Rock
 
   data Query a where
@@ -67,13 +96,22 @@ description: |
     D :: Query Integer
 
   deriving instance Show (Query a)
-
   deriveGEq ''Query
-  deriveGCompare ''Query
+
+  instance Hashable (Query a) where
+    hashWithSalt salt query =
+      case query of
+        A -> hashWithSalt salt (0 :: Int)
+        B -> hashWithSalt salt (1 :: Int)
+        C -> hashWithSalt salt (2 :: Int)
+        D -> hashWithSalt salt (3 :: Int)
+
+  instance Hashable (Some Query) where
+    hashWithSalt salt (Some query) = hashWithSalt salt query
 
   rules :: Rock.Rules Query
   rules key = do
-    putText $ "Fetching " <> show key
+    liftIO $ putStrLn $ "Fetching " <> show key
     case key of
       A -> pure 10
       B -> do
@@ -88,27 +126,14 @@ description: |
   main :: IO ()
   main = do
     do
-      putText "Running"
-      result <- Rock.runTask Rock.sequentially rules (Rock.fetch D)
+      liftIO $ putStrLn "Running"
+      result <- Rock.runTask rules (Rock.fetch D)
       print result
     do
-      putText "Running with memoisation"
-      memoVar <- newMVar mempty
-      result <-
-        Rock.runTask
-          Rock.sequentially
-          (Rock.memoise memoVar rules)
-          (Rock.fetch D)
-      print result
-    do
-      putText "Running with memoisation using the parallel strategy"
-      memoVar <- newMVar mempty
-      result <-
-        Rock.runTask
-          Rock.inParallel
-          (Rock.memoise memoVar rules)
-          (Rock.fetch D)
-      print result
+      liftIO $ putStrLn "Running with memoisation"
+      memoVar <- newIORef mempty
+      result <- Rock.runTask (Rock.memoise memoVar rules) (Rock.fetch D)
+      liftIO $ print result
   ```
 
   Prints
@@ -127,12 +152,6 @@ description: |
   Fetching A
   Fetching C
   70
-  Running with memoisation using the parallel strategy
-  Fetching D
-  Fetching C
-  Fetching B
-  Fetching A
-  70
   ```
 
   # Related projects
@@ -142,6 +161,5 @@ description: |
 
   # Contributions
 
-  ... are very welcome, especially in the areas of documentation, examples,
-  testing, and benchmarking.
+  ... are very welcome, especially in the areas of documentation and examples.
 license-name: BSD-3-Clause
