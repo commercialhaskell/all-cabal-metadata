@@ -1,6 +1,6 @@
 homepage: https://github.com/luc-tielen/souffle-haskell#README.md
 changelog-type: markdown
-hash: 5b94e4d9fba9c4ad9c172c6a2cd5afac594e604ef75efff382c3daa1f3d5b731
+hash: 1a4dbb3e91ef0266813dd2fb655f1170e919b8f5f5443eb5605de3af65cb8e27
 test-bench-deps:
   base: '>=4.12 && <5'
   hspec: '>=2.6.1 && <3.0.0'
@@ -24,7 +24,24 @@ changelog: |2
   All notable changes to this project (as seen by library users) will be documented in this file.
   The CHANGELOG is available on [Github](https://github.com/luc-tielen/souffle-haskell.git/CHANGELOG.md).
 
-  ## [0.2.2] - 2020-05-21
+  ## [1.0.0] - 2020-07-09
+  ### Changed
+
+  - Libraries using souffle-haskell are now "self-contained": if a project
+    depends on such a library, it will not require to also have Souffle installed.
+  - souffle-haskell now supports Soufflé version 2.0.0.
+  - `writeFiles` now takes an extra `FilePath` argument for writing facts to a
+    certain directory.
+
+  ### Deleted
+
+  - Language.Souffle.TH module is deleted because it is no longer needed anymore
+    due to a change in the generated Souffle code. The generated code can now be
+    correctly integrated by adding the files to `cxx-sources`
+    in package.yaml / cabal file.
+
+
+  ## [0.2.3] - 2020-05-21
   ### Changed
 
   - Optimize performance when marshalling and unmarshalling facts.
@@ -75,16 +92,20 @@ changelog: |2
 
   - Initial version of the library
 basic-deps:
+  extra: '>=1.6.18 && <2'
   base: '>=4.12 && <5'
   type-errors-pretty: '>=0.0.1.0 && <1'
   text: '>=1.0 && <2'
+  megaparsec: '>=7.0.5 && <8'
   filepath: '>=1.4.2 && <2'
   process: '>=1.6 && <2'
+  containers: '>=0.6.2.1 && <1'
   mtl: '>=2.0 && <3'
   temporary: '>=1.3 && <2'
   deepseq: '>=1.4.4 && <2'
-  template-haskell: '>=2 && <3'
+  template-haskell: ==2.*
   vector: <=1.0
+  souffle-haskell: -any
   directory: '>=1.3.3 && <2'
 all-versions:
 - 0.0.1
@@ -93,8 +114,9 @@ all-versions:
 - 0.2.1
 - 0.2.2
 - 0.2.3
+- 1.0.0
 author: Luc Tielen
-latest: 0.2.3
+latest: 1.0.0
 description-type: markdown
 description: |2+
 
@@ -144,7 +166,7 @@ description: |2+
 
   ```haskell
   -- Enable some necessary extensions:
-  {-# LANGUAGE TemplateHaskell, ScopedTypeVariables, DataKinds, TypeFamilies, DeriveGeneric #-}
+  {-# LANGUAGE ScopedTypeVariables, DataKinds, TypeFamilies, DeriveGeneric #-}
 
   module Main ( main ) where
 
@@ -152,19 +174,13 @@ description: |2+
   import Control.Monad.IO.Class
   import GHC.Generics
   import Data.Vector
-  import qualified Language.Souffle.TH as Souffle
   import qualified Language.Souffle.Compiled as Souffle
-
-  -- We only use template haskell for directly embedding the .cpp file into this file.
-  -- If we do not do this, it will link incorrectly due to the way the
-  -- C++ code is generated.
-  Souffle.embedProgram "/path/to/path.cpp"
 
 
   -- We define a data type representing our datalog program.
   data Path = Path
 
-  -- Facts are represent in Haskell as simple product types,
+  -- Facts are represented in Haskell as simple product types,
   -- Numbers map to Int32, symbols to Strings / Text.
 
   data Edge = Edge String String
@@ -180,7 +196,7 @@ description: |2+
     type ProgramFacts Path = [Edge, Reachable]
     programName = const "path"
 
-  -- By making a data type an instance of Edge, we give Haskell the
+  -- By making a data type an instance of Fact, we give Haskell the
   -- necessary information to bind to the datalog fact.
   instance Souffle.Fact Edge where
     factName = const "edge"
@@ -237,14 +253,16 @@ description: |2+
   Without Nix, you will have to follow the manual install instructions
   on the [Souffle website](https://souffle-lang.github.io/install).
 
-  In your package.yaml / *.cabal file, make sure to add the following options
+  In your package.yaml or .cabal file, make sure to add the following options
   (assuming package.yaml here):
 
   ```yaml
   # ...
 
-  cpp-options:
+  cxx-options:
     - -D__EMBEDDED_SOUFFLE__
+  cxx-sources:
+    - /path/to/FILE.cpp  # be sure to change this according to what you need!
 
   # ...
   ```
@@ -252,6 +270,17 @@ description: |2+
   This will instruct the Souffle compiler to compile the C++ in such a way that
   it can be linked with other languages (including Haskell!).
 
+  For an example, take a look at the configuration for the
+  [test suite](https://github.com/luc-tielen/souffle-haskell/blob/master/package.yaml#L68-L80) of this project.
+
+  If you run into C++ compilation issues when using stack, this might be because
+  the `-std=c++17` flag is not being used correctly when compiling souffle-haskell.
+  To fix this, you can add the following to your `stack.yaml`:
+
+  ```yaml
+  ghc-options:
+    souffle-haskell: -optcxx-std=c++17
+  ```
 
   ## Supported modes
 
@@ -276,7 +305,6 @@ description: |2+
   2. You need to call `Souffle.cleanup` after you no longer need the Souffle
      functionality. This will clean up the generated CSV fact files located in
      a temporary directory.
-  3. You don't need to import `Language.Souffle.TH` to embed a Datalog program.
 
 
   #### Interpreter configuration
@@ -309,10 +337,7 @@ description: |2+
   The main differences with interpreted mode are the following:
 
   1. Compile the Datalog code with `souffle -g`.
-  2. You need to import `Language.Souffle.TH` to embed a Datalog program
-     using `Language.Souffle.TH.embedProgram`, as shown in the
-     [motivating example](#motivating-example).
-  3. Remove `Souffle.cleanup` if it is present in your code, compiled mode
+  2. Remove `Souffle.cleanup` if it is present in your code, compiled mode
      leaves no CSV artifacts.
 
   The [motivating example](#motivating-example) is a complete example for the compiled mode.
