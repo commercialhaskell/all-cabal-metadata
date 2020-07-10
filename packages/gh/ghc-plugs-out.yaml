@@ -1,0 +1,332 @@
+homepage: https://github.com/blockscope/ghc-plugs-out
+changelog-type: markdown
+hash: 21994770ee931325500c2fdc075f394dc8edcc7eab75a96d7e6be6d2736d4480
+test-bench-deps:
+  base: '>=4.13 && <5'
+  call-count-plugin: -any
+  undefined-stop-plugin: -any
+  undefined-solve-plugin: -any
+  undefined-init-plugin: -any
+maintainer: phil.dejoux@blockscope.com
+synopsis: Type checker plugins without the type checking.
+changelog: |
+  # Versions of ghc-plugs-out
+
+  ## 1.0.0.0 Initial Release
+  Add tests that show how typechecker plugins interact with GHC depending on
+  their purity, how they're wired up and whether GHC needs help typechecking.
+basic-deps: {}
+all-versions:
+- 1.0.0.0
+author: Phil de Joux
+latest: 1.0.0.0
+description-type: text
+description: |
+  GHC Plugs Out
+  =============
+  Type checker plugins without the type checking.
+
+  |cabal-ci|
+
+  Introduction
+  ------------
+  When getting ready to launch, one of the steps is the plugs-out test. Can the
+  spacecraft function on its own without power or fuel from all cables and
+  umbilicals?
+
+  When debugging GHC plugins, I've added tracing and changed the wiring.  Rather
+  than throw those edits away, I've collected them in `ghc-plugs-out`_, a package
+  of tests that don't supply any power or fuel for typechecking. It is the first
+  multiple library package I've put together [#]_.
+
+  Wiring Diagram
+  --------------
+  Here's a type checker plugin that doesn't do any solving but instead writes its
+  call count.
+
+  .. code-block:: haskell
+
+      {-# LANGUAGE QuasiQuotes, NamedFieldPuns #-}
+
+      module CallCount.TcPlugin (callCount) where
+
+      import Language.Haskell.Printf (s)
+      import Data.IORef (IORef)
+      import IOEnv (newMutVar, readMutVar, writeMutVar)
+      import TcPluginM (tcPluginIO)
+      import TcRnTypes (TcPluginResult(..), TcPlugin(..), unsafeTcPluginTcM)
+
+      newtype State = State { callref :: IORef Int }
+
+      callCount :: TcPlugin
+      callCount =
+          TcPlugin
+              { tcPluginInit = return . State =<< (unsafeTcPluginTcM $ newMutVar 1)
+
+              , tcPluginSolve = \State{callref = c} _ _ _ -> do
+                  n <- unsafeTcPluginTcM $ readMutVar c
+                  tcPluginIO . putStrLn $ [s|>>> GHC-TcPlugin #%d|] n
+                  unsafeTcPluginTcM $ writeMutVar c (n + 1)
+                  return $ TcPluginOk [] []
+
+              , tcPluginStop = const $ return ()
+              }
+
+  Plugins are flagged for recompilation in their ``pluginRecompile`` field.
+  Let's now wire up and test the pure ``CallCount.Pure.Plugin`` and the impure
+  ``CallCount.Impure.Plugin``. The recommended way to wire up a plugin is with
+  a pragma, only in source files that need the plugin.
+
+  .. code-block:: haskell
+
+      {-# OPTIONS_GHC -fplugin CallCount.Pure.Plugin #-}
+
+      module Main where
+
+      main :: IO a
+      main = undefined
+
+  The call count prints on first build but not when there's no work to do.
+
+  .. code-block:: pre
+
+      > cabal build test-wireup-pure-by-pragma
+      [1 of 1] Compiling Main
+      >>> GHC-TcPlugin #1
+
+      > cabal build test-wireup-pure-by-pragma
+      Up to date
+
+  A plugin can also be wired up with an option, say in a cabal file. This is
+  probably fine if all your modules need a plugin.
+
+  .. code-block:: yaml
+
+      test-suite test-wireup-pure-by-option
+        import: opts
+        type: exitcode-stdio-1.0
+        main-is: Main.hs
+        hs-source-dirs: test-suites/wireup-pure-by-option
+        ghc-options: -Wall -fplugin CallCount.Pure.Plugin
+        build-depends: base, call-count-plugin
+
+  .. code-block:: pre
+
+      > cabal build test-wireup-pure-by-option
+      [1 of 1] Compiling Main
+      >>> GHC-TcPlugin #1
+
+  If you mix and match both ways of doing the wiring you'll end up with two
+  instances of the plugin in the compilation.
+
+  .. code-block:: pre
+
+      > cabal build test-wireup-pure-by-both
+      [1 of 1] Compiling Main
+      >>> GHC-TcPlugin #1
+      >>> GHC-TcPlugin #1
+
+  If your plugin is impure, it's going to force a recompilation.
+
+  .. code-block:: pre
+
+      > cabal build test-wireup-impure-by-pragma
+      [1 of 1] Compiling Main
+      >>> GHC-TcPlugin #1
+      [1 of 1] Compiling Main [Impure plugin forced recompilation]
+      >>> GHC-TcPlugin #1
+
+      > cabal build test-wireup-impure-by-option
+      [1 of 1] Compiling Main
+      >>> GHC-TcPlugin #1
+      [1 of 1] Compiling Main [Impure plugin forced recompilation]
+      >>> GHC-TcPlugin #1
+
+      > cabal build test-wireup-impure-by-both
+      [1 of 1] Compiling Main
+      >>> GHC-TcPlugin #1
+      >>> GHC-TcPlugin #1
+      [1 of 1] Compiling Main [Impure plugin forced recompilation]
+      >>> GHC-TcPlugin #1
+      >>> GHC-TcPlugin #1
+
+  Modularity
+  ----------
+  GHC compiles modules. We see the counter plugin is called on twice when
+  functions ``foo`` and ``bar`` are in module ``Main``.
+
+  .. code-block:: haskell
+
+      {-# OPTIONS_GHC -fplugin CallCount.Pure.Plugin #-}
+
+      module Main where
+
+      foo :: IO a
+      foo = undefined
+
+      bar :: IO a
+      bar = undefined
+
+      main :: IO ()
+      main = return ()
+
+  .. code-block:: pre
+
+      > cabal build test-counter-main
+      [1 of 1] Compiling Main
+      >>> GHC-TcPlugin #1
+      >>> GHC-TcPlugin #2
+
+  Moving ``foo`` and ``bar`` to module ``FooBar`` and the counter plugin reports
+  two calls again.
+
+  .. code-block:: pre
+
+      > cabal build test-counter-foobar-main
+      [1 of 2] Compiling FooBar
+      >>> GHC-TcPlugin #1
+      >>> GHC-TcPlugin #2
+      [2 of 2] Compiling Main
+
+  Move these functions into separate modules and we count one call for each module.
+
+  .. code-block:: pre
+
+      > cabal build test-counter-foo-bar-main
+      [1 of 3] Compiling Bar
+      >>> GHC-TcPlugin #1
+      [2 of 3] Compiling Foo
+      >>> GHC-TcPlugin #1
+      [3 of 3] Compiling Main
+
+  Undefined is not a Function
+  ---------------------------
+  If your plugin behaves badly it is going to hurt. GHC panics when any one of
+  the functions required of a type checker plugin is implemented undefined.
+
+  .. code-block:: haskell
+
+      plugin :: Plugin
+      plugin = mkPureTcPlugin undefSolve
+
+      undefSolve :: TcPlugin
+      undefSolve = noOp { tcPluginSolve = \_ _ _ _ -> undefined }
+
+      noOp :: TcPlugin
+      noOp =
+          TcPlugin
+              { tcPluginInit = return ()
+              , tcPluginSolve = \_ _ _ _ -> return $ TcPluginOk [] []
+              , tcPluginStop = const $ return ()
+              }
+
+      mkPureTcPlugin :: TcPlugin -> Plugin
+      mkPureTcPlugin p =
+          defaultPlugin
+              { tcPlugin = const $ Just p
+              , pluginRecompile = purePlugin
+              }
+
+  .. code-block:: pre
+
+      > cabal build test-undefined-solve
+      [1 of 1] Compiling Undefined.Solve.Plugin
+      [1 of 1] Compiling Main
+      ghc: panic! (the 'impossible' happened)
+      Please report this as a GHC bug:  http://www.haskell.org/ghc/reportabug
+
+  I would have liked to use record update syntax for undefSolve as shown above
+  but this is not yet possible [#]_ with GHC when the data type has an
+  existential qualifier and that is how TcPlugin is defined [#]_.
+
+  .. code-block:: haskell
+
+      data TcPlugin = forall s. TcPlugin
+          { tcPluginInit  :: TcPluginM s
+          -- ^ Initialize plugin, when entering type-checker.
+          , tcPluginSolve :: s -> TcPluginSolver
+          -- ^ Solve some constraints.
+          -- TODO: WRITE MORE DETAILS ON HOW THIS WORKS.
+          , tcPluginStop  :: s -> TcPluginM ()
+          -- ^ Clean up after the plugin, when exiting the type-checker.
+          }
+
+  Care Free
+  ---------
+  Type checker plugins are of course called on by GHC to resolve constraints.
+  Some need solving and others don't. GHC knows that it can get an ``a`` from
+  ``undefined`` but maybe a plugin can do better so we get called.
+
+  .. code-block:: haskell
+
+      {-# OPTIONS_GHC -fplugin Undefined.Solve.Plugin #-}
+      module Main where
+
+      main :: IO a
+      main = undefined
+
+  Going from ``()`` to ``()`` needs no further resolution. GHC can handle this
+  by itself. The ``test-undefined-*-carefree`` test suites have these mains.
+  The ones without carefree in their name don't. They have the ``a`` from
+  ``undefined`` mains.
+
+  .. code-block:: haskell
+
+      {-# OPTIONS_GHC -fplugin Undefined.Solve.Plugin #-}
+      module Main where
+
+      main :: IO ()
+      main = return ()
+
+  So we've seen that a typechecker plugin's solve function **may** be called but
+  its init and stop functions are **always** called.
+
+  .. code-block:: ascii
+
+    +-------------------------------+------------+
+    | Test Suite                    | GHC Panics |
+    +===============================+============+
+    | test-undefined-init           |     x      |
+    +-------------------------------+------------+
+    | test-undefined-init-carefree  |     x      |
+    +-------------------------------+------------+
+    | test-undefined-solve          |     x      |
+    +-------------------------------+------------+
+    | test-undefined-solve-carefree |            |
+    +-------------------------------+------------+
+    | test-undefined-stop           |     x      |
+    +-------------------------------+------------+
+    | test-undefined-stop-carefree  |     x      |
+    +-------------------------------+------------+
+
+  Takeaways
+  ---------
+  * We should wire up type checker plugins with pragmas only in modules that need
+    it.
+  * Don't forget to flag pure plugins as such.
+  * If GHC doesn't need help resolving constraints then it won't call out to your plugin.
+  * Modules are the units of compilation.
+
+  License
+  -------
+  .. code-block:: ascii
+
+      Copyright © Phil de Joux 2017-2020
+      Copyright © Block Scope Limited 2017-2020
+
+  This software is subject to the terms of the Mozilla Public License, v2.0. If
+  a copy of the MPL was not distributed with this file, you can obtain one at
+  http://mozilla.org/MPL/2.0/.
+
+  .. _ghc-plugs-out: https://github.com/BlockScope/ghc-plugs-out
+
+  .. _ghc-2595: https://gitlab.haskell.org/ghc/ghc/issues/2595
+
+  .. _fgaz-GSoC-2018: https://fgaz.me/posts/2019-11-14-cabal-multiple-libraries/
+
+  .. [#] Multiple libraries were added to cabal 3.0, see fgaz-GSoC-2018_.
+  .. [#] The error if you try is "Record update for insufficiently polymorphic field", see ghc-2595_.
+  .. [#] These field haddock comments are verbatim from the GHC source.
+
+  .. |cabal-ci| image:: https://github.com/BlockScope/ghc-plugs-out/workflows/cabal/badge.svg
+license-name: MPL-2.0
