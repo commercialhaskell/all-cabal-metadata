@@ -1,0 +1,153 @@
+homepage: https://github.com/bristolpl/intensional-datatys#readme
+changelog-type: ''
+hash: fb6fb61799d1ce8327599bebb6476a8edeffe6da0b575b9650cb963b8ebfb922
+test-bench-deps:
+  intensional-datatys: -any
+  base: '>=4 && <5'
+maintainer: ej16147@bristol.ac.uk, steven.ramsay@bristol.ac.uk
+synopsis: A GHC Core plugin for intensional datatype refinement checking
+changelog: ''
+basic-deps:
+  ghc: '>=8.8 && <=8.8.4'
+  extra: ==1.7.4
+  haskeline: ==0.7.5.0
+  intensional-datatys: -any
+  base: ==4.*
+  unordered-containers: ==0.2.11.0
+  filepath: ==1.4.2.1
+  containers: ==0.6.2.1
+  mtl: ==2.2.2
+  hashable: ==1.3.0.0
+  aeson: ==1.5.2.0
+  directory: ==1.3.6.0
+all-versions:
+- 0.2.0.0
+author: Eddie Jones, Steven Ramsay
+latest: 0.2.0.0
+description-type: markdown
+description: "# Intensional Datatype Refinement Checking\n\nThe pattern-match safety
+  problem is to verify that a given functional program will never crash due to nonexhaustive\npatterns
+  in its function definitions. This tool is designed to verify pattern-match safety
+  of Haskell programs.\n\nConsider the following definition of formulas and disjunctive
+  normal form (DNF) from [PaperExamples.hs](test/PaperExamples.hs):\n````\n  data
+  Fm = \n      Lit L\n      | Not Fm\n      | And Fm Fm\n      | Or Fm Fm\n      |
+  Imp Fm Fm\n\n  distrib xss yss = List.nub [ List.union xs ys | xs <- xss, ys <-
+  yss ]\n\n  nnf2dnf (And p q) = distrib (nnf2dnf p) (nnf2dnf q)\n  nnf2dnf (Or p
+  q)  = List.union (nnf2dnf p) (nnf2dnf q)\n  nnf2dnf (Lit a)   = [[a]]\n  nnf2dnf
+  _         = error \"Impossible!\"\n\n  nnf' :: Fm -> Fm\n  nnf' (And p q) = And
+  (nnf' p) (nnf' q)\n  nnf' (Or p q) = Or (nnf' p) (nnf' q)\n  nnf' (Imp p q) = Or
+  (Not (nnf' p)) (nnf' q) \n  nnf' (Not (Not p)) = nnf' p \n  nnf' (Not (And p q))
+  = Or (nnf' (Not p)) (nnf' (Not q))\n  nnf' (Not (Or p q)) = And (nnf' (Not p)) (nnf'
+  (Not q))\n  nnf' (Not (Imp p q)) = And (nnf' p) (nnf' (Not q))\n  nnf' (Not (Lit
+  (Atom x))) = Lit (NegAtom x)\n  nnf' (Not (Lit (NegAtom x))) = Lit (Atom x)\n  nnf'
+  (Lit (Atom x)) = Lit (Atom x)\n  nnf' (Lit (NegAtom x)) = Lit (NegAtom x)\n\n  dnf'
+  = nnf2dnf . nnf'\n\n````\nThe function ``nnf2dnf`` has only partial patterns, for
+  example ``Imp p q`` is omitted, because it expects its argument to be in negation
+  normal form and thus not contain any occurrences of ``Imp`` or ``Not``.  However,
+  the definition of ``dnf`` ensures that any input to ``nnf2dnf`` is of the correct
+  form (assuming the definition of ``nnf'`` is correct).  \n\nHowever, the definition
+  of ``nnf'`` is not correct.  Can you spot the error?  Our tool can analyse how this
+  program will behave at runtime and notices that ``nnf'`` can let a rogue ``Not``
+  through in some cases.  In particular, the following use of ``dnf`` will result
+  in the program crashing with a pattern-match exception:\n````\n  willCrash = \n
+  \   dnf' (Imp (Lit (Atom 1)) \n              (And (Lit (Atom 2)) \n                  (Or
+  (Lit (NegAtom 3)) (Lit (Atom 1)))))\n````\n\nWhen we try to compile this file with
+  our plugin enabled, after a few milliseconds we get:\n\n![warning message](docs/intensional-warning.png)\n\nThe
+  warning tells us that it is the ``Not`` created on line 60 that leaks out of the
+  function (this is the ``Imp`` case of ``nnf``) and that the call on lines 73--76
+  (this is the definition of ``willCrash``) will cause that ``Not`` to reach the incomplete
+  pattern match on lines 32--35 (this is the definition of ``nnf2dnf``).\n\nOn the
+  other hand, the analysis also understands that the usage in the following definition
+  will not exercise the faulty ``Imp`` case of ``nnf'`` and hence no warning is issued
+  for this line of code:\n````\n  willNotCrash = dnf' (And (Lit (Atom 1)) (Lit (Atom
+  2)))\n````\n\nInternally, the tool is using a kind of refinement type system in
+  order to statically approximate which constructors are flowing to which points of
+  the program.  The system is carefully designed so that inference is completely automatic
+  and runs in time that is linear in the size of the program, but exponential in the
+  underlying (Haskell) type of the program.  In particular, it is exponential in the
+  size of the datatype definitions, so the analysis may struggle if your program has
+  very large datatypes.  However, we have successfully analysed many large packages
+  from Hackage (subject to the significant [limitations](#limitations) in the current
+  implementation, discussed below).\n\nThe same example [file](test/PaperExamples.hs)
+  also contains a non-faulty implementation ``nnf``.  The type assigned to ``nnf``
+  describes a function that will never return a value built with ``Not`` or ``Implies``
+  (in fact the type is 'flow-sensitive' which means, in this case, that it says which
+  constructors will be in the output given which constructors were in the input).
+  \ Take a look at [Viewing the inferred types](#viewing-inferred-types) to see the
+  type.\n\n\n\n## Usage\n\nThe tool is a plugin for GHC, and is integrated into the
+  compilation pipeline.  Since it depends on the GHC API directly, it is currently
+  tied to GHC >= 8.6 and <=8.8.4 so first ensure you have a compatible version of
+  the compiler.\n\n### Invoke via GHC directly\nTo add the analysis to compilation
+  using GHC directly from the command line, first install the ``intensional-datatys``
+  package from Hackage:\n````\n  $ cabal update\n  Downloading the latest package
+  list from hackage.haskell.org\n  $ cabal install intensional-datatys\n  Resolving
+  dependencies...\n````\nThen use the flags ``-package intensional-datatys`` and ``-fplugin
+  Intensional`` when invoking GHC as usual, e.g:\n````\n  $ ghc -package intensional-datatys
+  -fplugin Intensional Main.hs\n````\nOptionally, add the flags detailed [here](#optional-ghc-flags)
+  to the command line invocation to help the analysis efficiency or to view inferred
+  types interactively.\n\n\n### Invoke via an (existing) Cabal project\nTo add this
+  analysis as another stage to compilation for a Haskell project with a working cabal
+  description\nand access to Hackage:\n  \n  1. Add ``intensional-datatys`` to the
+  ``build-depends`` field of the target that you want to analyse.\n  2. Add ``-fplugin
+  Intensional`` to the ``ghc-options`` field\n  3. Optionally, add flags detailed
+  [here](#optional-ghc-flags) to ``ghc-options`` to help the analysis efficiency or
+  to view inferred types interactively.\n\n### Interpreting the output \nIn the terminal
+  you will find notifications of any warnings produced by the tool, which can be identified
+  by the ``Intensional`` label in square brackets.\n\n````\n  test/PaperExamples.hs:(73,1)-(76,56):
+  warning: [Intensional]\n    Could not verify that ‘Not’ from test/PaperExamples.hs:60:21-34\n
+  \     cannot reach the incomplete match at test/PaperExamples.hs:(32,1)-(35,39)\n````\n\nThe
+  warnings record instances where the tool *believes* there will be a pattern-match
+  violation at runtime.\nIf there are no warnings, then the code has been verified
+  as free from pattern-match safety violations at runtime, subject to the [limitations](#limitations)
+  discussed below.\n\nThe first line of the warning gives the location of the error.\nThe
+  second line of the warning gives a datatype constructor and the location in the
+  source that the constructor is created.\nThe third line of the warning gives the
+  location in the source code of an incomplete pattern.\nThe warning is being reported
+  because, after analysing how the program will behave, the tool cannot exclude the
+  possibility that the given incomplete pattern will not be matched to the given constructor
+  at runtime, which result in an exception.\n\n\n### Optional GHC flags\n  \n  We
+  recommend the following additional flags which turn off inlining and other GHC optimisations
+  whilst retaining strictness analysis.\n\n      * ``-g``\n      * ``-O0``\n      *
+  ``-fno-pre-inlining``\n      * ``-funfolding-use-threshold=0``\n      * ``-fno-ignore-interface-pragmas``\n
+  \     * ``-fno-omit-interface-pragmas``\n  \n  To view the types inferred for a
+  module ``m`` or any module that ``m`` depends on, use the following flag and see
+  section [Viewing Inferred Types](#viewing-inferred-types).\n\n      * ``-fplugin-opt
+  Intensional:m``\n\n\n## Limitations\nAs this is only a prototype tool, it's interface
+  and deployment are not well developed!  \nIn particular, many features of Haskell
+  are not properly analysed, notably:\n* Type classes\n* GADTs\n* Higher-ranked types\n\nWe
+  do not analyse any code that is not from the home package (i.e. in the source files
+  being compiled) and so we do not refine any types that are not defined in your program.
+  For example, we do not track the control flow of ``Maybe`` or ``Bool``.\n\nFor efficiency,
+  we do not allow empty refinements of single-constructor datatypes.  This gives great
+  savings when there are many newtypes, records and wrapper datatypes and are not
+  a major concern of our work.\n\n## Viewing inferred types\nIf the flag ``-fplugin-opt
+  Intensional:m`` is used then, following the compilation of module ``m``, a very
+  simple REPL will be presented from which you can issue commands to view inferred
+  types of- or the GHC core associated with top-level functions.\n\n* To view the
+  type of a compiled module-level function ``f``, issue the command ``:t f``.\n````\n
+  \ Main> :t nnf\n  nnf : forall X Y.inj_X Fm -> inj_Y Fm\n        where\n          [Imp]
+  in X(Fm) ? Not <= X(Fm)\n          [Imp] in X(Fm) ? Or <= Y(Fm)\n          [Or]
+  in X(Fm) ? Or <= Y(Fm)\n          [And, Not] in X(Fm) ? Or <= Y(Fm)\n          [And]
+  in X(Fm) ? And <= Y(Fm)\n          [Imp, Not] in X(Fm) ? And <= Y(Fm)\n          [Not,
+  Or] in X(Fm) ? And <= Y(Fm)\n          [Lit, Not] in X(Fm), [NegAtom] in X(L) ?
+  Lit <= Y(Fm)\n          [Lit, Not] in X(Fm), [Atom] in X(L) ? Lit <= Y(Fm)\n          [Lit]
+  in X(Fm), [NegAtom] in X(L) ? Lit <= Y(Fm)\n          [Lit] in X(Fm), [Atom] in
+  X(L) ? Lit <= Y(Fm)\n          [Lit, Not] in X(Fm), [NegAtom] in X(L) ? Atom <=
+  Y(L)\n          [Lit] in X(Fm), [Atom] in X(L) ? Atom <= Y(L)\n          [Lit, Not]
+  in X(Fm), [Atom] in X(L) ? NegAtom <= Y(L)\n          [Lit] in X(Fm), [NegAtom]
+  in X(L) ? NegAtom <= Y(L)\n````\n* To view the GHC Core associated with a module-level
+  function ``f``, issue ``:c f``\n````\n    Main> :c dnf\n    src<test/PaperExamples.hs:36:1-19>\n
+  \   . @ Fm\n      @ [[L]]\n      @ Fm\n      (src<test/PaperExamples.hs:36:7-13>
+  nnf2dnf)\n      (src<test/PaperExamples.hs:36:17-19> nnf)\n````\n* To resume compilation,
+  issue ``:q ``.\n\nFunctions from module dependencies of ``m`` can also be queried
+  by using their fully-qualified names.\n\n  \n## Troubleshooting \n\n* I get warnings
+  about constructors created in typeclass functions that are not creating anything!
+  \ \n    - See [limitations](#limitations), currently typeclass functions are overapproximated
+  so the tool believes they return all constructors for the given type.\n\n* I ran
+  the tool and it seemed to compile without any warnings at all, but I was expecting
+  some!\n    - Are you sure that the source was actually compiled?  The tool is part
+  of the usual compilation pipeline, so if nothing changes in the source, GHC will
+  not recompile the file.\n\n* I can't seem to get the tool to work because of some
+  Cabal dependency issues!\n    - Perhaps you are not using GHC 8.8.3 or 8.8.4.  Sorry
+  about that, but the tool uses the GHC API directly, so the version is important.\n"
+license-name: BSD-3-Clause
