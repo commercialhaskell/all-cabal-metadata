@@ -1,17 +1,33 @@
 homepage: https://github.com/LeapYear/th-test-utils#readme
 changelog-type: markdown
-hash: 4ed4be9a9daaa8822f856147f4ddd812bd26f9ef6adacb6f422414e2b9fcf6c7
+hash: 9031e177727b96703e30c2b8d0c376a96270137b9bc82a822e2c55d4f36d7a74
 test-bench-deps:
+  bytestring: -any
   base: '>=4.9 && <5'
+  tasty-golden: -any
   th-test-utils: -any
-  tasty-hunit: '>=0.9.2 && <0.10.1'
+  th-orphans: '>=0.13.4 && <0.13.11'
+  tasty-hunit: -any
   transformers: '>=0.5.2 && <0.5.7'
-  tasty: '>=0.11.3 && <1.4'
+  tasty: -any
   template-haskell: '>=2.11.1.0 && <2.17'
 maintainer: Brandon Chinn <brandon@leapyear.io>
 synopsis: Utility functions for testing Template Haskell code
 changelog: |
   ## Upcoming
+
+  ## 1.1.0
+
+  * Rewrite with `runTestQ`, allowing for both recoverable `Q` actions and mocked `Q` actions in `IO`.
+
+      The previous `tryQ'` function can be reimplemented as:
+
+      ```hs
+      tryQ' :: Q a -> Q (Either String a)
+      tryQ' = tryTestQ unmockedState
+      ```
+
+      with the other helpers defined as before, using `tryQ'`.
 
   ## 1.0.2
 
@@ -28,58 +44,67 @@ changelog: |
   * Add `tryQ`, `tryQErr`, `tryQErr'` functions
 basic-deps:
   base: '>=4.9 && <5'
+  th-orphans: '>=0.13.4 && <0.13.11'
   transformers: '>=0.5.2 && <0.5.7'
   template-haskell: '>=2.11.1.0 && <2.17'
 all-versions:
 - 1.0.0
 - 1.0.1
 - 1.0.2
+- 1.1.0
 author: Brandon Chinn <brandon@leapyear.io>
-latest: 1.0.2
+latest: 1.1.0
 description-type: markdown
 description: |
   # th-test-utils
 
   ![CircleCI](https://img.shields.io/circleci/build/github/LeapYear/th-test-utils.svg)
   ![Hackage](https://img.shields.io/hackage/v/th-test-utils.svg)
+  [![codecov](https://codecov.io/gh/LeapYear/th-test-utils/branch/master/graph/badge.svg)](https://codecov.io/gh/LeapYear/th-test-utils)
 
-  This package contains utility functions for testing Template Haskell code.
-
-  Currently, this package only exposes a single function, `tryQ` (and derivatives),
-  that allows testing whether a given Template Haskell expression fails.
+  This package implements `tryTestQ` and related helpers in order to better test Template Haskell code. It supports returning the actual error message that [`recover` doesn't currently return](https://gitlab.haskell.org/ghc/ghc/-/issues/2340) as well as mocking out `Q` actions, so that you can run Template Haskell code at runtime.
 
   ## Usage
 
   ```haskell
-  -- e.g. $(qConcat ["hello", "world"]) generates "helloworld" at compile time
-  qConcat :: [String] -> Q Exp
-  qConcat [] = fail "Cannot concat empty list"
-  qConcat xs = ...
-
-  -- e.g. [numberify| one |] generates `1` at compile time
-  numberify :: QuasiQuoter
-  numberify = ...
+  -- e.g. $(showInfo "Bool") generates a string corresponding
+  -- to the reify `Info` for `Bool`.
+  showInfo :: String -> Q Exp
+  showInfo s = do
+    mName <- lookupTypeName s
+    case mName of
+      Nothing -> fail $ "Unknown type: " ++ s
+      Just name -> do
+        info <- reify name
+        lift $ show info
   ```
 
   ```haskell
   -- example using tasty-hunit
   main :: IO ()
   main = defaultMain $ testGroup "my-project"
-    [ testCase "qConcat 1" $
-        $(tryQ $ qConcat ["hello", "world"]) @?= (Right "helloworld" :: Either String String)
-    , testCase "qConcat 2" $
-        $(tryQ $ qConcat [])                 @?= (Left "Cannot concat empty list" :: Either String String)
-    , testCase "numberify 1" $
-        $(tryQ $ quoteExp numberify "one")   @?= (Right 1 :: Either String Int)
-    , testCase "numberify 2" $
-        $(tryQ $ quoteExp numberify "foo")   @?= (Left "not a number" :: Either String Int)
+    [ testCase "showInfo unmocked" $(do
+        result1 <- tryTestQ unmockedState $ showInfo "Bool"
+        runIO $ isRight result1 @? ("Unexpected error: " ++ show result1)
 
-    -- can also return error message as `Maybe String` or `String` (which errors
-    -- if the function doesn't error)
-    , testCase "numberify 3" $
-        $(tryQErr $ quoteExp numberify "foo") @?= Just "not a number"
-    , testCase "numberify 4" $
-        $(tryQErr' $ quoteExp numberify "foo") @?= "not a number"
+        result2 <- tryTestQ unmockedState $ showInfo "Foo"
+        runIO $ result2 @?= Left "Unknown type: Foo"
+
+        [| return () |]
+      )
+
+    , testCase "showInfo mocked success" $ do
+        let state = QState
+              { mode = MockQ
+              , knownNames = [("Bool", ''Bool)]
+              , reifyInfo = $(loadNames [''Bool])
+              }
+
+        let result1 = tryTestQ state $ showInfo "Bool"
+        isRight result1 @? ("Unexpected error: " ++ show result1)
+
+        let result2 = tryTestQ state $ showInfo "Foo"
+        result2 @?= Left "Unknown type: Foo"
     ]
   ```
 license-name: BSD-3-Clause
