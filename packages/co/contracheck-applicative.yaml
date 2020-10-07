@@ -1,116 +1,207 @@
 homepage: ''
 changelog-type: markdown
-hash: 0fbc1418eec284760f8d169da46fbefa93e4df97f5d48d7fa2e8d0b5b236d9a7
+hash: 0e2564e3c95b7efe117d64fc4f51f9f04cb283e41cf4304d0af3d9fd2382f87a
 test-bench-deps: {}
 maintainer: 99fabianb@sis.gl
 synopsis: Validation types/typeclass based on the contravariance.
 changelog: |
   # Changelog for contracheck-applicative
 
+  ## 0.2.0 Major update
+     * Add `CheckPatch`-module and functionality
+     * Add SOP-support
+     * Deprecate Control.Validation.Class
+     * Update documentation
+
+  ## 0.1.3 Update documentation
+
   ## 0.1.1.1 Update documentation
 
   ## 0.1.1.0 Drop Checkable instances for Text and ByteString
 basic-deps:
   base: '>=4.7 && <5'
-  containers: '>=0.4 && <0.7'
+  containers: '>=0.2 && <0.7'
   contravariant: '>=1.0.0 && <1.6'
-  mmorph: '>=1.0.0 && <1.2'
+  mmorph: '>=1.1.0 && <1.2'
+  generics-sop: '>=0.4.0.0 && <0.6'
+  microlens: '>=0.1.3 && <0.5'
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
 - 0.1.1.0
 - 0.1.2
+- 0.2.0
 author: Fabian Birkmann
-latest: 0.1.2
+latest: 0.2.0
 description-type: markdown
-description: "contracheck-applicative\n=======================\n\nThis package provides
+description: "contracheck-applicative\n=======================\n\n\nThis package provides
   some simple yet useful types and functions to dynamically check properties of your
-  data.\n\n# Table of contents\n1. [Why use this library](#why)\n2. [Quickstart](#quickstart)\n
-  \   1. [Types](#Types)\n\t   * [`Unvalidated`](#Unvalidated)\n\t   * [`CheckResult`](#CheckResult)\n\t
-  \  * [`Check`](#Check)\n    2. [Composition of `Check`'s](#composition)\n\t3. [Combination
-  of `Check`'s](#combination)\n\t4. [Dealing with additional context](#context)\n\t5.
-  [`Checkable` Typeclass](#typeclass)\n\n# Why use this library? <a name=\"why\"></a>\n\nRuntime-checking
-  for properties of data is the poor man's parsing. Nonetheless, sometimes it has
-  do be done, and most of the time is not really pretty.\n\nMost validation libraries
-  define validations to be a type like `a -> Either Text a`, which makes sense as
-  it captures the essence of validations: Put something in, and you either get it
-  back and know your data is alright, or you have an error to work with. But the type
-  `a -> Either Text a` does not behave nicely:\n* On the type level it does not distinguish
-  between unvalidated and validated values.\n* Validations are not combinable: There
-  is no canonical monoid instance\n* Validations are not reusable:   It is invariant;
-  so it is neither co- nor contravariant.\n* Validations are not composable: There
-  is no canonical way to combine a pair of validations `(a -> Either Text a, b ->
-  Either Text b)` to a validation `(a, b) -> Either Text (a, b)`\n\nThis library attempts
-  to fix these issues.\n\n# Quickstart <a name=\"quickstart\"></a>\n\n\nA `Check`
-  is a function that takes an `Unvalidated` value and returns the result, possibly
-  with a context: If the input has `Passed` the check or `Failed` it with a number
-  of possible errors.\n```haskell\nnewtype Unvalidated a = Unvalidated { unsafeValidate
-  :: a } \n\ndata CheckResult \n\t= Passed\n\t| Failed (Seq a)\n\t\nnewtype Check
-  \ e m a = Check { runCheck :: Unvalidated a -> m (CheckResult e) }\ntype    Check'
-  e = Check e Identity\n```\n\n## Types <a name=\"types\"></a>\nBasically all this
-  library does is provide convenient instances for the following types.\n\n### `Unvalidated`
-  <a name=\"unvalidated\"></a>\n\n```haskell\nnewtype Unvalidated a = Unvalidated
-  { unsafeValidate :: a } \n```\n\nThe `Unvalidated` newtype is to make a distinction
-  between validated and unvalidated values on the type level. It is often convient
-  to give an orphan instance for the typeclass of your choice via `-XStandaloneDeriving`
-  so unvalidated data cannot sneak into your system, e.g.\n```haskell\n{-# language
-  StandaloneDeriving, GeneralizedNewtypeDeriving, DerivingStrategies #-}\nimport Data.Aeson(FromJSON)\nderiving
-  newtype instance (FromJSON a) => FromJSON (Unvalidated a)\n```\n\n### `CheckResult`
-  <a name=\"CheckResult\"></a>\n```haskell\ndata CheckResult \n\t= Passed\n\t| Failed
-  (Seq a)\n\t\ninstance Monoid CheckResult\ninstance Functor CheckResult\n```\n\nIt
-  has a monoid instance that collects all possible errors, that is, it is not lazy
-  in its failure component.\n\n### Check <a name=\"Check\"></a>\n\n```haskell\nnewtype
+  data.\n\n# Table of contents\n1. [Why use this library](#why)\n2. [Quickstart](#quickstart)\n3.
+  [Documentation](#documentation)\n    1. [Types](#Types)\n\t   * [`Unvalidated`](#Unvalidated)\n\t
+  \  * [`CheckResult`](#CheckResult)\n\t   * [`Check`](#Check)\n    2. [Composition
+  of `Check`'s](#composition)\n        1. [Pulling back `Check`s](#pullback)\n        2.
+  [Checking ADTs](#adt)\n        3. [Combination of `Check`'s: Checking multiple things](#combination)\n
+  \   3. [Dealing with additional context](#context)\n    4. [`CheckPatch`: Fix your
+  errors](#checkPatch)\n\t  5. [`Checkable` Typeclass](#typeclass)\n\n# Why use this
+  library? <a name=\"why\"></a>\n\nRuntime-checking for properties of data is the
+  poor man's parsing. Nonetheless, sometimes it has do be done, and most of the time
+  is not really pretty.\n\nMost validation libraries define validations to be a type
+  like `a -> Either Text a`, which makes sense as it captures the essence of what
+  you do when you validate input: Put something in, and you either get it back and
+  know your data is alright, or if it is not then you have an error to return. But
+  the type `a -> Either Text a` does not behave nicely:\n* On the type level it does
+  not distinguish between unvalidated and validated values.\n* Validations are not
+  combinable: There is no canonical monoid instance\n* Validations are not reusable:
+  \  It is invariant; so it is neither co- nor contravariant.\n* Validations are not
+  composable: There is no canonical way to e.g. combine a pair of validations `(a
+  -> Either Text a, b -> Either Text b)` to a validation `(a, b) -> Either Text (a,
+  b)`\n\nThis library attempts to make it pleasant to validate and more.\n\n# Quickstart
+  <a name=\"quickstart\"></a>\n\nYou validate your `Unvalidated` data by a (possibly
+  very large `Check`); Either your data passed all the checks or you get a `Data.Sequence.Seq`
+  of errors of type `e`:\n```haskell\nvalidateBy' :: Check' e a -> Unvalidated a ->
+  Either (Seq e) a\nvalidateBy :: Functor f => Check e f a -> Unvalidated a -> f (Either
+  (Seq e) a)\n```\nDepending on whether you need additional context `f` (such as `IO`)
+  you should use the types functions postfixed by an apostrophe `'` (otherwise the
+  context is `Identity`).\n\nTo use this library you want to\n1. Wrap your unvalidated
+  data in `Unvalidated` by either using `unvalidated :: a -> Unvalidated a` or via
+  an orphan instance if you are brave enough (see below).\n2. Write your basic `Check`s
+  by \n   - `checking' :: (a -> CheckResult e) -> Check' e a ` \n   - or based on
+  a predicate using the functions from the family `test`/`?>`\n3. Combine them using
+  \n   - `(<>) :: Check' e a -> Check' e a -> Check' e a` (Check both)\n   - `contramap
+  :: (b -> a) -> Check' e a -> Check' e b` (\"Pull back\" a `Check` on an `a` to a
+  Check on a `b` via a function `b -> a`)\n   - `joinMultiCheck` to easily compose
+  a check for an ADT from checks for the single fields\n   - `choose / divide` to
+  multiple single `Check`s to a `Check` on a sum / product if you need more flexibility\n4.
+  Run the checks via `validateBy' :: Check' e a -> Unvalidated a -> Either (Seq e)
+  a`.\n5. Check out `CheckPatch`es to maybe even preprocess your data before your
+  business logic!\n\n```haskell\n\ntype Name = String\ntype Age = Int\n\ndata Pet
+  = Dog Name Age | Cat Name\n  deriving (Show)\n\ndata Profile = Profile\n  { _name
+  :: Name\n  , _age  :: Int\n  , _pet  :: Pet\n  , _otherWebsites :: [String]\n  }
+  deriving (Show)\n\n\ncheckNotEmpty = not . null ?>> \"No name given\"\n\ncheckAdult
+  \ = (>= 18) ?> printf \"%s is too young; must be at least 18 years old\" . show\n\ncheckHttps
+  = (\"https://\" `isPrefixOf`) ?> printf \"Website '%s' is not secure: Missing 'https'\"\n\n--
+  to do this we need\nderiveGeneric ''Pet\ncheckPet = joinMultiCheck\n  (  (checkNotEmpty
+  :* mempty :* Nil)\n  :* (checkNotEmpty :* Nil)\n  :* Nil )\n\ncheckProfile :: Check'
+  Err Profile\ncheckProfile \n  =  contramap _name          checkNotEmpty\n  <> contramap
+  _age           checkAdult\n  <> contramap _pet           checkPet\n  <> contramap
+  _otherWebsites (foldWithCheck checkHttps) -- `foldWithCheck lifts a Check to a foldable,
+  in this case a list`\n \n-- or again using generics:\nderiveGeneric ''Profile\ncheckProfile2
+  :: Check' Err Profile\ncheckProfile2 = joinMultiCheck $ \n  (  checkNotEmpty\n  :*
+  checkAdult\n  :* checkPet\n  :* foldWithCheck checkHttps\n  :* Nil ) :* Nil\n \nunvalidatedProfile1
+  = unvalidated $ \n  Profile \"Fabian\" 23 [\"https://facebook.com/fabian\"]\n\nunvalidatedProfile2
+  = unvalidated $ \n  Profile \"\" 23 [\"http://fakebok.com/eviluser\"]\n\nvalidateBy'
+  checkProfile unvalidatedProfile1\n-- ~> Right (Profile \"Fabian\" ...)\n\nvalidateBy'
+  checkProfile unvalidatedProfile2\n-- -> Left (fromList [\"No name given\", \"Website
+  'https://...' is not secure\"])\n```\n\n# Documentation <a name=\"documentation\"></a>\n\nLet's
+  introduce these types to work with; the `deriveGeneric` is only used for `CheckPatch`es,
+  so you can safely ignore it until you use that\n\n``` haskell\ntype Name = String\ntype
+  Age = Int\ntype Err = String\n\ndata Pet = Dog Name Age | Cat Name\n  deriving (Show)\nderiveGeneric
+  ''Pet\n\ndata Profile = Profile\n  { _name :: Name\n  , _age  :: Int\n  , _pet  ::
+  Pet\n  , _otherWebsites :: [String]\n  } deriving (Show)\nderiveGeneric ''Profile\n```\n\n##
+  Types <a name=\"types\"></a>\n\n### `Unvalidated` <a name=\"unvalidated\"></a>\n\n```haskell\nnewtype
+  Unvalidated a = Unvalidated { unsafeValidate :: a } \n```\n\nThe `Unvalidated` newtype
+  is to make a distinction between validated and unvalidated values on the type level.
+  It is often convient to give an orphan instance for the typeclass of your choice
+  via `-XStandaloneDeriving` so unvalidated data cannot sneak into your system, so
+  in YOUR code you could for example declare (if your api has to deal with data incoming
+  as JSON):\n```haskell\n{-# language StandaloneDeriving, GeneralizedNewtypeDeriving,
+  DerivingStrategies #-}\nimport Data.Aeson(FromJSON)\nderiving newtype instance (FromJSON
+  a) => FromJSON (Unvalidated a)\n```\n\n### `CheckResult` <a name=\"CheckResult\"></a>\n```haskell\ndata
+  CheckResult e\n\t= Passed\n\t| Failed (Seq e)\n\t\t\n\t\ninstance Monoid CheckResult\ninstance
+  Functor CheckResult\n```\n\nThe type `CheckResult a` is basically `Either e ()`
+  with  a monoid instance that collects all possible errors.\n\n### Check <a name=\"Check\"></a>\n\n```haskell\nnewtype
   Check  e m a = Check { runCheck :: Unvalidated a -> m (CheckResult e) }\ntype    Check'
-  e = Check e Identity\n```\n\nTo start off lets give some simple examples. We construct
-  `Check`s using the auxiliary combinators\n* `failsWith :: e -> CheckResult e`\n*
-  `failsNoMsg :: CheckResult e`\n* `checking' :: (a -> CheckResult e) -> Check' e
-  a`\n* `test' :: Applicative m => (a -> Bool) -> (a -> e) -> Check e m a`\n\n```haskell\nimport
-  Data.Char(isAlpha)\n\ncheckEven :: Check' String Int\ncheckEven = test \n\t          ((==
-  0) . (`mod` 2)) \n\t\t\t  (mappend \"Number not even: \" . show)\n\t\t\t  \ntype
-  Age = Int\ncheckAge = test' (< 18) failsNoMsg\n\ntype Name = String\ncheckName =
-  test $ \\name -> \n\tlet invalidChars = filter (not . isAlpha) name\n\tin if null
-  invalidChars\n\t\t then Passed\n\t\t else failsWith invalidChars\n```\n\nThere are
-  some other combinators to construct checks in various flavours, notably the `test/(?>)`
-  family.\nYou can run the checks using `validateBy'` if you want to use the validated
-  result or just by `runCheck` if you just want to know if your input passed the check
-  (though this is slower than it needs to be as the check collects all possible errors).\n\n##
-  Composition of `Check`s <a name=\"composition\"></a>\n\n\nThe `Check` type is contravariant
-  in the parameter to be checked (in fact, the whole library is merely a big wrapper
-  around the instances for the type classes from the package [contravariant](https://www.stackage.org/package/contravariant)).
-  This tells us that we can \"pull back\" checks to other types:\n\n```haskell\ncheckOdd
-  = contramap (+1) checkEven\n```\n\nSo if we have a `Check` for an `a` and know how
-  to convert a `b` into an `a` that preserves the property to be checked, we get a
-  `Check` for our `b` for free. You can also pull back a pair of checks to a product/sum
+  e = Check e Identity\n```\n\nA `Check` is a function that takes some `Unvalidated`
+  data and produces a `CheckResult`.\nLet's give some simple examples. We construct
+  `Check`s using the auxiliary combinators\n- For `CheckResult`s:\n* `failsWith ::
+  e -> CheckResult e`\n  (`failsWith` is simply the constructor `Failed` precomposed
+  with `Data.Sequence.Singleton`)\n* `failsNoMsg :: CheckResult e`\n  (`failsNoMsg
+  = Failed mempty`)\n  \n- For `Check`s (note the apostrophe at the end to indicate
+  a \"pure\" Check, if you need monadic context such as `IO` use `checking` and `test`)\n*
+  `checking' :: (a -> CheckResult e) -> Check' e a`\n* `test' :: Applicative m =>
+  (a -> Bool) -> (a -> e) -> Check e m a`\n\n\nUsage (academic examples):\n```haskell\nimport
+  Data.Char(isAlpha)\n\ncheckEven :: Check' Err Int\ncheckEven = test \n\t          ((==
+  0) . (`mod` 2)) \n\t\t\t  (mappend \"Number not even: \" . show)\n\t\t\t  \ncheckAge
+  = test' (< 18) failsNoMsg\n\ncheckName = checking' $ \\name -> \n\tlet invalidChars
+  = filter (not . isAlpha) name\n\tin if null invalidChars\n\t\t then Passed\n\t\t
+  else failsWith invalidChars\n```\n\nThere are some other combinators to construct
+  checks in various flavours, notably the `test/(?>)` family.\nYou can run the checks
+  using `validateBy'` if you want to use the validated result or just by `runCheck`
+  if you just want to know if your input passed the check (though this is slower than
+  it needs to be as the check collects all possible errors).\n\n## Composition of
+  `Check`s <a name=\"composition\"></a>\n\n### Pulling back `Check`s <a name=\"pullback\"></a>\nThe
+  `Check` type is contravariant in the parameter to be checked (in fact, the whole
+  library is (edit: was, until the `CheckPatch` functionality was added) merely a
+  big wrapper around the instances for the type classes from the package [contravariant](https://www.stackage.org/package/contravariant)).
+  The `Contravariant`-instace allows us to \"pull back\" checks to other values:\n\n```haskell\n--
+  Given a Check for an Int we can pull it back to a Check for a String\n-- by suppling
+  a function `String -> Int` (`length` in this case):\ncheckEvenLength :: Check' Err
+  String\ncheckEvenLength = contramap length checkEven\n```\n\nSo if we have a `Check`
+  for an `a` and know how to convert a `b` into an `a` that preserves the property
+  to be checked, we get a `Check` for our `b` for free. \n\n### Checking ADTs <a name=\"adt\"></a>\nFor
+  ADTs the case is even simpler: For each constructor you give a list of `Check`s
+  ─ one for each field ─ concatenated by `(:*)` and ended by `Nil`; so in total you
+  have a nested list: A list of lists, one for each constructor, each containing the
+  checks for the fields of that constructor, and then collapse it to a single 'Check'
+  using 'joinMultiCheck':\n\n``` haskell\ncheckNotEmpty = not . null ?>> \"No name
+  given\"\n\ncheckAdult  = (>= 18) ?> printf \"%s is too young; must be at least 18
+  years old\" . show\n\ncheckHttps = (\"https://\" `isPrefixOf`) ?> printf \"Website
+  '%s' is not secure: Missing 'https'\"\n\ncheckPet :: Check' Err Pet\ncheckPet =
+  joinMultiCheck\n  (  (checkNotEmpty :* mempty :* Nil) -- checks for the fields of
+  the first constructor\n  :* (checkNotEmpty :* Nil) -- checks for the fields of the
+  second constructor\n  :* Nil ) -- outer list is also terminated by `Nil`\n\ncheckProfile
+  :: Check' Err Profile\ncheckProfile = joinMultiCheck\n  (  checkNotEmpty\n  :* checkAdult\n
+  \ :* checkPet\n  :* foldWithCheck checkHttps -- `foldWithCheck` lifts a `Check`
+  to a `Foldable`, in this case a list \n  :* Nil ) -- only one constructor, so the
+  outer list is a singleton list\n  :* Nil\n```\n\nUnfortunately this way the information
+  about which field of which constructor threw what error gets lost; the solution
+  is `mapErrorsWithInfo`: It takes a function changing the error based on the datatype
+  name, constructor name and field name. Make sure to apply it to the `MultiCheck`-list
+  _BEFORE_ applying `joinMultiCheck`!\n\n``` haskell\naddInfo :: DatatypeName -> ConstructorName
+  -> FieldName -> (Err -> Err)\n-- we are ignoring the constructorname as it is only
+  one constructor anyway\naddInfo d _ f err = printf \"%s [Field %s]: %s\" d f err\n\ncheckProfile
+  :: Check' Err Profile\ncheckProfile = joinMultiCheck . mapErrorsWithInfo addInfo
+  $  \n  (  checkNotEmpty\n  :* checkAdult\n  :* checkPet\n  :* foldWithCheck checkHttps\n
+  \ :* Nil ) -- only one constructor, so the outer list is a singleton list\n  :*
+  Nil\n  \n-- $ validateBy' checkProfile (unvalidated $ Profile \"\" 23 (Cat \"haskell\")
+  [\"http://badsite.com\"])\n-- >>> Left (fromList [\"Profile: [Field _name]: No name
+  given\", \"Profile: [Field _websites]: Website ... not secure ...\"])\n  \n```\n\nAnother
+  thing that is not optimal is if you have a lot of constructors but only want to
+  check one, e.g. for\n`data X = A | B | C | D | E | F | Other String`, the \"MultiCheck\"-list
+  just gets very ugly. Fortunatley, theres a way around: `constructorCheck` takes
+  the \"index\" of the constructor you want to check and just the list of 'Check's
+  for this constructor; but careful, the index is counted in \"unary\" and is zero
+  based:\n* First constructor ~ `Z`\n* Second constructor ~ `(S . Z)`\n* Third constructor
+  ~ `(S . S . Z)`\nand so on. \nA 'Check' for `X` above that only checks the `Other`-case
+  for being not empty thus looks like\n\n``` haskell\ncheckOtherField = constructorCheck
+  (S.S.S.S.S.S.Z) (checkNotEmpty :* Nil)\n```\n\n\nIf you need more granularity, you
+  more generally can also pull back a pair of checks to an arbitrary (binary) product/sum
   of types (`(,)/Either`) using `divide/choose` from the type classes `Divisible/Decidable`
   (also defined in the package [contravariant](https://www.stackage.org/package/contravariant)).
   We show how to use them by lifting a `Check` for an `a` to a `Check` for a list
   of `a`s:\n\n```haskell\ncheckListBy :: Check' e a -> Check' e [a]\ncheckListBy checkA
-  =\n  choose split checkNil checkCons\n  where\n    splitSum [] = Left ()\n    splitSum
-  (x:xs) = Right (x, xs)\n\tcheckNil = mempty\n\tcheckCons = divide id checkA (checkListBy
-  checkA)\n```\t\nTo check a list `[a]` we have to distinguish two cases (`split`);
-  either it is empty (`Left ()`), then we apply the trivial check `checkNil` or it
-  is a cons, then we apply the check to the head and check the rest of the list.\n\nTo
-  summarize, we can use (with Types specialized to `Check`):\n* `contramap` (≡ `>$<`):
-  `(b -> a) -> Check e m a -> Check e m b`\n* `divide :: (a -> (b, c)) -> Check e
-  m b -> Check e m c -> Check e m a`\n* `choose :: (a -> Either b c) -> Check e m
-  b -> Check e m c -> Check e m a`\n\n## Combination of `Check`'s <a name=\"combination\"></a>\n\nBut
-  now you want to combine your checks, e.g. to check a registration form. A first
-  attempt might be to use the monoid instance of `CheckResult`. Note that it collects
-  all errors and does not short-circuit if a `Check` fails (as you do not want to
-  be _that_ guy that sends the registration form back twenty times with different
-  errors). But fortunately the `Monoid`-instance of `CheckResult` lifts to `Checks`!
-  That means we can use the `Semigroup/Monoid` operations on `Checks`, (`mempty` being
-  the trivial `Check` that always succeeds).\n```haskell\ndata Registration = Registration
-  \n\t{ registrationAge :: Age\n\t, registrationName :: Name\n\t, registrationEmail
-  :: String \n\t} \ncheckRegistration \n\t=  contramap registrationAge   checkAge
-  \n\t<> contramap registrationName  checkName\n\t<> contramap registrationEmail mempty
-  -- of course unneccessary as it does nothing, but here for completeness\n```\n\n##
-  Dealing with additional Context <a name=\"context\"></a>\n\nSometimes you need to
-  check properties, but the check itself has a sideeffect e.g. making a HTTP request
-  or reading from a database. This is no problem, as \n1. `Check`s may have a context
-  (remember that `Check' e a ≡ Check e Identity a`, a `Check` with a trivial context).\n2.
-  we can easily convert our checks between context as `Check`s are an instance of
-  `MFunctor` from the package [mmorph](https://www.stackage.org/package/mmorph).\n3.
+  =\n  choose split checkNil checkCons\n  where\n    split [] = Left ()\n    split
+  (x:xs) = Right (x, xs)\n\tcheckNil = mempty -- mempty being the trivial check\n\tcheckCons
+  = divide id checkA (checkListBy checkA)\n```\t\nTo check a list `[a]` we have to
+  distinguish two cases (`split`); either it is empty (`Left ()`), then we apply the
+  trivial check `checkNil` or it is a cons, then we apply the check to the head and
+  then check the rest of the list.\n\n\n### Combination of `Check`'s: Checking multiple
+  things <a name=\"combination\"></a>\n\nIf you want to combine multiple 'Check's
+  of the same type to a larger 'Check', just use the Semigroup / Monoid instance for
+  'Check'. Note that it collects all errors and does not short-circuit if a `Check`
+  fails (as you do not want to be _that_ guy that sends the registration form back
+  twenty times with different errors). The neutral element `mempty` is the trivial
+  `Check` that always succeeds.\n```haskell\nimport Text.Printf(printf)\n-- Here we
+  use the combinaters to construct checks, if thats not your style use the 'test*'
+  family. The precedence is so that it \"just works\"\ncheckNameInput :: Check' Err
+  String\ncheckNameInput \n  =  checkNotEmpty\n  <> (< 100) . length    ?>   printf
+  \"Input exeeds limit 100: %d\" . length\n  <> not . (';' `elem`)  ?>>  \"Bad input
+  char: ';'\" \n```\n\n## Dealing with additional Context <a name=\"context\"></a>\n\nSometimes
+  you need to check properties, but the check itself has a sideeffect e.g. making
+  a HTTP request or reading from a database. This is no problem, as \n1. `Check`s
+  may have a context (remember that `Check' e a ≡ Check e Identity a`, a `Check` with
+  a trivial context).\n2. we can easily convert our checks between context as `Check`s
+  are an instance of `MFunctor` from the package [mmorph](https://www.stackage.org/package/mmorph).\n3.
   we are all good as long as the context is an `Applicative` as then the monoid instance
   of `CheckResult e` lifts to `m CheckResult e`.\n\nLet's give an example. Say you
   let users store URLs in a database, but for their convience you do not accept broken
@@ -126,7 +217,7 @@ description: "contracheck-applicative\n=======================\n\nThis package p
   whatnot. With `foldWithCheck`/`traverseWithCheck` you can lift checks to arbitary
   instances of `Foldable` or `Traversable`:\nfoldWithCheck :: (Foldable f, Applicative
   m) => Check e m a -> Check e m (f a)\ntraverseWithCheck :: (Traversable t, Applicative
-  m) => Check e m a -> Check e m (t a)\n\n```haskell\ntype UrlList =  [ Url ] \ncheckUrlList
+  m) => Check e m a -> Check e m (t a)\n\n```haskell\ntype UrlList =  [Url] \ncheckUrlList
   :: Check Status IO [Url]\ncheckUrlList = traverseWithCheck checkUrlNo4xx \n```\nThats
   all there is. Since it is that easy to generalize, `Check`s for foldables/traversable
   are ommited.\n\nWell, its not really performant, as the `Url`s are checked in sequence.
@@ -140,10 +231,50 @@ description: "contracheck-applicative\n=======================\n\nThis package p
   a -> n a) -> Check e m a -> Check e n a\n-- ParIO :: forall a. IO a -> ParIO a\ncheckUrlListPar
   :: Check Status ParIO [Url]\ncheckUrlListPar = traverseWithCheck (hoist ParIO checkUrlNo4xx)\n```\n_Warning_:
   \n```haskell\ncheckUrlListParWrong = hoist ParIO checkUrlList\n```\ndoes *NOT* work
-  as here you lift into the parallel context after all the checks have been performed.\n\nThats
-  about it. \n\n## `Checkable` typeclass <a name=\"typeclass\"></a>\n\nThere is also
-  a typeclass in the module Control.Validation.Class, but it has to be used with care
-  as it does not perform any Checks on primitive types and this is often not what
-  you want. You should probably use it _only_ on nested structures made up solely
-  from custom data types, and otherwise define the checks explicitly.\n\n\n\n\n\n"
+  as here you lift into the parallel context after all the checks have been performed.\n\n##
+  `CheckPatch`: Fix the problems that occured while checking the data <a name=\"checkPatch\"></a>\nA
+  `CheckPatch e m a` is like a `Check e m a` but for each error that happens it may
+  contain a \"patch\" to fix it. `Patch` tries to fix its input if it can \nor else
+  aborts, so it is defined simply as\n``` haskell\nnewtype Patch a = Patch { runPatch
+  :: a -> Maybe a }\n```\nNote that when you combine `CheckPatch`es and one `CheckPatch`
+  cannot patch its input (returns `Nothing`) then the whole `CheckPatch` returns `Nothing`.\n`CheckPatch`es
+  work mostly like `Check`s, the corresponding functions have a -`Patch` suffix (so
+  `test` becomes `testPatch` etc.). To construct a `CheckPatch` you either lift an
+  existing `Check` ─ with (`liftPatch`) or without (`liftNoPatch`) supplying a `Patch`
+  ─ or by constructing them the same way as `Check`s: Via\n`checkingPatch`, `testPatch`
+  etc., the only difference is that you know need to say how you want to fix your
+  data (or if it is \"unfixable\").\nUnfortunately, `contramap`, `divide` and `choose`
+  are a little bit more complicated now: Instead of normal functions they take `Lens`es
+  to split up or view inside the data. BUT the `MultiCheckPatch` works the same way
+  as the normal `MultiCheck`.\n\nThe previous examples, but this time with `CheckPatch`.\n\n```
+  haskell\n\n-- Checks whether the string is empty (then it has NO patch, so it aborts)\n--
+  Or if it contains semicolons, then it filters them out.\ncheckNotEmptyAndNoSemicolonP
+  :: Applicative m => CheckPatch [Char] m String\ncheckNotEmptyAndNoSemicolonP = liftNoPatch
+  checkNotEmpty <> checkNoSemicolonP\n  where\n    checkNoSemicolonP = testPatch'_\n
+  \                         (not . elem ';')\n                          \"Input contains
+  semicolon\"\n                          (patch $ filter (/= ';'))\n\n-- Being to
+  young cannot be patched\ncheckAdultP :: Applicative m => CheckPatch [Char] m Int\ncheckAdultP
+  \ = liftNoPatch $ checkAdult\n\n\ncheckPetP2 :: Applicative m => CheckPatch String
+  m Pet\ncheckPetP2 = joinMultiCheckPatch\n  (  (checkNotEmptyAndNoSemicolonP :* mempty
+  :* Nil)\n  :* (checkNotEmptyAndNoSemicolonP :* Nil)\n  :* Nil )\n\n\ncheckProfileP2
+  :: CheckPatch String IO Profile\ncheckProfileP2 = constructorCheckPatch Z\n  (  checkNotEmptyAndNoSemicolonP\n
+  \ :* checkAdultP\n  :* checkPetP2\n  :* liftNoPatch checkWebsites\n  :* Nil )\n\n\n\n\n\n--
+  This is just to show how you would use `chooseL`; here you probably would use `joinMultiCheckPatch`,
+  see above\n--\n-- To check the 'Pet', we now need \"splitting\" 'Lens'es instead
+  of simple functions. A 'Lens Pet (Either (Name, Age) Age)' unfortunately is not
+  auto-derivable,\n-- but we almost always can use the fact that this lens can (and
+  mostly _should_ be) an isomorphism.\ncheckPetP :: Applicative m => CheckPatch [Char]
+  m Pet\ncheckPetP = chooseL splitPetLens checkDog checkCat\n  where\n    splitPetLens
+  :: Lens' Pet (Either (Name, Age) Name) -- forall f. Functor f => (Either (Name,
+  Age) Age -> f (Either (Name Age), Age)) -> Pet -> f Pet\n    splitPetLens f = \\case\n
+  \     Dog name age -> either (uncurry Dog) Cat <$> f (Left (name, age))\n      Cat
+  name -> either (uncurry Dog) Cat <$> f (Right name)\n    checkDog = divideL id checkNotEmptyAndNoSemicolonP
+  mempty\n    checkCat = checkNotEmptyAndNoSemicolonP\n\n\n\n-- No we can wrap it
+  up using our TemplateHaskell-derived 'Lens'es: Additionally, we throw out websites
+  that are not https.\nmakeLenses ''Profile\ncheckProfileP :: CheckPatch String IO
+  Profile\ncheckProfileP =  contramapL name checkNotEmptyAndNoSemicolonP\n              <>
+  contramapL age  checkAdultP\n              <> contramapL pet  checkPetP\n              <>
+  contramapL otherWebsites (liftNoPatch  checkWebsites)\n\n\n\n\n\n```\n\n## `Checkable`
+  typeclass <a name=\"typeclass\"></a>\n\nThe typeclass is deprecated as its use was
+  very limited and is basically redundant with the new SOP-functions.\n\n\n\n\n"
 license-name: BSD-3-Clause
