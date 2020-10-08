@@ -1,10 +1,11 @@
 homepage: ''
 changelog-type: ''
-hash: abdf8bc9c73b5486efc3982df9f83aa8e3e61d843f06e4fbec1ad40dcee4421e
+hash: 217fc9fb668b06c7fe3a68b060e2d7ad3c9df851aaef56f2f52daaf2d1e973ce
 test-bench-deps:
   ghc: -any
   extra: ^>=1.7.8
   base: '>=4.11 && <5'
+  hsinspect: ^>=0.0.17
   text: -any
   tasty-hspec: ^>=1.1.5
   filepath: -any
@@ -12,6 +13,7 @@ test-bench-deps:
   parsec: -any
   HUnit: ^>=1.6.0
   containers: -any
+  transformers: -any
   tasty: ^>=1.3.1
   directory: -any
 maintainer: Tseen She
@@ -20,7 +22,7 @@ changelog: ''
 basic-deps:
   ghc: -any
   base: '>=4.11 && <5'
-  hsinspect: ^>=0.0.13
+  hsinspect: '>=0.0.17 && <0.1'
   text: -any
   filepath: -any
   boilerplate: -any
@@ -28,12 +30,211 @@ basic-deps:
   containers: -any
   parsers: '>0.12 && <0.13'
   ghc-paths: -any
+  transformers: -any
   vector: '>0.12 && <0.13'
   directory: -any
 all-versions:
 - 0.0.1
+- 0.0.2
 author: Tseen She
-latest: 0.0.1
-description-type: haddock
-description: Generates boilerplate from templates and markers in Haskell source code.
+latest: 0.0.2
+description-type: markdown
+description: |
+  Rather than [Scrap your Boilerplate](https://www.microsoft.com/en-us/research/wp-content/uploads/2003/01/hmap.pdf), we say: **Generate your Boilerplate**.
+
+  `boilerplate` is a command line tool that generates explicit boilerplate and inserts it into your source code, enclosed in comments that text editors can easily hide from view. Like the way IDEs do it for languages such as Java, C++ and Go.
+
+  The advantages of this approach are:
+
+  - lower bar for users: no need to understand `Generic` and typelevel programming
+  - better compiler errors makes edge cases easier to debug and fix (just manually edit them!)
+  - a simple DSL for typeclass authors to define derivation rules
+  - can also be used to create functions and data, as well as typeclass instances
+  - faster compile times
+  - potential for faster runtime
+  - easy to customise
+  - more portable (e.g. works for whole program optimising compilers)
+  - can replace all `deriving` language extensions
+
+  A community repo could hold a curated list of rules, and typeclass authors may ship rules in their documentation.
+
+  # Installation
+
+  ```
+  cabal install -O2 boilerplate --constraint="parsers -attoparsec -binary"
+  ```
+
+  or install per-project in the `build-tool-depends` of your `.cabal` files.
+
+  # How to Use
+
+  This section explains how to use the `boilerplate` tool on Haskell source code to automatically generate code.
+
+  It assumes that some rules are available in a `boilerplate` directory in the codebase, see the `boilerplate` directory of this repo for examples; including rules for `Eq`, `Ord`, `Show`, `Functor`, `Foldable`, `Traversable`, `FFunctor`, Aeson's `FromJSON` / `ToJSON`, and QuickCheck's `Gen` (which is not a typeclass). Further below are instructions on how to write rules.
+
+  ## Code Markers
+
+  The `boilerplate` tool parses source code to find block comments marking what to expand and will update the source inline
+
+  ```
+  boilerplate -i path/to/File.hs
+  ```
+
+  The syntax of the block comment looks like
+
+  ```haskell
+  {- BOILERPLATE <type> <rules> <options> -}
+  ```
+
+  where `<type>` is a `type` constructor defined in the module, `<rules>` is comma separated list of rules to expand. `<options>` are described below.
+
+  When the tool runs, it will insert the output immediately after the comment, between comments
+
+  ```haskell
+  {- BOILERPLATE START-}
+  ...
+  {- BOILERPLATE END -}
+  ```
+
+  which indicates the region that is to be destructively replaced, and should not be moved.
+
+  The closing comment may be used by text editors to automatically collapse the region, e.g. [`hide-show` in Emacs](https://www.gnu.org/software/emacs/manual/html_node/emacs/Hideshow.html) and [folding in VSCode](https://code.visualstudio.com/docs/editor/codebasics#_folding).
+
+  For example, the following data type and expansion rules would be processed by `boilerplate` for the rules named `FromJSON` and `ToJSON`
+
+  ```haskell
+  data Coord = Coordy { a :: Double, b :: Double}
+
+  {- BOILERPLATE Coord FromJSON, ToJSON -}
+  ```
+
+  producing
+
+  ```haskell
+  {- BOILERPLATE START-}
+  instance FromJSON Coord where
+    parseJSON = withObject "Coord" $ v ->
+      Coordy <$> v .: "a" <*> v .: "b"
+  instance ToJSON Coord where
+    toJSON (Coordy p_1_1 p_1_2) = object ["a" .= p_1_1, "b" .= p_1_2]
+    toEncoding (Coordy p_1_1 p_1_2) = pairs (("a", p_1_1) <> ("b", p_1_2))
+  {- BOILERPLATE END -}
+  ```
+
+  If integration with code formatters is required, just add [magic comments](https://github.com/tweag/ormolu#magic-comments) to your rules or around the boilerplate markers.
+
+  ### Options
+
+  The `<options>` section is a JSON-like object that is translated into `{Custom NAME}` parameters on a per-rule basis. Multiple options may be specified in the form
+
+  ```
+  <key> = <value>
+  ```
+
+  where `<value>` can be a string, array or object. Unlike in JSON, strings do not need to be quoted, but can be. For example, in the `FromJSON` and `ToJSON` rules, a custom `field` value is defined that overrides the record field name. This can be provided as either an array, overriding the field names by position:
+
+  ```
+  {- BOILERPLATE Coord FromJSON, ToJSON
+     field = [x, y] -}
+  ```
+
+  or a translation map:
+
+  ```
+  {- BOILERPLATE Coord FromJSON, ToJSON
+     field = {a:x, b:y} -}
+  ```
+
+  producing
+
+  ```haskell
+  {- BOILERPLATE START-}
+  instance FromJSON Coord where
+    parseJSON = withObject "Coord" $ v ->
+      Coordy <$> v .: "x" <*> v .: "y"
+  instance ToJSON Coord where
+    toJSON (Coordy p_1_1 p_1_2) = object ["x" .= p_1_1, "y" .= p_1_2]
+    toEncoding (Coordy p_1_1 p_1_2) = pairs (("x", p_1_1) <> ("y", p_1_2))
+  {- BOILERPLATE END -}
+  ```
+
+  The way the custom values are interpreted depends on the context of their use:
+
+  - string values can be used anywhere
+  - arrays can only contain strings and are used for positional arguments of a product type
+  - objects of strings can be used
+    - for named record fields
+    - for data constructors of a sum type
+  - objects of arrays are used for positional arguments of a sum type
+
+  It is intentionally not possible to use objects of objects to provide custom values to field names in sum types; record syntax in sum types results in partial functions and should be discouraged.
+
+  - if the `type` is a product type, the value may be an array of strings corresponding to positional field values
+  - if the `type` is a record product type, the value may additionally be an object where the field names match the record field names and their inner values are strings.
+  - if the `type` is a sum type, then the value may be an object where the field names of the JSON correspond to the type tag names. The inner contents may be an array or object as for product types.
+
+  Note that all rules share the same namespace.
+
+  # Templates
+
+  This section is for template authors.
+
+  ## Rules
+
+  The DSL for the `boilerplate` rules are fundamentally plain text, with markers that expand containing product and sum information. This allows rules to expand to generate anything that is a valid top-level form. It also means that it is the user's responsibility to ensure that the relevant imports and language extensions are enabled as required by that rule.
+
+  The filename dictates the name of the rule, using the same module naming convention as haskell source code. e.g. `Data/Aeson/FromJson.rule` provides the rule named `Data.Aeson.FromJson` which may be referred to in a codebase as `FromJson` if there are no rule namespace conflicts.
+
+  Note that naming a rule for the typeclass it represents is just convention. Multiple rules may exist for the same typeclass, for example we may wish to have `Data/Aeson/FromJson-Untagged.rule` for a different sum type encoding.
+
+  "magic" syntax is triggered by curly braces `{ }`. Literal `{`, `}` or `\` may be used when escaped with `\`.
+
+  In any location the following syntax will expand:
+
+  - `{Type}` the type constructor.
+
+  And, unless nested, the following syntax will expand:
+
+  - `{TParams T_ARGS}` repeating for each type parameter.
+  - `{Product ...}` the contents only printed if the type is a product type.
+  - `{Sum S_ARGS}` the contents only printed if the type is a sum type, repeated for each data constructor.
+
+  `T_ARGS` can be either `{ELEMENT}{SEP}` or `{EMPTY}{PREFIX}{ELEMENT}{SEP}{SUFFIX}` where `EMPTY` is used when there are no elements to iterate. `PREFIX` / `ELEMENT` / `SEP` / `SUFFIX` are used when there are elements.
+
+  `S_ARGS` can be a `ELEMENT`, `{ELEMENT}{SEP}` or `{PREFIX}{ELEMENT}{SEP}{SUFFIX}`; there is no `{EMPTY}` since there is always at least 2 tagged types.
+
+  Inside a `{TParams}` `ELEMENT`, the syntax `{TParam}` may be used to insert the verbatim type parameter.
+
+  Inside a `{Product }` or `{Sum }` `ELEMENT` the following will expand:
+
+  - `{Uncons}` the data constructor's pattern extractor, with generated parameter names.
+  - `{Cons}` the data constructor.
+  - `{Field F_ARGS}` repeats for each field.
+
+  `F_ARGS` can be either `{ELEMENT}{SEP}` or `{EMPTY}{PREFIX}{ELEMENT}{SEP}{SUFFIX}` following the same principles as `{TParams}`.
+
+  Inside a `Field` `ELEMENT`, the following will expand:
+
+  - `{Param}` is the generated parameter matching the `{Uncons}`.
+  - `{FieldName}` is the field name, will cause an error for non-record `data`.
+  - `{FieldType}` is the field's type.
+  - `{TyCase {POLY}{HIGHER}{OTHER}}` expands `POLY` when the field has exactly the same type as a type parameter, `HIGHER` when it contains one of the type parameters, and `OTHER` when neither. This can be used to implement typeclasses like `Functor` and `Foldable`.
+
+  It should be noted that all `{X }` syntax is stripped and is not replaced by whitespace. Pay special attention when relying on significant whitespace that the output is correct, regardless of how it is aligned in the `.rule` file.
+
+  Inside a `{Field}` `ELEMENT` the syntax `{Uncons}` and `{Param}` introduced so far is shorthand for `{Uncons1}` and `{Param1}`. `{UnconsN}` and `{ParamN}` may be used to refer to the `N`th product inside a `{Product ...}` or `{Sum ...}`. For example, consider writing a rule for a typeclass with a binary operator like `Semigroup`. For sum types, only the inner product can be created, it is not possible to combine arbitrary data constructors.
+
+  A `{Custom NAME FALLBACK}` will expand anywhere for a user-defined parameter named `NAME`, optionally defaulting to `FALLBACK` (which may be another magic expansion). User-defined parameters may be defined for the entire rule, for each `{Sum ...}` repetition, or in each `{Field ...}`, and will be expanded accordingly.
+
+  Syntax sugar is available for some common templates, e.g. `{Instance Foo}` expands to
+
+  ```
+  instance {TParams {}{(}{Foo {TParam}}{, }{) => }}Foo {TParams {{Type}}{({Type} }{{TParam}}{ }{)}} where
+  ```
+
+  and `{Data ...}` expands to `{Product ...}{Sum ...}` which is useful when the same templates work for both product, and no special handling is needed for empty cases, prefix, separators or suffixes.
+
+  which is useful to define an `instance` declaration for a typical typeclass that depends on instances for all type parameters.
+
+  Examples rules are available in the `boilerplate` directory of this repository.
 license-name: GPL-3.0-or-later
