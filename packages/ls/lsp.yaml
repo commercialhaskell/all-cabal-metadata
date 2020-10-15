@@ -1,0 +1,255 @@
+homepage: https://github.com/alanz/lsp
+changelog-type: markdown
+hash: ef7b5ca4594044a7a4510b461d134a89b08d76d026239d4a2a9ddb0dbb3f69b1
+test-bench-deps:
+  lsp: -any
+  bytestring: -any
+  stm: -any
+  base: -any
+  unordered-containers: -any
+  hspec: -any
+  text: -any
+  filepath: -any
+  data-default: -any
+  sorted-list: ==0.2.1.*
+  containers: -any
+  lens: '>=4.15.2'
+  quickcheck-instances: -any
+  rope-utf16-splay: '>=0.2'
+  network-uri: -any
+  hashable: -any
+  QuickCheck: -any
+  aeson: -any
+  directory: -any
+maintainer: alan.zimm@gmail.com
+synopsis: Haskell library for the Microsoft Language Server Protocol
+changelog: "# Revision history for lsp\n\n## 1.0.0.0\n\n1.0.0.0 is a major rework
+  with both internal and external facing changes, and\nwill require manual migration.\n\n*
+  The package has been renamed from `haskell-lsp` to `lsp`, and similarly for `haskell-lsp-types`
+  to `lsp-types`\n  * Because of this, all modules are now exported from `Language.LSP.X`
+  rather than `Language.Haskell.X`.\n* Both `lsp` and `lsp-types` have been reworked
+  to be much more *type safe*\n* The 3.15 specification should be fully supported
+  now. If you find anything in\n  the specification that isn't in lsp-types, please
+  let us know\n* The Capture module has been removed as it will be reworked later
+  on and moved to lsp-test\n* `lsp` can now handle dynamic registration through the
+  `registerCapability` and\n  `unregisterCapability` functions\n\n### Type safety\n\nThere
+  are three types of concrete messages, `NotificationMessage`,\n`RequestMessage` and
+  `ResponseMessage`. They are parameterised by their\n`Method`, which determines what
+  type their parameters or response result must be.\n\n```haskell\ndata RequestMessage
+  (m :: Method f Request) = RequestMessage\n    { _jsonrpc :: Text\n    , _id      ::
+  LspId m\n    , _method  :: SMethod m\n    , _params  :: MessageParams m\n    }\n```\n\nA
+  `Method` in turn is parameterised by whether it originates from the client or\nthe
+  server, and whether it is used for notifications or requests:\n\n```haskell\nTextDocumentFoldingRange
+  \          :: Method FromClient Request\nTextDocumentSelectionRange         :: Method
+  FromClient Request\nWindowShowMessage                  :: Method FromServer Notification\nWindowShowMessageRequest
+  \          :: Method FromServer Request\n```\n\nEach `Method` also has a singleton
+  counterpart which allows it to be used at the\nterm level, for example in `RequestMessage._method`:\n\n```haskell\nSTextDocumentFoldingRange
+  \          :: SMethod TextDocumentFoldingRange\nSTextDocumentSelectionRange         ::
+  SMethod TextDocumentSelectionRange\n\nSWindowShowMessage                  :: SMethod
+  WindowShowMessage\nSWindowShowMessageRequest           :: SMethod WindowShowMessageRequest\n```\n\nThe
+  type families `MessageParams` and `ResponseResult` map each `Method` to the\nappropriate
+  type to be used in a response:\n\n```haskell\nResponseResult TextDocumentRename
+  \           = WorkspaceEdit\nResponseResult TextDocumentPrepareRename     = Range
+  |? RangeWithPlaceholder\n```\n\nAlso new is the `|?` type which represents [union
+  types in\nTypeScript](https://www.typescriptlang.org/docs/handbook/unions-and-intersections.html#union-types),\nand
+  is used throughout the specification where a field can accept several\ndifferent
+  types.\n\nAs an example of this in action, the types of your handlers will now depend
+  on\nwhether or not they are a request or a notification. They will pass along the\nprecise
+  type for the parameters the method you are handling, and in the case of\na request
+  handler, will expect that the response you give back is of the correct\ntype as
+  well.\n\n```haskell\ntype family Handler (f :: Type -> Type) (m :: Method from t)
+  = (result :: Type) | result -> f t m where\n  Handler f (m :: Method _from Request)
+  \     = RequestMessage m -> (Either ResponseError (ResponseResult m) -> f ()) ->
+  f ()\n  Handler f (m :: Method _from Notification) = NotificationMessage m -> f
+  ()\n```\n\n### LspT\n`LspFuncs` has been removed and instead functionality is exposed
+  through\nfunctions in the `MonadLsp` class.\n\n```haskell\ngetVirtualFile :: MonadLsp
+  config m => NormalizedUri -> m (Maybe VirtualFile)\nsendRequest :: forall (m ::
+  Method FromServer Request) f config. MonadLsp config f\n            => SServerMethod
+  m\n            -> MessageParams m\n            -> (Either ResponseError (ResponseResult
+  m) -> f ())\n            -> f (LspId m)\n```\n\nIt is parameterised over the server's
+  LSP configuration type and the underlying\nmonad.\nWe recommend that you build your
+  own monad for your server on top of the `LspT`\ntransformer, so it will automatically
+  become an instance of `MonadLsp`.\n\nInside the new `ServerDefinition` data type
+  which gets passed to `runServer`,\nyou need to specify how to convert from IO to
+  your monad and back in\n`interpretHandler` so that `lsp` can execute your monad
+  inside the handlers. You\ncan use the result returned from `doInitialize` to pass
+  along the\n`LanguageContextEnv` needed to run an `LspT`, as well as anything else
+  your\nmonad needs.\n```haskell\ntype \nServerDefinition { ...\n, doInitialize =
+  \\env _req -> pure $ Right env\n, interpretHandler = \\env -> Iso \n   (runLspT
+  env) -- how to convert from IO ~> m\n   liftIO        -- how to convert from m ~>
+  IO\n}\n```\n\n### Steps to migrate\n\n1. In your `.cabal` file change any `haskell-lsp`
+  dependencies to `lsp`\n2. Replace your existing imports with `Haskell.LSP.Server`\n3.
+  If necessary define your own monad and fill in `interpretHandler`\n4. Migrate your
+  handlers to use `notificationHandler` and `requestHandler`,\n   passing along the
+  corresponding `SMethod` (See `example/Simple.hs`)\n5. Remove any storage/use of
+  `LspFuncs` and instead call the corresponding\n   functions directly from your monad
+  instead of `IO`\n\n## 0.23.0.0\n\n* Add runWith for transporots other than stdio
+  (@paulyoung)\n* Fix race condition in event captures (@bgamari)\n* Tweak the sectionSeparator
+  (@alanz)\n* Add hashWithSaltInstances (@ndmitchell)\n* Fix CompletionItem.tags not
+  being optional (@bubba)\n* Avoid unnecessary normalisation in Binary instance for\n
+  \ NormalizedFilePath (@cocreature)\n* Fix ordering of TH splices (@fendor)\n\n##
+  0.22.0.0\n\n* ResponseMessage results are now an Either type (@greenhat)\n* Support
+  for GHC 8.10.1\n\n## 0.21.0.0\n\n* Stop getCompletionPrefix from crashing if beforePos
+  is empty\n* Add DidChangeWatchedFilesRegistrationOptions\n* Add NormalizedFilePath
+  from ghcide\n* Add diagnostic and completion tags\n* Fix language server example\n*
+  Correctly fix the problem with '$/' notifications\n* Add azure ci\n\n## 0.20.0.1\n\n*
+  Fix Haddock generation syntax error\n\n## 0.20.0.0\n\n* Force utf8 encoding when
+  writing vfs temp files\n* Don't log errors for '$/' notifications (@jinwoo)\n* Force
+  utf8 encoding when writing vfs temp files (@jneira)\n* Store a hash in a NormalizedUri
+  (@mpickering)\n* Move \"Semigroup WorkspaceEdit\" instance (@sheaf)\n* Fix vfs line
+  endings (@jneira)\n\n## 0.19.0.0 -- 2019-12-14\n\n* Fix vfs line endings (@jneira)\n*
+  Fix typo in .cabal (@turion)\n* Normalize file paths before converting to Uri's
+  (@jneira)\n* Fixes to persistVirtualFile (@mpickering)\n\n## 0.18.0.0 -- 2019-11-17\n\n*
+  Explain the use of NonEmpty in\n  documentOnTypeFormattingTriggerCharacters (@bubba)\n*
+  Fix response type for CodeLensResolve, add the ContentModified error\n  code (@SquidDev)\n*
+  Virtual file fixes, removing race conditions and other cleanups (@mpickering)\n*
+  Add missing fmClientPrepareRenameRequest to MessageFuncs export (@alanz)\n* Make
+  explicit GHC 8.6.5 stack file (@alanz)\n* Rework Core.Options and infer all server
+  capabilities from handlers (@bubba)\n* Generate lenses for WorkDoneProgress data
+  types (@alanz)\n\n## 0.17.0.0 -- 2019-10-18\n\n* Update progress reporting to match
+  the LSP 3.15 specification (@cocreature)\n* Fix progress cancellation action being
+  retained (@mpickering)\n* Respect both codeActionProvider and codeActionHandler
+  in server\n  capabilities (@fendor)\n* Ensure ResponseMessage has either a result
+  or an error (@cocreature)\n\n## 0.16.0.0 -- 2019-09-07\n\n* Add support for CodeActionOptions
+  (@thomasjm)\n* Add support for `textDocument/prepareRename` request (@thomasjm)\n*
+  Fix diagnostic code parsing (@thomasjm)\n* Fix shutdown response type (@bubba)\n*
+  Relax base constraints for GHC 8.8 (@bubba)\n\n## 0.15.0.0 -- 2019-07-01\n\n* Fix
+  decoding of `ResponseMessage` to account for `null` messages (@cocreature)\n* Normalize
+  URIs to avoid issues with percent encoding (@cocreature)\n* Changed the initial
+  callbacks type to also capture initial config (@lorenzo)\n* Improved documentation
+  (@bubba)\n\n## 0.14.0.0 -- 2019-06-13\n\n* Add support for custom request and notification
+  methods\n  (@cocreature)\n* Use attoparsec to parse message headers incrementally
+  (@cocreature)\n* Only build lsp-hello when -fdemo flag is set (@bubba)\n\n## 0.13.0.0
+  -- 2019-05-18\n\n* Fix relative posix URIs (@DavidM-D)\n* Make sure that markedUpContent
+  always starts on a newline (@alanz)\n\n## 0.12.1.0 -- 2019-05-08\n\n* Bring over
+  functions from @mpickering's hie-bios.\n  So `LspFuncs` now includes\n\n```haskell\n
+  \   , persistVirtualFileFunc       :: !(J.Uri -> IO FilePath)\n    , reverseFileMapFunc
+  \          :: !(IO (FilePath -> FilePath))\n```\n\n* Fix exception on empty filepaths\n\n*
+  Migrate some utility functions from `haskell-ide-engine`, for the\n  benefit of
+  other language servers.\n  - `rangeLinesFromVfs`\n  - `PosPrefixInfo(..)`\n  - `getCompletionPrefix`\n\n*
+  Remove `HoverContentsEmpty`. It is unnecessary, and generated\n  illegal JSON on
+  the wire.\n\n## 0.12.0.0 -- 2019-05-05\n\n* Added A NFData instance for Diagnostics
+  (@DavidM-D/@ndmitchell)\n* Switch to using the rope-utf16-splay library for ropes
+  (@ollef)\n\n## 0.11.0.0 -- 2019-04-28\n\n* Add support for cancellable requests
+  within `withProgress` and\n  `withIndefiniteProgress`\n* Align `withProgress` and
+  `withIndefiniteProgress` types to be in `IO`\n  like the rest of the library. (Look
+  at using `monad-control` and\n  `unliftio` if you need to use them with a Monad
+  transformer stack)\n\n## 0.10.0.0 -- 2019-04-22\n\n* Add `withProgress` and `withIndefiniteProgress`
+  functions for sending\n  `window/progress` notifications.\n\n## 0.9.0.0\n\n* Add
+  `MarkupContent` to `HoverResponse`, and (some) json roundtrip tests.\n\n## 0.8.2.0
+  -- 2019-04-11\n\n* Add `applyTextEdit` and `editTextEdit` helpers\n* Set the typedefinitionProvider
+  capability if it has a handler\n* Add stack files for GHC 8.4.4 and 8.6.4\n\n##
+  0.8.1.0 -- 2019-02-28\n\n* Update Handler to delegate to typeDefinitionHandler instead
+  of\n  definitionHandler. by @fendor\n\n## 0.8.0.1 -- 2018-10-27\n\n* Support GHC
+  8.6.1 by loosening constraints. Via @domenkozar\n\n## 0.8.0.0 -- 2018-09-08\n\n*
+  Update Hover to be a nullable according to spec\n* Move Lenses into a separate module,
+  `Language.Haskell.LSP.Types.Lens`\n\n## 0.7.0.0 -- 2018-08-14\n\n* Update CompletionItem\n
+  * Add `commitCharacters` field\n * Add `MarkupContent` option for `documentation`\n
+  * Add `preselect` field\n* Add CompletionContext\n* Add new server capabilities\n*
+  Add workspace folder support\n* Add document color and color presentation\n* Add
+  folding range support\n* Add goto type support\n* s/TH/Types/g\n * Move all types
+  into haskell-lsp-types\n * Hide Language.Haskell.LSP.TH.DataTypesJSON - Use Language.Haskell.LSP.Types
+  instead\n* Add lenses for Language.Haskell.LSP.Types.Capabilities\n\n\n## 0.6.0.0
+  -- 2018-08-06\n\n* Add new DocumentSymbol type and heirarchal support\n* Rename
+  CommandOrCodeAction to CAResult\n* Add handler for 'textDocument/implementation'
+  request from client\n* Bump stack resolvers for lts 11 and lts 12\n\n## 0.5.0.0
+  \ -- 2018-08-03\n\n* Update Command.arguments to match specification\n* Update ClientCapabilities
+  to v3.10\n* Add MarkupContent\n* Add new CompletionKinds\n* Add new SymbolKinds\n*
+  Add preset version capabilities\n\n## 0.4.0.0  -- 2018-07-10\n\n* CodeAction support
+  as per v3.8 of the specification, by @Bubba\n* Update VersionedTextDocumentIdentifier
+  to match specification, by @Bubba\n\n## 0.3.0.0\n\n* Handle TextDocumentSync fallbacks
+  with new TDS type.\n\n## 0.2.3.0  -- 2018-99-99\n\n* GHC 8.4.3 support\n* Apply
+  changes to the VFS in the order received in a message.\n  This fixes vscode undo
+  behaviour. By @Bubba\n* Introduce additional error codes as per the LSP spec. By
+  @Bubba\n* Add preliminary support for recording LSP traffic for later playback\n
+  \ in test scenarios. By @Bubba\n\n## 0.2.2.0  -- 2018-05-04\n\n* Make Diagnostic
+  relatedInformation optional, as per the LSP Spec. By @Bubba.\n\n## 0.2.1.0  -- 2018-05-02\n\n*
+  Support GHC 8.4.2\n* Split into two packages\n* Language.Haskell.LSP.TH.DataTypesJSON
+  becomes Language.Haskell.LSP.Types\n* Diagnostic now has _relatedInformation. Can
+  default it to mempty. via @AlexeyRaga\n* Correct the name of the DidChangeWatchedFilesParams
+  field, by @robrix\n* Make sure to escape URIs properly for Windows file paths\n
+  \ Fixes #75. Also added a couple of pretty dumb tests!, by @johnsonw\n\n\n## 0.2.0.1
+  \ -- 2017-12-27\n\n* Built with LTS 10.1 (stack)\n* Don't escape semicolons after
+  drive letters by @nponeccop\n* Add Foldable and Traversable instance to List by
+  @noughtmare\n\n## 0.2.0.0  -- 2017-11-23\n\n* Major changes as implementation continued.
+  Now seems stable, used in haskell-ide-engine\n\n## 0.1.0.0  -- 2017-07-19\n\n* First
+  version. Implements version 3 of the Microsoft Language\n  Server Protocol\n"
+basic-deps:
+  lsp: -any
+  bytestring: -any
+  unliftio: -any
+  stm: ==2.5.*
+  base: '>=4.9 && <4.15'
+  time: -any
+  unordered-containers: -any
+  text: -any
+  uuid: '>=1.3'
+  dependent-map: -any
+  filepath: -any
+  async: -any
+  data-default: -any
+  sorted-list: ==0.2.1.*
+  containers: -any
+  lens: '>=4.15.2'
+  unliftio-core: -any
+  hslogger: -any
+  network-uri: -any
+  mtl: -any
+  hashable: -any
+  attoparsec: -any
+  transformers: '>=0.5.6 && <0.6'
+  random: -any
+  scientific: -any
+  aeson: '>=1.0.0.0'
+  lsp-types: ==1.0.*
+  directory: -any
+all-versions:
+- 1.0.0.0
+author: Alan Zimmerman
+latest: 1.0.0.0
+description-type: markdown
+description: "[![CircleCI](https://circleci.com/gh/alanz/lsp/tree/master.svg?style=svg)](https://circleci.com/gh/alanz/lsp/tree/master)\n[![Hackage](https://img.shields.io/hackage/v/lsp.svg)](https://hackage.haskell.org/package/lsp)\n\n#
+  lsp\nHaskell library for the Microsoft Language Server Protocol.\nIt currently implements
+  all of the [3.15 specification](https://microsoft.github.io/language-server-protocol/specifications/specification-3-15/).\n\nIt
+  is split into two separate packages, `lsp` and `lsp-types`\n- `lsp-types` provides
+  *type-safe* definitions that match up with the\ntypescript definitions laid out
+  in the specification\n- `lsp` is a library for building language servers, handling:\n
+  \ - JSON-RPC transport\n  - Keeping track of the document state in memory with the
+  Virtual File System (VFS)\n  - Responding to notifications and requests via handlers\n
+  \ - Setting the server capabilities in the initialize request based on registered
+  handlers\n  - Dynamic registration of capabilities\n  - Cancellable requests and
+  progress notifications\n  - Publishing and flushing of diagnostics\n\n## Language
+  servers built on lsp\n- [ghcide](https://github.com/haskell/ghcide)\n- [haskell-language-server](https://github.com/haskell/haskell-language-server)\n-
+  [dhall-lsp-server](https://github.com/dhall-lang/dhall-haskell/tree/master/dhall-lsp-server#readme)\n\n##
+  Example language servers\nThere are two example language servers in the `example/`
+  folder. `Simple.hs` provides a minimal example:\n\n```haskell\n{-# LANGUAGE OverloadedStrings
+  #-}\n\nimport Language.LSP.Server\nimport Language.LSP.Types\nimport Control.Monad.IO.Class\nimport
+  qualified Data.Text as T\n\nhandlers :: Handlers (LspM ())\nhandlers = mconcat\n
+  \ [ notificationHandler SInitialized $ \\_not -> do\n      let params = ShowMessageRequestParams
+  MtInfo \"Turn on code lenses?\"\n            (Just [MessageActionItem \"Turn on\",
+  MessageActionItem \"Don't\"])\n      _ <- sendRequest SWindowShowMessageRequest
+  params $ \\res ->\n        case res of\n          Right (Just (MessageActionItem
+  \"Turn on\")) -> do\n            let regOpts = CodeLensRegistrationOptions Nothing
+  Nothing (Just False)\n              \n            _ <- registerCapability STextDocumentCodeLens
+  regOpts $ \\_req responder -> do\n              let cmd = Command \"Say hello\"
+  \"lsp-hello-command\" Nothing\n                  rsp = List [CodeLens (mkRange 0
+  0 0 100) (Just cmd) Nothing]\n              responder (Right rsp)\n            pure
+  ()\n          Right _ ->\n            sendNotification SWindowShowMessage (ShowMessageParams
+  MtInfo \"Not turning on code lenses\")\n          Left err ->\n            sendNotification
+  SWindowShowMessage (ShowMessageParams MtError $ \"Something went wrong!\\n\" <>
+  T.pack (show err))\n      pure ()\n  , requestHandler STextDocumentHover $ \\req
+  responder -> do\n      let RequestMessage _ _ _ (HoverParams _doc pos _workDone)
+  = req\n          Position _l _c' = pos\n          rsp = Hover ms (Just range)\n
+  \         ms = HoverContents $ markedUpContent \"lsp-demo-simple-server\" \"Hello
+  world\"\n          range = Range pos pos\n      responder (Right $ Just rsp)\n  ]\n\nmain
+  :: IO Int\nmain = runServer $ ServerDefinition\n  { onConfigurationChange = const
+  $ pure $ Right ()\n  , doInitialize = \\env _req -> pure $ Right env\n  , staticHandlers
+  = handlers\n  , interpretHandler = \\env -> Iso (runLspT env) liftIO\n  , options
+  = defaultOptions\n  }\n```\n\nWhilst `Reactor.hs` shows how a reactor design can
+  be used to handle all\nrequests on a separate thread, such in a way that we could
+  then execute them on\nmultiple threads without blocking server communication. They
+  can be installed\nfrom source with\n\n    cabal install lsp-demo-simple-server lsp-demo-reactor-server\n
+  \   stack install :lsp-demo-simple-server :lsp-demo-reactor-server --flag haskell-lsp:demo\n\n##
+  Useful links\n\n- https://github.com/Microsoft/language-server-protocol/blob/master/protocol.md\n\n##
+  Other resources\n\nSee #haskell-ide-engine on IRC freenode\n\n"
+license-name: MIT
