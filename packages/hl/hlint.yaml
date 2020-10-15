@@ -1,12 +1,20 @@
 homepage: https://github.com/ndmitchell/hlint#readme
 changelog-type: text
-hash: 99189d23c5d03ad34d701732b681f5f8151b594f23ffd00daf6bd1b1109e8d21
+hash: d8376ecc15ceaf3ddb66bb960e7291582146bc25ec332515a37f009bffbb6d1c
 test-bench-deps: {}
 maintainer: Neil Mitchell <ndmitchell@gmail.com>
 synopsis: Source code suggestions
 changelog: |
   Changelog for HLint (* = breaking change)
 
+  3.2.1, released 2020-10-15
+      #1150, remove the Duplicate hint (was slow)
+      #1149, allow within to use module wildcards, e.g. **.Foo
+      #1141, make redundant return highlight just the return
+      #1142, suggest newtype instead of data for data family instances
+      #1138, show allowed fields in YAML error message
+      #1131, fix potential variable capture in zipWith/repeat hint
+      #1129, add hints to use const and \_ x -> x where appropriate
   3.2, released 2020-09-14
       #75, make Windows 10 use color terminals
       Make sure the extension removed matches what you called it
@@ -1263,24 +1271,25 @@ all-versions:
 - 3.1.5
 - 3.1.6
 - '3.2'
+- 3.2.1
 author: Neil Mitchell <ndmitchell@gmail.com>
-latest: '3.2'
+latest: 3.2.1
 description-type: markdown
 description: |
   # HLint [![Hackage version](https://img.shields.io/hackage/v/hlint.svg?label=Hackage)](https://hackage.haskell.org/package/hlint) [![Stackage version](https://www.stackage.org/package/hlint/badge/nightly?label=Stackage)](https://www.stackage.org/package/hlint) [![Linux build status](https://img.shields.io/travis/ndmitchell/hlint/master.svg?label=Linux%20build)](https://travis-ci.org/ndmitchell/hlint) [![Windows build status](https://img.shields.io/appveyor/ci/ndmitchell/hlint/master.svg?label=Windows%20build)](https://ci.appveyor.com/project/ndmitchell/hlint)
 
   HLint is a tool for suggesting possible improvements to Haskell code. These suggestions include ideas such as using alternative functions, simplifying code and spotting redundancies. This document is structured as follows:
 
-  * [Installing and running HLint](#installing-and-running-hlint)
-  * [FAQ](#faq)
-  * [Customizing the hints](#customizing-the-hints)
-  * [Hacking HLint](#hacking-hlint)
+  * [Installing and running HLint](./README.md#installing-and-running-hlint)
+  * [FAQ](./README.md#faq)
+  * [Customizing the hints](./README.md#customizing-the-hints)
+  * [Hacking HLint](./README.md#hacking-hlint)
 
   ### Bugs and limitations
 
   Bugs can be reported [on the bug tracker](https://github.com/ndmitchell/hlint/issues). There are some issues that I do not intend to fix:
 
-  * HLint operates on each module at a time in isolation, as a result HLint does not know about types or which names are in scope. This decision is deliberate, allowing HLint to parallelise and be used incrementally on code that may not type-check. If fixities are required to parse the code properly, they [can be supplied](#why-doesnt-hlint-know-the-fixity-for-my-custom--operator).
+  * HLint operates on each module at a time in isolation, as a result HLint does not know about types or which names are in scope. This decision is deliberate, allowing HLint to parallelise and be used incrementally on code that may not type-check. If fixities are required to parse the code properly, they [can be supplied](./README.md#why-doesnt-hlint-know-the-fixity-for-my-custom--operator).
   * The presence of `seq` may cause some hints (i.e. eta-reduction) to change the semantics of a program.
   * Some transformed programs may require additional type signatures, particularly if the transformations trigger the monomorphism restriction or involve rank-2 types.
   * Sometimes HLint will change the code in a way that causes values to default to different types, which may change the behaviour.
@@ -1324,7 +1333,7 @@ description: |
 
   The first hint is marked as an warning, because using `concatMap` in preference to the two separate functions is always desirable. In contrast, the removal of brackets is probably a good idea, but not always. Reasons that a hint might be a suggestion include requiring an additional import, something not everyone agrees on, and functions only available in more recent versions of the base library.
 
-  Any configuration can be done via [.hlint.yaml](#customizing-the-hints) file.
+  Any configuration can be done via [.hlint.yaml](./README.md#customizing-the-hints) file.
 
   **Bug reports:** The suggested replacement should be equivalent - please report all incorrect suggestions not mentioned as known limitations.
 
@@ -1334,7 +1343,7 @@ description: |
 
   1. Initially, run `hlint . --report` to generate `report.html` containing a list of all issues HLint has found. Fix those you think are worth fixing and keep repeating.
   1. Once you are happy, run `hlint . --default > .hlint.yaml`, which will generate a settings file ignoring all the hints currently outstanding. Over time you may wish to edit the list.
-  1. For larger projects, add [custom hints or rules](#customizing-the-hints).
+  1. For larger projects, add [custom hints or rules](./README.md#customizing-the-hints).
 
   Most hints are intended to be a good idea in most circumstances, but not universally - judgement is required. When contributing to someone else's project, HLint can identify pieces of code to look at, but only make changes you consider improvements - not merely to adhere to HLint rules.
 
@@ -1412,7 +1421,53 @@ description: |
 
   ## FAQ
 
-  ### Why are hints not applied recursively?
+  ### Usage
+
+  #### Why doesn't the compiler automatically apply the optimisations?
+
+  HLint doesn't suggest optimisations, it suggests code improvements - the intention is to make the code simpler, rather than making the code perform faster. The [GHC compiler](http://haskell.org/ghc/) automatically applies many of the rules suggested by HLint, so HLint suggestions will rarely improve performance.
+
+  #### Why do I sometimes get a "Note" with my hint?
+
+  Most hints are perfect substitutions, and these are displayed without any notes. However, some hints change the semantics of your program - typically in irrelevant ways - but HLint shows a warning note. HLint does not warn when assuming typeclass laws (such as `==` being symmetric). Some notes you may see include:
+
+  * __Increases laziness__ - for example `foldl (&&) True` suggests `and` including this note. The new code will work on infinite lists, while the old code would not. Increasing laziness is usually a good idea.
+  * __Decreases laziness__ - for example `(fst a, snd a)` suggests `a` including this note. On evaluation the new code will raise an error if a is an error, while the old code would produce a pair containing two error values. Only a small number of hints decrease laziness, and anyone relying on the laziness of the original code would be advised to include a comment.
+  * __Removes error__ - for example `foldr1 (&&)` suggests `and` including the note `Removes error on []`. The new code will produce `True` on the empty list, while the old code would raise an error. Unless you are relying on the exception thrown by the empty list, this hint is safe - and if you do rely on the exception, you would be advised to add a comment.
+
+  #### What is the difference between error/warning/suggestion?
+
+  Every hint has a severity level:
+
+  * __Error__ - by default only used for parse errors.
+  * __Warning__ - for example `concat (map f x)` suggests `concatMap f x` as a "warning" severity hint. From a style point of view, you should always replace a combination of `concat` and `map` with `concatMap`.
+  * __Suggestion__ - for example `x !! 0` suggests `head x` as a "suggestion" severity hint. Typically `head` is a simpler way of expressing the first element of a list, especially if you are treating the list inductively. However, in the expression `f (x !! 4) (x !! 0) (x !! 7)`, replacing the middle argument with `head` makes it harder to follow the pattern, and is probably a bad idea. Suggestion hints are often worthwhile, but should not be applied blindly.
+
+  The difference between warning and suggestion is one of personal taste, typically my personal taste. If you already have a well developed sense of Haskell style, you should ignore the difference. If you are a beginner Haskell programmer you may wish to focus on warning hints before suggestion hints.
+
+  #### Why do I get a parse error?
+
+  HLint enables/disables a set of extensions designed to allow as many files to parse as possible, but sometimes you'll need to enable an additional extension (e.g. Arrows, QuasiQuotes, ...), or disable some (e.g. MagicHash) to enable your code to parse.
+
+  You can enable extensions by specifying additional command line arguments in [.hlint.yaml](./README.md#customizing-the-hints), e.g.: `- arguments: [-XQuasiQuotes]`.
+
+  ### Configuration
+
+  #### Why doesn't HLint know the fixity for my custom !@%$ operator?
+
+  HLint knows the fixities for all the operators in the base library, as well as operators whose fixities are declared in the module being linted, but no others. HLint works on a single file at a time, and does not resolve imports, so cannot see fixity declarations from imported modules. You can tell HLint about fixities by putting them in a hint file named `.hlint.yaml` with the syntax `- fixity: "infixr 5 !@%$"`. You can also use `--find` to automatically produce a list of fixity declarations in a file.
+
+  #### Which hints are ignored?
+
+  Some hints are off-by-default. Some are ignored by the configuration settings. To see all hints pass `--show`. This feature is often useful in conjunction with `--report` which shows the hints in an interactive web page, allowing them to be browsed broken down by hint.
+
+  #### Which hints are used?
+
+  HLint uses the `hlint.yaml` file it ships with by default (containing things like the `concatMap` hint above), along with the first `.hlint.yaml` file it finds in the current directory or any parent thereof. To include other hints, pass `--hint=filename.yaml`.
+
+  ### Design
+
+  #### Why are hints not applied recursively?
 
   Consider:
 
@@ -1429,41 +1484,7 @@ description: |
   * Sometimes a transformed expression will be large, and a further hint will apply to some small part of the result, which appears confusing.
   * Consider `f $ (a b)`. There are two valid hints, either remove the $ or remove the brackets, but only one can be applied.
 
-  ### Why doesn't the compiler automatically apply the optimisations?
-
-  HLint doesn't suggest optimisations, it suggests code improvements - the intention is to make the code simpler, rather than making the code perform faster. The [GHC compiler](http://haskell.org/ghc/) automatically applies many of the rules suggested by HLint, so HLint suggestions will rarely improve performance.
-
-  ### Why doesn't HLint know the fixity for my custom !@%$ operator?
-
-  HLint knows the fixities for all the operators in the base library, as well as operators whose fixities are declared in the module being linted, but no others. HLint works on a single file at a time, and does not resolve imports, so cannot see fixity declarations from imported modules. You can tell HLint about fixities by putting them in a hint file named `.hlint.yaml` with the syntax `- fixity: "infixr 5 !@%$"`. You can also use `--find` to automatically produce a list of fixity declarations in a file.
-
-  ### Which hints are ignored?
-
-  Some hints are off-by-default. Some are ignored by the configuration settings. To see all hints pass `--show`. This feature is often useful in conjunction with `--report` which shows the hints in an interactive web page, allowing them to be browsed broken down by hint.
-
-  ### Which hints are used?
-
-  HLint uses the `hlint.yaml` file it ships with by default (containing things like the `concatMap` hint above), along with the first `.hlint.yaml` file it finds in the current directory or any parent thereof. To include other hints, pass `--hint=filename.yaml`.
-
-  ### Why do I sometimes get a "Note" with my hint?
-
-  Most hints are perfect substitutions, and these are displayed without any notes. However, some hints change the semantics of your program - typically in irrelevant ways - but HLint shows a warning note. HLint does not warn when assuming typeclass laws (such as `==` being symmetric). Some notes you may see include:
-
-  * __Increases laziness__ - for example `foldl (&&) True` suggests `and` including this note. The new code will work on infinite lists, while the old code would not. Increasing laziness is usually a good idea.
-  * __Decreases laziness__ - for example `(fst a, snd a)` suggests `a` including this note. On evaluation the new code will raise an error if a is an error, while the old code would produce a pair containing two error values. Only a small number of hints decrease laziness, and anyone relying on the laziness of the original code would be advised to include a comment.
-  * __Removes error__ - for example `foldr1 (&&)` suggests `and` including the note `Removes error on []`. The new code will produce `True` on the empty list, while the old code would raise an error. Unless you are relying on the exception thrown by the empty list, this hint is safe - and if you do rely on the exception, you would be advised to add a comment.
-
-  ### What is the difference between error/warning/suggestion?
-
-  Every hint has a severity level:
-
-  * __Error__ - by default only used for parse errors.
-  * __Warning__ - for example `concat (map f x)` suggests `concatMap f x` as a "warning" severity hint. From a style point of view, you should always replace a combination of `concat` and `map` with `concatMap`.
-  * __Suggestion__ - for example `x !! 0` suggests `head x` as a "suggestion" severity hint. Typically `head` is a simpler way of expressing the first element of a list, especially if you are treating the list inductively. However, in the expression `f (x !! 4) (x !! 0) (x !! 7)`, replacing the middle argument with `head` makes it harder to follow the pattern, and is probably a bad idea. Suggestion hints are often worthwhile, but should not be applied blindly.
-
-  The difference between warning and suggestion is one of personal taste, typically my personal taste. If you already have a well developed sense of Haskell style, you should ignore the difference. If you are a beginner Haskell programmer you may wish to focus on warning hints before suggestion hints.
-
-  ### Is it possible to use pragma annotations in code that is read by `ghci` (conflicts with `OverloadedStrings`)?
+  #### Is it possible to use pragma annotations in code that is read by `ghci` (conflicts with `OverloadedStrings`)?
 
   Short answer: yes, it is!
 
@@ -1481,12 +1502,6 @@ description: |
   ```
 
   See discussion in [issue #372](https://github.com/ndmitchell/hlint/issues/372).
-
-  ### Why do I get a parse error?
-
-  HLint enables/disables a set of extensions designed to allow as many files to parse as possible, but sometimes you'll need to enable an additional extension (e.g. Arrows, QuasiQuotes, ...), or disable some (e.g. MagicHash) to enable your code to parse.
-
-  You can enable extensions by specifying additional command line arguments in [.hlint.yaml](#customizing-the-hints), e.g.: `- arguments: [-XQuasiQuotes]`.
 
   ## Customizing the hints
 
@@ -1506,6 +1521,24 @@ description: |
   You can see the output of `--default` [here](https://github.com/ndmitchell/hlint/blob/master/data/default.yaml).
 
   If you wish to use the [Dhall configuration language](https://github.com/dhall-lang/dhall-lang) to customize HLint, there [is an example](https://kowainik.github.io/posts/2018-09-09-dhall-to-hlint) and [type definition](https://github.com/kowainik/relude/blob/master/hlint/Rule.dhall).
+
+  ### Finding the name of a hint
+
+  Hints are named with the string they display in their help message
+
+  For example, if hlints outputs a warning like
+
+  ```
+  ./backend/tests/api-tests/src/Main.hs:116:51: Warning: Redundant ==
+  Found:
+    regIsEnabled rr == True
+  Perhaps:
+    regIsEnabled rr
+  ```
+
+  the name of the lint is `Redundant ==`.
+
+  You can use that name to refer to the lint in the configuration file and `ANN` pragmas, see the following sections.
 
   ### Ignoring hints
 
@@ -1601,9 +1634,15 @@ description: |
 
   ## Hacking HLint
 
-  Contributions to HLint are most welcome, following [my standard contribution guidelines](https://github.com/ndmitchell/neil/blob/master/README.md#contributions). You can run the tests either from within a `ghci` session by typing `:test` or by running the standalone binary's tests via `cabal run -- hlint --test` or `stack run -- hlint --test`. After changing hints, you will need to regenerate the [hints.md](hints.md) file with `hlint --generate-summary`.
+  Contributions to HLint are most welcome, following [my standard contribution guidelines](https://github.com/ndmitchell/neil/blob/master/README.md#contributions).
 
-  New tests for individual hints can be added directly to source and hint files by adding annotations bracketed in `<TEST></TEST>` code comment blocks. As some examples:
+  ### How to run tests
+
+  You can run the tests either from within a `ghci` session by typing `:test` or by running the standalone binary's tests via `cabal run -- hlint --test` or `stack run -- hlint --test`. After changing hints, you will need to regenerate the [hints.md](hints.md) file with `hlint --generate-summary`.
+
+  ### How to add tests
+
+  New tests for individual hints can be added directly to source and hint files by adding annotations bracketed in `<TEST></TEST>` code comment blocks. Here are some examples:
 
   ```haskell
   {-
@@ -1618,6 +1657,12 @@ description: |
   ```
 
   The general syntax is `lhs -- rhs` with `lhs` being the expression you expect to be rewritten as `rhs`. The absence of `rhs` means you expect no hints to fire. In addition `???` lets you assert a warning without a particular suggestion, while `@` tags require a specific severity -- both these features are used less commonly.
+
+  ### Printing abstract syntax
+
+  Getting started on problems in HLint often means wanting to inspect a GHC parse tree to get a sense of what it looks like (to see how to match on it for example). Given a source program `Foo.hs` (say), you can get GHC to print a textual representation of `Foo`'s AST via the `-ddump-parsed-ast` flag e.g. `ghc -fforce-recomp -ddump-parsed-ast -c Foo.hs`.
+
+  When you have an [`HsSyn`](https://gitlab.haskell.org/ghc/ghc/-/wikis/commentary/compiler/hs-syn-type) term in your program, it's quite common to want to print it (e.g. via `Debug.Trace.trace`). Types in `HsSyn` aren't in [`Show`](https://hoogle.haskell.org/?hoogle=Show). Not all types in `HsSyn` are [`Outputable`](https://hoogle.haskell.org/?hoogle=Outputable) but when they are you can call `ppr` to get `SDoc`s. This idiom is common enough that there exists [`unsafePrettyPrint`](https://hackage.haskell.org/package/ghc-lib-parser-ex-8.10.0.16/docs/Language-Haskell-GhclibParserEx-GHC-Utils-Outputable.html#v:unsafePrettyPrint). The function [`showAstData`](https://hoogle.haskell.org/?hoogle=showAstData) can be called on any `HsSyn` term to get output like with the `dump-parsed-ast` flag. The `showAstData` approach is preferable to `ppr` when both choices exist in that two ASTs that differ only in fixity arrangments will render differently with the former.
 
   ### Acknowledgements
 
