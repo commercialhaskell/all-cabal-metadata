@@ -1,7 +1,8 @@
 homepage: https://github.com/fumieval/winery#readme
 changelog-type: markdown
-hash: cf5e9a4d09a48c1fc662ee90afe691a3520e05135f849c202ad03751760ec1fd
+hash: c2289c82301a69df026c86ea31f14d76509309c30fb29fe7e7712ec45d36c2cc
 test-bench-deps:
+  barbies: -any
   fast-builder: -any
   cereal: -any
   serialise: -any
@@ -9,6 +10,7 @@ test-bench-deps:
   base: '>=4.7 && <5'
   time: -any
   unordered-containers: -any
+  barbies-th: '>=0.1.5'
   text: -any
   gauge: -any
   containers: -any
@@ -25,6 +27,12 @@ test-bench-deps:
 maintainer: fumiexcel@gmail.com
 synopsis: A compact, well-typed seralisation format for Haskell values
 changelog: |
+  ## 1.3.2
+
+  * Inlined methods of various `Serialise` instances
+  * Added `buildRecordExtractor` and `bextractors`
+  * Added a `Serialise` instance for `Barbie`
+
   ## 1.3.1
 
   * Added `bundleVia`, deprecating `bundleRecord` and `bundleVariant`
@@ -104,19 +112,21 @@ changelog: |
 
   Initial release
 basic-deps:
+  barbies: ^>=2.0
   fast-builder: -any
   bytestring: -any
   base: '>=4.7 && <5'
   time: -any
   unordered-containers: -any
+  barbies-th: ^>=0.1
   text: -any
-  megaparsec: '>=6.0.0'
+  megaparsec: '>=7.0.0'
   semigroups: -any
   HUnit: -any
   containers: -any
   mtl: -any
   hashable: -any
-  prettyprinter: -any
+  prettyprinter: ==1.7.*
   transformers: -any
   scientific: -any
   QuickCheck: -any
@@ -143,8 +153,9 @@ all-versions:
 - '1.2'
 - '1.3'
 - 1.3.1
+- 1.3.2
 author: Fumiaki Kinoshita
-latest: 1.3.1
+latest: 1.3.2
 description-type: markdown
 description: |
   # winery
@@ -223,6 +234,16 @@ description: |
   for any ADT. The former explicitly describes field names in the schema, and the
   latter does constructor names.
 
+  If you want to customise one of the methods, you can use `bundleVia` to supply the rest of definitions.
+
+  ```haskell
+  instance Serialise Foo where
+    bundleSerialise = bundleVia WineryRecord
+    extractor = buildExtractor $ Foo
+      <$> extractField "foo"
+      <*> extractField "bar"
+  ```
+
   ## Backward compatibility
 
   If the representation is not the same as the current version (i.e. the schema
@@ -232,14 +253,7 @@ description: |
   `Extractor` parses a schema and returns a function which gives a value back from
   a `Term`.
 
-  If having default values for missing fields is sufficient, you can pass a
-  default value to `gextractorRecord`:
-
-  ```haskell
-    extractor = gextractorRecord $ Just $ Foo "" 42 0
-  ```
-
-  You can also build an extractor using combinators such as `extractField`, `extractConstructor`, etc.
+  You can build an extractor using combinators such as `extractField`, `extractConstructor`, etc.
 
   ```haskell
   buildExtractor
@@ -249,8 +263,51 @@ description: |
     :: Extractor (Maybe a)
   ```
 
+  If you want to customise the extractor, the pair of `gvariantExtractors` and `buildVariantExtractors` is handy.
+
+  ```haskell
+  gvariantExtractors :: (GSerialiseVariant (Rep a), Generic a) => HM.HashMap T.Text (Extractor a)
+  buildVariantExtractor :: (Generic a, Typeable a) => HM.HashMap T.Text (Extractor a) -> Extractor a
+  ```
+
   `Extractor` is Alternative, meaning that multiple extractors (such as a default
   generic implementation and fallback plans) can be combined into one.
+
+  Altering an instance for a record type is a little bit tricky.
+  HKD can represent a record where each field is `Subextractor` instead of the orignal type.
+  The [barbies-th](http://hackage.haskell.org/package/barbies-th) allows us to derive it from a plain declaration.
+
+  ```haskell
+  import Barbies.Bare
+  import Barbies.TH
+
+  declareBareB [d|
+    data HRecB = HRec
+      { baz :: !Int
+      , qux :: !Text
+      }
+      |]
+  type HRec = HRecB Bare Identity
+  ```
+
+  Obtain a record of extractors using `bextractors :: forall b. (AllB Serialise b, ...) => b Subextractor`, update it as necessary,
+  then build an extractor for an entire record by `buildRecordExtractor`.
+
+  ```haskell
+  instance Serialise HRec where
+    bundleSerialise = bundleVia WineryRecord
+    extractor = fmap bstrip $ buildRecordExtractor bextractors
+      { qux = extractField "qux" <|> extractField "oldQux" }
+  ```
+
+  More generic instance (for covered types) can be defined as below:
+
+  ```haskell
+  instance (Typeable h, AllBF Serialise h (HRecB Covered)) => Serialise (HRecB Covered h) where
+    bundleSerialise = bundleVia Barbie
+    extractor = buildRecordExtractorF bextractorsF
+      { qux = Compose $ extractField "qux" <|> extractField "oldQux" }
+  ```
 
   ## Pretty-printing
 
