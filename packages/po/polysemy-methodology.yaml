@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: ff1f9246240b5975648e0dba97cdf8b0976b72e3624d92ad6045f818e1b95c8c
+hash: 17631d38830ddcfb56aaf22a612ab25545e1baa690df740163a5af75e0585848
 test-bench-deps: {}
 maintainer: dan.firth@homotopic.tech
 synopsis: Domain modelling algebra for polysemy
@@ -27,35 +27,129 @@ all-versions:
 - 0.1.0.0
 - 0.1.1.0
 - 0.1.2.0
+- 0.1.2.1
 author: Daniel Firth
-latest: 0.1.2.0
+latest: 0.1.2.1
 description-type: markdown
-description: |
-  # polysemy-methodology
-
-  polysemy-methodology provides an algebra for domain modelling in polysemy.
-
-  A simple program might look something like this:
-
-  ```
-  prog :: Members '[ Input a
-                   , Methodology a b
-                   , Output b]
-  prog = input @a >>= process @a @b >>= output @b
-  ```
-
-  That is, this program transforms an `Input a` into an `Output b` by way of a
-  `Methodology a b` that turns `a` into `b`. We can then type apply `a` and `b`
-  and connect this to `main`.
-
-  If we have a solution readily available, we can consume a `Methodology` by
-  running one of the interpreters `runMethodologyPure` or `runMethodologySem`.
-
-  Otherwise, we can use the other interpreters in this package to break the
-  problem down into components or branches and solve each section separately.
-  Each interpreter will produce a new set of `Methodology`s to be solved.
-
-  This allows you to work up a solution to a domain problem backwards, by running
-  the program you intend to solve directly and using holes to guide the
-  requirements.
+description: "# polysemy-methodology\n\npolysemy-methodology provides an algebra for
+  domain modelling in polysemy.\n\nA simple program might look something like this:\n\n```\nprog
+  :: Members '[ Input a\n                 , Methodology a b\n                 , Output
+  b]\n     => Sem r ()\nprog = input @a >>= process @a @b >>= output @b\n```\n\nThat
+  is, this program transforms an `Input a` into an `Output b` by way of a\n`Methodology
+  a b` that turns `a` into `b`. We can then type apply `a` and `b`\nand connect this
+  to `main`.\n\nIf we have a solution readily available, we can consume a `Methodology`
+  by\nrunning one of the interpreters `runMethodologyPure` or `runMethodologySem`.\n\nOtherwise,
+  we can use the other interpreters in this package to break the\nproblem down into
+  components or branches and solve each section separately.\nEach interpreter will
+  produce a new set of `Methodology`s to be solved.\n\nThis allows you to work up
+  a solution to a domain problem backwards, by running\nthe program you intend to
+  solve directly and using holes to guide the\nrequirements.\n\n## Worked example\n\nA
+  worked example of this approach can be found in the\n[flashblast](https://gitlab.com/homotopic-tech/flashblast)\nrepository.
+  In this we want to take a configuration in dhall,\nand process it in some way an
+  output of flashcards.\n\nWe might model this as such:\n\n```\n-- Domain.hs\nimport
+  Polysemy\nimport Polysemy.Input\nimport Polysemy.Tagged\nimport Polysemy.Methodology\nimport
+  Polysemy.Output\n\n-- | A `DeckConfiguration` indicates how we create cards.\ndata
+  DeckConfiguration\n\n-- | A `CollectionsPackage` indicates.\ndata CollectionsPackage\n\n--
+  | The Construction Methodology for flashblast.\ndata ConstructionMethodology\n\n--
+  | `flashblast` is a program that takes a `DeckConfiguration` and outputs a `CollectionsPackage`.\nflashblast
+  :: Members '[ Tagged DeckConfiguration (Input a)\n                       , Tagged
+  ConstructionMethodology (Methodology a b)\n                       , Tagged CollectionsPackage
+  (Output b)] r\n           => Sem r ()\nflashblast = do\n  x <- tag @DeckConfiguration
+  input\n  k <- tag @ConstructionMethodology $ process x\n  tag @CollectionsPackage
+  $ output k\n```\n\nNotice that this is an abstract domain model. We have not committed
+  to\na particular representation of any of the three elements of this program.\nIn
+  fact, this file depends only on polysemy modules, which allows\nus to isolate the
+  domain model from anything resembling real code.\n\nHowever, we would also like
+  to claim that what we say the program *should*\ndo in abstraction is *actually*
+  what we run for real. So it would be\nreassuring to be able to simply interpret
+  this into real functions.\n\nWe commit to a concrete representation for the config
+  and for\nthe output only in the main application file, where we iterate over\nthe
+  decks.\n\n```\n-- Config.hs\ndata Spec =\n    Pronunciation   [PronunciationSpec]\n
+  \ | Excerpt         [ExcerptSpec]\n  | BasicReversed   [BasicReversedCard]\n  |
+  MinimalReversed [MinimalReversedCard]\n    deriving stock Generic\n    deriving
+  D.FromDhall\n      via D.Codec (D.Field (D.DropPrefix \"_\")) Spec\n\nmakePrisms
+  ''Spec\n\ndata Part = Part {\n  _outfile :: Path Rel File\n, _spec    :: Spec\n}
+  deriving Generic\n  deriving D.FromDhall\n    via D.Codec (D.Field (D.DropPrefix
+  \"_\")) Part\n\ndata Deck = Deck {\n  _resourceDirs :: ResourceDirs\n, _exportDirs
+  \  :: ExportDirs\n, _parts        :: [Part]\n} deriving stock Generic\n  deriving
+  D.FromDhall\n    via D.Codec (D.Field (D.DropPrefix \"_\")) Deck\n```\n\n```\n--
+  Main.hs\ndata Deck = Deck {\n  notes :: Map (Path Rel File) Text\n, media :: [Path
+  Rel File]\n} deriving stock (Eq, Show, Generic)\n  deriving Semigroup via GenericSemigroup
+  Deck\n  deriving Monoid via GenericMonoid Deck\n\nmain = do\n  Config.FlashBlast{..}
+  <- D.input D.auto \"./index.dhall\"\n  forM_ _decks $ \\x -> do\n    flashblast
+  @Config.Deck @Deck\n      & runM\n```\n\nHere we will be told that we need to satisfy
+  the `Input`, `Output` and\n`Methodology` effects.\n\nThe `Config.Deck` is divided
+  into several different specs. We could simply\nwrite one giant function to solve
+  the `Methodology` and annihilate the \n`Methodology` effect using `runMethodologySem`.\n\n```\nsoln
+  :: Members '[...] r => Config.Deck -> Sem r Deck\nsoln = ...\n\n-- runMethodologySem
+  @Config.Deck @Deck soln\n```\n\nBut this would conflate our concerns - the different
+  specs require different\neffects to execute, and having this single function require
+  all effects\nwouuld be maintenance should we choose to remove any functionality.
+  It\nwould also increase our testing surface.\n\n* The `MinimalReversedCard`s and
+  `BasicReversedCard`s are direct\n  representations of what the output cards should
+  look like, and so can be\npurely transformed.\n* `ExcerptSpec`s need to be transformed
+  into cards by way of processing\n  the specified video and subtitle track via ffmpeg.\n*
+  `PronunciationSpec` need to fetch the pronunciation data for the target\n  words
+  from a remote API.\n\nWhat would be nice is if we could reach a point where we can
+  make functions\nfor each of with their respective effects isolated but without having
+  to\nagglomerate all the effects into a single solution function.\n\nIt makes sense
+  then to take our `Methodology` and break it down into sub\n`Methodology`s that can
+  be reasoned about independently, rather than trying\nto satisfy the program with
+  one function built up from parts. This way\nwe can break the program down using
+  only type applications and interpreters,\nand we only need to write any code once
+  we are happy that the problem is\nsufficiently decomposed.\n\nThe interpreters in
+  this library aree operations that consume a `Methodology`\nand turn it into parts.\n\n`cutMethodology`
+  breaks the `Methodology` into two pieces, and will then\nrequire interpreters for
+  each. So if we start with a `Methodology b d`, we\ncan break it into `Methodology
+  b c` and `Methodology c d`, each of which\nwill require some solution. This is essentially
+  reverse arrow composition.\n\n```\nb -----> d   ===>  (b ---> c), (c ---> d)\n```\n\n`divideMethodology`
+  breaks the target into a pair, and connects\nthe source to both of them, producing
+  three `Methodology`s we need to solve. This is reverse fanout.\n\n```\nb ----> d
+  ==> (b ---> c), (b ---> c'), ((c,c') ----> d)\n```\n\n`decideMethodology` breaks
+  the source into an `Either`, allowing us to\nchoose a `Methodology` to run as the
+  result of another `Methodology`\nbased on the source. This is reverse fanin.\n\n```\nb
+  ----> d ===> (b---> Either c c'), (c ---> d), (c ---> d)\n```\n\n`decomposeMethodology`
+  is `cutMethodology` specialised to\n`HList` as the center argument. This allows
+  us to cut the\n`Methodology` into multiple parallel tracks.\n\n```\n                /-----c-----\\\nb
+  ----> d ===> b------d------f\n                \\-----e-----/\n```\n\nBack to our
+  example, we need to decompose our `Config` into\nthe problems concerning each type
+  of spec, then turn\neach of those into a `Deck` of its own, then collect the\nproduced
+  decks monoidally into the final output.\n\nDealing with HLists is a little awkward
+  but the approach that\nwill work is to deal with each strand individually, and use\n`separateMethodologyInitial`
+  or `separateMethodologyTerminal`\ndepending on whether the strand appears before
+  or after the\n`HList`, which will separate the element of the `HList` into\nits
+  own `Methodology`. Then, decompose this further or solve\nit.\n\n```\ntype DeckSplit
+  = '[Map (Path Rel File) [Config.MinimalReversedCard]\n                 , Map (Path
+  Rel File) [Config.BasicReversedCard]\n                 , Map (Path Rel File) [Config.ExcerptSpec]\n
+  \                , Map (Path Rel File) [Config.PronunciationSpec]\n                 ]\n\ntype
+  FileMap b = Map (Path b File)\n\nextractParts :: Prism' Config.Spec x -> Config.Deck
+  -> Map (Path Rel File) x\nextractParts x = Map.fromList . itoListOf\n                  (
+  Config.parts\n                  % itraversed\n                  %> reindexed (view
+  Config.outfile) selfIndex\n                  % Config.spec\n                  %
+  x\n                  )\n\n\n\nmain = do\n  Config.FlashBlast{..} <- D.input D.auto
+  \"./index.dhall\"\n  forM_ _decks $ \\x -> do\n    flashblast @Config.Deck @Deck\n
+  \     & untag @ConstructionMethodology\n      & decomposeMethodology @Config.Deck
+  @DeckSplit @Deck\n        -- We pull out `Config.Deck -> (FileMap Rel [Config.MinimalReversedCard]`
+  as its own `Methodology`.\n        & separateMethodologyInitial @Config.Deck @(FileMap
+  Rel [Config.MinimalReversedCard])\n          -- And then immediately solve it purely.\n
+  \         & runMethodologyPure (extractParts Config._MinimalReversed)\n        --
+  and do the same for each one in the list.\n        & separateMethodologyInitial
+  @Config.Deck @(FileMap Rel [Config.BasicReversedCard])\n          & runMethodologyPure
+  (extractParts Config._BasicReversed)\n        & separateMethodologyInitial @Config.Deck
+  @(FileMap Rel [Config.ExcerptSpec])\n          & runMethodologyPure (extractParts
+  Config._Excerpt)\n        & separateMethodologyInitial @Config.Deck @(FileMap Rel
+  [Config.PronunciationSpec])\n          & runMethodologyPure (extractParts Config._Pronunciation)\n
+  \       & endMethodologyInitial\n          & separateMethodologyTerminal @(FileMap
+  Rel [Config.MinimalReversedCard]) @Deck\n            & runMethodologyPure _\n          &
+  separateMethodologyTerminal @(FileMap Rel [Config.BasicReversedCard]) @Deck\n            &
+  runMethodologyPure _\n          & separateMethodologyTerminal @(FileMap Rel [Config.ExcerptSpec])
+  @Deck\n            & runMethodologySem _\n          & separateMethodologyTerminal
+  @(FileMap Rel [Config.PronunciationSpec]) @Deck\n            & runMethodologySem
+  _\n```\n\nWe have left holes that polysemy will now tell us need to be\nfilled by
+  nice clean `a -> b` or `a -> Sem r b` functions.\nAny effects we add here we can
+  deal with after this block, or\nwe can decompose this even further (see flashblast
+  for details).\n\n## Notes\n\nThere are intended to be less boilerplatey ways to
+  deal with\nseparation, as a very common pattern is simply to separate a\nstrand
+  out and then immediately solve it, but this library is\nearly and I didn't want
+  to jump the gun with too many\nfunctions.\n"
 license-name: MIT
