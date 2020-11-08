@@ -1,6 +1,6 @@
 homepage: https://github.com/knupfer/type-of-html
 changelog-type: markdown
-hash: a85fddc12c90145a97af25d4ce67352cdbbc8aca48ba5f2233a45a45004729ac
+hash: e1643d7c2cea2b5ec84548cd8f2d151caf96d0c2b84f3c1b3ec5e04113540db2
 test-bench-deps:
   type-of-html: -any
   ghc: -any
@@ -19,6 +19,12 @@ maintainer: fknupfer@gmail.com
 synopsis: High performance type driven html generation.
 changelog: |
   # Revision history for type-of-html
+
+  ## 1.6.1.0  -- 2020-11-07
+
+  * visual fixes
+  * benchmark cleanup
+  * added example
 
   ## 1.6.0.0  -- 2020-11-06
 
@@ -198,8 +204,10 @@ all-versions:
 - 1.5.1.0
 - 1.5.2.0
 - 1.6.0.0
+- 1.6.1.0
+- 1.6.1.1
 author: Florian Knupfer
-latest: 1.6.0.0
+latest: 1.6.1.1
 description-type: markdown
 description: |
   # Type of html
@@ -363,12 +371,19 @@ description: |
 
   This is comparing blaze with `type-of-html`:
 
-  ![type-of-html](https://user-images.githubusercontent.com/5609565/37879227-765df128-3075-11e8-9270-3839ce1852c8.png)
+  ![type-of-html](https://user-images.githubusercontent.com/5609565/98452828-48a97780-2153-11eb-8e6c-2981c69e7d0d.png)
 
   To look at the exact code of this benchmark look into the repo.  The
-  big table benchmark here is only a 4x4 table. Using a 1000x10 table
-  like on the blaze homepage yields even better relative performance (~9
-  times faster), but would make the other benchmarks unreadable.
+  big table benchmark here is only a 50x10 table. Using a 1000x10 table
+  like on the blaze homepage yields even better relative performance,
+  but would make the other benchmarks unreadable. The synthetic page is
+  just a small page with a lot of elements and a lot of attributes but
+  with minimal text. The hackage upload benchmark is a rendering of
+  https://http://hackage.haskell.org/upload which contains a lot of text.
+
+  Note how the `compactHTML` rendering is about 150 times faster than
+  blaze for the real world case. Look below for the explanation of the
+  difference between `type-of-html` and `compactHTML`.
 
   How is this possible? We supercompile lots of parts of the generation
   process. This is possible thanks to the new features of GHC 8.2:
@@ -525,66 +540,15 @@ description: |
   main = putStrLn $ renderCompactString myDoc (Put "Bob") (Put (42 :: Int))
   ```
 
-  ## Comparision to lucid and blaze-html
-
-  Advantages of `type-of-html`:
-  - more or less 10 times faster on a medium sized page
-  - a lot higher type safety: nearly no invalid document is inhabited
-  - fewer dependencies
-
-  Disadvantages of 'type-of-html':
-  - a bit noisy syntax (don't write types!)
-  - sometimes unusual type error messages
-  - compile times (30sec for a medium sized page, with `-O0` only ~2sec)
-  - needs at least ghc 8
-
-  I'd generally recommend that you put your documents into an extra
-  module to avoid frequent recompilations.  Additionally you can use
-  `type-of-html` within an `blaze-html` document and vice versa.  This
-  allows you to gradually migrate, or only write the hotpath in a more
-  efficient representation.
-
-  ## Example usage
+  You can easily investigate your CompactHTML in ghci thanks to a colorful prettified show instance:
 
   ```haskell
-  {-# OPTIONS_GHC -fno-warn-missing-signatures #-}
-
-  module Main where
-
-  import Html
-
-  import Data.Text.Lazy.IO as TL
-
-  main :: IO ()
-  main = TL.putStrLn $ renderText example
-
-  example
-    = Html
-    :> ( Body
-       :> ( H1
-          :> ( Img
-             # Strong :> "foo"
-             )
-          # Div :> Div :> "bar"
-          # Div
-          :> ( Form
-             :> ( Fieldset
-                :> ( Div
-                   :> ( Div
-                      :> ( Label :> "zot"
-                         # Select
-                         :> ( Option :> 'b'
-                            # Option :> 'c'
-                            )
-                         # map (Div :>) [1..5 :: Int]
-                         )
-                      )
-                   # Button :> I
-                   )
-                )
-             )
-          )
-       )
+  >>> myDoc
+  "<div>Hello, my name is: "
+  name
+  "</div><div>I&#39;m of age: "
+  age
+  "</div>"
   ```
 
   ## Custom Attributes and Elements
@@ -630,6 +594,88 @@ description: |
   main :: IO ()
   main = print $ banana :@ AsyncA:="foo" :> "bar"
   ```
+
+  ## Notation
+
+  If you want a bit cleaner notation which resembles blaze, you can use
+  the language pragma rebindable syntax:
+
+  ```haskell
+  {-# OPTIONS_GHC -fno-warn-missing-signatures -fno-warn-unused-do-bind -fno-warn-name-shadowing #-}
+  {-# LANGUAGE NoMonomorphismRestriction #-}
+  {-# LANGUAGE RebindableSyntax #-}
+
+  import Prelude
+  import Html
+
+  main :: IO ()
+  main = print $
+    Html :> do
+      Body :> do
+        H1 :@ IdA:="a" :> do
+          Img
+          Strong :@ ClassA:="b" :> (0 :: Int)
+        Div :> do
+          Div :@ IdA:="c" :> (1 :: Int)
+        Div :> do
+          Form :@ ClassA:="d" :> do
+            Fieldset :> do
+              Div :@ IdA:="e" :> do
+                Div :> do
+                  Label :@ ClassA:="f" :> "a"
+                  Select :> do
+                    Option :@ IdA:="g" :> "b"
+                    Option :> "c"
+                  Div :@ ClassA:="h" :> "d"
+                I :> "a"
+              Button :@ IdA:="i" :> do
+                I :> "e"
+    where
+      (>>) = (#)
+  ```
+
+  ## Comparision to lucid and blaze-html
+
+  Advantages of `type-of-html`:
+  - more or less 10 times faster on a medium sized page
+  - a lot higher type safety: nearly no invalid document is inhabited
+  - fewer dependencies
+
+  Disadvantages of 'type-of-html':
+  - a bit noisy syntax (don't write types!)
+  - sometimes unusual type error messages
+  - compile times (30sec for a medium sized page, with `-O0` only ~2sec)
+  - needs at least ghc 8.2
+  - you may need to specify {-# OPTIONS_GHC -freduction-depth=0 #-}
+
+  I'd generally recommend that you put your documents into an extra
+  module to avoid frequent recompilations.  Additionally you can use
+  `type-of-html` within an `blaze-html` document and vice versa.  This
+  allows you to gradually migrate, or only write the hotpath in a more
+  efficient representation.
+
+  ## Example usage
+
+  If you'd like to see a full fledged example, go to following module
+  from the benchmarks of this library:
+
+  [Example](https://github.com/knupfer/type-of-html/tree/master/bench/ExampleTypeOfHtml.hs)
+
+  It is a verbatim implementation of the source of
+  http://hackage.haskell.org/upload
+
+  If you wish, you can compare the clarity of the code with an
+  implementation in blaze:
+
+  [Example](https://github.com/knupfer/type-of-html/tree/master/bench/ExampleBlaze.hs)
+
+  I'd argue that the source code in `type-of-html` has some visual advantages:
+  - qualified imports aren't needed
+  - it's more consistent, e.g. no spurious underscores (e.g. `rel_` vs `ref`)
+  - clearer distinction between data and functions, in `type-of-html`
+    elements and attributes are capitalized
+
+  Note that the type of `hackageUpload` is quite big (about 1kLOC of type signature), so don't even bother to ask ghci :).
 
   ## FAQ
 
