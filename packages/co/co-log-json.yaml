@@ -1,0 +1,148 @@
+homepage: ''
+changelog-type: markdown
+hash: cbf9aadeb0f382f96be7c629d7bf972631730552bbdf6628bce208ee93d67e87
+test-bench-deps: {}
+maintainer: alexander.vershilov@sirius.online
+synopsis: Structured messages support in co-log ecosystem.
+changelog: |
+  # Revision history for co-log-json
+
+  ## 0.0.1.0 -- 2020-11-11
+
+  * First version.
+basic-deps:
+  bytestring: ^>=0.10
+  base: '>=4.11 && <5'
+  text: ^>=1.2
+  co-log-core: ^>=0.2
+  containers: ^>=0.6
+  string-conv: ^>=0.1
+  aeson: ^>=1.5
+all-versions:
+- 0.0.1.0
+author: Alexander Vershilov
+latest: 0.0.1.0
+description-type: markdown
+description: "# co-log-json\n\n`co-log-json` allows writing structured logs in your
+  application.\n\nThe library allows adding additional machine-readable context to
+  the log\nmessages. I.e. each log message is a JSON object with a predefined structure\nwhere
+  additional user context can be added. Such logs can be easily indexed\nby external
+  logs systems such as [Graylog](https://www.graylog.org) or \n[Elastic search](https://www.elastic.co).
+  The message logging is done using\na special context, that keeps the information
+  about additional attributes.\nSuch contexts form a nested scope, and all messages
+  in the score inherit provided\ncontext:\n\n```\n   scope [ user = \"Joe\"] \n     |\n
+  \    | ==>  {\"message\":\"user arrived\", \"data\": { \"user\": \"Joe\"}\n     |\n
+  \    +------ scope [ tag = \"human\" ]\n              |\n              | ==> {\"message\":
+  \"user entered the door\", \"data\": { \"user\": \"Joe\", \"tag\": \"human\"}\n```\n\n\nIn
+  other words, this library takes two choices:\n\n  1. We write full context with
+  each message.\n  This approach allows using external tools (like elastic-search)
+  that can index message\n  without any additional work and information.\n  Any message
+  can be lost without affecting the ability to decode other messages. An alternative\n
+  \ approach could be emitting a list of events (possibly as a bytecode), such an
+  approach\n  is taken by the tracing libraries. It requires more works during reading
+  and indexing\n  logs, and in the case in some logs are logs may render later ones
+  unusable or lose some info.\n\n  2. We keep a state context so we don't need to
+  attach context messages to each one.\n  An alternative approach is the extraction
+  of the structure information from the message itself.\n  This approach is taken
+  in some structured logging libraries, it can provide better error\n  messages. However,
+  it requires to think about the message context all the time (and developer \n  user
+  may not even know all interesting context where the message will be used).\n\n\n#
+  Using a library\n\nTo to use a library you'll need to add `co-log-json` to the dependency
+  list.\n\n```\nlibrary.cabal\n\nlibrary\n  build-depends:\n    base,\n    co-log-json
+  ^>= 0.0\n```\n\n\n## Setting the library\n\n\n```haskell\nimport Colog.Json                       --
+  Core API for structured logging\nimport Colog.Json.Action (logToHandle)  -- Actions
+  to store the message\nimport System.IO (stderr)\n\nmain :: IO ()\nmain = do\n  --
+  First, we need to set up log storing function:\n  --   To emit logs we need to create
+  a context.\n  --    Context takes the action to store log and it's possible to\n
+  \ --    attach additional information to it.\n\n  let context = mkLogger (logToHandle
+  stderr)\n  --                          ^\n  --                          |\n  --
+  \                         +------  `LogAction IO Message` \n  --                                    (see
+  discussion \"Why IO below\")\n  --\n  -- Once 'context' is created it can be passed
+  to the other parts\n  -- of the code or used to emit logs.\n\n  logDebug context
+  \"Hi, there!\"\n  --         ^         ^\n  --         |         |\n  --         |
+  \        +----- `LogStr` type - is an efficient text builder.\n  --         |                 \n
+  \ --         |\n  --         +-- log context\n\n  -- Will output:\n  --\n  -- ```\n
+  \ -- {\"severity\":\"DEBUG\", \"thread\": 1, \"message\": \"Hi, there!\"}\n  --
+  ```\n  --                ^               ^                ^\n  --                |
+  \              |                +------------ Message itself\n  --                |
+  \              +----------------------------- Id of the thread that emitted the
+  message\n  --                +----------------- Severity level: Debug, Info, Notice,
+  Error, Critical, Alert, Emergency\n  -- \n  -- to the stderr.\n\n  -- There are
+  other helper functions list `logInfo`, `logNotice`, etc.\n```\n\nNow let's discuss
+  `LogStr` type. It exists to efficiently generate message without\nextra allocations
+  that can be avoided. It's just a [Text.Builder](http://hackage.haskell.org/package/text-1.2.4.0/docs/Data-Text-Lazy-Builder.html)
+  though internal\nrepresentation may evolve in the future. `LogStr` allows message
+  concatenation without allocating\nintermediate structures, so it allows efficient
+  log building. For example line:\n\n```haskell\n  logDebug context $ \"a\" <> \"b\"
+  <> \"c\"\n```\n\nwill write all text string \"a\", \"b\", \"c\" directly to the
+  buffer, and can do more optimizations.\nSo it's quite safe to use the library even
+  with a large number of logs.\n\nThe 'LogStr' type implement [IsString](http://hackage.haskell.org/package/base-4.14.0.0/docs/Data-String.html#t:IsString)
+  instance it means that you can just write string literals\nand they will be treated
+  as 'LogStr'. To concatenate two 'LogStr' you can use [`<>`](https://hackage.haskell.org/package/base-4.14.0.0/docs/Data-Semigroup.html#t:Semigroup)
+  operation.\n\nIn addition you can convert any string lines that has [StringConv
+  a T.Text](https://hackage.haskell.org/package/string-conv-0.1.2/docs/Data-String-Conv.html),
+  i.e. can be converted\nto LogStr using `ls :: StringConv a T.Text => a -> LogStr`.\nEfficiency
+  and safety of this conversion depends on the concrete instance implementation and
+  is out\nof control of the package.\n\n```haskell\n   logDebug context $ \"foo is
+  \" <> ls (\"ы\":: ByteString)\n```\n\nIn case your data structure does not implement
+  `StringConv a` it's possible to use not efficient but\nvery general `showLS :: Show
+  a => a -> LogStr` method that will work for any type that has Show instance.\n\n##
+  Adding context.\n\nBut just writing JSON messages is not very interesting, we want
+  to control the context of the message.\nIn order to add user data to the context
+  we can use `addContext :: PushContext -> LoggerEnv -> LoggerEnv`\nmethod.\n\n```haskell\n\n
+  \  let context1 = addContext (sl \"user_id\" (1::Int)) context\n   --    ^                    ^
+  \    ^         ^        ^\n   --    |                    |     |         |        +---
+  old context\n   --    |                    |     |         +------------ user data
+  \n   --    |                    |     +---------------------- key for the user data\n
+  \  --    |                    +---------------------------- function that generates
+  an entry\n   --    +------------------------------------------------- new context
+  that has data attached\n\n   logDebug context1 \"Hi again!\"\n\n   -- Will emit
+  to the stderr:\n   --\n   -- ```\n   -- {\"severity\":\"DEBUG\", \"thread\": 1,
+  \"message\": \"Hi, there!\", \"data\": {\"user_id\":1}}\n   -- ```\n   --                                                              ^
+  \          ^    ^\n   --                                                              |
+  \          |    +-- value\n   --                                                              |
+  \          +------- key\n   --                                                              +---
+  all user data is kept under 'data' key\n```\n\nSidenote: 'sl' function looks redundant,
+  but it's needed in order to provide a future\ncompatibility for a case when internal
+  structure of user data is changing. Historically\nit came from [katip](https://hackage.haskell.org/package/katip)
+  library, there are more functions that allows context creation but\n\nFunction `sl
+  :: ToJSON a => T.Text -> a -> PushContext` prepares update to the context. \nIt
+  encodes user data to JSON. This is why we had to add type annotation to `1` otherwise
+  GHC had\nno means to infer the type).\n\nIt's important that the library does not
+  perform any compaction of key-values, i.e.:\n\n```haskell\n   logDebug (addContext
+  (sl \"user_id\" 2) context1) \"Who am I?\"\n   -- Will emit:\n   -- ```\n   -- {\"severity\":\"DEBUG\",
+  \"thread\": 1, \"message\": \"Hi, there!\", \"data\": {\"user_id\":1, \"user_id\":
+  2}}\n   -- ```\n```\n\nThis is done for purpose, but may be a subject to change
+  in the future major versions.\n\n`addContext` is not the only function that allows
+  to modify context, there is the other one\n`addNamespace :: Text -> LoggerEnv ->
+  LoggerEnv`, this function adds an entry about the \ncurrent namespace. Namespace
+  is a nested list of strings that tells the logical part of \nthe codebase the log
+  belongs to. It's kept separate fom the data, and it's possible to\nuse in library
+  filtering (using  [cfilter](https://kowainik.github.io/posts/2018-09-25-co-log#cfilter))
+  or filtering in external system.\n\n\nThe described functionality is enough to perform
+  logging. However, it may worth discussing \ninteroperability with the rest of co-log
+  ecosystem and ergonomics.\n\n## co-log interoperability\n\nThe co-log ecosystem
+  works with \"LogAction m a\" and in the package, we use \"LogEnv\" it means\nthat
+  we are losing most of the benefits of the library and can't use a lot of utility\nfunctions.
+  To improve the situation it's possible to convert LogEnv into\n`LogAction m (Severity,LogStr)`
+  using function `unLogger`. Then we will have log action\nthat will emit a message
+  with the current context, but the context will no longer be modifiable.\n\n# Ergonomics\n\nThe
+  package provides no ergonomic tools by default and it's important that `addContext`
+  is a pure\nfunction. On the one han,d it introduces a log of boilerplate code but
+  on the other.\n\nIt allows to modify context even outside of the effectful computation
+  for example with servant you may have:\n\n```haskell\n-- | Catalogue of items \ndata
+  CatalogueApi route = CatalogueApi\n  { _the_catalogue :: route :- Capture \"catalogue_id\"
+  CatalogueId :> ToServantAPI Bar\n  , ...\n  } \n\n-- Item\ndata ItemApi route =
+  ItemApi\n  { _items :: route :- \"items\" :> Get '[JSON] (Vector Item)\n  , ...\n
+  \ }\n\nhandleCatalogue :: LoggerEnv -> ToServant CatalogueApi AsServer\nhandleCatalogue
+  ctx' = CatalogueApi\n  { _the_catalogue = \\catalogue_id ->\n     handleItem (addContext
+  \"catalogue_id\" catalogue_id) ctx) catalogue_id\n  , ...\n  }\n  where \n    ctx
+  = addNamespace \"catalogue\" ctx'\n\nhandleItem :: LoggerEnv -> CatalogueId -> ToServant
+  ItemApi AsServer\nhandleItem ctx' catalogue_id = ItemApi ...\n  where ctx = addNamespace
+  \"item\" ctx'\n```\n\nSo we can build computation that we will execute later while
+  modifying the context.\n\nOn the other hand, we can always wrap this pure function
+  into an effect system \nof choice be it either handle pattern or readert or MTL
+  or effect system.\nThis library does not target any particular solution and  want
+  to introduce \nneither additional dependencies nor additional restrictions on the
+  user.\n"
+license-name: MPL-2.0
