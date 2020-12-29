@@ -1,0 +1,82 @@
+homepage: https://github.com/ivanbakel/ytl#readme
+changelog-type: ''
+hash: 1c9fe942e81382ce6b75d2e58b54375e966669ccec44eca71121e614b0644361
+test-bench-deps: {}
+maintainer: ivb@vanbakel.io
+synopsis: mtl-style transformations for Yesod sites
+changelog: ''
+basic-deps:
+  yesod-core: -any
+  base: '>=4.7 && <5'
+  pointed: -any
+  mtl: -any
+  template-haskell: -any
+all-versions:
+- 0.1.0.0
+author: Isaac van Bakel
+latest: 0.1.0.0
+description-type: markdown
+description: |
+  # ytl - Yesod Transformer Library
+
+  [Yesod](https://github.com/yesodweb/yesod) is a powerful, type-safe webserver library. At its core, Yesod lets you describe *foundation sites* which carry the configuration of your webserver, and *handlers* and *widgets* which use that foundation to handle requests, generate HTML and CSS, and even access a database.
+
+  Haskellers who are familiar with [mtl](https://github.com/haskell/mtl) are used to transforming monad stacks, adding or computing monadic features at whim, to introduce wide-ranging effects to a program with a few small, type-safe changes. Unfortunately, Yesod does not support monad transformers - its basic `HandlerFor` and `WidgetFor` monads are woven into the server code, and won't allow for other monads to stack on top.
+
+  However, a `mtl`-style approach can be done for Yesod - the secret is, rather than transforming Yesod's `HandlerFor` and `WidgetFor` monads, to *transform the foundation site itself*. The result is `ytl` - the Yesod transfomer library, which exports a similar API to `mtl`, but in terms of site transformers.
+
+  A site transformer wraps a Yesod foundation site in additional information. Yesod's code is fine with custom foundation types, so the wrapped site can be used in Yesod code as normal - giving additional effects to existing Yesod code for "free".
+
+  ## An example
+
+  The `ReaderSite` transformer adds additional data to a site, similar to how `ReaderT` adds data to a monad stack. The data accessible by `ReaderSite` can be accessed through a `MonadReader`-style API in Yesod's `HandlerFor` and `WidgetFor` monads - like this:
+
+  ```haskell
+  useValue
+    :: (SiteReader r site)
+    => HandlerFor site a
+    -> (r -> m site b)
+    -> HandlerFor site (a, b)
+  useValue mArg f = do
+    a <- mArg
+    r <- ask
+    b <- f r
+    pure (a, b)
+  ```
+
+  ## Writing your own transformers
+
+  Writing your own `ytl` site transformers is relatively simple. Define your site wrapper, and some class for its API - in the above example, `ReaderSite` is the wrapper, and `SiteReader` is the API class.
+
+  Implement the class for the wrapper (duh!). Then, to interact nicely with the other transformers, you'll want to define a lifting instance, which lifts the API implementation through any transformer layers. For `ReaderSite`, this looks like
+  ```haskell
+  instance {-# OVERLAPPABLE #-}
+    (SiteTrans t, SiteReader r site) => SiteReader r (t site) where
+    ...
+  ```
+
+  ### Implement `RenderRoute`, and maybe `Yesod`
+
+  You'll also need to implement `RenderRoute` for your wrapped site type - make sure to make the route type coercible to the route type of the base site, because `ytl` relies on them being representation-identical (see `SiteCompatible`)! This is normally fine, because you don't want to modify the routes anyways.
+
+  If your site transformer changes some `Yesod` behaviour - like logging, middleware, etc. - you need to also implement `Yesod` for your wrapped site type. `ytl` comes with some Template Haskell helpers for writing `Yesod` implementations that pass through to the base site most of the time; so if you just want to override how logging works, you can ignore the other `Yesod` methods and they'll be implemented for you.
+
+  ### Why isn't my translation of this mtl type working?
+
+  Remember that, in Yesod's handlers and widgets, the site is in *reader* position - it gets passed into Yesod functions. That means that the site type is basically contravariant (as evidenced by `withSiteT`) - so `HandlerFor` and `WidgetFor` are an awful lot like profunctors. That means that you can't translate `mtl`-style code directly - you have to consider the difference in data flow.
+
+  For example, `ReaderSite` is not an exact copy of `ReaderT`: `ReaderT` takes the read value as an argument:
+  ```
+  data ReaderT m a = ReaderT (r -> m a)
+  ```
+  But for Yesod, the site is already in reader position - taking `r` as an argument wouldn't have the right semantics. Instead, `ReaderSite` includes `r` *alongside* the site:
+  ```
+  data ReaderSite r site = ReaderSite r site
+  ```
+  That looks very different. However, they end up being very similar in use:
+  ```haskell
+  runReaderT :: ReaderT r m a -> r -> m a
+
+  runReaderSite :: HandlerFor (ReaderSite r site) a -> r -> HandlerFor site a
+  ```
+license-name: BSD-3-Clause
