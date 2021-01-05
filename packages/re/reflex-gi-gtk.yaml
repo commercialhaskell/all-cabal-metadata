@@ -1,35 +1,154 @@
 homepage: https://gitlab.com/Kritzefitz/reflex-gi-gtk#readme
-changelog-type: ''
-hash: a8c3aab9c6fc9f243d4178be12ee95f0b14d6644a80b35d48f19fb57b0724d14
+changelog-type: markdown
+hash: 9dbc367375c608855aef218dbfa9de84394d0b412a360284352d74d7b81e807b
 test-bench-deps: {}
 maintainer: sven.bartscher@weltraumschlangen.de
-synopsis: Helper functions to use Reflex with gi-gtk
-changelog: ''
+synopsis: Helper functions to use reflex with gi-gtk
+changelog: |
+  # 0.2.0.0
+
+  * Initial release
 basic-deps:
   haskell-gi-base: '>=0.24.5 && <0.25'
-  semialign: ==1.1.*
-  these: '>=1.1.1 && <1.2'
+  semialign: ^>=1.1
+  these: ^>=1.1.1
   dependent-sum: '>=0.7.1 && <0.8'
-  stm: ==2.5.*
-  exception-transformers: ==0.4.*
-  base: '>=4.7 && <5'
+  witherable: ^>=0.3.5
+  stm: ^>=2.5
+  exception-transformers: ^>=0.4
+  base: ==4.13.*
   text: '>=1.2.4 && <1.3'
-  gi-glib: ==2.*
-  gi-gtk: ==3.*
-  gi-gdk: ==3.*
-  patch: ==0.0.*
-  async: '>=2.2.2 && <2.3'
-  ref-tf: ==0.4.*
+  gi-glib: ^>=2.0
+  gi-gtk: ==3.0.*
+  gi-gdk: ^>=3.0
+  patch: ^>=0.0
+  async: ^>=2.2.2
+  ref-tf: ^>=0.4
   reflex-gi-gtk: -any
   containers: '>=0.6.2 && <0.7'
   mtl: '>=2.2.2 && <2.3'
   reflex: ==0.8.*
-  primitive: ==0.7.*
+  primitive: ^>=0.7
 all-versions:
-- 0.1.0.0
+- 0.2.0.0
 author: Sven Bartscher
-latest: 0.1.0.0
+latest: 0.2.0.0
 description-type: markdown
 description: |
   # reflex-gi-gtk
+
+  This package provides the necessary plumbing to write reactive GUI
+  applications using GTK3+ (based on
+  [gi-gtk](https://hackage.haskell.org/package/gi-gtk/)) and
+  [reflex](https://hackage.haskell.org/package/reflex/).
+
+  While this packes should make working with gi-gtk and reflex together
+  much easier than using them together without any kind of glue code, it
+  doesn't provide a lot of abstraction on top of either GTK or
+  reflex. People familiar with both gi-gtk and reflex separately should
+  have no trouble using reflex-gi-gtk successfully to build awesome
+  applications.
+
+  ## Installation
+
+  The package can be compiled with [stack](https://haskellstack.org/)
+  using the shipped `stack.yaml` as follows:
+
+  ```Shell
+  $ stack install
+  ```
+
+  The build process has mostly been tested using stack, but it should
+  also work using [cabal-install](https://www.haskell.org/cabal/) or
+  other standard `Cabal`-based package managers.
+
+  ## Quick start
+
+  To start writing your reactive GUI application using reflex-gi-gtk, you will farst want to start the reactive part of your application using `runReflexGtk`, something like this:
+
+  ```Haskell
+  {-# LANGUAGE OverloadedStrings, OverloadedLabels, FlexibleContexts #-}
+
+  import Control.Applicative (liftA2)
+  import GI.Gtk hiding (main)
+  import Reflex.GI.Gtk
+  import System.Environment
+  import System.Exit
+
+  main :: IO ()
+  main = do
+    argv <- (:) <$> getProgName <*> getArgs
+    Just gtkApplication <- applicationNew (Just "org.example.MyAwesomeApp") []
+    rc <- runReflexGtk gtkApplication (Just argv) $ myReactiveCode gtkApplication
+    case rc of
+      0 -> exitSuccess
+      n -> exitWith $ ExitFailure $ fromIntegral n
+  ```
+
+  Inside the call to `runReflexGtk` you can assume that GTK has been
+  initialized and start creating GTK widgets:
+
+  ```Haskell
+  myReactiveCode :: (MonadReflexGtk t m) => Application -> m ()
+  myReactiveCode gtkApplication = do
+    window <- runGtk $ applicationWindowNew gtkApplication
+    box <- runGtk $ boxNew OrientationVertical 0
+    containerAdd window box
+    input1 <- runGtk entryNew
+    input2 <- runGtk entryNew
+    output <- runGtk $ labelNew Nothing
+    runGtk $ boxPackStart box input1 False False 0
+    runGtk $ boxPackStart box input2 False False 0
+    runGtk $ boxPackStart box output False False 0
+  ```
+
+  Note that we use `runGtk` to execute GTK functions instead of relying
+  on `liftIO`. This is because GTK functions are required to be run with
+  the correct thread local context. reflex-gi-gtk internally uses
+  multiple threads in a way that makes it hard to predict in which
+  thread a given piece of code will run. `runGtk` will ensure that the
+  lifted `IO` action is always run in the appropriate threading context
+  for GTK functions.
+
+  You can also start obtaining reactive inputs from widget signals:
+
+  ```Haskell
+    text1 <- dynamicOnSignal "" input1 #changed $ \fire -> labelGetText input1 >>= fire
+    text2 <- dynamicOnAttribute input2 #text
+  ```
+
+  This creates to `Dynamic`s containing texts. `text1` is constructed
+  based on the `#changed` event of the first input `Entry` while `text2`
+  is bound to the attribute `#text` of `input2`, but overall the effect
+  will be the same. Both `text1` and `text2` will always contain the
+  text entered into their respective input `Entry`.
+
+  Once we have obtained reactive inputs, we can of course manipulate
+  them just as any other reactive values:
+
+  ```Haskell
+    let combinedText = liftA2 (<>) text1 text2
+  ```
+
+  In the end, we can also render dynamic values to attributes of GTK
+  widgets:
+
+  ```Haskell
+    sink output [#label :== combinedText]
+  ```
+
+  Don't forget to call `widgetShowAll` on your window at an appropriate
+  time:
+
+  ```Haskell
+    _ <- gtkApplication `on` #activate $ widgetShowAll window
+    pure ()
+  ```
+
+  When you compile and run your program above, you should see your two
+  input boxes and the appropriate, dynamically updated output label.
+
+  This is of course a very basic example. For more information you can
+  look at a more elaborate example in the `example` directory or at the
+  haddock documentation on hackage.
 license-name: MPL-2.0
