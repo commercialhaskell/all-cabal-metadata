@@ -1,6 +1,6 @@
 homepage: https://github.com/zsedem/haskell-cpython
 changelog-type: markdown
-hash: a2f8ca273062063bee1e5a8f80607c69bd51eda665e5c4e24bee6085faa52db6
+hash: fb15b6778a14671d9bd2c7c76d24ca8ca08e206381e6b7770efae75ab1e0ff6c
 test-bench-deps:
   base: '>4.0 && <5.0'
   text: -any
@@ -8,6 +8,11 @@ test-bench-deps:
 maintainer: Adam Zsigmond <zsedem@gmail.com>
 synopsis: Bindings for libpython
 changelog: |
+  # 3.5.1
+
+  * add new API for simple usage (See readme for details)
+  * improve hackage page
+
   # 3.5.0
 
   * made the compilation compatible with different python3 versions
@@ -31,11 +36,87 @@ all-versions:
 - 3.3.1
 - 3.4.0
 - 3.5.0
+- 3.5.1
 author: John Millikin <jmillikin@gmail.com>
-latest: 3.5.0
-description-type: haddock
-description: |-
-  These bindings allow Haskell code to call CPython code. It is not
-  currently possible to call Haskell code from CPython, but this feature
-  is planned.
+latest: 3.5.1
+description-type: markdown
+description: "# Haskell CPython C bindings [![Build Status](https://travis-ci.org/zsedem/haskell-cpython.svg?branch=main)](https://travis-ci.org/zsedem/haskell-cpython)\n\nThis
+  library provides C bindings to more or less all of the python3 C API.\n\n> WARNING:
+  Note that the python 3 C API might be quite stable, BUT the [ABI](https://docs.python.org/3/c-api/stable.html)
+  is not, which\nmeans if you compiled with a certain minor version (3.7.1) you should
+  run your program\nwith the same minor version (3.7.x). (Using docker or nix to package
+  your program is enough\nto avoid this problem)\n\n## Writing a Haskell wrapper over
+  a Python module\n\nThe easiest way to get started is to `import CPython.Simple`\n\nThe
+  `Simple` API surface is fairly small, so if you're doing something fancy you may
+  need to dip into other parts of `CPython`\n\n### General Info\n\n`initialize ::
+  IO ()` kicks off talking to Python, and will need to be called before using other
+  functions.\n\nThe `ToPy` and `FromPy` instances are what let us convert Haskell
+  values to and from the corresponding Python values. There are `easyToPy` and `easyFromPy`
+  helpers to help you easily write your own instances in common cases. If you find
+  an instance for some common Haskell type is missing, please submit a PR!\n\n`Arg`
+  is a type representing an argument to a Python function, which lets us use various
+  Haskell types in the same list of arguments.\n\n```haskell\nsampleArgs :: [Arg]\nsampleArgs
+  =\n  [ arg (7 :: Integer)\n  , arg (\"hello\" :: Text)\n  ]\n```\n\n### Calling
+  Functions\n\nThe most common use case is to call some Python function, which we
+  can do with `call`\n\n```haskell\ncall\n  :: FromPy a\n  => Text -- ^ module name\n
+  \ -> Text -- ^ function name\n  -> [Arg] -- ^ args\n  -> [(Text, Arg)] -- ^ keyword
+  args\n  -> IO a\n```\n\nFor example, if we wanted to wrap Python's `random.randint(low,
+  high)`, we could write this:\n\n```haskell\nrandint :: Integer -> Integer -> IO
+  Integer\nrandint low high =\n  call \"random\" \"randint\" [arg low, arg high] []\n```\n\nBecause
+  of the `FromPy` instance in `call`'s type signature, we can infer what to do to
+  convert a Python value back into Haskell, if given the type\n\n```haskell\nuniform
+  :: Integer -> Integer -> IO Double\nuniform low high =\n  call \"random\" \"uniform\"
+  [arg low, arg high] []\n```\n\nWe can also use the `TypeApplications` language extension
+  to do this, if needed\n\n```haskell\ncall @Double \"random\" \"uniform\" [arg low,
+  arg high] []\n```\n\nCalling a function with mixed positional and keyword arguments
+  is also fairly straightforward:\n\n```haskell\nmoveToDuration :: Integer -> Integer
+  -> Double -> IO ()\nmoveToDuration x y seconds =\n  call \"pyautogui\" \"moveTo\"
+  [arg x, arg y] [(\"duration\", arg seconds)]\n```\n\n### Getting and Setting Attributes\n\n`getAttribute`
+  lets us get the value of an attribute of some Python module\n\n```haskell\ngetAttribute\n
+  \ :: FromPy a\n  => Text -- ^ module name\n  -> Text -- ^ attribute name\n  -> IO
+  a\n```\n\nHere, we get the value of `random.BPF`\n\n```haskell\ngetBpf :: IO Integer\ngetBpf
+  = getAttribute \"random\" \"BPF\"\n```\n\nLikewise, `setAttribute` lets us set the
+  value of an attribute\n\n```haskell\nsetAttribute\n  :: ToPy a\n  => Text -- ^ module
+  name\n  -> Text -- ^ attribute name\n  -> a -- ^ value to set attribute to\n  ->
+  IO ()\n```\n\nHere's how we can set `random.BPF` to some given number `n`\n\n```haskell\nsetBpf
+  :: Integer -> IO ()\nsetBpf n = setAttribute \"random\" \"BPF\" n\n```\n\n## Using
+  the Low Level API\n\nSometimes it might be useful to use the less simpler API, especially
+  if you are\nalready familiar with the [CPython C API](https://docs.python.org/3/c-api/index.html).\nThis
+  API comes with one-on-one connections between the C API methods and the Haskell
+  methods,\nbut you won't have to write FFI code directly (like calling incref/decref
+  for Python GC).\n\nAfter you are familiar with the concepts from the C API, you
+  can search for\nmethods in the [API docs](http://hackage.haskell.org/package/cpython-3.5.0)
+  on hackage\n\nThese examples below should help you start with using the API, by
+  showing the \nequivalent haskell code to implement the same as the python example.\n\n###
+  Using `builtins.sum` function\n```haskell\nsumWithPy :: [Integer] -> IO Int\nsumWithPy
+  intlist = do\n    testList <- traverse toObj intlist >>= PyList.toList >>= (return
+  . Py.toObject)\n    builtinsModule <- Py.importModule \"builtins\"\n    sumFunc
+  <- PyUnicode.toUnicode \"sum\" >>= Py.getAttribute builtinsModule\n    args <- PyTuple.toTuple
+  [testList]\n    kwargs <- PyDict.new\n    Py.call sumFunc args kwargs >>= castToNumber
+  >>= Py.toInteger >>= PyInt.fromInteger\n  where\n    castToNumber obj = do x <-
+  Py.castToNumber obj\n                          return $ fromMaybe (error \"not a
+  number returned from the sum\") x\n    toObj integer = fmap Py.toObject $ PyInt.toInteger
+  integer\n```\nThis example should show you how different it is to call python from
+  strongly typed code, because you have to\nhandle every bit of the errors, like getting
+  an attribute of a module or just creating new python objects.\n\n```python\nintlist
+  = [1, 10, 100, 42]\nsum(intlist)\n```\n### Printing traceback from python\nThis
+  example is an approach to handle python exceptions, like python would do it, so
+  if an exception comes, we print a traceback\n```haskell\n{-# LANGUAGE OverloadedStrings
+  #-}\nmodule Main\n  ( main ) where\n\nimport qualified CPython as Py\nimport qualified
+  CPython.Types.Module as Py\nimport qualified CPython.Types.Dictionary as PyDict\nimport
+  qualified CPython.Types.List as PyList\nimport qualified CPython.Types.Tuple as
+  PyTuple\nimport qualified CPython.Types.Unicode as PyUnicode\nimport qualified CPython.Types.Exception
+  as PyExc\nimport Data.Text()\nimport Control.Exception(handle)\n\nmain :: IO ()\nmain
+  = handle pyExceptionHandler $ do\n  Py.initialize\n  callingSomePython\n  Py.finalize\n
+  \ where\n    pyExceptionHandler :: PyExc.Exception -> IO ()\n    pyExceptionHandler
+  exception = handle pyExceptionHandlerWithoutPythonTraceback $ do\n        tracebackModule
+  <- Py.importModule \"traceback\"\n        print_exc <- PyUnicode.toUnicode \"print_exception\"
+  >>= Py.getAttribute tracebackModule\n        kwargs <- PyDict.new\n        args
+  <- case PyExc.exceptionTraceback exception of\n          Just tb -> PyTuple.toTuple
+  [PyExc.exceptionType exception, PyExc.exceptionValue exception, tb]\n          _
+  -> PyTuple.toTuple [PyExc.exceptionType exception, PyExc.exceptionValue exception]\n
+  \       _ <- Py.call print_exc args kwargs\n        return ()\n    pyExceptionHandlerWithoutPythonTraceback
+  :: PyExc.Exception -> IO ()\n    pyExceptionHandlerWithoutPythonTraceback exception
+  = do\n        print exception\n        putStrLn \"Unexpected Python exception (Please
+  report a bug)\"\n\ncallingSomePython :: IO ()\ncallingSomePython = do ...\n```\n"
 license-name: GPL-3.0-only
