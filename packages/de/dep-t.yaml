@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: e62894482bbceea2afb67d57867ac169f871b4eadbefa1d4a78b6774222620e9
+hash: 1b2e8b2873cca51375fae2df29d338b2908b4e52b7f80d6eaa55bac5a677e262
 test-bench-deps:
   rank2classes: ^>=1.4.1
   base: '>=4.10.0.0 && <5'
@@ -13,9 +13,10 @@ test-bench-deps:
   template-haskell: -any
 maintainer: diaz_carrete@yahoo.com
 synopsis: Reader-like monad transformer for dependency injection.
-changelog: "# Revision history for dep-t\r\n\r\n## 0.1.0.2 \r\n\r\n* Minor documentation
-  changes.\r\n\r\n## 0.1.0.1 \r\n\r\n* Minor documentation changes.\r\n\r\n## 0.1.0.0
-  -- YYYY-mm-dd\r\n\r\n* First version. Released on an unsuspecting world.\r\n"
+changelog: "# Revision history for dep-t\r\n\r\n## 0.1.1.0\r\n\r\n* Added NilEnv.\r\n\r\n##
+  0.1.0.2 \r\n\r\n* Minor documentation changes.\r\n\r\n## 0.1.0.1 \r\n\r\n* Minor
+  documentation changes.\r\n\r\n## 0.1.0.0 -- YYYY-mm-dd\r\n\r\n* First version. Released
+  on an unsuspecting world.\r\n"
 basic-deps:
   base: '>=4.10.0.0 && <5'
   unliftio-core: ^>=0.2.0.0
@@ -25,118 +26,139 @@ all-versions:
 - 0.1.0.0
 - 0.1.0.1
 - 0.1.0.2
+- 0.1.1.0
 author: Daniel Diaz
-latest: 0.1.0.2
+latest: 0.1.1.0
 description-type: markdown
-description: "# dep-t\n\n`DepT` is a\n[ReaderT](http://hackage.haskell.org/package/mtl-2.2.2/docs/Control-Monad-Reader.html)-like\nmonad
-  transformer for dependency injection.\n\nThe difference with `ReaderT` is that `DepT`
-  takes an enviroment whose type is\nparameterized by `DepT` itself.\n\n## Rationale\n\nTo
-  achieve dependency injection in Haskell, a common solution is to build a\nrecord
-  of functions and pass it to the program logic using some variant of\n[`ReaderT`](http://hackage.haskell.org/package/mtl-2.2.2/docs/Control-Monad-Reader.html).\n\nLet's
-  start by defining some auxiliary typeclasses to extract functions from an\nenvironment
-  record:\n\n    type HasLogger :: Type -> (Type -> Type) -> Constraint\n    class
-  HasLogger r m | r -> m where\n      logger :: r -> String -> m ()\n\n    type HasRepository
-  :: Type -> (Type -> Type) -> Constraint\n    class HasRepository r m | r -> m where\n
-  \     repository :: r -> Int -> m ()\n\nWe see that the type of the record determines
-  the monad in which the effects take place.\n\nLet's define a monomorphic record
-  with effects in `IO`:\n\n    type EnvIO :: Type\n    data EnvIO = EnvIO\n      {
-  _loggerIO :: String -> IO (),\n        _repositoryIO :: Int -> IO ()\n      }\n\n
-  \   instance HasLogger EnvIO IO where\n      logger = _loggerIO\n\n    instance
-  HasRepository EnvIO IO where\n      repository = _repositoryIO\n\nRecord-of-functions-in-IO
-  is a simple technique which works well in many\nsituations. There are even [specialized\nlibraries](http://hackage.haskell.org/package/rio)
-  that support it.\n\nHere's a function which obtains its dependencies from the environment
-  record:\n\n    mkControllerIO :: (HasLogger e IO, HasRepository e IO) => Int ->
-  ReaderT e IO String\n    mkControllerIO x = do\n      e <- ask\n      liftIO $ logger
-  e \"I'm going to insert in the db!\"\n      liftIO $ repository e x\n      return
-  \"view\"\n\nThat's all and well, but there are two issues that bug me:\n\n- What
-  if the repository function needs access to the logger, too? The\n  repository lives
-  in the environment record, but isn't aware of it. That means\n  it can't use the
-  `HasLogger` typeclass for easy and convenient dependency\n  injection. Why privilege
-  the controller in such a way?\n\n  In a sufficiently complex app, the diverse functions
-  that comprise it will be\n  organized in a big\n  [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
-  of dependencies.\n  And it would be nice if all the functions taking part in dependency
-  injection\n  were treated uniformly; if all of them had access to (some view of)
-  the\n  environment record.\n\n- We might want to write code that is innocent of
-  `IO` and polymorphic over the\n  monad, to ensure that the program logic can't do
-  some unexpected missile\n  launch, or to allow testing our app in a \"pure\" way.
-  \n\nLet's parameterize our environment by a monad: \n\n    type Env :: (Type ->
-  Type) -> Type\n    data Env m = Env\n      { _logger :: String -> m (),\n        _repository
-  :: Int -> m (),\n        _controller :: Int -> m String\n      }\n    -- helper
-  from the \"rank2classes\" package\n    $(Rank2.TH.deriveFunctor ''Env)\n\n    instance
-  HasLogger (Env m) m where\n      logger = _logger\n\n    instance HasRepository
-  (Env m) m where\n      repository = _repository\n\nNotice that the controller function
-  is now part of the environment. No\nfavorites here!\n\nThe following implementation
-  of the logger function has no dependencies besides\n`MonadIO`:\n\n    mkStdoutLogger
-  :: MonadIO m => String -> m ()\n    mkStdoutLogger msg = liftIO (putStrLn msg)\n\nBut
-  look at this implementation of the repository function. It gets hold of the\nlogger
-  through `HasLogger`:\n\n    mkStdoutRepository :: (MonadReader e m, HasLogger e
-  m, MonadIO m) => Int -> m ()\n    mkStdoutRepository entity = do\n      e <- ask\n
-  \     logger e \"I'm going to write the entity!\"\n      liftIO $ print entity\n\nAnd
-  here's the controller:\n\n    mkController :: (MonadReader e m, HasLogger e m, HasRepository
-  e m) => Int -> m String\n    mkController x = do\n      e <- ask\n      logger e
-  \"I'm going to insert in the db!\"\n      repository e x\n      return \"view\"\n\nNow,
-  lets choose `IO` as the base monad and assemble an environment record:\n\n    envIO
-  :: Env (DepT Env IO)\n    envIO =\n      let _logger = mkStdoutLogger\n          _repository
-  = mkStdoutRepository\n          _controller = mkController\n       in Env {_logger,
-  \ _repository, _controller}\n\nNot very complicated, except... what is that weird
-  `DepT Env IO` doing there in\nthe signature? \n\nWell, that's the whole reason this
-  library exists. Trying to use a `ReaderT\n(Env something) IO` to parameterize `Env`
-  won't fly; you'll get weird \"infinite\ntype\" kind of errors because the `Env`
-  needs to be parameterized with the monad\nthat provides the `Env` environment. So
-  I created the `DepT` newtype over\n`ReaderT` to mollify the compiler.\n\n## How
-  to embed environments into other environments?\n\nSometimes it might be convenient
-  to nest an environment into another one,\nbasically making it a field of the bigger
-  environment:\n\n    type BiggerEnv :: (Type -> Type) -> Type\n    data BiggerEnv
-  m = BiggerEnv\n      { _inner :: Env m,\n        _extra :: Int -> m Int\n      }\n
-  \   $(Rank2.TH.deriveFunctor ''BiggerEnv)\n\nWhen constructing the bigger environment,
-  we have to tweak the monad parameter\nof the smaller one, to make the types match.
-  This can be done with the\n`zoomEnv` function:\n\n    biggerEnvIO :: BiggerEnv (DepT
-  BiggerEnv IO)\n    biggerEnvIO =\n      let _inner' = zoomEnv (Rank2.<$>) _inner
-  envIO\n          _extra = pure\n       in BiggerEnv {_inner = _inner', _extra}\n\nWe
-  need to pass as the first parameter of `zoomEnv` a function that tweaks the\nmonad
-  parameter of `Env` using a natural transformation. We can write such a\nfunction
-  ourselves, but here we are using the function generated for us by the\n[rank2classes\nTH](http://hackage.haskell.org/package/rank2classes-1.4.1/docs/Rank2-TH.html#v:deriveFunctor).\n\n##
-  How to use \"pure fakes\" during testing?\n\nThe [test suite](./test/tests.hs) has
-  an example of using a `Writer` monad for\ncollecting the outputs of functions working
-  as [\"test\ndoubles\"](https://martinfowler.com/bliki/TestDouble.html).\n\n## How
-  to avoid using \"ask\" or \"asks\" before invoking a dependency?\n\nOne possible
-  workaround (at the cost of more boilerplate) is to define helper\nfunctions like:
-  \ \n\n    logger' :: (MonadReader e m, HasLogger e m) => String -> m ()\n    logger'
-  msg = asks logger >>= \\f -> f msg\n\nWhich you can invoke like this:\n\n    mkController
-  x = do\n      logger' \"I'm going to insert in the db!\"\n\nI'm not sure it's worth
-  the hassle.\n\n## How to instrument functions in the environment?\n\nOnce we have
-  commited to a concrete monad and constructed our\nrecord-of-functions, we might
-  indulge in a bit of low-calorie\naspect-oriented-programming.\n\nFor example, imagine
-  we want a generic way of adding logging of function\nparameters to any function
-  in the environment, provided the environment already\ncontains a logging function.\n\nWe
-  can write the following typeclass:\n\n    class Instrumentable e m r | r -> e m
-  where\n      instrument ::\n        ( forall x.\n          HasLogger (e (DepT e
-  m)) (DepT e m) =>\n          [String] ->\n          DepT e m x ->\n          DepT
-  e m x\n        ) ->\n        r ->\n        r\n\nWhich means \"if you tell me how
-  to transform a terminal `DepT` action, using\nthe list of preceding arguments, in
-  an environment that has as logger, then\nI'll be able to transform any function
-  which ends in `DepT`\".\n\nThe terminal case is a `DepT` without preceding parameters:\n\n
-  \   instance HasLogger (e (DepT e m)) (DepT e m) => Instrumentable e m (DepT e m
-  x) where\n      instrument f d = f [] d\n\nThe recursive case handles functions
-  argument by argument:\n\n    instance (Instrumentable e m r, Show a) => Instrumentable
-  e m (a -> r) where\n      instrument f ar =\n        let instrument' = instrument
-  @e @m @r\n         in \\a -> instrument' (\\names d -> f (show a : names) d) (ar
-  a)\n\nHere's how to add logging advice to the controller function:\n\n    instrumentedEnv
-  :: Env (DepT Env (Writer TestTrace))\n    instrumentedEnv =\n       let loggingAdvice
-  args action = do\n                e <- ask\n                logger e $ \"advice
-  before \" ++ intercalate \",\" args\n                r <- action\n                logger
-  e $ \"advice after\"\n                pure r\n        in env { _controller = instrument
-  loggingAdvice (_controller env) }\n\n## Caveats\n\nThe structure of the `DepT` type
-  might be prone to trigger a [known infelicity\nof the GHC\nsimplifier](https://twitter.com/DiazCarrete/status/1350116413445439493).\n\n##
-  Links\n\n- This library was extracted from my answer to [this Stack Overflow\n  question](https://stackoverflow.com/a/61782258/1364288).\n\n-
-  The implementation of `mapDepT` was teased out in [this other SO question](https://stackoverflow.com/questions/65710657/writing-a-zooming-function-for-a-readert-like-monad-transformer).\n\n-
-  An [SO\n  answer](https://stackoverflow.com/questions/57703898/how-to-call-impure-functions-from-pure-ones/57714058#57714058)\n
-  \ about records-of-functions and the \"veil of polymorphism\".\n\n- I'm unsure of
-  the relationship between `DepT` and the technique described in\n  [Adventures assembling
-  records of\n  capabilities](https://discourse.haskell.org/t/adventures-assembling-records-of-capabilities/623).
-  \n\n  It seems that, with `DepT`, functions in the environment obtain their\n  dependencies
-  anew every time they are invoked. If we change a function in the\n  environment
-  record, all other functions which depend on it will be affected\n  in subsequent
-  invocations. I don't think this happens with \"Adventures...\" at\n  least when
-  changing an already \"assembled\" record.\n\n"
+description: "# dep-t\r\n\r\n`DepT` is a\r\n[ReaderT](http://hackage.haskell.org/package/mtl-2.2.2/docs/Control-Monad-Reader.html)-like\r\nmonad
+  transformer for dependency injection.\r\n\r\nThe difference with `ReaderT` is that
+  `DepT` takes an enviroment whose type is\r\nparameterized by `DepT` itself.\r\n\r\n##
+  Rationale\r\n\r\nTo achieve dependency injection in Haskell, a common solution is
+  to build a\r\nrecord of functions and pass it to the program logic using some variant
+  of\r\n[`ReaderT`](http://hackage.haskell.org/package/mtl-2.2.2/docs/Control-Monad-Reader.html).\r\n\r\nLet's
+  start by defining some auxiliary typeclasses to extract functions from an\r\nenvironment
+  record:\r\n\r\n    type HasLogger :: Type -> (Type -> Type) -> Constraint\r\n    class
+  HasLogger r m | r -> m where\r\n      logger :: r -> String -> m ()\r\n\r\n    type
+  HasRepository :: Type -> (Type -> Type) -> Constraint\r\n    class HasRepository
+  r m | r -> m where\r\n      repository :: r -> Int -> m ()\r\n\r\nWe see that the
+  type of the record determines the monad in which the effects take place.\r\n\r\nLet's
+  define a monomorphic record with effects in `IO`:\r\n\r\n    type EnvIO :: Type\r\n
+  \   data EnvIO = EnvIO\r\n      { _loggerIO :: String -> IO (),\r\n        _repositoryIO
+  :: Int -> IO ()\r\n      }\r\n\r\n    instance HasLogger EnvIO IO where\r\n      logger
+  = _loggerIO\r\n\r\n    instance HasRepository EnvIO IO where\r\n      repository
+  = _repositoryIO\r\n\r\nRecord-of-functions-in-IO is a simple technique which works
+  well in many\r\nsituations. There are even [specialized\r\nlibraries](http://hackage.haskell.org/package/rio)
+  that support it.\r\n\r\nHere's a function which obtains its dependencies from the
+  environment record:\r\n\r\n    mkControllerIO :: (HasLogger e IO, HasRepository
+  e IO) => Int -> ReaderT e IO String\r\n    mkControllerIO x = do\r\n      e <- ask\r\n
+  \     liftIO $ logger e \"I'm going to insert in the db!\"\r\n      liftIO $ repository
+  e x\r\n      return \"view\"\r\n\r\nThat's all and well, but there are two issues
+  that bug me:\r\n\r\n- What if the repository function needs access to the logger,
+  too? The\r\n  repository lives in the environment record, but isn't aware of it.
+  That means\r\n  it can't use the `HasLogger` typeclass for easy and convenient dependency\r\n
+  \ injection. Why privilege the controller in such a way?\r\n\r\n  In a sufficiently
+  complex app, the diverse functions that comprise it will be\r\n  organized in a
+  big\r\n  [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph) of dependencies.\r\n
+  \ And it would be nice if all the functions taking part in dependency injection\r\n
+  \ were treated uniformly; if all of them had access to (some view of) the\r\n  environment
+  record.\r\n\r\n- We might want to write code that is innocent of `IO` and polymorphic
+  over the\r\n  monad, to ensure that the program logic can't do some unexpected missile\r\n
+  \ launch, or to allow testing our app in a \"pure\" way. \r\n\r\nLet's parameterize
+  our environment by a monad: \r\n\r\n    type Env :: (Type -> Type) -> Type\r\n    data
+  Env m = Env\r\n      { _logger :: String -> m (),\r\n        _repository :: Int
+  -> m (),\r\n        _controller :: Int -> m String\r\n      }\r\n    -- helper from
+  the \"rank2classes\" package\r\n    $(Rank2.TH.deriveFunctor ''Env)\r\n\r\n    instance
+  HasLogger (Env m) m where\r\n      logger = _logger\r\n\r\n    instance HasRepository
+  (Env m) m where\r\n      repository = _repository\r\n\r\nNotice that the controller
+  function is now part of the environment. No\r\nfavorites here!\r\n\r\nThe following
+  implementation of the logger function has no dependencies besides\r\n`MonadIO`:\r\n\r\n
+  \   mkStdoutLogger :: MonadIO m => String -> m ()\r\n    mkStdoutLogger msg = liftIO
+  (putStrLn msg)\r\n\r\nBut look at this implementation of the repository function.
+  It gets hold of the\r\nlogger through `HasLogger`:\r\n\r\n    mkStdoutRepository
+  :: (MonadReader e m, HasLogger e m, MonadIO m) => Int -> m ()\r\n    mkStdoutRepository
+  entity = do\r\n      e <- ask\r\n      logger e \"I'm going to write the entity!\"\r\n
+  \     liftIO $ print entity\r\n\r\nAnd here's the controller:\r\n\r\n    mkController
+  :: (MonadReader e m, HasLogger e m, HasRepository e m) => Int -> m String\r\n    mkController
+  x = do\r\n      e <- ask\r\n      logger e \"I'm going to insert in the db!\"\r\n
+  \     repository e x\r\n      return \"view\"\r\n\r\nNow, lets choose `IO` as the
+  base monad and assemble an environment record:\r\n\r\n    envIO :: Env (DepT Env
+  IO)\r\n    envIO =\r\n      let _logger = mkStdoutLogger\r\n          _repository
+  = mkStdoutRepository\r\n          _controller = mkController\r\n       in Env {_logger,
+  \ _repository, _controller}\r\n\r\nNot very complicated, except... what is that
+  weird `DepT Env IO` doing there in\r\nthe signature? \r\n\r\nWell, that's the whole
+  reason this library exists. Trying to use a `ReaderT\r\n(Env something) IO` to parameterize
+  `Env` won't fly; you'll get weird \"infinite\r\ntype\" kind of errors because the
+  `Env` needs to be parameterized with the monad\r\nthat provides the `Env` environment.
+  So I created the `DepT` newtype over\r\n`ReaderT` to mollify the compiler.\r\n\r\n##
+  So how do we invoke the controller now?\r\n\r\nI suggest something like\r\n\r\n
+  \   runDepT (do e <- ask; _controller e 7) envIO \r\n\r\n## How to embed environments
+  into other environments?\r\n\r\nSometimes it might be convenient to [nest an environment
+  into another\r\none](https://stackoverflow.com/questions/43452644/what-is-the-difference-between-spring-parent-context-and-child-context),\r\nbasically
+  making it a field of the bigger environment:\r\n\r\n    type BiggerEnv :: (Type
+  -> Type) -> Type\r\n    data BiggerEnv m = BiggerEnv\r\n      { _inner :: Env m,\r\n
+  \       _extra :: Int -> m Int\r\n      }\r\n    $(Rank2.TH.deriveFunctor ''BiggerEnv)\r\n\r\nWhen
+  constructing the bigger environment, we have to tweak the monad parameter\r\nof
+  the smaller one, to make the types match. This can be done with the\r\n`zoomEnv`
+  function:\r\n\r\n    biggerEnvIO :: BiggerEnv (DepT BiggerEnv IO)\r\n    biggerEnvIO
+  =\r\n      let _inner' = zoomEnv (Rank2.<$>) _inner envIO\r\n          _extra =
+  pure\r\n       in BiggerEnv {_inner = _inner', _extra}\r\n\r\nWe need to pass as
+  the first parameter of `zoomEnv` a function that tweaks the\r\nmonad parameter of
+  `Env` using a natural transformation. We can write such a\r\nfunction ourselves,
+  but here we are using the function generated for us by the\r\n[rank2classes\r\nTH](http://hackage.haskell.org/package/rank2classes-1.4.1/docs/Rank2-TH.html#v:deriveFunctor).\r\n\r\n##
+  How to use \"pure fakes\" during testing?\r\n\r\nThe [test suite](./test/tests.hs)
+  has an example of using a `Writer` monad for\r\ncollecting the outputs of functions
+  working as [\"test\r\ndoubles\"](https://martinfowler.com/bliki/TestDouble.html).\r\n\r\n##
+  How to avoid using \"ask\" or \"asks\" before invoking a dependency?\r\n\r\nOne
+  possible workaround (at the cost of more boilerplate) is to define helper\r\nfunctions
+  like:  \r\n\r\n    logger' :: (MonadReader e m, HasLogger e m) => String -> m ()\r\n
+  \   logger' msg = asks logger >>= \\f -> f msg\r\n\r\nWhich you can invoke like
+  this:\r\n\r\n    mkController x = do\r\n      logger' \"I'm going to insert in the
+  db!\"\r\n\r\nI'm not sure it's worth the hassle.\r\n\r\n## How to instrument functions
+  in the environment?\r\n\r\nOnce we have commited to a concrete monad and constructed
+  our\r\nrecord-of-functions, we might indulge in a bit of low-calorie\r\naspect-oriented-programming.\r\n\r\nFor
+  example, imagine we want a generic way of adding logging of function\r\nparameters
+  to any function in the environment, provided the environment already\r\ncontains
+  a logging function.\r\n\r\nWe can write the following typeclass:\r\n\r\n    class
+  Instrumentable e m r | r -> e m where\r\n      instrument ::\r\n        ( forall
+  x.\r\n          HasLogger (e (DepT e m)) (DepT e m) =>\r\n          [String] ->\r\n
+  \         DepT e m x ->\r\n          DepT e m x\r\n        ) ->\r\n        r ->\r\n
+  \       r\r\n\r\nWhich means \"if you tell me how to transform a terminal `DepT`
+  action, using\r\nthe list of preceding arguments, in an environment that has as
+  logger, then\r\nI'll be able to transform any function which ends in `DepT`\".\r\n\r\nThe
+  terminal case is a `DepT` without preceding parameters:\r\n\r\n    instance HasLogger
+  (e (DepT e m)) (DepT e m) => Instrumentable e m (DepT e m x) where\r\n      instrument
+  f d = f [] d\r\n\r\nThe recursive case handles functions argument by argument:\r\n\r\n
+  \   instance (Instrumentable e m r, Show a) => Instrumentable e m (a -> r) where\r\n
+  \     instrument f ar =\r\n        let instrument' = instrument @e @m @r\r\n         in
+  \\a -> instrument' (\\names d -> f (show a : names) d) (ar a)\r\n\r\nHere's how
+  to add logging advice to the controller function:\r\n\r\n    instrumentedEnv ::
+  Env (DepT Env (Writer TestTrace))\r\n    instrumentedEnv =\r\n       let loggingAdvice
+  args action = do\r\n                e <- ask\r\n                logger e $ \"advice
+  before \" ++ intercalate \",\" args\r\n                r <- action\r\n                logger
+  e $ \"advice after\"\r\n                pure r\r\n        in env { _controller =
+  instrument loggingAdvice (_controller env) }\r\n\r\nMore complete advice support
+  can be found in the\r\n[dep-t-advice](http://hackage.haskell.org/package/dep-t-advice)
+  package.\r\n\r\n## Caveats\r\n\r\nThe structure of the `DepT` type might be prone
+  to trigger a [known infelicity\r\nof the GHC\r\nsimplifier](https://twitter.com/DiazCarrete/status/1350116413445439493).\r\n\r\n##
+  Links\r\n\r\n- This library was extracted from my answer to [this Stack Overflow\r\n
+  \ question](https://stackoverflow.com/a/61782258/1364288).\r\n\r\n- The implementation
+  of `mapDepT` was teased out in [this other SO question](https://stackoverflow.com/questions/65710657/writing-a-zooming-function-for-a-readert-like-monad-transformer).\r\n\r\n-
+  An [SO\r\n  answer](https://stackoverflow.com/questions/57703898/how-to-call-impure-functions-from-pure-ones/57714058#57714058)\r\n
+  \ about records-of-functions and the \"veil of polymorphism\".\r\n\r\n- The answers
+  to [this SO\r\n  question](https://stackoverflow.com/questions/61642492/simplifying-the-invocation-of-functions-stored-inside-an-readert-environment)\r\n
+  \ gave me the idea for how to \"instrument\" monadic functions (although the\r\n
+  \ original motive of the question was different).\r\n\r\n- I'm unsure of the relationship
+  between `DepT` and the technique described in\r\n  [Adventures assembling records
+  of\r\n  capabilities](https://discourse.haskell.org/t/adventures-assembling-records-of-capabilities/623).
+  \r\n\r\n  It seems that, with `DepT`, functions in the environment obtain their\r\n
+  \ dependencies anew every time they are invoked. If we change a function in the\r\n
+  \ environment record, all other functions which depend on it will be affected\r\n
+  \ in subsequent invocations. I don't think this happens with \"Adventures...\" at\r\n
+  \ least when changing an already \"assembled\" record.\r\n\r\n- [RIO](http://hackage.haskell.org/package/rio)
+  is a featureful ReaderT-like /\r\n  prelude replacement library which favors monomorphic
+  environments.\r\n\r\n- Another exploration of dependency injection with `ReaderT`:\r\n
+  \ [ReaderT-OpenProduct-Environment](https://github.com/keksnicoh/ReaderT-OpenProduct-Environment).\r\n\r\n-
+  [registry](http://hackage.haskell.org/package/registry) is a package that\r\n  implements
+  an alternative approach to dependency injection, one different\r\n  from the `ReaderT`-based
+  one. \r\n\r\n"
 license-name: BSD-3-Clause
