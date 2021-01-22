@@ -1,0 +1,72 @@
+homepage: https://github.com/YoshikuniJujo/typecheck-plugin-nat-simple#readme
+changelog-type: markdown
+hash: af0df5ee528805630f78088307889f29e7f0e96728c776db511e63b331351cb0
+test-bench-deps:
+  ghc: -any
+  typecheck-plugin-nat-simple: -any
+  base: '>=4.7 && <5'
+  containers: -any
+maintainer: yoshikuni.jujo.pc@gmail.com
+synopsis: Simple type check plugin which calculate addition, subtraction and less-or-equal-than
+changelog: |
+  # Changelog for typecheck-plugin-nat-simple
+
+  ## Unreleased changes
+basic-deps:
+  ghc: -any
+  base: '>=4.7 && <5'
+  containers: -any
+all-versions:
+- 0.1.0.0
+author: Yoshikuni Jujo
+latest: 0.1.0.0
+description-type: markdown
+description: "# typecheck-plugin-nat-simple\n\n## what's this\n\nThis package provide
+  plugin which extend type checking of Nat.\nThe type checker can calculate only addition,
+  subtraction and less or equal of\nconstants and variables.\n\n(View sample code
+  on directory sample/.)\n\n## motivation\n\nSuppose you need lengthed list. You define
+  like following.\n(View `sample/lengthed_tail.hs`)\n\n```haskell\nimport GHC.TypeNats\n\ninfixr
+  6 :.\n\ndata List :: Nat -> * -> * where\n        Nil :: List 0 a\n\t(:.) :: a ->
+  List ln a -> List (ln + 1) a\n```\n\nAnd you want to define function `tail`.\n\n```haskell\ntail_
+  :: List (n + 1) a -> List n a\ntail_ Nil = error \"tail_: Nil\"\ntail_ (_ :. xs)
+  = xs\n```\n\nBut it cause type check error.\n\n```\nerror:\n  ・Could not deduce:
+  ln ~ n\n    from the context: (n + 1) ~ (ln + 1)\n    ...\n```\n\nType checker say
+  \"I cannot derive (ln == n) from (n + 1 == ln + 1)\".\nBut it seems to be obvious.\nYou
+  can use this plugin like following.\n\n```haskell\n{-# OPTIONS_GHC -fplugin=Plugin.TypeCheck.Nat.Simple
+  #-}\n```\n\nAdd it to top of the code, then type check succeed.\n\n## more example\n\nTo
+  show more example, I will use Data.Proxy.Proxy.\nFirst examle is following (View
+  `sample/mplus1_nplus1.hs`).\n\n```haskell\nfoo :: (m + 1) ~ (n + 1) => Proxy m ->
+  Proxy n\nfoo = id\n```\n\nIf you don't use this plugin, then following error occur.\n\n```\n
+  \ ・Could not deduce: m ~ n\n    from the context: (m + 1) ~ (n + 1)\n    ...\n```\n\nUse
+  this plugin, you can compile it.\n\nSecond example is following (View `sample/two_equations.hs`).\n\n```haskell\nfoo
+  :: ((x + y) ~ z, (w - y) ~ v) => Proxy (x + w) -> Proxy (z + v)\nfoo = id\n```\n\nWithout
+  this plugin, following error occur.\n\n```\n  ・Could not deduce: (x + w) ~ (z +
+  v)\n    from the context: ((x + y) ~ z, (w - y) ~ v)\n    ...\n```\n\nUse this plugin,
+  you can compile it.\n\n## error and recovery\n\n### type check error\n\nSee following
+  code.\n\n```haskell\nfoo :: Proxy (n - 1 + 1) -> Proxy n\nfoo = id\n```\n\nThis
+  cause type check error even if you use this plugin.\n\n```\n  ・Couldn't match type
+  `n' with `(n - 1) + 1'\n  ...\n```\n\n### research\n\nWhat's wrong?\nYou can see
+  type check log of this plugin like following.\n\n```\n% stack ghc sample/minus1plus1.hs
+  -- -ddump-tc-trace 2>&1 | grep -A 20 'Plugin.TypeCheck.Nat.Simple'\n...\ngivens
+  ([Exp v 'Boolean]): given (Givens v): (Givens [])\nexBool: not boolean: (n_a1s2[sk:1]
+  - 1) + 1\nwanted (Exp v 'Boolean): ((((Var n_a1s2[sk:1]) :- (Const 1)) :+ (Const
+  1)) :== (Var n_a1s2[sk:1]))\nwanted (Wanted v): (Wanted [(0 == 0), (1 * n_a1s2[sk:1]
+  >= 0), (-1 + 1 * n_a1s2[sk:1] >= 0), (1 * n_a1s2[sk:1] >= 0)])\ncanDerive1: (0 ==
+  0) is self-contained\ncanDerive1: (1 * n_a1s2[sk:1] >= 0) is self-contained\ncanDerive1:
+  (-1 + 1 * n_a1s2[sk:1] >= 0) cannot be derived from\ncanDerive1: (1 * n_a1s2[sk:1]
+  >= 0) is self-contained\nresult: type checker: return False\n...\n```\n\nSee the
+  line of `canDerive1: (- 1 + 1 * n_a1s2[sk:1] >= 0) cannot be derived from`.\nIt
+  mean \"`-1 + n_a1s2[sk:1]` should be greater or equal than 0. But no such context\".\n\n###
+  try calculation more portably\n\nYou can try to caluculate more simply.\n\n```\n%
+  stack ghci\n> :set -XTypeApplications\n> :module Data.Derivation.Parse Data.Derivation.CanDerive
+  Control.Monad.Try Data.Maybe\n> parseConstraint \"n - 1 + 1 == n\"\nJust ((:==)
+  ((:+) ((:=) (Var \"n\") (Const 1)) (Const 1)) (Var \"n\"))\n> Just w = wanted @String
+  <$> it\n> gs = givens @String []\n> fst . runTry $ uncurry canDerive =<< (,) <$>
+  gs <*> w\nRight False\n```\n\nThe wanted constraint cannot be derived from empty
+  given constraint.\nLet's add `1 <= n` constraint.\n\n```\n> gs = given @String .
+  maybeToList $ parseConstraint \"1 <= n\"\n> fst . runTry $ uncurry canDerive =<<
+  (,) <$> gs <*> w\nRight True\n```\n\nOK! It succeed if you add `1 <= n` to given
+  constraint.\n\n### recovery\n\nLet's add `1 <= n` context like following.\n\n```haskell\nfoo
+  :: 1 <= n => Proxy (n - 1 + 1) -> Proxy n\nfoo = id\n```\n\nThen it succeed to type
+  check.\n"
+license-name: BSD-3-Clause
