@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: a37423d6271a9a4884888077734cf67ff17d0cde1bb658586719bbcde3295818
+hash: 6392f2561b0e08b5ead48c8530dd9e889c543bfe475263d62a47939ee3a84688
 test-bench-deps:
   rank2classes: '>=1.4.1 && <1.5'
   sop-core: ^>=0.5.0.0
@@ -36,28 +36,30 @@ all-versions:
 - 0.1.2.0
 - 0.1.3.0
 - 0.4.0.0
+- 0.4.0.1
 author: Daniel Diaz
-latest: 0.4.0.0
+latest: 0.4.0.1
 description-type: markdown
 description: "# dep-t\r\n\r\n`DepT` is a\r\n[ReaderT](http://hackage.haskell.org/package/mtl-2.2.2/docs/Control-Monad-Reader.html)-like\r\nmonad
   transformer for dependency injection.\r\n\r\nThe difference with `ReaderT` is that
   `DepT` takes an enviroment whose type is\r\nparameterized by `DepT` itself.\r\n\r\n##
-  Rationale\r\n\r\nTo achieve dependency injection in Haskell, a common solution is
+  Rationale\r\n\r\nTo perform dependency injection in Haskell, a common solution is
   to build a\r\nrecord of functions and pass it to the program logic using some variant
-  of\r\n[`ReaderT`](http://hackage.haskell.org/package/mtl-2.2.2/docs/Control-Monad-Reader.html).\r\n\r\nLet's
-  start by defining some auxiliary typeclasses to extract functions from an\r\nenvironment
-  record:\r\n\r\n    type HasLogger :: (Type -> Type) -> Type -> Constraint\r\n    class
-  HasLogger d e | e -> d where\r\n      logger :: e -> String -> d ()\r\n\r\n    type
-  HasRepository :: (Type -> Type) -> Type -> Constraint\r\n    class HasRepository
-  d e | e -> d where\r\n      repository :: e -> Int -> d ()\r\n\r\nWe see that the
-  type of the environment `e` determines the monad `d` on which\r\nthe effects take
-  place.\r\n\r\nLet's define a monomorphic record with effects in `IO`:\r\n\r\n    type
-  EnvIO :: Type\r\n    data EnvIO = EnvIO\r\n      { _loggerIO :: String -> IO (),\r\n
-  \       _repositoryIO :: Int -> IO ()\r\n      }\r\n\r\n    instance HasLogger IO
-  EnvIO where\r\n      logger = _loggerIO\r\n\r\n    instance HasRepository IO EnvIO
-  where\r\n      repository = _repositoryIO\r\n\r\nRecord-of-functions-in-IO is a
-  simple technique which works well in many\r\nsituations. There are even [specialized\r\nlibraries](http://hackage.haskell.org/package/rio)
-  that support it.\r\n\r\nHere's a function which obtains its dependencies from the
+  of\r\n[`ReaderT`](http://hackage.haskell.org/package/mtl-2.2.2/docs/Control-Monad-Reader.html).\r\n\r\nTo
+  avoid becoming tied to a concrete reader environment, let's define some\r\nauxiliary
+  typeclasses that extract functions from a generic environment:\r\n\r\n    type HasLogger
+  :: (Type -> Type) -> Type -> Constraint\r\n    class HasLogger d e | e -> d where\r\n
+  \     logger :: e -> String -> d ()\r\n\r\n    type HasRepository :: (Type -> Type)
+  -> Type -> Constraint\r\n    class HasRepository d e | e -> d where\r\n      repository
+  :: e -> Int -> d ()\r\n\r\nWe see that the type `e` of the environment determines
+  the monad `d` on which\r\nthe effects take place.\r\n\r\nHere's a monomorphic environment
+  record with functions that have effects in `IO`:\r\n\r\n    type EnvIO :: Type\r\n
+  \   data EnvIO = EnvIO\r\n      { _loggerIO :: String -> IO (),\r\n        _repositoryIO
+  :: Int -> IO ()\r\n      }\r\n\r\n    instance HasLogger IO EnvIO where\r\n      logger
+  = _loggerIO\r\n\r\n    instance HasRepository IO EnvIO where\r\n      repository
+  = _repositoryIO\r\n\r\nRecord-of-functions-in-IO is a simple technique which works
+  well in many\r\nsituations. There are even [specialized\r\nlibraries](http://hackage.haskell.org/package/rio)
+  that support it.\r\n\r\nHere's a function which can get its dependencies from the
   monomorphic\r\nenvironment:\r\n\r\n    mkControllerIO :: (HasLogger IO e, HasRepository
   IO e) => Int -> ReaderT e IO String\r\n    mkControllerIO x = do\r\n      e <- ask\r\n
   \     liftIO $ logger e \"I'm going to insert in the db!\"\r\n      liftIO $ repository
@@ -72,43 +74,51 @@ description: "# dep-t\r\n\r\n`DepT` is a\r\n[ReaderT](http://hackage.haskell.org
   comprise it will be\r\n  organized in a big\r\n  [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
   of dependencies.\r\n  And it would be nice if all the functions taking part in dependency
   injection\r\n  were treated uniformly; if all of them had access to (some view of)
-  the\r\n  environment record.\r\n\r\nTo tackle these issues, let's begin by writing
-  the controller in a more generic\r\nway:\r\n\r\n    mkController :: MonadDep [HasLogger,
-  HasRepository] d e m => Int -> m String\r\n    mkController x = do\r\n      e <-
-  ask\r\n      liftD $ logger e \"I'm going to insert in the db!\"\r\n      liftD
-  $ repository e x\r\n      return \"view\"\r\n\r\nThe signature has changed, and
-  we now use `liftD` instead of `liftIO`. But\r\n`mkController` does the same things
-  as `mkControllerIO`, and can be used as a\r\nsubstitute for it:\r\n\r\n    mkControllerIO'
-  :: (HasLogger IO e, HasRepository IO e) => Int -> ReaderT e IO String\r\n    mkControllerIO'
-  = mkController\r\n\r\nHere we have intantiated `m` to `ReaderT e IO`, and `d` (the
-  effect monad used\r\nby dependencies in the environment) to `IO`. So in this example
-  `liftD` (the\r\nfunction that lifts `d` effects to `m`) is simply `liftIO`.\r\n\r\nHowever
-  the `MonadDep` constraint of `mkController` has valid instances for other\r\nmonads,
-  as we shall see.\r\n\r\nNow let's turn our attention to the environment record.
-  Let's parameterize its\r\ntype by a monad: \r\n\r\n    type Env :: (Type -> Type)
-  -> Type\r\n    data Env m = Env\r\n      { _logger :: String -> m (),\r\n        _repository
-  :: Int -> m (),\r\n        _controller :: Int -> m String\r\n      }\r\n\r\n    instance
-  HasLogger m (Env m) where\r\n      logger = _logger\r\n\r\n    instance HasRepository
-  m (Env m) where\r\n      repository = _repository\r\n\r\nNotice that the controller
-  function is now part of the environment. No\r\nfavorites here!\r\n\r\nThe following
-  implementation of the logger function has no dependencies besides\r\n`MonadIO`:\r\n\r\n
+  the\r\n  environment record.\r\n\r\nTo tackle these issues, we begin by writing
+  the controller in a more generic\r\nway:\r\n\r\n    mkControllerIO :: (HasLogger
+  IO e, HasRepository IO e, MonadIO m, MonadReader e m) => Int -> m String\r\n\r\nSo
+  far only the signature has changed, but now the function can work in other\r\nreader-like
+  monads besides `ReaderT`.\r\n\r\nLet's go one step further, and abstract away the
+  `IO`, so that function in the\r\nrecord can have effects in other monads:\r\n\r\n
+  \   mkController :: (HasLogger d e, HasRepository d e, LiftDep d m, MonadReader
+  e m) => Int -> m String\r\n    mkController x = do\r\n      e <- ask\r\n      liftD
+  $ logger e \"I'm going to insert in the db!\"\r\n      liftD $ repository e x\r\n
+  \     return \"view\"\r\n\r\nNow both the implementation and the signature have
+  changed:\r\n\r\n- There's a new type variable `d`, the monad in which functions
+  taken from the\r\n  environment `e` have their effects.\r\n- `MonadIO` has been
+  replaced by `LiftDep` from `Control.Monad.Dep.Class`, a\r\n  constraint that says
+  we can lift `d` effects into `m` (though it could still\r\n  make sense to require
+  `MonadIO m` for effects not originating in the\r\n  environment).\r\n- Uses of `liftIO`
+  have been replaced by `liftD`.\r\n\r\nIf all those constraints prove annoying to
+  write, there's a convenient shorthand using the `MonadDep` type family:\r\n\r\n
+  \   mkController :: MonadDep [HasLogger, HasRepository] d e m => Int -> m String\r\n\r\nThe
+  new, more polymorphic `mkController` function can replace the original `mkControllerIO`:\r\n\r\n
+  \   mkControllerIO' :: (HasLogger IO e, HasRepository IO e) => Int -> ReaderT e
+  IO String\r\n    mkControllerIO' = mkController\r\n\r\nNow let's focus on the environment
+  record. We'll parameterize its type by a\r\nmonad: \r\n\r\n    type Env :: (Type
+  -> Type) -> Type\r\n    data Env m = Env\r\n      { _logger :: String -> m (),\r\n
+  \       _repository :: Int -> m (),\r\n        _controller :: Int -> m String\r\n
+  \     }\r\n\r\n    instance HasLogger m (Env m) where\r\n      logger = _logger\r\n\r\n
+  \   instance HasRepository m (Env m) where\r\n      repository = _repository\r\n\r\nNotice
+  that the controller function is now part of the environment. No\r\nfavorites here!\r\n\r\nThe
+  following implementation of the logger function has no dependencies besides\r\n`MonadIO`:\r\n\r\n
   \   mkStdoutLogger :: MonadIO m => String -> m ()\r\n    mkStdoutLogger msg = liftIO
   (putStrLn msg)\r\n\r\nBut look at this implementation of the repository function.
   It gets hold of the\r\nlogger through `HasLogger`, just as the controller did:\r\n\r\n
   \   mkStdoutRepository :: (MonadDep '[HasLogger] d e m, MonadIO m) => Int -> m ()\r\n
   \   mkStdoutRepository entity = do\r\n      e <- ask\r\n      liftD $ logger e \"I'm
   going to write the entity!\"\r\n      liftIO $ print entity\r\n\r\nIt's about time
-  we chose a concrete monad and assemble an environment record:\r\n\r\n    envIO ::
-  Env (DepT Env IO)\r\n    envIO =\r\n      let _logger = mkStdoutLogger\r\n          _repository
+  we choose a concrete monad and assemble an environment record:\r\n\r\n    envIO
+  :: Env (DepT Env IO)\r\n    envIO =\r\n      let _logger = mkStdoutLogger\r\n          _repository
   = mkStdoutRepository\r\n          _controller = mkController\r\n       in Env {_logger,
   \ _repository, _controller}\r\n\r\nNot very complicated, except... what is that
   weird `DepT Env IO` doing there in\r\nthe signature? \r\n\r\nWell, that's the whole
-  reason this library exists. For dependency injection to\r\nwork for all functions,
+  reason this library exists. For dependency injection to\r\nwork for *all* functions,
   `Env` needs to be parameterized with a monad that\r\nprovides that same `Env` environment.
   And trying to use a `ReaderT (Env\r\nsomething) IO` to parameterize `Env` won't
   fly; you'll get weird \"infinite\r\ntype\" kind of errors. So I created the `DepT`
-  newtype over `ReaderT` to mollify\r\nthe compiler.\r\n\r\n`DepT` satisfies the `MonadDep`
-  constraint, so the effects of `mkController`\r\ncan take place on it.\r\n\r\n##
+  newtype over `ReaderT` to mollify\r\nthe compiler.\r\n\r\n`DepT` has `MonadReader`
+  and `LiftDep` instances, so the effects of\r\n`mkController` can take place on it.\r\n\r\n##
   So how do we invoke the controller now?\r\n\r\nI suggest something like\r\n\r\n
   \   runDepT (do e <- ask; _controller e 7) envIO \r\n\r\nor \r\n\r\n    (do e <-
   ask; _controller e 7) `runDepT` envIO \r\n\r\nThe companion package\r\n[dep-t-advice](http://hackage.haskell.org/package/dep-t-advice)
