@@ -1,26 +1,44 @@
 homepage: https://github.com/Bodigrim/tasty-bench
 changelog-type: markdown
-hash: 19172fa8dc3439971f79fc326488e8008ac4099cbab8aa6b9838592a62350456
+hash: 626728b61aa0050b7c3b65277d185d3281db7845c8cb5fea8c17edccffa8f1c4
 test-bench-deps: {}
 maintainer: Andrew Lelechenko <andrew.lelechenko@gmail.com>
 synopsis: Featherlight benchmark framework
 changelog: |
+  # 0.2.1
+
+  * Fix integer overflow in stdev computations.
+
+  # 0.2
+
+  * Add `env` and `envWithCleanup`.
+  * Run console and CSV reporters in parallel.
+  * Extend console reporter and export it as `consoleBenchReporter`.
+  * Add comparison against baseline and relevant options.
+  * Export `RelStDev` option.
+  * Export `benchIngredients`.
+
   # 0.1
 
   * Initial release.
 basic-deps:
   base: '>=4.3 && <5'
+  containers: '>=0.4'
   tasty: '>=1.2.3'
   deepseq: '>=1.1'
 all-versions:
 - '0.1'
+- 0.2.1
 author: ''
-latest: '0.1'
+latest: 0.2.1
 description-type: markdown
 description: |
-  # tasty-bench
+  # tasty-bench [![Hackage](http://img.shields.io/hackage/v/tasty-bench.svg)](https://hackage.haskell.org/package/tasty-bench)
 
-  Featherlight benchmark framework (only one file!) for performance measurement with API mimicking [`criterion`](http://hackage.haskell.org/package/criterion) and [`gauge`](http://hackage.haskell.org/package/gauge).
+  Featherlight benchmark framework (only one file!) for performance measurement
+  with API mimicking [`criterion`](http://hackage.haskell.org/package/criterion)
+  and [`gauge`](http://hackage.haskell.org/package/gauge).
+  A prominent feature is built-in comparison against baseline.
 
   ## How lightweight is it?
 
@@ -57,7 +75,7 @@ description: |
     build-depends:
       tasty-bench
     mixins:
-      tasty-bench (Test.Tasty.Bench as Criterion)
+      tasty-bench (Test.Tasty.Bench as Criterion, Test.Tasty.Bench as Criterion.Main)
   ```
 
   This works vice versa as well: if you use `tasty-bench`, but at some point
@@ -197,14 +215,131 @@ description: |
   In the absence of a good theory
   simplistic approaches are as (un)sound as obscure ones.
   Those who seek statistical soundness should rather collect raw data
-  and process it themselves in R/Python. Data reported by `tasty-bench`
+  and process it themselves using a proper statistical toolbox.
+  Data reported by `tasty-bench`
   is only of indicative and comparative significance.
 
-  ## Tip
+  ## Memory usage
 
   Passing `+RTS -T` (via `cabal bench --benchmark-options '+RTS -T'`
   or `stack bench --ba '+RTS -T'`) enables `tasty-bench` to estimate and report
-  memory usage such as allocated and copied bytes.
+  memory usage such as allocated and copied bytes:
+
+  ```
+  All
+    fibonacci numbers
+      fifth:     OK (2.13s)
+         63 ns ± 3.4 ns, 223 B  allocated,   0 B  copied
+      tenth:     OK (1.71s)
+        809 ns ±  73 ns, 2.3 KB allocated,   0 B  copied
+      twentieth: OK (3.39s)
+        104 μs ± 4.9 μs, 277 KB allocated,  59 B  copied
+
+  All 3 tests passed (7.25s)
+  ```
+
+  ## Combining tests and benchmarks
+
+  When optimizing an existing function, it is important to check that its
+  observable behavior remains unchanged. One can rebuild
+  both tests and benchmarks after each change, but it would be more convenient
+  to run sanity checks within benchmark itself. Since our benchmarks
+  are compatible with `tasty` tests, we can easily do so.
+
+  Imagine you come up with a faster function `myFibo` to generate Fibonacci numbers:
+
+  ```haskell
+  import Test.Tasty.Bench
+  import Test.Tasty.QuickCheck -- from tasty-quickcheck package
+
+  fibo :: Int -> Integer
+  fibo n = if n < 2 then toInteger n else fibo (n - 1) + fibo (n - 2)
+
+  myFibo :: Int -> Integer
+  myFibo n = if n < 3 then toInteger n else myFibo (n - 1) + myFibo (n - 2)
+
+  main :: IO ()
+  main = Test.Tasty.Bench.defaultMain -- not Test.Tasty.defaultMain
+    [ bench "fibo   20" $ nf fibo   20
+    , bench "myFibo 20" $ nf myFibo 20
+    , testProperty "myFibo = fibo" $ \n -> fibo n === myFibo n
+    ]
+  ```
+
+  This outputs:
+
+  ```
+  All
+    fibo   20:     OK (3.02s)
+      104 μs ± 4.9 μs
+    myFibo 20:     OK (1.99s)
+       71 μs ± 5.3 μs
+    myFibo = fibo: FAIL
+      *** Failed! Falsified (after 5 tests and 1 shrink):
+      2
+      1 /= 2
+      Use --quickcheck-replay=927711 to reproduce.
+
+  1 out of 3 tests failed (5.03s)
+  ```
+
+  We see that `myFibo` is indeed significantly faster than `fibo`,
+  but unfortunately does not do the same thing. One should probably
+  look for another way to speed up generation of Fibonacci numbers.
+
+  ## Troubleshooting
+
+  If benchmark results look malformed like below, make sure that you are invoking
+  `Test.Tasty.Bench.defaultMain` and not `Test.Tasty.defaultMain` (the difference
+  is `consoleBenchReporter` vs. `consoleTestReporter`):
+
+  ```
+  All
+    fibo 20:       OK (1.46s)
+      Response {respEstimate = Estimate {estMean = Measurement {measTime = 87496728, measAllocs = 0, measCopied = 0}, estStdev = 694487}, respIfSlower = FailIfSlower Infinity, respIfFaster = FailIfFaster Infinity}
+  ```
+
+  ## Comparison against baseline
+
+  One can compare benchmark results against an earlier baseline in an automatic way.
+  To use this feature, first run `tasty-bench` with `--csv FILE` key
+  to dump results to `FILE` in CSV format:
+
+  ```
+  Name,Mean (ps),2*Stdev (ps)
+  All.fibonacci numbers.fifth,48453,4060
+  All.fibonacci numbers.tenth,637152,46744
+  All.fibonacci numbers.twentieth,81369531,3342646
+  ```
+
+  Note that columns do not match CSV reports of `criterion` and `gauge`.
+  If desired, missing columns can be faked with
+  `awk 'BEGIN {FS=",";OFS=","}; {print $1,$2,$2,$2,$3/2,$3/2,$3/2}'` or similar.
+
+  Now modify implementation and rerun benchmarks
+  with `--baseline FILE` key. This produces a report as follows:
+
+  ```
+  All
+    fibonacci numbers
+      fifth:     OK (0.44s)
+         53 ns ± 2.7 ns,  8% slower than baseline
+      tenth:     OK (0.33s)
+        641 ns ±  59 ns
+      twentieth: OK (0.36s)
+         77 μs ± 6.4 μs,  5% faster than baseline
+
+  All 3 tests passed (1.50s)
+  ```
+
+  You can also fail benchmarks, which deviate too far from baseline, using
+  `--fail-if-slower` and `--fail-if-faster` options. For example, setting both of them
+  to 6 will fail the first benchmark above (because it is more than 6% slower),
+  but the last one still succeeds (even while it is measurably faster than baseline,
+  deviation is less than 6%). Consider also using `--hide-successes` to show
+  only problematic benchmarks, or even
+  [`tasty-rerun`](http://hackage.haskell.org/package/tasty-rerun) package
+  to focus on rerunning failing items only.
 
   ## Command-line options
 
@@ -217,18 +352,13 @@ description: |
     [`tasty` documentation](https://github.com/feuerbach/tasty#patterns)
     for details.
 
-  * `--csv`
-
-    File to write results in CSV format. If specified, suppresses console output.
-
   * `-t`, `--timeout`
 
     This is a standard `tasty` option, setting timeout for individual benchmarks
     in seconds. Use it when benchmarks tend to take too long: `tasty-bench` will make
     an effort to report results (even if of subpar quality) before timeout. Setting
-    timeout too tight (insufficient for at least three iterations of benchmark)
-    will result in a benchmark failure. Do not use `--timeout` without a reason:
-    it forks an additional thread and thus affects reliability of measurements.
+    timeout too tight (insufficient for at least three iterations)
+    will result in a benchmark failure.
 
   * `--stdev`
 
@@ -236,4 +366,18 @@ description: |
     Large values correspond to fast and loose benchmarks, and small ones to long and precise.
     If it takes far too long, consider setting `--timeout`,
     which will interrupt benchmarks, potentially before reaching the target deviation.
+
+  * `--csv`
+
+    File to write results in CSV format.
+
+  * `--baseline`
+
+    File to read baseline results in CSV format (as produced by `--csv`).
+
+  * `--fail-if-slower`, `--fail-if-faster`
+
+    Upper bounds of acceptable slow down / speed up in percents. If a benchmark is unacceptably slower / faster than baseline (see `--baseline`),
+    it will be reported as failed. Can be used in conjunction with
+    a standard `tasty` option `--hide-successes` to show only problematic benchmarks.
 license-name: MIT
