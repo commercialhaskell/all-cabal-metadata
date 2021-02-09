@@ -1,19 +1,21 @@
 homepage: https://github.com/GaloisInc/what4
 changelog-type: markdown
-hash: ae5e7363ba9edf6a179d63fa4bea20a90a084fc86c5692b65c633d6bb7454b11
+hash: f7b17576cdeb20f0e36fb8547c1578ad38dcbe5678f30dfee947e05e2735ad3a
 test-bench-deps:
   bytestring: -any
   base: -any
   tasty-hedgehog: -any
   text: -any
   bv-sized: -any
+  libBF: -any
   process: -any
   hedgehog: '>=1.0.2'
   what4: -any
   versions: -any
-  containers: -any
+  containers: '>=0.5.0.0'
   lens: -any
   tasty-quickcheck: '>=0.10'
+  mtl: '>=2.2.1'
   data-binary-ieee754: -any
   tasty-hunit: '>=0.9'
   transformers: -any
@@ -23,6 +25,33 @@ test-bench-deps:
 maintainer: jhendrix@galois.com, rdockins@galois.com
 synopsis: Solver-agnostic symbolic values support for issuing queries
 changelog: |
+  # 1.1 (Febuary 2021)
+
+  * Use multithread-safe storage primitive for configuration options,
+    and clarify single-threaded use assumptions for other data structures.
+
+  * Fix issue #63, which caused traversals to include the bodies of
+  defined functions at call sites, which yielded confusing results.
+
+  * Add concrete evaluation and constant folding for floating-point
+  operations via the `libBF` library.
+
+  * Add min and max operations for integers and reals to the expression interface.
+
+  * Remove `BaseNatType` from the set of base types. There were bugs
+    relating to having nat types appear in structs, arrays and
+    functions that were difficult to fix. Natural number values are
+    still avaliable as scalars (where they are repesented by integers with
+    nonzero assumptions) via the `SymNat` type.
+
+  * Support for exporting What4 terms to Verilog syntax.
+
+  * Various documentation fixes and improvements.
+
+  * Test coverage improvements.
+
+  * Switch to use the `prettyprinter` package for user-facing output.
+
   # 1.0 (July 2020)
 
   * Initial Hackage release
@@ -31,43 +60,48 @@ basic-deps:
   bimap: '>=0.2'
   bytestring: '>=0.10'
   fingertree: '>=0.1.4'
-  ansi-wl-pprint: '>=0.6.8'
   extra: '>=1.6'
   base: '>=4.8 && <5'
   deriving-compat: '>=0.5'
   unordered-containers: '>=0.2.10'
-  text: '>=1.1'
+  text: '>=1.2.4.0 && <1.3'
   bv-sized: '>=1.0.0'
+  libBF: '>=0.6 && <0.7'
   filepath: '>=1.3'
   process: '>=1.2'
   what4: -any
-  versions: '>=3.5.2 && <4.0'
-  th-abstraction: '>=0.1 && <0.4'
+  versions: '>=4.0 && <5.0'
+  th-abstraction: '>=0.1 && <0.5'
+  th-lift-instances: '>=0.1 && <0.2'
   containers: '>=0.5.0.0'
   lens: '>=4.18'
   io-streams: '>=1.5'
+  config-value: '>=0.8 && <0.9'
   bifunctors: '>=5'
   utf8-string: '>=1.0.1'
   hashtables: '>=1.2.3'
-  ghc-prim: '>=0.5.3'
+  ghc-prim: '>=0.5.2'
   zenc: '>=0.1.0 && <0.2.0'
   panic: '>=0.3'
   mtl: '>=2.2.1'
   data-binary-ieee754: -any
   hashable: '>=1.3'
   attoparsec: '>=0.13'
+  prettyprinter: '>=1.7.0'
   transformers: '>=0.4'
   temporary: '>=1.2'
   deepseq: '>=1.3'
   scientific: '>=0.3.6'
+  th-lift: '>=0.8.2 && <0.9'
   template-haskell: -any
   vector: '>=0.12.1'
   parameterized-utils: ==2.1.*
   directory: '>=1.2.2'
 all-versions:
 - '1.0'
+- '1.1'
 author: Galois Inc.
-latest: '1.0'
+latest: '1.1'
 description-type: markdown
 description: |+
   # What4
@@ -291,9 +325,49 @@ description: |+
   * `What4.Protocol.SMTLib2` (the functions to interact with a solver backend)
   * `What4.Solver` (solver-specific implementations of `What4.Protocol.SMTLib2`)
   * `What4.Solver.*`
+  * `What4.Protocol.Online` (interface for online solver connections)
   * `What4.SatResult` and `What4.Expr.GroundEval` (for analyzing solver output)
 
-  ## Known working solver verions
+  Additional implementation and operational documentation can be found
+  in the [implementation documentation in doc/implementation.md](doc/implementation.md).
+
+  ## Formula Construction vs Solving
+
+  In what4, building expressions and solving expressions are orthogonal concerns.
+  When you create an `ExprBuilder` (with `newExprBuilder`), you are not committing
+  to any particular solver or solving strategy (except insofar as the selected
+  floating point mode might preclude the use of certain solvers).  There are two
+  dimensions of solver choice: solver and mode.  The supported solvers are listed
+  in `What4.Solver.*`.  There are two modes:
+
+  - All solvers can be used in an "offline" mode, where a new solver process is
+    created for each query (e.g., via `What4.Solver.solver_adapter_check_sat`)
+  - Many solvers also support an "online" mode, where what4 maintains a persistent
+    connection to the solver and can issue multiple queries to the same solver
+    process (via the interfaces in `What4.Protocol.Online`)
+
+  There are a number of reasons to use solvers in online mode.  First, state
+  (i.e., previously defined terms and assumptions) can be shared between queries.
+  For a series of closely related queries that share context, this can be a
+  significant performance benefit.  Solvers that support online solving provide
+  the SMT `push` and `pop` primitives for maintaining context frames that can be
+  discarded (to define local bindings and assumptions).  The canonical use of
+  online solving is *symbolic execution*, which usually requires reflecting the
+  state of the program at every program point into the solver (in the form of a
+  path condition) and using `push` and `pop` to mimic the call and return
+  structure of programs. Second, reusing a single solver instance can save process
+  startup overhead in the presence of many small queries.
+
+  While it may always seem advantageous to use the online solving mode, there are
+  advantages to offline solving.  As offline solving creates a fresh solver
+  process for each query, it enables parallel solving.  Online solving necessarily
+  serializes queries.  Additionally, offline solving avoids the need for complex
+  state management to synchronize the solver state with the state of the tool
+  using what4.  Additionally, not all solvers that support online interaction
+  support per-goal timeouts; using offline solving trivially allows users of what4
+  to enforce timeouts for each solved goal.
+
+  ## Known working solver versions
 
   What4 has been tested and is known to work with the following solver versions.
 
@@ -303,7 +377,7 @@ description: |+
   encounter such a situation, please open a ticket, as our goal is to work correctly
   on as wide a collection of solvers as is reasonable.
 
-  - Z3 versions 4.8.7 and 4.8.8
+  - Z3 versions 4.8.7, 4.8.8, and 4.8.9
   - Yices 2.6.1 and 2.6.2
   - CVC4 1.7 and 1.8
   - Boolector 3.2.1
