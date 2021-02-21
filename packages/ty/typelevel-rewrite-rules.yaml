@@ -1,194 +1,487 @@
 homepage: https://github.com/gelisam/typelevel-rewrite-rules#readme
 changelog-type: markdown
-hash: d21a713cede6ce333636da46b558eb343f75e0ca17156d880cc710a13df4f971
+hash: ef52c302c56fad2c2da4fe1f59c91d432104383f9772cf28e9ff7d5ad254d4e2
 test-bench-deps:
-  base: '>=4.12 && <6'
+  base: '>=4.12 && <5'
   typelevel-rewrite-rules: -any
-  vinyl: -any
+  vinyl: '>=0.13.0'
   ghc-prim: '>=0.5.3'
 maintainer: gelisam+github@gmail.com
 synopsis: Solve type equalities using custom type-level rewrite rules
 changelog: |
+  # 1.0
+  * Now supports ghc-8.10! Unfortunately, ghc-8.6 and ghc-8.8 are no longer
+    supported.
+  * Now using ghc's builtin iteration limit instead of a hardcoded internal
+    limit. Since ghc's limit is much smaller than our internal limit was, you may
+    need to add something like `{-# OPTIONS_GHC -fconstraint-solver-iterations=100 #-}`
+    if ghc recommends you to do so.
+  * Now making use of givens. That is, you can now call a function expecting
+    (xs ~ rewritten-expr) given (xs ~ expr). Previously, you could only call a
+    function expecting (xs ~ expr) given (xs ~ rewritten-expr).
+  * Now supports instance constraints. That is, you can now call a function which
+    requires an `Eq (Vec rewritten-expr)` given an `Eq (Vec expr)`. Previously,
+    we only supported equality constraints (`expr ~ rewritten-expr`).
+  * Now works with type variables of kind Nat and Symbol.
+  * The generated code now passes ghc's core-lint check.
+  * Error messages involving rewritten constraints now include the relevant
+    rewrite rules.
+  * Bugfix: a spurious "the substitution forms a cycle" message was sometimes
+    emitted even when the substitution rules did not form a cycle (see #15).
+  * Bugfix: rewrite rules were sometimes not firing (see #21).
+  * Bugfix: error messages were sometimes missing the error location (see #17).
+
   # 0.1
   * initial release
 basic-deps:
   term-rewriting: '>=0.3.0.1'
-  ghc: '>=8.6.3 && <8.10'
-  base: '>=4.12 && <6'
-  ghc-tcplugins-extra: '>=0.3'
+  ghc: '>=8.10.2 && <9.0'
+  base: '>=4.12 && <5'
+  containers: '>=0.6.2.1'
   ghc-prim: '>=0.5.3'
-  transformers: '>=0.5.5.0'
+  transformers: '>=0.5.6.2'
 all-versions:
 - '0.1'
+- '1.0'
 author: Samuel Gélineau
-latest: '0.1'
+latest: '1.0'
 description-type: markdown
-description: |+
-  # Type-Level Rewrite Rules [![Hackage](https://img.shields.io/hackage/v/typelevel-rewrite-rules.svg)](https://hackage.haskell.org/package/typelevel-rewrite-rules) [![Build Status](https://secure.travis-ci.org/gelisam/typelevel-rewrite-rules.png?branch=master)](http://travis-ci.org/gelisam/typelevel-rewrite-rules)
-
-  Solve type equalities using custom type-level rewrite rules like `(n + 'Z) ~ n` and `((m + n) + o) ~ (m + (n + o))`.
-
-
-  ## The problem
-
-  Type equalities involving type families sometimes get stuck:
-
-  ```haskell
-  {-# LANGUAGE DataKinds, TypeFamilies, TypeOperators #-}
-  module My.Module where
-
-  import Prelude hiding ((++))
-
-  import Data.Type.Nat (Nat(Z, S), type (+))
-  import Data.Vec.Lazy (Vec, (++))
-
-  -- Couldn't match type ‘(((m + 'Z) + n) + 'Z) + o’
-  --                with ‘(m + n) + o’
-  simplify
-    :: Vec  m a
-    -> Vec 'Z a
-    -> Vec  n a
-    -> Vec 'Z a
-    -> Vec  o a
-    -> Vec (m + n + o) a
-  simplify xsM empty1 xsN empty2 xsO
-    = (((xsM ++ empty1) ++ xsN) ++ empty2) ++ xsO
-  ```
-
-  This is unfortunate because the equation is valid; for any three concrete `Nat`s `l`, `m` and `n`, ghc would gladly accept the equation as true, but when `l`, `m` and `n` are abstract, it gets stuck.
-
-  ```haskell
-  -- ok
-  simplifyConcrete
-    :: Vec ('S 'Z) a
-    -> Vec 'Z a
-    -> Vec ('S ('S 'Z)) a
-    -> Vec 'Z a
-    -> Vec ('S ('S ('S 'Z))) a
-    -> Vec ('S 'Z + 'S ('S 'Z) + 'S ('S ('S 'Z))) a
-  simplifyConcrete xsM empty1 xsN empty2 xsO
-    = (((xsM ++ empty1) ++ xsN) ++ empty2) ++ xsO
-  ```
-
-  The reason this particular type family gets stuck is because it pattern-matches on its left argument. Pattern-matching proceeds as designed when that argument is a known type-level value like `'S 'Z`, but when that argument is the type variable `m`, evaluation cannot proceed until we learn more about `m`.
-
-  ```haskell
-  module Data.Type.Nat where
-
-  type family (+) (m :: Nat) (n :: Nat) :: Nat where
-    'Z   + n = n
-    'S m + n = 'S (m + n)
-  ```
-
-
-  ## The solution
-
-  First, define some rewrite rules. Each rewrite rule has a name, some variables, a left-hand side, and a right-hand side. The left-hand side gets rewritten to the right-hand side. Syntactically, a rewrite rule is defined via a constraint type synonym expanding to a type equality between the two sides.
-
-  For technical reasons, these must be defined in a different module than the one in which the stuck constraints appear, but they could be defined in the same module as the one which defines the type family.
-
-  ```haskell
-  {-# LANGUAGE ConstraintKinds, DataKinds, TypeFamilies, TypeOperators #-}
-  module My.RewriteRules where
-
-  import Data.Type.Nat (Nat(Z, S), type (+))
-
-  type RightIdentity n
-    = (n + 'Z) ~ n
-  type RightAssociative m n o
-    = ((m + n) + o) ~ (m + (n + o))
-  ```
-
-  Next, coming back to our original module, point the `TypeLevel.Rewrite` plugin to those rewrite rules. The type error disappears!
-
-  ```haskell
-  {-# LANGUAGE DataKinds, TypeFamilies, TypeOperators #-}
-  {-# OPTIONS_GHC -fplugin TypeLevel.Rewrite
-                  -fplugin-opt=TypeLevel.Rewrite:My.RewriteRules.RightIdentity
-                  -fplugin-opt=TypeLevel.Rewrite:My.RewriteRules.RightAssociative #-}
-  module My.Module where
-
-  import Prelude hiding ((++))
-
-  import Data.Type.Nat (Nat(Z, S), type (+))
-  import Data.Vec.Lazy (Vec, (++))
-
-  -- the module which contains the rewrite rules must be imported
-  import My.RewriteRules ()
-
-  -- now ok!
-  simplify
-    :: Vec  m a
-    -> Vec 'Z a
-    -> Vec  n a
-    -> Vec 'Z a
-    -> Vec  o a
-    -> Vec (m + n + o) a
-  simplify xsM empty1 xsN empty2 xsO
-    = (((xsM ++ empty1) ++ xsN) ++ empty2) ++ xsO
-  ```
-
-  For this particular type equality, it just so happens that either of the two rewrite rules would have been sufficient on its own. With only `RightIdentity`, the two `(+ 'Z)`s get removed from `(((m + 'Z) + n) + 'Z) + o`, leaving `(m + n) + o`. With only `RightAssociative`, `(((m + 'Z) + n) + 'Z) + o` gets rewritten to `m + ('Z + (n + ('Z + o)))`, and now `(+)` can pattern-match on the `'Z`s and evaluate to `m + (n + o)`. Meanwhile, the right-hand side `(m + n) + o` also gets rewritten to `m + (n + o)`. With both `RightIdentity` and `RightAssociative`, both sides get rewritten to `m + (n + o)`.
-
-
-  ## Dangers
-
-  Typechecker plugins are used to extend ghc with domain-specific knowledge about particular types. For example, [ghc-typelits-natnormalise](https://hackage.haskell.org/package/ghc-typelits-natnormalise) simplifies type equalities involving natural numbers. It is the plugin's responsibility to ensure its simplifications are valid.
-
-  This plugin is both more general and more dangerous: it allows you to specify any rewrite rules you want, including invalid rules like `(n + 'Z) ~ 'Z` which break the type system:
-
-  ```haskell
-  {-# LANGUAGE DataKinds, RankNTypes, TypeFamilies, TypeApplications, TypeOperators #-}
-  {-# OPTIONS_GHC -fplugin TypeLevel.Rewrite
-                  -fplugin-opt=TypeLevel.Rewrite:My.RewriteRules.Nonsense #-}
-  module My.Module where
-
-  import Data.Functor.Identity
-  import Data.Proxy
-  import Data.Vinyl
-  import Data.Vinyl.TypeLevel
-
-  import My.RewriteRules ()
-
-  withNonsense
-    :: proxy as
-    -> ((as ++ '[]) ~ '[] => r)
-    -> r
-  withNonsense _ r = r
-
-  -- |
-  -- >>> recFromNowhere (Proxy @'[])
-  -- {}
-  -- >>> recFromNowhere (Proxy @'[Int, String])
-  -- error: Impossible case alternative
-  recFromNowhere
-    :: proxy as
-    -> Rec Identity (as ++ '[])
-  recFromNowhere proxy = withNonsense proxy RNil
-  ```
-
-  A more subtle danger is that even rewrite rules which are valid, such as `(x + y) ~ (y + x)`, can be problematic. The problem with this rule is that the right-hand side matches the left-hand side, and so the rewrite rule can be applied an infinite number of times to switch the arguments back and forth without making any progress. The same problem occurs if both `((m + n) + o) ~ (m + (n + o))` and `(m + (n + o)) ~ ((m + n) + o)` are included, the parentheses can get rearranged back and forth indefinitely.
-
-
-  ## Troubleshooting
-
-  Most error messages should be self-explanatory, but there are a few circumstances in which the ghc API produces a confusing error message without giving me the opportunity to replace it with a better one. So if you encounter one of those confusing error messages, hopefully google will lead you to this page explaining what they mean.
-
-  ### `GHC internal error: ‘My.Module.MyRule’ is not in scope during type checking, but it passed the renamer tcl_env of environment: []`
-
-  This means you are in `My.Module` and you are trying to use a rewrite rule which is also defined in `My.Module`. This is unfortunately not supported.
-
-  Solution: move your rewrite rule to another module and import that module from `My.Module`.
-
-  ### `attempting to use module ‘My.RewriteRules’ which is not loaded`
-
-  This one is annoying because whether it happens or not depends on the order in which ghc chooses to compile your modules. If ghc happens to compile the module which uses your rewrite rules before the module which defines your rewrite rules, you'll get that error message.
-
-  Solution: add an `import My.RewriteRules ()` statement to force ghc to compile `My.RewriteRules` first.
-
-  ### `Can't find interface-file declaration for type constructor or class My.RewriteRules.MyRule`
-
-  That error message is misleadingly followed by `Probable cause: bug in .hi-boot file, or inconsistent .hi file`, but the actual cause is that `MyRule` simply isn't defined in `My.RewriteRules`. Maybe it's a typo?
-
-
+description: "# Type-Level Rewrite Rules [![Hackage](https://img.shields.io/hackage/v/typelevel-rewrite-rules.svg)](https://hackage.haskell.org/package/typelevel-rewrite-rules)
+  [![Build Status](https://github.com/gelisam/typelevel-rewrite-rules/workflows/CI/badge.svg)](https://github.com/gelisam/typelevel-rewrite-rules/actions)\n\nSolve
+  type equalities using custom type-level rewrite rules like `(n + 'Z) ~ n` and `((m
+  + n) + o) ~ (m + (n + o))`.\n\n* [The problem](#the-problem)\n* [The solution](#the-solution)\n*
+  [Dangers](#dangers)\n* [Troubleshooting](#troubleshooting)\n* [Alternatives](#alternatives)\n
+  \ + [Propagate the constraints](#propagate-the-constraints)\n  + [Hasochism](#hasochism)\n
+  \ + [Axiom](#axiom)\n  + [ghc-typelits-natnormalise](#ghc-typelits-natnormalise)\n
+  \ + [Thoralf](#thoralf)\n  + [LiquidHaskell](#liquidhaskell)\n  + [Ghosts of Departed
+  Proofs](#ghosts-of-departed-proofs)\n\n\n## The problem\n\nType equalities involving
+  type families sometimes get stuck:\n\n```haskell\n{-# LANGUAGE DataKinds, TypeFamilies,
+  TypeOperators #-}\nmodule My.Module where\n\nimport Prelude hiding ((++))\n\nimport
+  Data.Type.Nat (Nat(Z, S), type (+))\nimport Data.Vec.Lazy (Vec, (++))\n\n-- Couldn't
+  match type ‘(((m + 'Z) + n) + 'Z) + o’\n--                with ‘(m + n) + o’\nsimplify\n
+  \ :: Vec  m a\n  -> Vec 'Z a\n  -> Vec  n a\n  -> Vec 'Z a\n  -> Vec  o a\n  ->
+  Vec (m + n + o) a\nsimplify xsM empty1 xsN empty2 xsO\n  = (((xsM ++ empty1) ++
+  xsN) ++ empty2) ++ xsO\n```\n\nThis is unfortunate because the equation is valid;
+  for any three concrete `Nat`s `m`, `n` and `o`, ghc would gladly accept the equation
+  as true, but when `m`, `n` and `o` are abstract, it gets stuck.\n\n```haskell\n--
+  ok\nsimplifyConcrete\n  :: Vec ('S 'Z) a\n  -> Vec 'Z a\n  -> Vec ('S ('S 'Z)) a\n
+  \ -> Vec 'Z a\n  -> Vec ('S ('S ('S 'Z))) a\n  -> Vec ('S 'Z + 'S ('S 'Z) + 'S ('S
+  ('S 'Z))) a\nsimplifyConcrete xsM empty1 xsN empty2 xsO\n  = (((xsM ++ empty1) ++
+  xsN) ++ empty2) ++ xsO\n```\n\nThe reason this particular type family gets stuck
+  is because it pattern-matches on its left argument. Pattern-matching proceeds as
+  designed when that argument is a known type-level value like `'S 'Z`, but when that
+  argument is the type variable `m`, evaluation cannot proceed until we learn more
+  about `m`.\n\n```haskell\nmodule Data.Type.Nat where\n\ntype family (+) (m :: Nat)
+  (n :: Nat) :: Nat where\n  'Z   + n = n\n  'S m + n = 'S (m + n)\n```\n\n\n## The
+  solution\n\nFirst, define some rewrite rules. Each rewrite rule has a name, some
+  variables, a left-hand side, and a right-hand side. The left-hand side gets rewritten
+  to the right-hand side. Syntactically, a rewrite rule is defined via a constraint
+  type synonym expanding to a type equality between the two sides.\n\nFor technical
+  reasons, these must be defined in a different module than the one in which the stuck
+  constraints appear, but they could be defined in the same module as the one which
+  defines the type family.\n\n```haskell\n{-# LANGUAGE ConstraintKinds, DataKinds,
+  TypeFamilies, TypeOperators #-}\nmodule My.RewriteRules where\n\nimport Data.Type.Nat
+  (Nat(Z, S), type (+))\n\ntype RightIdentity n\n  = (n + 'Z) ~ n\ntype RightAssociative
+  m n o\n  = ((m + n) + o) ~ (m + (n + o))\n```\n\nNext, coming back to our original
+  module, point the `TypeLevel.Rewrite` plugin to those rewrite rules. The type error
+  disappears!\n\n```haskell\n{-# LANGUAGE DataKinds, TypeFamilies, TypeOperators #-}\n{-#
+  OPTIONS_GHC -fplugin TypeLevel.Rewrite\n                -fplugin-opt=TypeLevel.Rewrite:My.RewriteRules.RightIdentity\n
+  \               -fplugin-opt=TypeLevel.Rewrite:My.RewriteRules.RightAssociative
+  #-}\nmodule My.Module where\n\nimport Prelude hiding ((++))\n\nimport Data.Type.Nat
+  (Nat(Z, S), type (+))\nimport Data.Vec.Lazy (Vec, (++))\n\n-- the module which contains
+  the rewrite rules must be imported\nimport My.RewriteRules ()\n\n-- now ok!\nsimplify\n
+  \ :: Vec  m a\n  -> Vec 'Z a\n  -> Vec  n a\n  -> Vec 'Z a\n  -> Vec  o a\n  ->
+  Vec (m + n + o) a\nsimplify xsM empty1 xsN empty2 xsO\n  = (((xsM ++ empty1) ++
+  xsN) ++ empty2) ++ xsO\n```\n\nFor this particular type equality, it just so happens
+  that either of the two rewrite rules would have been sufficient on its own. With
+  only `RightIdentity`, the two `(+ 'Z)`s get removed from `(((m + 'Z) + n) + 'Z)
+  + o`, leaving `(m + n) + o`. With only `RightAssociative`, `(((m + 'Z) + n) + 'Z)
+  + o` gets rewritten to `m + ('Z + (n + ('Z + o)))`, and now `(+)` can pattern-match
+  on the `'Z`s and evaluate to `m + (n + o)`. Meanwhile, the right-hand side `(m +
+  n) + o` also gets rewritten to `m + (n + o)`. With both `RightIdentity` and `RightAssociative`,
+  both sides get rewritten to `m + (n + o)`.\n\n\n## Dangers\n\nTypechecker plugins
+  are used to extend ghc with domain-specific knowledge about particular types. For
+  example, [ghc-typelits-natnormalise](https://hackage.haskell.org/package/ghc-typelits-natnormalise)
+  simplifies type equalities involving natural numbers. It is the plugin's responsibility
+  to ensure its simplifications are valid.\n\nThis plugin is both more general and
+  more dangerous: it allows us to specify any rewrite rules we want, including invalid
+  rules like `(n + 'Z) ~ 'Z` which break the type system:\n\n```haskell\n{-# LANGUAGE
+  DataKinds, RankNTypes, TypeFamilies, TypeApplications, TypeOperators #-}\n{-# OPTIONS_GHC
+  -fplugin TypeLevel.Rewrite\n                -fplugin-opt=TypeLevel.Rewrite:My.RewriteRules.Nonsense
+  #-}\nmodule My.Module where\n\nimport Prelude hiding ((++))\n\nimport Data.Proxy
+  (Proxy(Proxy))\nimport Data.Type.Nat (Nat(Z, S), type (+))\nimport Data.Vec.Lazy
+  (Vec((:::), VNil), (++))\n\nimport My.RewriteRules ()\n\nwithNonsense\n  :: proxy
+  n\n  -> ((n + 'Z) ~ 'Z => r)\n  -> r\nwithNonsense _ r = r\n\n-- |\n-- >>> recFromNowhere
+  (Proxy @'Z)\n-- VNil\n-- >>> let (n ::: VNil) = recFromNowhere (Proxy @('S 'Z))\n--
+  >>> n\n-- internal error: interpretBCO: hit a CASEFAIL\nrecFromNowhere\n  :: proxy
+  n\n  -> Vec (n + 'Z) Int\nrecFromNowhere proxy = withNonsense proxy VNil\n```\n\nA
+  more subtle danger is that even rewrite rules which are valid, such as `(x + y)
+  ~ (y + x)`, can be problematic. The problem with this rule is that the right-hand
+  side matches the left-hand side, and so the rewrite rule can be applied an infinite
+  number of times to switch the arguments back and forth without making any progress.
+  The same problem occurs if both `((m + n) + o) ~ (m + (n + o))` and `(m + (n + o))
+  ~ ((m + n) + o)` are included, the parentheses can get rearranged back and forth
+  indefinitely.\n\n\n## Troubleshooting\n\nMost error messages should be self-explanatory,
+  but there are a few circumstances in which the ghc API produces a confusing error
+  message without giving me the opportunity to replace it with a better one. So if
+  you encounter one of those confusing error messages, hopefully google will lead
+  you to this page explaining what they mean.\n\n### `GHC internal error: ‘My.Module.MyRule’
+  is not in scope during type checking, but it passed the renamer tcl_env of environment:
+  []`\n\nThis means you are in `My.Module` and you are trying to use a rewrite rule
+  which is also defined in `My.Module`. This is unfortunately not supported.\n\nSolution:
+  move your rewrite rule to another module and import that module from `My.Module`.\n\n###
+  `attempting to use module ‘My.RewriteRules’ which is not loaded`\n\nThis one is
+  annoying because whether it happens or not depends on the order in which ghc chooses
+  to compile your modules. If ghc happens to compile the module which uses your rewrite
+  rules before the module which defines your rewrite rules, you'll get that error
+  message.\n\nSolution: add an `import My.RewriteRules ()` statement to force ghc
+  to compile `My.RewriteRules` first.\n\n### `Can't find interface-file declaration
+  for type constructor or class My.RewriteRules.MyRule`\n\nThat error message is misleadingly
+  followed by `Probable cause: bug in .hi-boot file, or inconsistent .hi file`, but
+  the actual cause is that `MyRule` simply isn't defined in `My.RewriteRules`. Maybe
+  it's a typo?\n\n\n## Alternatives\n\nRemember, this typechecker plugin is dangerous!
+  Have you considered these other, safer alternatives?\n\n| Approach                                                |
+  Effort                                                         | Limitations             |
+  Safety concerns                         |\n|---------------------------------------------------------|----------------------------------------------------------------|-------------------------|-----------------------------------------|\n|
+  [typelevel-rewrite-rules](#readme)                      | state rewrite rules                                            |
+  no commutativity        | :construction: invalid rules, loops     |\n| [Propagate
+  the constraints](#propagate-the-constraints) |                                                                |
+  no recursion            |                                         |\n| [Hasochism](#hasochism)
+  \                                | singletons boilerplate, prove properties, apply
+  properties     |                         |                                         |\n|
+  [Axiom](#axiom) (at the call sites)                     | copy-paste equation                                            |
+  \                        | :bomb: invalid rules more likely        |\n| [Axiom](#axiom)
+  (when defining properties)              | state properties, apply properties                             |
+  \                        | :construction: invalid rules            |\n| [ghc-typelits-natnormalise](#ghc-typelits-natnormalise)
+  |                                                                | `GHC.TypeLits.Nat`
+  only |                                         |\n| [Thoralf](#thoralf)                                     |
+  convert types and functions to Z3                              |                         |
+  :construction: invalid conversion       |\n| [LiquidHaskell](#liquidhaskell)                         |
+  state refined types                                            | builtin types only
+  \     | :construction: invalid `assume` pragmas |\n| [Ghosts of Departed Proofs](#ghosts-of-departed-proofs)
+  | Argument boilerplate, state/prove properties, apply properties |                         |
+  :construction: invalid `axiom` uses     |\n\n\n### Propagate the constraints\n\nThe
+  easiest alternative is to propagate the constraints. We know that ghc would accept
+  `(m + 'Z + n + 'Z + o) ~ (m + n + o)` if we had concrete `Nat`s for `m`, `n` and
+  `o`; so let's wait until we have a concrete type-level values for them.\n\n```haskell\nsimplify\n
+  \ :: (m + 'Z + n + 'Z + o) ~ (m + n + o)\n  => Vec  m a\n  -> Vec 'Z a\n  -> Vec
+  \ n a\n  -> Vec 'Z a\n  -> Vec  o a\n  -> Vec (m + n + o) a\nsimplify xsM empty1
+  xsN empty2 xsO\n  = (((xsM ++ empty1) ++ xsN) ++ empty2) ++ xsO\n\nfooBarBazQuux
+  :: Vec ('S ('S ('S ('S 'Z)))) String\nfooBarBazQuux\n  -- ('S ('S 'Z) + 'Z + 'S
+  'Z + 'Z + 'S 'Z) ~ ('S ('S 'Z) + 'S 'Z + 'S 'Z) holds\n  -- because both sides evaluate
+  to ('S ('S ('S ('S 'Z))))\n  = simplify (\"foo\" ::: \"bar\" ::: VNil)\n             VNil\n
+  \            (\"baz\" ::: VNil)\n             VNil\n             (\"quux\" ::: VNil)\n```\n\nAs
+  you can see, once we call `simplify` with concrete values, the constraint gets discharged.
+  The downside of this approach is that if there are a lot of intermediate calls between
+  `simplify` and `fooBarBazQuux`, we might accumulate a lot of constraints. Also,
+  sometimes this approach doesn't work when recursion is involved, because we would
+  need to accumulate an infinite number of constraints.\n\n```haskell\n-- nope!\nappendSingletons\n
+  \ :: ( (m + 'Z) ~ m\n     , (m + 'S 'Z + 'Z) ~ (m + 'S 'Z)\n     , (m + 'S 'Z +
+  'S 'Z + 'Z) ~ (m + 'S 'Z + 'S 'Z)\n     , ...\n     , (m + 'S 'Z + n) ~ (m + 'S
+  n)\n     , (m + 'S 'Z + 'S 'Z + n) ~ (m + 'S 'Z + 'S n)\n     , ...\n     )\n  =>
+  Vec m a\n  -> Vec n (Vec ('S 'Z) a)\n  -> Vec (m + n) a\nappendSingletons xsM VNil\n
+  \ -- uses (m + 'Z) ~ m\n  = xsM\nappendSingletons xsM (singleton1 ::: singletons)\n
+  \ -- uses (m + 'S 'Z + n) ~ (m + 'S n)\n  -- but we're recurring on a larger m,
+  so we need to provide both\n  -- (m + 'Z) ~ m and (m + 'S 'Z + n) ~ (m + 'S n) for
+  that larger m;\n  -- that is, we need to provide ((m + 'S 'Z) + 'Z) ~ (m + 'S 'Z)
+  and\n  -- ((m + 'S 'Z) + 'S 'Z + n) ~ ((m + 'S 'Z) + 'S n). But if we add\n  --
+  those constraints to 'appendSingletons', we'll also need to provide\n  -- those
+  constraints for that larger m, etc.\n  = appendSingletons (xsM ++ singleton1) singletons\n```\n\n\n###
+  Hasochism\n\nIf you're worried about accidentally breaking the type system by writing
+  an invalid rule like `(n + 'Z) ~ 'Z`, try proving it correct. The [Hasochism](http://homepages.inf.ed.ac.uk/slindley/papers/hasochism.pdf)
+  paper explains how; but as the title implies, writing proofs in Haskell can be a
+  lot more painful than doing it in a language like Agda which was built for writing
+  proofs. Doing it in Agda is not a painless experience either... but in Haskell,
+  we need to write a lot of boilerplate before we can even begin writing the proofs:\n\n```haskell\n{-#
+  LANGUAGE DataKinds, GADTs, TypeOperators #-}\n\n\n-- called 'SNat' in \"Data.Type.Nat\"\ndata
+  Natty n where\n  Zy :: Natty 'Z\n  Sy :: Natty n -> Natty ('S n)\n\naddy\n  :: Natty
+  m\n  -> Natty n\n  -> Natty (m + n)\naddy Zy ny\n  = ny\naddy (Sy my) ny\n  = Sy
+  (addy my ny)\n\n\n-- called 'SNatI' in \"Data.Type.Nat\"\nclass NATTY n where\n
+  \ natty :: Natty n\n\ninstance NATTY 'Z where\n  natty = Zy\n\ninstance NATTY n
+  => NATTY ('S n) where\n  natty = Sy natty\n```\n\nNow that we have defined all of
+  those, we can write the proofs. Here, I am proving `(n + 'Z) ~ n`, `((m + n) + o)
+  ~ (m + (n + o))`, and `(m + n) ~ (n + m)`. The proofs are only a few lines long,
+  but as the abundance of comments shows, careful thought is required in order to
+  figure out what those few lines are.\n\n```haskell\n{-# LANGUAGE RankNTypes, ScopedTypeVariables,
+  TypeApplications #-}\n\nwithRightIdentity\n  :: Natty n\n  -> ((n + 'Z) ~ n => r)\n
+  \ -> r\nwithRightIdentity Zy r\n  = r\n    -- ('Z + 'Z) ~ 'Z  holds\n    -- because
+  ('Z + 'Z) evaluates to 'Z\nwithRightIdentity (Sy ny) r\n  = withRightIdentity ny\n
+  \   -- we now have (n + 'Z) ~ n\n  $ r\n    -- ('S n + 'Z) ~ 'S n  now holds\n    --
+  because ('S n + 'Z) evaluates to ('S (n + 'Z))\n\nwithRightAssociative\n  :: Natty
+  m\n  -> Natty n\n  -> Natty o\n  -> (((m + n) + o) ~ (m + (n + o)) => r)\n  -> r\nwithRightAssociative
+  Zy _ _ r\n  = r\n    -- (('Z + n) + o) ~ ('Z + (n + o))  holds\n    -- because both
+  sides evaluate to (n + o)\nwithRightAssociative (Sy my) ny oy r\n  = withRightAssociative
+  my ny oy\n    -- we now have ((m + n) + o) ~ (m + (n + o))\n  $ r\n    -- (('S m
+  + n) + o) ~ ('S m + (n + o))  now holds\n    -- because (('S m + n) + o) evaluates
+  to 'S ((m + n) + o)\n    -- and ('S m + (n + o)) evaluates to 'S (m + (n + o))\n\nwithCommutative\n
+  \ :: Natty m\n  -> Natty n\n  -> ((m + n) ~ (n + m) => r)\n  -> r\nwithCommutative
+  Zy ny r\n  = withRightIdentity ny\n    -- we now have (n + 'Z) ~ n\n  $ r\n    --
+  ('Z + n) ~ (n + 'Z)  now holds\n    -- because both sides are equivalent to n\nwithCommutative
+  my Zy r\n  = withRightIdentity my\n    -- we now have (m + 'Z) ~ m\n  $ r\n    --
+  (m + 'Z) ~ ('Z + m)  now holds\n    -- because both sides are equivalent to m\nwithCommutative
+  (Sy my) (Sy ny) r\n  = withCommutative my (Sy ny)\n    -- we now have (m + 'S n)
+  ~ ('S n + m)\n  $ withCommutative (Sy my) ny\n    -- we now have ('S m + n) ~ (n
+  + 'S m)\n  $ withCommutative my ny\n    -- we now have (m + n) ~ (n + m)\n  $ r\n
+  \   -- ('S m + 'S n) ~ ('S n + 'S m)  now holds\n    -- because ('S m + 'S n) evaluates
+  to 'S (m + 'S n)\n    -- which is equivalent to 'S ('S (n + m))\n    -- similarly
+  ('S n + 'S m) becomes ('S ('S (m + n)))\n    -- and ('S ('S n + m)) is equivalent
+  to ('S ('S m + n))\n```\n\nOne disadvantage of this approach is that careful thought
+  is also needed when applying the properties we proved.\n\n```\nsimplify\n  :: forall
+  m n o a. (NATTY m, NATTY n)\n  => Vec  m a\n  -> Vec 'Z a\n  -> Vec  n a\n  -> Vec
+  'Z a\n  -> Vec  o a\n  -> Vec (m + n + o) a\nsimplify xsM empty1 xsN empty2 xsO\n
+  \ = withRightIdentity (natty @m)\n    -- we now have (m + 'Z) ~ m\n  $ withRightIdentity
+  (natty @m `addy` natty @n)\n    -- we now have ((m + n) + 'Z) ~ (m + n)\n  $ (((xsM
+  ++ empty1) ++ xsN) ++ empty2) ++ xsO\n    -- (((m + 'Z) + n) + 'Z) + o\n    -- becomes
+  ((m + n) + 'Z) + o\n    -- then (m + n) + o\n```\n\nAs before, `simplify` has some
+  constraints which propagate until we get concrete values for `m` and `n`.\n\n```haskell\nfooBarBazQuux
+  :: Vec ('S ('S ('S ('S 'Z)))) String\nfooBarBazQuux\n  = simplify (\"foo\" ::: \"bar\"
+  ::: VNil)\n             VNil\n             (\"baz\" ::: VNil)\n             VNil\n
+  \            (\"quux\" ::: VNil)\n```\n\nThis time, however, the constraints don't
+  accumulate as much, because we can construct derived `Natty`s from existing ones.
+  In particular, the recursive function which was giving us trouble before no longer
+  requires an infinite number of constraints.\n\n```haskell\nappendSingletons\n  ::
+  forall m n a. (NATTY m, NATTY n)\n  => Vec m a\n  -> Vec n (Vec ('S 'Z) a)\n  ->
+  Vec (m + n) a\nappendSingletons\n  = go (natty @m) (natty @n)\n\ngo\n  :: Natty
+  m\n  -> Natty n\n  -> Vec m a\n  -> Vec n (Vec ('S 'Z) a)\n  -> Vec (m + n) a\ngo
+  my Zy xsM VNil\n  = withRightIdentity my\n    -- we now have (m + 'Z) ~ m\n  $ xsM\n
+  \   -- m becomes (m + 'Z)\ngo my (Sy ny) xsM (singleton1 ::: singletons)\n  = withCommutative
+  my (natty @('S 'Z))\n    -- we now have (m + 'S 'Z) ~ ('S 'Z + m)\n  $ withRightAssociative
+  my (natty @('S 'Z)) ny\n    -- we now have ((m + 'S 'Z) + n) ~ (m + ('S 'Z + n))\n
+  \   -- or equivalently ('S m + n) ~ (m + 'S n)\n  $ go (Sy my) ny (xsM ++ singleton1)
+  singletons\n    -- (xsM ++ singleton1) has type (Vec (m + 'S 'Z) a)\n    -- which
+  becomes (Vec ('S 'Z + m) a) and then (Vec ('S m) a)\n    -- the recursive call produces
+  a (Vec ('S m + n) a)\n    -- which becomes (Vec (m + 'S n) a)\n```\n\nAnother disadvantage
+  of this approach is that the proofs have a runtime cost, as we recur down the `Natty`
+  in order to construct our type-level constraint. Especially if, like me, you write
+  `withCommutative` using an `O(3^n)` algorithm in order to avoid having to also prove
+  an extra lemma!\n\n\n### Axiom\n\nOne way to avoid that runtime cost is to write
+  a one-step \"trust me\" proof. Obviously, this brings us back to the danger zone.\n\nThe
+  way to write a one-step \"trust me\" proof is not obvious, but can be found [in
+  the innards of the `constraints` package](http://hackage.haskell.org/package/constraints-0.11.2/docs/src/Data.Constraint.Nat.html#axiom):\n\n```haskell\n{-#
+  LANGUAGE DataKinds, PolyKinds, ScopedTypeVariables, TypeOperators #-}\n\nimport
+  Data.Constraint (Dict(Dict), withDict)\nimport Data.Type.Nat (Nat(Z, S), type (+))\nimport
+  Data.Vec.Lazy (Vec, (++))\nimport Unsafe.Coerce (unsafeCoerce)\n\naxiom :: forall
+  a b. Dict (a ~ b)\naxiom = unsafeCoerce (Dict :: Dict (a ~ a))\n\nsimplify\n  ::
+  forall m n o a\n   . Vec  m a\n  -> Vec 'Z a\n  -> Vec  n a\n  -> Vec 'Z a\n  ->
+  Vec  o a\n  -> Vec (m + n + o) a\nsimplify xsM empty1 xsN empty2 xsO\n  = withDict
+  (axiom :: Dict ((m + 'Z + n + 'Z + o) ~ (m + n + o)))\n  $ (((xsM ++ empty1) ++
+  xsN) ++ empty2) ++ xsO\n```\n\nNotice that the comments indicating what information
+  we learn from applying each property are gone! That's supposed to illustrate another
+  advantage of this approach, namely that we no longer need to think too hard about
+  which proof to apply in order to get our function to typecheck. Just write the function
+  without using `withDict`, look at the two type-level expressions which ghc says
+  don't match, and if they look to you like they should match, use `axiom` to assert
+  that they do.\n\nThe biggest disadvantage of this technique is that if we use `axiom`
+  too often, we're likely to spend less and less time worrying about whether the expressions
+  we're pasting from ghc really are equivalent, and so we're likely to accidentally
+  break the type system.\n\nIt's better to restrict `axiom` to a much smaller number
+  of definitions, such as the proofs of a few key properties.\n\n```haskell\nrightIdentity\n
+  \ :: proxy n\n  -> Dict ((n + 'Z) ~ n)\nrightIdentity _\n  = axiom\n\nrightAssociative\n
+  \ :: proxy m\n  -> proxy n\n  -> proxy o\n  -> Dict (((m + n) + o) ~ (m + (n + o)))\nrightAssociative
+  _ _ _\n  = axiom\n```\n\nUnfortunately, with that variant, we once again need some
+  careful thought when applying the properties.\n\n```haskell\nsimplify\n  :: forall
+  m n o a\n   . Vec  m a\n  -> Vec 'Z a\n  -> Vec  n a\n  -> Vec 'Z a\n  -> Vec  o
+  a\n  -> Vec (m + n + o) a\nsimplify xsM empty1 xsN empty2 xsO\n  = withDict (rightIdentity
+  (Proxy @m))\n    -- we now have (m + 'Z) ~ m\n  $ withDict (rightIdentity (Proxy
+  @(m + n)))\n    -- we now have ((m + n) + 'Z) ~ (m + n)\n  $ (((xsM ++ empty1) ++
+  xsN) ++ empty2) ++ xsO\n    -- (((m + 'Z) + n) + 'Z) + o\n    -- becomes ((m + n)
+  + 'Z) + o\n    -- then (m + n) + o\n```\n\nThis typechecker plugin, typelevel-rewrite-rules,
+  can be thought as a way to get about the same level of safety as this variant, except
+  that the properties are applied automatically, so we don't need to think hard at
+  the use sites.\n\nThe reason it is not exactly the same level of safety is that
+  while both approaches require us to vouch for the validity of a few key properties,
+  typelevel-rewrite-rules has an extra way we can shoot ourselves in the foot: by
+  writing a set of rules which loop indefinitely. This also means that there are properties,
+  like commutativity, which cannot be expressed.\n\n\n### ghc-typelits-natnormalise\n\nIn
+  order to express properties like commutativity, we need something more sophisticated
+  than rewrite rules: we need a typechecker plugin like [ghc-typelits-natnormalise](https://hackage.haskell.org/package/ghc-typelits-natnormalise),
+  which already knows about commutativity and more.\n\n```haskell\n{-# LANGUAGE DataKinds,
+  GADTs, TypeOperators #-}\n{-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}\n\nimport
+  Prelude hiding ((++))\n\nimport GHC.TypeLits\n\ndata Vec n a where\n  VNil  :: Vec
+  0 a\n  (:::) :: a -> Vec n a -> Vec (1 + n) a\n\n(++)\n  :: Vec m a\n  -> Vec n
+  a\n  -> Vec (m + n) a\n(++) VNil xsN\n  = xsN\n(++) (x ::: xsM) xsN\n  = x ::: (xsM
+  ++ xsN)\n\nsimplify\n  :: Vec m a\n  -> Vec 0 a\n  -> Vec n a\n  -> Vec 0 a\n  ->
+  Vec o a\n  -> Vec (m + n + o) a\nsimplify xsM empty1 xsN empty2 xsO\n  = (((xsM
+  ++ empty1) ++ xsN) ++ empty2) ++ xsO\n\nappendSingletons\n  :: Vec m a\n  -> Vec
+  n (Vec 1 a)\n  -> Vec (m + n) a\nappendSingletons xsM VNil\n  = xsM\nappendSingletons
+  xsM (singleton ::: singletons)\n  = appendSingletons (xsM ++ singleton) singletons\n```\n\nLike
+  typelevel-rewrite-rules, ghc-typelits-natnormalise automatically solves the constraints
+  it knows about, we don't have to manually apply the properties like we did with
+  the Hasochism and Axiom approaches. Furthermore, since ghc-typelits-natnormalise
+  already knows that `(+)` is associative and commutative, we don't have to state
+  nor prove the properties which we expect to hold.\n\nWhen ghc-typelits-natnormalise
+  works, it works great! Unfortunately, it only works in one narrow situation: when
+  the type indices are `Nat`s from `GHC.TypeLits`. That's why I had to redefine `Vec`
+  above: I cannot use ghc-typelits-natnormalise with the `Vec`s from `Data.Vec.Lazy`,
+  as they use the `Nat`s from `Data.Type.Nat` instead.\n\n\n### Thoralf\n\nThe exact
+  same code compiles with `ThoralfPlugin.Plugin` instead of `GHC.TypeLits.Normalise`.
+  That's because [the Thoralf plugin](https://github.com/bgamari/the-thoralf-plugin#readme)
+  also knows about the properties of `Nat`s from `GHC.TypeLits`. However, unlike ghc-typelits-natnormalise,
+  Thoralf is [designed to be extensible](https://github.com/bgamari/the-thoralf-plugin/blob/master/DOCUMENTATION.md),
+  so it's possible to teach Thoralf about the properties of `Nat`s from `Data.Type.Nat`!
+  Here is the code which does so. Note that the `Vec`s in that code are `Thoralf`'s
+  `Vec`s, not the `Vec`s from `Data.Vec.Lazy`. \n\n```haskell\n{-# LANGUAGE GADTs,
+  PackageImports, RankNTypes #-}\nmodule ThoralfPlugin.Encode.Nat (natTheory) where\n\nimport
+  \"base\" Control.Monad (guard)\nimport \"ghc\" DataCon (DataCon, promoteDataCon)\nimport
+  \"ghc\" FastString (fsLit)\nimport \"ghc\" GhcPlugins (getUnique)\nimport \"ghc\"
+  Module (Module, mkModuleName)\nimport \"ghc\" OccName (mkDataOcc, mkTcOcc)\nimport
+  \"ghc\" TcPluginM (FindResult(..), TcPluginM, findImportedModule, lookupOrig, tcLookupDataCon,
+  tcLookupTyCon)\nimport \"ghc\" TyCon (TyCon(..))\nimport \"ghc\" Type (Type, splitTyConApp_maybe,
+  tyVarKind)\nimport ThoralfPlugin.Encode.TheoryEncoding\n\nimportModule :: String
+  -> String -> TcPluginM Module\nimportModule packageName moduleName = do\n  let package
+  = fsLit packageName\n  Found _ module_ <- findImportedModule (mkModuleName moduleName)
+  (Just package)\n  pure module_\n\nfindTyCon :: Module -> String -> TcPluginM TyCon\nfindTyCon
+  md strNm = do\n    name <- lookupOrig md (mkTcOcc strNm)\n    tcLookupTyCon name\n\nfindDataCon
+  :: Module -> String -> TcPluginM DataCon\nfindDataCon md strNm = do\n    name <-
+  lookupOrig md (mkDataOcc strNm)\n    tcLookupDataCon name\n\nexpectTyCon :: TyCon
+  -> Type -> Maybe [Type]\nexpectTyCon expectedTyCon ty = do\n  (actualTyCon, args)
+  <- splitTyConApp_maybe ty\n  guard (actualTyCon == expectedTyCon)\n  pure args\n\naddZ3Numbers
+  :: Vec n String -> String\naddZ3Numbers VNil      = \"0\"\naddZ3Numbers (x :> xs)
+  = \"(+ \" ++ x ++ \" \" ++ addZ3Numbers xs ++ \")\"\n\naddExtraZ3Numbers :: [Int]
+  -> Vec n String -> String\naddExtraZ3Numbers = go addZ3Numbers\n  where\n    go
+  :: (forall m. Vec m String -> String) -> [Int] -> Vec n String -> String\n    go
+  acc []     = acc\n    go acc (x:xs) = go (acc . (show x :>)) xs\n\nmkTyConvCont
+  :: [Type] -> [Int] -> TyConvCont\nmkTyConvCont args extra = go VNil (reverse args)\n
+  \ where\n    go :: Vec n Type -> [Type] -> TyConvCont\n    go acc []     = let toZ3
+  z3Numbers VNil = addExtraZ3Numbers extra z3Numbers\n                    in TyConvCont
+  acc VNil toZ3 []\n    go acc (x:xs) = go (x :> acc) xs\n\nconvertTyConToZ3 :: TyCon
+  -> Int -> [Int] -> Type -> Maybe TyConvCont\nconvertTyConToZ3 tyCon argCount extra
+  ty = do\n  args <- expectTyCon tyCon ty\n  guard (length args == argCount)\n  pure
+  $ mkTyConvCont args extra\n\nnatTheory :: TcPluginM TheoryEncoding\nnatTheory =
+  do\n  dataDotNat        <- importModule \"fin\" \"Data.Nat\"\n  dataDotNatDotType
+  <- importModule \"fin\" \"Data.Type.Nat\"\n  nat <- findTyCon dataDotNat \"Nat\"\n
+  \ z <- promoteDataCon <$> findDataCon dataDotNat \"Z\"\n  s <- promoteDataCon <$>
+  findDataCon dataDotNat \"S\"\n  plus <- findTyCon dataDotNatDotType \"Plus\"\n  pure
+  $ emptyTheory\n    { kindConvs = [ \\ty -> do [] <- expectTyCon nat ty\n                              pure
+  $ KdConvCont VNil (\\VNil -> \"Int\")\n                  ]\n    , tyVarPreds = \\tv
+  -> do _ <- expectTyCon nat (tyVarKind tv)\n                             pure [\"(assert
+  (<= 0 \" ++ show (getUnique tv) ++ \"))\"]\n                   \n    , typeConvs
+  = [ convertTyConToZ3 z    0 []\n                  , convertTyConToZ3 s    1 [1]\n
+  \                 , convertTyConToZ3 plus 2 []\n                  ]\n    }\n```\n\nThat
+  example code illustrates a few disadvantages of this approach. First, the module
+  name `ThoralfPlugin.Encode.Nat`. This hints at the disadvantage that the way in
+  which we extend Thoralf is rather invasive: we don't extend Thoralf by importing
+  a library or by pointing it to some extension code, but by forking the Thoralf repository
+  and adding a new module to its source code. Next, the imports from the \"ghc\" package.
+  This hints at the disadvantage that we need to be familiar with (a small part of)
+  the ghc API in order to implement the part of the extension which imports modules,
+  types and data constructors, and the part which converts type expressions into Z3
+  expressions. The final disadvantage is that we also need to be familiar with the
+  Z3 syntax; although as you can see, here I am simply converting `Nat` to `Int` and
+  `'S ('S 'Z)` to `(+ 1 (+ 1 0))`, so it's not that hard.\n\nOnce again, we don't
+  have to state the properties which we expect to hold, as Z3 already knows that `(+)`
+  is associative and commutative. Unlike with ghc-typelits-natnormalise, this does
+  not mean we are limited to a single definition of `Nat` and `(+)`. Z3 only knows
+  about one `(+)`, but it doesn't know about any particular Haskell definition of
+  `(+)`; the magic of Thoralf is that it allows us to translate all the Haskell definitions
+  of `(+)` to Z3's definition of `(+)`, which in turn allows Thoralf to solve type-equality
+  constraints for all of those Haskell definitions.\n\nZ3 is an SMT solver, where
+  \"SMT\" stands for \"Satisfiability-Modulo-Theories\" and \"theories\" refers to
+  the set of types and functions like `Int` and `(+)` which the solver knows about.
+  Thankfully, the translation doesn't have to be one-to-one, and so it is possible
+  to combine several Z3 types and functions in order to encode Haskell types and function
+  for which Z3 doesn't have an equivalent. For example, Z3 only knows about integers,
+  not about natural numbers, and so above we used `(assert (<= 0 n))` to encode Haskell's
+  `Nat`s as non-negative Z3 `Int`s. \n\nThe \"satisfiability solver\" part means that
+  Thoralf is not rewriting the type equalities it encounters to hopefully-simpler
+  type equalities using the properties it knows about, but rather, it searches for
+  a counter-example which would demonstrate that the type equality is invalid. Even
+  though there are infinitely-many `Int`s, Z3 somehow manages to exhaustively search
+  the space in a finite amount of time, and so if Z3 cannot find a counter-example,
+  then Thoralf knows that the type equality holds and discharges the constraint.\n\n\n###
+  LiquidHaskell\n\n[LiquidHaskell](https://github.com/ucsd-progsys/liquidhaskell#readme)
+  is in a slightly different category than the other approaches because it doesn't
+  discharge type-equality constraints. Nevertheless, it is very similar to Thoralf
+  in that it also uses an SMT solver to figure out whether to accept or reject the
+  program. Instead of looking at equality constraints, LiquidHaskell looks at `{-@
+  ... @-}` annotations which specify more precise type signatures for our Haskell
+  functions. Those type signatures use refinement types, which look similar to the
+  GADT-based type signatures we've been using up to now, except they use predicates
+  and support subtyping: if P implies Q, then `{v : T | P}` is a subtype of `{v :
+  T | Q}`.\n\n```haskell\n{-@\nmeasure myLen :: [a] -> Int\nmyLen []     = 0\nmyLen
+  (x:xs) = 1 + myLen xs\n@-}\n\ntype Vec a = [a]\n\n{-@ type VecN a N = {v : Vec a
+  | myLen v = N} @-}\n\n{-@ assume (++) :: xs:Vec a -> ys:Vec a -> VecN a {myLen xs
+  + myLen ys} @-}\n\n{-@ simplify\n      :: xs:Vec a\n      -> VecN a 0\n      ->
+  ys:Vec a\n      -> VecN a 0\n      -> zs:Vec a\n      -> VecN a {myLen xs + myLen
+  ys + myLen zs} @-}\nsimplify :: [a] -> [a] -> [a] -> [a] -> [a] -> [a]\nsimplify
+  xs empty1 ys empty2 zs\n  = (((xs ++ empty1) ++ ys) ++ empty2) ++ zs\n\n{-@ appendSingletons\n
+  \     :: xs:Vec a\n      -> singletons:Vec (VecN a 1)\n      -> VecN a {myLen xs
+  + myLen singletons} @-}\nappendSingletons :: [a] -> [[a]] -> [a]\nappendSingletons
+  xsM []\n  = xsM\nappendSingletons xsM (singleton : singletons)\n  = appendSingletons
+  (xsM ++ singleton) singletons\n```\n\nOnce again, LiquidHaskell knows that `(+)`
+  is associative and commutative, so we don't have to state the properties which we
+  expect to hold. We don't need to write converters from Haskell types and functions
+  to Z3 types and functions like we did with Thoralf, which means we have to use the
+  types and functions which LiquidHaskell already knows about. Thankfully, these types
+  and functions are the `Int` and `(+)` from Haskell which we are already familiar
+  with, not Z3's `Int` and `(+)`. The way in which we write the `P` and `Q` predicates
+  for our refinement types is also familiar: we write ordinary recursive Haskell functions,
+  such as `myLen` above.\n\nThe main disadvantage of this approach is the same as
+  with ghc-typelits-natnormalise: we cannot reuse the existing `Vec` from `Data.Vec.Lazy`
+  nor the existing `Nat` from `Data.Type.Nat`, we have to define a separate type inside
+  LiquidHaskell's framework. There are several reasons for this. First, as I've just
+  explained, we are limited to the types which LiquidHaskell already knows about,
+  and `Nat` is not on that list. Second, `Vec` is a GADT which uses a `Nat` as a type
+  index, but LiquidHaskell uses refinement types, not GADTs. Finally, LiquidHaskell's
+  refinement types are stricter than the Haskell types it refines, and so LiquidHaskell
+  provides more type safety by rejecting more programs. By contrast, our original
+  `Vec`-based program was already rejected by ghc's regular type checker, and so in
+  order to reuse `Vec`, we need an approach which rejects fewer programs, by discharging
+  some constraints.\n\nIn the example above, while we were not able to reuse `Vec`,
+  we were able to use lists, a much more ubiquitous type than `Vec` for which many
+  more functions already exist. In fact, `appendSingletons = foldl' (++)`! Unfortunately,
+  we cannot use that simpler definition, because LiquidHaskell needs to observe the
+  recursive call in order to confirm that `appendSingletons` does have the refined
+  type we stated. \n\n\n### Ghosts of Departed Proofs\n\nThe [Ghosts of Departed Proofs](https://hackage.haskell.org/package/gdp)
+  library supports a variety of styles, including refined types like LiquidHaskell,
+  computer-checked proofs like Hasochism, and using typechecker plugins and \"trust
+  me\" axioms to avoid having to write those proofs. However, its signature style
+  involves giving names to arguments and functions, like this:\n\n```haskell\n{-#
+  LANGUAGE TypeOperators #-}\n\nimport GDP\n\nnewtype Zero = Zero Defn\nnewtype Plus
+  m n = Plus Defn\n\nzero :: Int ~~ Zero\nzero = defn 0\n\nplus :: (Int ~~ m)\n     ->
+  (Int ~~ n)\n     -> (Int ~~ Plus m n)\nplus m n = defn (the m + the n)\n```\n\nThe
+  type signature says that given two numbers named `m` and `n`, we can construct a
+  number named `Plus m n`. The only way to obtain a value with that name is to call
+  `plus`.\n\nWe can now use those names to express some properties which we assert
+  to be true about those functions:\n\n```haskell\ninstance Associative Plus\ninstance
+  Commutative Plus\n\nzeroPlus :: Proof (Plus Zero n == n)\nzeroPlus = axiom\n\nplusZero
+  :: Proof (Plus n Zero == n)\nplusZero = axiom\n```\n\nUsing those properties, we
+  can in turn write some proofs showing that some other properties are a consequence
+  of the asserted properties.\n\n```haskell\nsimplifyZNZ :: Proof (Zero `Plus` n `Plus`
+  Zero == n)\nsimplifyZNZ\n    = -- (Zero `Plus` n) `Plus` Zero\n      plusZero\n
+  \ ==. -- Zero `Plus` n\n      zeroPlus\n      -- n\n```\n\nIn the proof above, I
+  was lucky that each equality proof applied to the entire name, so I could simply
+  concatenate a few existing proofs. A more common use case is to apply an equality
+  proof to a portion of the name, in which case we need to specify which portion we
+  have in mind. In order to do that, we need to write a bit of boilerplate in order
+  to identify the various arguments to each function name.\n\n```haskell\n{-# LANGUAGE
+  DataKinds, MultiParamTypeClasses, TypeFamilies #-}\n\ninstance Argument (Plus m
+  n) 0 where\n  type GetArg (Plus m n) 0    = m\n  type SetArg (Plus m n) 0 m' = Plus
+  m' n\n\ninstance Argument (Plus m n) 1 where\n  type GetArg (Plus m n) 1    = n\n
+  \ type SetArg (Plus m n) 1 n' = Plus m n'\n```\n\nWe can now use those to `apply`
+  an equality proof to a portion of a name.\n\n```haskell\n{-# LANGUAGE TypeApplications
+  #-}\n\nsimplifyMZNZO :: Proof ( (m `Plus` Zero `Plus` n `Plus` Zero `Plus` o)\n
+  \                     == (m `Plus` n `Plus` o)\n                       )\nsimplifyMZNZO\n
+  \   = -- (((m `Plus` Zero) `Plus` n) `Plus` Zero) `Plus` o\n      ( apply (arg @0)\n
+  \     $ plusZero\n      )\n  ==. -- ((m `Plus` Zero) `Plus` n) `Plus` o\n      (
+  apply (arg @0)\n      $ apply (arg @0)\n      $ plusZero\n      )\n      -- (m `Plus`
+  n) `Plus` o\n```\n\nProofs with GDT can be more tedious than with Hasochism, for
+  two reasons. First, with Hasochism, `(+)` can be a type family, and so we don't
+  need to explicitly simplify `'Z + n` to `n` because the former automatically computes
+  to the latter. Second, Hasochism uses the builtin `~` type equalities, which the
+  typechecker uses when comparing types at any depth, and so it is not necessary to
+  specify where we want to `apply` each equality proof.\n\nOn the flip side, the fact
+  that GDP uses its own equality type `Proof (x == y)` instead of the builtin `~`
+  allows GDP to represent properties other than equalities.\n\n```haskell\ndata Positive
+  xs\n\npositivePlusPositive :: Proof (Positive m)\n                     -> Proof
+  (Positive n)\n                     -> Proof (Positive (Plus m n))\npositivePlusPositive
+  _ _ = axiom\n```\n\nA function may ask for a `Proof` value in order to guarantee
+  that some property holds about its arguments.\n\n```haskell\ndivide1 :: Int\n        ->
+  (Int ~~ denominator)\n        -> Proof (Positive denominator)\n        -> Int\n```\n\nBut
+  it is more common to associate a proof with the value it describes, like this:\n\n```haskell\ndivide2
+  :: Int\n        -> (Int ~~ denominator ::: Positive denominator)\n        -> Int\n```\n\nThat
+  type asks for an `Int` named `denominator` such that `Positive denominator` holds.
+  GDP also offers the refinement-type syntax `Int ? Positive` for this common case
+  in which the proof is a proposition applied to the name and that name does not occur
+  anywhere else in the type signature.\n"
 license-name: LicenseRef-PublicDomain
