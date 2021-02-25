@@ -1,20 +1,21 @@
 homepage: https://morpheusgraphql.com
 changelog-type: markdown
-hash: f0261e51dd3bd9a118060542c56c28b374c1837d026324c3935c2ec13e1cbb3a
+hash: 487ad2e2b11d1038a65068f139f291a4e7b00986c347132b56e141608f0c8789
 test-bench-deps:
   bytestring: '>=0.10.4 && <0.11'
   morpheus-graphql: -any
-  morpheus-graphql-subscriptions: '>=0.16.0 && <0.17.0'
+  morpheus-graphql-subscriptions: '>=0.17.0 && <0.18.0'
   base: '>=4.7 && <5'
   unordered-containers: '>=0.2.8.0 && <0.3'
   text: '>=1.2.3.0 && <1.3'
-  morpheus-graphql-core: '>=0.16.0 && <0.17.0'
+  morpheus-graphql-core: '>=0.17.0 && <0.18.0'
   containers: '>=0.4.2.1 && <0.7'
   relude: '>=0.3.0'
   mtl: '>=2.0 && <=3.0'
   tasty-hunit: -any
   transformers: '>=0.3.0.0 && <0.6'
   tasty: -any
+  morpheus-graphql-app: '>=0.17.0 && <0.18.0'
   aeson: -any
   template-haskell: '>=2.0 && <=3.0'
   vector: '>=0.12.0.1 && <0.13'
@@ -22,6 +23,129 @@ maintainer: d.nalchevanidze@gmail.com
 synopsis: Morpheus GraphQL
 changelog: |
   # Changelog
+
+  ## 0.17.0 - 25.02.2021
+
+  ## new features
+
+  - (issue [#543](https://github.com/morpheusgraphql/morpheus-graphql/issues/543) & [#558](https://github.com/morpheusgraphql/morpheus-graphql/issues/558)): `GQLTypeOptions` supports new option `typeNameModifier`.
+    Before the schema failed if you wanted to use the same type for input and output, and the user had no control over the eventual GraphQL type name of the generated schema. Now with this option you can
+    provide a function of type `Bool -> String -> String` that generates a custom GraphQL type name. The first argument is a `Bool` that is `True` if the type is an input, and `False` otherwise. The second
+    argument is a `String` representing the initial, auto-generated GraphQL type name. The function returns the desired type name. thanks @nalchevanidze & @bradsherman
+
+    e.g this schema will not fail. morpheus will generate types: `Deity` and `InputDeity`
+
+    ```hs
+    data Deity = Deity
+    { name :: Text,
+      age :: Int
+    }
+    deriving (Show, Generic)
+
+    deityTypeNameModifier isInput original
+      | isInput = "Input" ++ original
+      | otherwise = original
+
+    instance GQLType Deity where
+      typeOptions _ opt = opt {typeNameModifier = deityTypeNameModifier}
+
+    newtype DeityArgs = DeityArgs
+      { input :: Deity
+      }
+      deriving (Show, Generic, GQLType)
+
+    newtype Query (m :: * -> *) = Query
+      { deity :: DeityArgs -> m Deity
+      }
+      deriving (Generic, GQLType)
+    ```
+
+  - exposed `EncodeWrapper` and `DecodeWrapper` type-classes.
+
+  ### Breaking Changes
+
+  - `Map k v` is now represented as just `[Pair k v]`
+  - `GQLScalar` was replaced with `EncodeScalar` and `DecodeScalar` type-classes.
+  - Exclusive input objects: Sum types used as input types are represented as input objects, where only one field must have a value. Namespaced constructors (i.e., where referenced type name concatenated with union type name is equal to constructor name) are unpacked. Furthermore, empty constructors are represented as fields with the unit type.
+
+    for example:
+
+    ```hs
+        data Device
+          | DevicePC PC
+          | Laptops { macAdress :: ID }
+          | Smartphone
+    ```
+
+    this type will generate the following SDL:
+
+    ```graphql
+    enum Unit {
+      Unit
+    }
+
+    input Laptop {
+      macAdress: ID
+    }
+
+    input Device {
+      PC: PC
+      Laptops: Laptops
+      Smartphone: Unit
+    }
+    ```
+
+  - For each nullary constructor will be defined GQL object type with a single field `_: Unit` (since GraphQL does not allow empty objects).
+
+    for example:
+
+    ```haskell
+    data Person = Client { name :: Text } | Accountant | Developer
+    ```
+
+    this type will generate the following SDL:
+
+    ```graphql
+    enum Unit {
+      Unit
+    }
+
+    type Student {
+      name: String!
+    }
+
+    type Accountant {
+      _: Unit!
+    }
+
+    type Developer {
+      _: Unit!
+    }
+
+    union Person = Client | Accountant | Developer
+    ```
+
+  - changed signature of `GQLType.typeOptions` from `f a -> GQLTypeOptions` to `f a -> GQLTypeOptions -> GQLTypeOptions`.
+
+    now you can write:
+
+    ```hs
+      typeOptions _ options = options { fieldLabelModifier = <my function> }
+    ```
+
+  whre argument options is default gql options.
+
+  - deexposed constructor of `GQLTypeOptions`.
+  - Type name for parametrized types like `One (Two Three)` will be generated directly, concatenating them `OneTwoThree` instead of `One_Two_Three.`
+  - Haskell `Float` was renamed to custom scalar type `Float32.`
+  - Haskell `Double` now represents GraphQL `Float`.
+
+  ### Minor Changes
+
+  - deprecated kinds `INPUT`, `ENUM` and `OUTPUT` in favor of more generalized kind `TYPE`.
+    now you can derive INPUT, ENUM and OUTPUT automatically with `deriving (Generic, GQLType)`.
+  - more likely to rebuild when a file loaded by `importGQLDocument` or
+    `importGQLDocumentWithNamespace` is changed
 
   ## 0.16.0 - 05.11.2020
 
@@ -1353,16 +1477,21 @@ changelog: |
     - `gqlResolver` : packs `m Either String a` to `Resolver m a`
     - `gqlEffectResolver`: resolver constructor for effectedResolver
     - `liftEffectResolver`: lifts normal resolver to Effect Resolver.
+
+  ```
+
+  ```
 basic-deps:
   bytestring: '>=0.10.4 && <0.11'
   base: '>=4.7 && <5'
   unordered-containers: '>=0.2.8.0 && <0.3'
   text: '>=1.2.3.0 && <1.3'
-  morpheus-graphql-core: '>=0.16.0 && <0.17.0'
+  morpheus-graphql-core: '>=0.17.0 && <0.18.0'
   containers: '>=0.4.2.1 && <0.7'
   relude: '>=0.3.0'
   mtl: '>=2.0 && <=3.0'
   transformers: '>=0.3.0.0 && <0.6'
+  morpheus-graphql-app: '>=0.17.0 && <0.18.0'
   aeson: '>=1.4.4.0 && <=1.6'
   template-haskell: '>=2.0 && <=3.0'
   vector: '>=0.12.0.1 && <0.13'
@@ -1394,8 +1523,9 @@ all-versions:
 - 0.15.0
 - 0.15.1
 - 0.16.0
+- 0.17.0
 author: Daviti Nalchevanidze
-latest: 0.16.0
+latest: 0.17.0
 description-type: markdown
 description: |
   # Morpheus GraphQL [![Hackage](https://img.shields.io/hackage/v/morpheus-graphql.svg)](https://hackage.haskell.org/package/morpheus-graphql) ![CI](https://github.com/morpheusgraphql/morpheus-graphql/workflows/CI/badge.svg)
@@ -1429,7 +1559,7 @@ description: |
   resolver: lts-16.2
 
   extra-deps:
-    - morpheus-graphql-0.16.0
+    - morpheus-graphql-0.17.0
   ```
 
   As Morpheus is quite new, make sure stack can find morpheus-graphql by running `stack upgrade` and `stack update`
@@ -1632,59 +1762,39 @@ description: |
 
   ```haskell
   data Character
-    = CharacterDeity Deity -- Only <tyConName><conName> should generate direct link
-    -- RECORDS
+    = CharacterDeity Deity -- will be unwrapped, since Character + Deity = CharacterDeity
+    | SomeDeity Deity -- will be wrapped since Character + Deity != SomeDeity
     | Creature { creatureName :: Text, creatureAge :: Int }
-    --- Types
-    | SomeDeity Deity
-    | CharacterInt Int
-    | SomeMulti Int Text
-    --- ENUMS
+    | Demigod Text Text
     | Zeus
-    | Cronus
     deriving (Generic, GQLType)
   ```
 
   where `Deity` is an object.
 
-  As you see there are different kinds of unions. `morpheus` handles them all.
+  As we see, there are different kinds of unions. `Morpheus` handles them all.
 
   This type will be represented as
 
   ```gql
-  union Character =
-      Deity # unwrapped union: because "Character" <> "Deity" == "CharacterDeity"
-    | Creature
-    | SomeDeity # wrapped union: because "Character" <> "Deity" /= SomeDeity
-    | CharacterInt
-    | SomeMulti
-    | CharacterEnumObject # no-argument constructors all wrapped into an enum
-  type Creature {
-    creatureName: String!
-    creatureAge: Int!
-  }
+  union Character = Deity | SomeDeity | Creature | SomeMulti | Zeus
 
   type SomeDeity {
     _0: Deity!
   }
 
-  type CharacterInt {
-    _0: Int!
+  type Creature {
+    creatureName: String!
+    creatureAge: Int!
   }
 
-  type SomeMulti {
+  type Demigod {
     _0: Int!
     _1: String!
   }
 
-  # enum
-  type CharacterEnumObject {
-    enum: CharacterEnum!
-  }
-
-  enum CharacterEnum {
-    Zeus
-    Cronus
+  type Zeus {
+    _: Unit!
   }
   ```
 
@@ -1748,10 +1858,12 @@ description: |
   ```haskell
   data Odd = Odd Int  deriving (Generic)
 
-  instance GQLScalar Odd where
-    parseValue (Int x) = pure $ Odd (...  )
-    parseValue (String x) = pure $ Odd (...  )
-    serialize  (Odd value) = Int value
+  instance DecodeScalar Euro where
+    decodeScalar (Int x) = pure $ Odd (... )
+    decodeScalar _ = Left "invalid Value!"
+
+  instance EncodeScalar Euro where
+    encodeScalar (Odd value) = Int value
 
   instance GQLType Odd where
     type KIND Odd = SCALAR
