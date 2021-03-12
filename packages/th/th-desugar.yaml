@@ -1,16 +1,17 @@
 homepage: https://github.com/goldfirere/th-desugar
 changelog-type: markdown
-hash: 573a176b4642c1ad1f40eef76ad2bfc6bdafe3e5d162f7a6bb08132488cc5496
+hash: 019a2b121ed5de5f8a6af40ee7754511708566fe86def9533e3a54ec074be20e
 test-bench-deps:
-  base: ! '>=4 && <5'
-  hspec: ! '>=1.3'
-  th-orphans: ! '>=0.13.9'
-  syb: ! '>=0.4'
-  HUnit: ! '>=1.2'
-  containers: ! '>=0.5'
+  base: '>=4 && <5'
+  hspec: '>=1.3'
+  th-orphans: '>=0.13.9'
+  syb: '>=0.4'
+  HUnit: '>=1.2'
+  th-abstraction: '>=0.4 && <0.5'
+  containers: '>=0.5'
   th-desugar: -any
-  mtl: ! '>=2.1'
-  th-lift: ! '>=0.6.1'
+  mtl: '>=2.1'
+  th-lift: '>=0.6.1'
   template-haskell: -any
 maintainer: Ryan Scott <ryan.gl.scott@gmail.com>
 synopsis: Functions to desugar Template Haskell
@@ -18,7 +19,116 @@ changelog: |
   `th-desugar` release notes
   ==========================
 
-  Version 1.11 [????.??.??]
+  Version 1.12 [2021.03.12]
+  -------------------------
+  * Support GHC 9.0.
+  * Add support for explicit specificity. As part of this change,
+    the way `th-desugar` represents type variable binders has been overhauled:
+    * The `DTyVarBndr` data type is now parameterized by a `flag` type parameter:
+
+      ```hs
+      data DTyVarBndr flag
+        = DPlainTV Name flag
+        | DKindedTV Name flag DKind
+      ```
+
+      This can be instantiated to `Specificity` (for type variable binders that
+      can be specified or inferred) or `()` (for type variable binders where
+      specificity is irrelevant). `DTyVarBndrSpec` and `DTyVarBndrUnit` are also
+      provided as type synonyms for `DTyVarBndr Specificity` and `DTyVarBndr ()`,
+      respectively.
+    * In order to interface with `TyVarBndr` (the TH counterpart to `DTyVarBndr`)
+      in a backwards-compatible way, `th-desugar` now depends on the
+      `th-abstraction` library.
+    * The `ForallVisFlag` has been removed in favor of the new `DForallTelescope`
+      data type, which not only distinguishes between invisible and visible
+      `forall`s but also uses the correct type variable flag for invisible type
+      variables (`Specificity`) and visible type variables (`()`).
+    * The type of the `dsTvb` is now different on pre-9.0 versions of GHC:
+
+      ```hs
+      #if __GLASGOW_HASKELL__ >= 900
+      dsTvb :: DsMonad q => TyVarBndr flag -> q (DTyVarBndr flag)
+      #else
+      dsTvb :: DsMonad q => flag -> TyVarBndr -> q (DTyVarBndr flag)
+      #endif
+      ```
+
+      This is unfortunately required by the fact that prior to GHC 9.0, there is
+      no `flag` information stored anywhere in a `TyVarBndr`. If you need to use
+      `dsTvb` in a backward-compatible way, `L.H.TH.Desugar` now provides
+      `dsTvbSpec` and `dsTvbUnit` functions which specialise `dsTvb` to
+      particular `flag` types:
+
+      ```hs
+      dsTvbSpec :: DsMonad q => TyVarBndrSpec -> q DTyVarBndrSpec
+      dsTvbUnit :: DsMonad q => TyVarBndrUnit -> q DTyVarBndrUnit
+      ```
+  * The type of the `getRecordSelectors` function has changed:
+
+    ```diff
+    -getRecordSelectors :: DsMonad q => DType -> [DCon] -> q [DLetDec]
+    +getRecordSelectors :: DsMonad q =>          [DCon] -> q [DLetDec]
+    ```
+
+    The old type signature had a `DType` argument whose sole purpose was to help
+    determine which type variables were existential, as this information was used
+    to filter out "naughty" record selectors, like the example below:
+
+    ```hs
+    data Some :: (Type -> Type) -> Type where
+      MkSome :: { getSome :: f a } -> Some f
+    ```
+
+    The old implementation of `getRecordSelectors` would not include `getSome` in
+    the returned list, as its type `f a` mentions an existential type variable,
+    `a`, that is not mentioned in the return type `Some f`. The new
+    implementation of `getRecordSelectors`, on the other hand, makes no attempt
+    to filter out naughty record selectors, so it would include `getSome`.
+
+    This reason for this change is ultimately because determining which type
+    variables are existentially quantified in the context of Template
+    Haskell is rather challenging in the general case. There are heuristics we
+    could employ to guess which variables are existential, but we have found
+    these heuristics difficult to predict (let alone specify). As a result, we
+    take the slightly less correct (but much easier to explain) approach of
+    returning all record selectors, regardless of whether they are naughty or not.
+  * The `conExistentialTvbs` function has been removed. It was horribly buggy,
+    especially in the presence of GADT constructors. Moreover, this function was
+    used in the implementation of `getRecordSelectors` function, so bugs in
+    `conExistentialTvbs` often affected the results of `getRecordSelectors`.
+  * The types of `decToTH`, `letDecToTH`, and `pragmaToTH` have changed:
+
+    ```diff
+    -decToTH :: DDec -> [Dec]
+    +decToTH :: DDec -> Dec
+
+    -letDecToTH :: DLetDec -> Maybe Dec
+    +letDecToTH :: DLetDec -> Dec
+
+    -pragmaToTH :: DPragma -> Maybe Pragma
+    +pragmaToTH :: DPragma -> Pragma
+    ```
+
+    The semantics of `pragmaToTH` have changed accordingly. Previously,
+    `pragmaToTH` would return `Nothing` when the argument is a `DPragma` that is
+    not supported on an old version of GHC, but now an error will be thrown
+    instead. `decToTH` and `letDecToTH`, which transitively invoke `pragmaToTH`,
+    have had their types updated to accommodate `pragmaToTH`'s type change.
+  * The type of the `substTyVarBndrs` function has been simplified to avoid the
+    needless use of continuation-passing style:
+
+    ```diff
+    -substTyVarBndrs :: Quasi q => DSubst -> [DTyVarBndr flag] -> (DSubst -> [DTyVarBndr flag] -> q a) -> q a
+    +substTyVarBndrs :: Quasi q => DSubst -> [DTyVarBndr flag] -> q (DSubst, [DTyVarBndr flag])
+    ```
+  * `mkDLamEFromDPats` has now generates slightly more direct code for certain
+    lambda expressions with `@`-patterns. For example, `\x@y -> f x y` would
+    previously desugar to `\arg -> case arg of { y -> let x = y in f x y }`, but
+    it now desugars to `\y -> let x = y in f x y`.
+  * `mkDLamEFromDPats` now requires only a `Quasi` context instead of `DsMonad`.
+
+  Version 1.11 [2020.03.25]
   -------------------------
   * Support GHC 8.10.
   * Add support for visible dependent quantification. As part of this change,
@@ -412,19 +522,17 @@ changelog: |
 
   * Initial release
 basic-deps:
-  fail: ==4.9.*
-  base: ! '>=4.7 && <5'
-  th-orphans: ! '>=0.13.7'
-  syb: ! '>=0.4'
-  ordered-containers: ! '>=0.2.2'
-  semigroups: ! '>=0.16'
-  th-abstraction: ! '>=0.2.11'
-  containers: ! '>=0.5'
+  base: '>=4.7 && <5'
+  th-orphans: '>=0.13.7'
+  syb: '>=0.4'
+  ordered-containers: '>=0.2.2'
+  th-abstraction: '>=0.4 && <0.5'
+  containers: '>=0.5'
   ghc-prim: -any
-  mtl: ! '>=2.1'
-  th-lift: ! '>=0.6.1'
-  template-haskell: ! '>=2.9 && <2.17'
-  transformers-compat: ! '>=0.6.3'
+  mtl: '>=2.1'
+  th-lift: '>=0.6.1'
+  template-haskell: '>=2.9 && <2.18'
+  transformers-compat: '>=0.6.3'
 all-versions:
 - 1.0.0
 - 1.1.0
@@ -450,15 +558,16 @@ all-versions:
 - '1.9'
 - '1.10'
 - '1.11'
+- '1.12'
 author: Richard Eisenberg <rae@cs.brynmawr.edu>
-latest: '1.11'
+latest: '1.12'
 description-type: markdown
 description: |
   `th-desugar` Package
   ====================
 
   [![Hackage](https://img.shields.io/hackage/v/th-desugar.svg)](http://hackage.haskell.org/package/th-desugar)
-  [![Build Status](https://travis-ci.org/goldfirere/th-desugar.svg?branch=master)](https://travis-ci.org/goldfirere/th-desugar)
+  [![Build Status](https://github.com/goldfirere/th-desugar/workflows/Haskell-CI/badge.svg)](https://github.com/goldfirere/th-desugar/actions?query=workflow%3AHaskell-CI)
 
   This package provides the `Language.Haskell.TH.Desugar` module, which desugars
   Template Haskell's rich encoding of Haskell syntax into a simpler encoding.
@@ -482,6 +591,9 @@ description: |
 
   Known limitations
   -----------------
+
+  ## Limited support for kind inference
+
   `th-desugar` sometimes has to construct types for certain Haskell entities.
   For instance, `th-desugar` desugars all Haskell98-style constructors to use
   GADT syntax, so the following:
@@ -544,4 +656,13 @@ description: |
   4. Locally reified data constructors
   5. Locally reified type family instances (on GHC 8.8 and later, in which the
      Template Haskell AST supports explicit `foralls` in type family equations)
+
+  ## Limited support for linear types
+
+  Currently, the `th-desugar` AST deliberately makes it impossible to represent
+  linear types, and desugaring a linear function arrow will simply turn into a
+  normal function arrow `(->)`. This choice is partly motivated by issues in the
+  way that linear types interact with Template Haskell, which sometimes make it
+  impossible to tell whether a reified function type is linear or not. See, for
+  instance, [GHC#18378](https://gitlab.haskell.org/ghc/ghc/-/issues/18378).
 license-name: BSD-3-Clause
