@@ -1,17 +1,268 @@
 homepage: https://github.com/sternenseemann/spacecookie
 changelog-type: markdown
-hash: e980b116628f841ac387e30a03664683d3e28bb069ab556e455c2102a0b5932d
-test-bench-deps: {}
-maintainer: git@lukasepple.de
-synopsis: Gopher Library and Server Daemon
+hash: 309d1d164176b0c23fdf55c487331235fc10ac43cec15e445511228b9ad0065e
+test-bench-deps:
+  bytestring: '>=0.10'
+  base: '>=4.9 && <5'
+  tasty-expected-failure: '>=0.11'
+  spacecookie: -any
+  process: '>=1.2.0'
+  containers: '>=0.6'
+  tasty-hunit: '>=0.10'
+  attoparsec: '>=0.13'
+  tasty: '>=1.2'
+  filepath-bytestring: '>=1.4'
+  download-curl: '>=0.1'
+  directory: '>=1.3'
+maintainer: sterni-spacecookie@systemli.org
+synopsis: Gopher server library and daemon
 changelog: |
   # Revision history for spacecookie
 
+  ## 1.0.0.0
+
+  2021-03-16
+
+  TL;DR:
+
+  * For server users, new features and configuration options have been
+    added, but old configuration stays compatible. However some gophermap
+    files may need adjusting, especially if they contain absolute paths
+    not starting with a slash.
+  * For library users there are multiple braking changes to the core API
+    that probably need adjusting in downstream usage as well as some
+    changes to behavior.
+
+  ### Server and Library Users
+
+  #### Gophermap parsing
+
+  There have been quite a few, partly breaking changes to gophermap parsing in
+  the library in an effort to fully support the format used in pygopherd and
+  bucktooth. Instances where spacecookie's parsing deviated from the established
+  format have been resolved and we now ship a test suite which checks compliance
+  against sample files from bucktooth and pygopherd.
+
+  We now support relative paths correctly: If a selector in a gophermap doesn't
+  start with `/` or `URL:` it is interpreted as a relative path and prefixed
+  with the directory the gophermap is located in. This should make writing
+  gophermaps much more convenient, as it isn't necessary to enter absolute
+  selectors anymore. However, absolute selectors not starting with `/`
+  are **broken** by this.
+
+  To facilitate these changes, the API of `Network.Gopher.Util.Gophermap`
+  changed in the following way:
+
+  * `GophermapEntry` changed to use `GophermapFilePath` instead of `FilePath`
+    which may either be `GophermapAbsolute`, `GophermapRelative` or `GophermapUrl`.
+    Additionally, `GophermapFilePath` is a wrapper around `RawFilePath`, contrary
+    to the previous use of `FilePath`.
+  * `gophermapToDirectoryResponse` takes an additional parameter describing
+    the directory the gophermap is located in to resolve relative to absolute
+    selectors.
+
+  See also [#22](https://github.com/sternenseemann/spacecookie/issues/22) and
+  [#23](https://github.com/sternenseemann/spacecookie/pull/23).
+
+  Menu lines which only contain a file type and name are now required to be
+  terminated by a tab before the newline. This also reflects the behavior
+  of bucktooth and pygopherd (although the latter's documentation on this
+  is a bit misleading). Although this **breaks** entries like `0/file`,
+  info lines which start with a valid file type character like
+  `1. foo bar baz` no longer get mistaken for normal menu entries.
+  See [#34](https://github.com/sternenseemann/spacecookie/pull/34).
+
+  The remaining, less significant changes are:
+
+  * Fixed parsing of gophermap files whose last line isn't terminated
+    by a newline.
+  * The `gophermaplineWithoutFileTypeChar` line type which mapped menu entries
+    with incompatible file type characters to info lines has been removed. Such
+    lines now result in a parse error. This is a **breaking change** if you
+    relied on this behavior.
+  * `parseGophermap` now consumes the end of input.
+
+  #### Changes to Connection Handling
+
+  * We now wait up to 1 second for the client to close the connection on
+    their side after sending all data. This fixes an issue specific to
+    `curl` which would result in it failing with a recv error (exit code
+    56) randomly.
+    See also [#42](https://github.com/sternenseemann/spacecookie/issues/42)
+    and [#44](https://github.com/sternenseemann/spacecookie/pull/44).
+  * Requests from clients are now checked more vigorously and limited
+    in size and time to prevent denial of service attacks.
+    * Requests may not exceed 1MB in size
+    * The client is only given 10s to send its request
+    * After the `\r\n` no additional data may be sent
+
+  ### Server Users
+
+  #### Configuration
+
+  * Add new `listen` field to configuration allowing to specify the
+    listening address and port. It expects an object with the fields
+    `port` and `addr`. The top level `port` option has been *deprecated*
+    as a result. It is now possible to bind to the link local address
+    `::1` only without listening on public addresses.
+    See [#13](https://github.com/sternenseemann/spacecookie/issues/13) and
+    [#19](https://github.com/sternenseemann/spacecookie/pull/19).
+  * Log output is now configurable via the new `log` field in the
+    configuration. Like `listen` it expects an object which supports the
+    following fields.
+    See [#10](https://github.com/sternenseemann/spacecookie/issues/10) and
+    [#20](https://github.com/sternenseemann/spacecookie/pull/20).
+    * `enable` allows to enable and disable logging
+    * `hide-ips` can be used to hide private information of users from
+      log output. This is *now enabled by default*.
+    * `hide-time` allows to hide timestamps if your log setup already
+      takes care of that.
+    * `level` allows to switch between `error` and `info` log level.
+  * Make `port` and `listen` → `port` settings optional, defaulting to 70.
+
+  Config parsing should be backwards compatible. Please open a bug report if
+  you experience any problems with that or any constellation of the new
+  settings.
+
+  #### Other changes
+
+  * A not allowed error is now generated if there are any dot directories or
+    dot files along the path: `/foo/.dot/bar` would now generate an error
+    instead of being processed like before.
+  * GHC RTS options are now enabled and the default option `-I10` is passed to
+    spacecookie.
+  * Exit if dropping privileges fails instead of just logging an error like before.
+    See [#45](https://github.com/sternenseemann/spacecookie/pull/45).
+  * Expand user documentation by adding three man pages
+    ([rendered](https://sternenseemann.github.io/spacecookie/)) on the server daemon:
+    * `spacecookie(1)`: daemon invocation and behavior
+    * `spacecookie.json(5)`: daemon configuration
+    * `spacecookie.gophermap(5)`: gophermap format documentation
+  * Fix the file not found error message erroneously stating that access of that
+    file was not permitted.
+  * Clarify error message when an URL: selector is sent to spacecookie.
+  * Print version when `--version` is given
+  * Print simple usage instructions when `--help` is given or the command line
+    can't be parsed.
+  * A warning is now logged when a gophermap file doesn't parse and the standard
+    directory response is used as fallback.
+
+  ### Library Users
+
+  ### New Representation of Request and Response
+
+  The following changes are the most significant to the library as they
+  break virtually all downstream usage of spacecookie as a library.
+
+  The gopher request handler for the `runGopher`-variants now receives
+  a `GopherRequest` record representing the request instead of the
+  selector as a `String`. The upsides of this are as follows:
+
+  * Handlers now know the IPv6 address of the client in question
+  * Simple support for search transaction is introduced as the request
+    sent by the client is split into selector and search string.
+  * Selectors are no longer required to be UTF-8 as `ByteString` is used.
+
+  If you want to reuse old handlers with minimal adjustments you can
+  use a snippet like the following. Note though that you might have
+  to make additional adjustments due to the changes to responses.
+
+      wrapLegacyHandler :: (String -> GopherResponse)
+                        -> (GopherRequest -> GopherResponse)
+      wrapLegacyHandler f = f . uDecode . requestSelectorRaw
+
+  Corresponding to the switch to `ByteString` in `GopherRequest` the
+  whole API now uses `ByteString` to represent paths and selectors.
+  This prompts the following additional, breaking changes:
+
+  * `ErrorResponse` now uses a `ByteString` instead of a `String`.
+  * `GopherMenuItem`'s `Item` now uses a `ByteString` instead of a `FilePath`
+    (you can use `encodeFilePath` from `filepath-bytestring` to fix downstream
+    usage).
+  * `sanitizePath` and `sanitizeIfNotUrl` now operate on `RawFilePath`s
+    (which is an alias for `ByteString`).
+  * As already mentioned, the gophermap API uses `RawFilePath`s instead
+    of `FilePath`s as well.
+
+  See also [#38](https://github.com/sternenseemann/spacecookie/pull/38)
+  and [#26](https://github.com/sternenseemann/spacecookie/issues/26).
+
+  #### Logging
+
+  The built-in logging support has been removed in favor of a log handler the
+  user can specify in `GopherConfig`. This is a **breaking change** in two ways:
+
+  * The type of `GopherConfig` changed as it has a new field called
+    `cLogHandler`.
+  * By default (`defaultGopherConfig`) the spacecookie library no longer
+    has logging enabled.
+
+  The motivation for this was to enable the library user to influence the log
+  output more. More specifically the following abilities were to be made
+  possible for the bundled server daemon:
+
+  * It should be possible to hide timestamps in the log output: If you are
+    using systemd for example, the journal will take care of those.
+  * There should be the ability to hide sensitive information from the log
+    output: Unless necessary client IP addresses shouldn't be logged to
+    disk.
+  * The log output should be filterable by log level.
+  * It should be easy for server implementation to also output log messages
+    via the same system as the `spacecookie` library.
+
+  The best solution to guarantee these properties (and virtually any you could
+  want) is to let the library user implement logging. This allows any target
+  output, any kind of logging, any kind of clock interaction to generate
+  timestamps (or not) etc. This is why the spacecookie library no longer
+  implements logging. Instead it lets you configure a `GopherLogHandler`
+  which may also be used by the user application (it is a simple `IO`
+  action). This additionally scales well: In the simplest case this could
+  be a trivial wrapper around `putStrLn`.
+
+  The second part to the solution is `GopherLogStr` which is the string type
+  given to the handler. Internally this is currently implemented as a `Seq`
+  containing chunks of `Builder`s which are coupled with meta data. This
+  should allow decent performance in building and rendering of `GopherLogStr`s.
+  The latter of which is relatively convenient using `FromGopherLogStr`.
+
+  The tagged chunks are used to allow a clean implementation of hiding sensitive
+  data: `makeSensitive` can be used to tag all chunks of a `GopherLogStr` which
+  will then be picked up by `hideSensitive` which replaces all those chunks
+  with `[redacted]`. This way sensitive information can be contained inline in
+  strings and users can choose at any given point whether it should remain there
+  or be hidden.
+
+  The new logging mechanism was implemented in
+  [#29](https://github.com/sternenseemann/spacecookie/pull/29).
+
+  Previously it was attempted to make built-in logging more configurable
+  (see [#13](https://github.com/sternenseemann/spacecookie/issues/13) and
+  [#19](https://github.com/sternenseemann/spacecookie/pull/19)), but this
+  was overly complicated and not as flexible as the new solution. Therefore
+  it was scrapped in favor of the new system.
+
+  #### Other Changes
+
+  * `cRunUserName` has been removed from `GopherConfig` since the functionality
+    doesn't need special treatment as users can implement it easily via the
+    ready action of `runGopherManual`. The formerly internal `dropPrivileges`
+    function is now available via `Network.Gopher.Util` to be used for this
+    purpose. See [#45](https://github.com/sternenseemann/spacecookie/pull/45).
+    This is a **breaking change** and requires adjustment if you used the built
+    in privilege deescalation capabilities.
+  * `santinizePath` and `santinizeIfNotUrl` have been corrected to `sanitizePath`
+    and `sanitizeIfNotUrl` respectively. This is a **breaking change** to the
+    interface of `Network.Gopher.Util`.
+
   ## 0.2.1.2 Bump fast-logger
+
+  2020-05-23
 
   * Bump fast-logger dependency, fix build
 
   ## 0.2.1.1 Fixed Privilege Dropping
+
+  2019-12-10
 
   * Server
     * Make `user` parameter in config optional. If it is not given or set to `null`, `spacecookie` won't attempt
@@ -29,6 +280,8 @@ changelog: |
 
   ## 0.2.1.0 Systemd Support
 
+  2019-10-20
+
   * Improved systemd support.
     * Support for the notify service type
     * Support for socket activation and socket (fd) storage
@@ -39,113 +292,97 @@ changelog: |
 
   ## 0.2.0.1 Hackage release
 
+  2019-05-23
+
   Fixed a problem hindering the hackage release.
 
   ## 0.2.0.0 initial release
+
+  2019-05-23
 
   * First version. Released on an unsuspecting world. Includes:
     * Library for writing any gopher server / application.
     * File system based gopher server with support for gopher maps.
     * Supports logging, privilege dropping, the gopher protocol and common extensions.
 basic-deps:
-  bytestring: -any
-  unix: -any
-  base: '>=4.9.0.0 && <5'
-  socket: -any
+  bytestring: '>=0.10'
+  unix: '>=2.7'
+  base: '>=4.9 && <5'
+  socket: '>=0.8.2'
+  text: '>=1.2'
   spacecookie: -any
-  filepath: -any
+  async: '>=2.2'
   systemd: '>=2.1.0'
-  fast-logger: '>=2.4.0 && <3.1'
-  containers: -any
-  mtl: -any
-  attoparsec: -any
-  transformers: -any
-  hxt-unicode: -any
-  aeson: -any
-  directory: -any
+  fast-logger: '>=2.4.0'
+  containers: '>=0.6'
+  mtl: '>=2.2'
+  attoparsec: '>=0.13'
+  transformers: '>=0.5'
+  hxt-unicode: '>=9.0'
+  aeson: '>=1.5'
+  filepath-bytestring: '>=1.4'
+  directory: '>=1.3'
 all-versions:
 - 0.2.0.1
 - 0.2.1.0
 - 0.2.1.1
 - 0.2.1.2
+- 1.0.0.0
 author: Lukas Epple
-latest: 0.2.1.2
+latest: 1.0.0.0
 description-type: markdown
-description: "\t ____                                       _    _\n\t/ ___| _ __
-  \  __ _  ___ ___  ___ ___   ___ | | _(_) ___\n\t\\___ \\| '_ \\ / _` |/ __/ _ \\/
-  __/ _ \\ / _ \\| |/ / |/ _ \\\n\t ___) | |_) | (_| | (_|  __/ (_| (_) | (_) |   <|
-  |  __/\n\t|____/| .__/ \\__,_|\\___\\___|\\___\\___/ \\___/|_|\\_\\_|\\___|\n\t
-  \     |_|    – haskell gopher server\n\n## What is Gopher?\n\n> The Gopher protocol
-  /ˈɡoʊfər/ is a TCP/IP application layer protocol designed for distributing, searching,
-  and retrieving documents over the Internet. The Gopher protocol was strongly oriented
-  towards a menu-document design and presented an alternative to the World Wide Web
-  in its early stages, but ultimately HTTP became the dominant protocol. The Gopher
-  ecosystem is often regarded as the effective predecessor of the World Wide Web.\n\n–
-  [WP](https://en.wikipedia.org/wiki/Gopher_(protocol))\n\n## What is Spacecookie?\n\nSpacecookie
-  is a gopher server and…\n\n* is RFC1436-compliant\n* supports info-line in menus
-  (compatible protocol extension)\n* supports gophermaps (see [below](#adding-content))\n*
-  provides a library for custom gopher applications ([see documentation](http://hackage.haskell.org/package/spacecookie/docs/Network-Gopher.html))\n*
-  can integrate with systemd using socket activation\n\n## Installation\n\n* Nix(OS):
-  [`pkgs.haskellPackages.spacecookie`](https://nixos.org/nixos/packages.html?channel=nixos-unstable&query=spacecookie)
-  (see also [below](#on-nixos))\n* Cabal: `cabal v2-install spacecookie` (see also
-  [hackage package](http://hackage.haskell.org/package/spacecookie))\n\n[Nix](https://nixos.org/nix/)
-  is probably the most hassle-free way to install spacecookie at the moment.\n\n##
-  Configuration\n\nIn order to run your new gopher server, you have to configure it
-  first. You can find an example configuration file in `./etc/spacecookie.json`. JSON
-  is mostly used due to legacy reason, it's not ideal, but alright for such a small
-  configuration file.\n\nLet's have a quick look at the options:\n\n* `hostname`:
-  The hostname your spacecookie will be reachable through. This should be accurate
-  as gopher clients use it for their subsequent requests.\n* `user`: The user that
-  is used to run spacecookie. If given, spacecookie will switch to this user after
-  setting up its socket. Can be omitted or set to `null`, if root privileges are not
-  needed (e. g. if systemd socket activation or a non well-known port is used).\n*
-  `port`: The port spacecookie should listen on. The well-known port for gopher is
-  70.\n* `root`: The directory which the files to serve via gopher are located in.\n\n##
+description: "# spacecookie\n\nHaskell gopher server daemon and library.\n\n## Features\n\n*
+  implements RFC1436\n* optionally supports common protocol extensions:\n  * informational
+  entries via the `i`-type\n  * [`h`-type and URL entries](http://gopher.quux.org:70/Archives/Mailing%20Lists/gopher/gopher.2002-02%7C/MBOX-MESSAGE/34)\n*
+  supports gophermaps (see [below](#adding-content))\n* supports systemd socket activation\n*
+  provides a library for custom gopher applications ([see documentation](http://hackage.haskell.org/package/spacecookie/docs/Network-Gopher.html))\n\n##
+  Non-Features\n\nspacecookie intentionally does not support:\n\n* HTTP, Gemini: Multi
+  protocol support is a non-goal for spacecookie.\n  For HTTP you can [proxy](https://github.com/sternenseemann/gopher-proxy)\n
+  \ pretty easily, however.\n* Search: Gopher supports search transactions, but the
+  spacecookie daemon doesn't offer\n  the possibility to add a search engine to a
+  gopherspace. It is however\n  entirely possible to implement an index search server
+  using [the\n  spacecookie library](https://hackage.haskell.org/package/spacecookie/docs/Network-Gopher.html)\n\n##
+  Installation\n\n* Nix(OS): [`pkgs.haskellPackages.spacecookie`](https://search.nixos.org/packages?channel=unstable&from=0&size=50&sort=relevance&query=spacecookie)\n
+  \ (see also [below](#on-nixos))\n* Cabal: `cabal v2-install spacecookie`\n  (see
+  also [hackage package](http://hackage.haskell.org/package/spacecookie))\n\n## Documentation\n\n*
+  User Documentation: [spacecookie(1)](https://sternenseemann.github.io/spacecookie/spacecookie.1.html)\n*
+  [Developer Documentation](https://hackage.haskell.org/package/spacecookie)\n\n##
+  Configuration\n\nspacecookie is configured via a JSON configuration file.\nAll available
+  options are documented in\n[spacecookie.json(5)](https://sternenseemann.github.io/spacecookie/spacecookie.json.5.html).\nThis
+  repository also contains an example configuration file in\n[`etc/spacecookie.json`](./etc/spacecookie.json).\n\n##
   Running\n\nAfter you've created your config file just start spacecookie like this:\n\n\tspacecookie
-  /path/to/spacecookie.json\n\nSpacecookie runs as a simple process and doesn't fork
-  or write a PID file. Therefore it is very simple to use a supervisor to run it as
-  a proper daemon. \n\n### With systemd\n\nSpacecookie supports systemd socket activation.
-  To set it up you'll need\nto install `spacecookie.service` and `spacecookie.socket`
-  like so:\n\n\tcp ./etc/spacecookie.{service,socket} /etc/systemd/system/\n\tsystemctl
+  /path/to/spacecookie.json\n\nspacecookie runs as a simple process and doesn't fork
+  or write a PID file.\nTherefore any supervisor (systemd, daemontools, ...) can be
+  used to run\nit as a daemon.\n\n### With systemd\n\nspacecookie supports systemd
+  socket activation. To set it up you'll need\nto install `spacecookie.service` and
+  `spacecookie.socket` like so:\n\n\tcp ./etc/spacecookie.{service,socket} /etc/systemd/system/\n\tsystemctl
   daemon-reload\n\tsystemctl enable spacecookie.socket\n\tsystemctl start  spacecookie.socket\n\tsystemctl
   start  spacecookie.service # optional, started by the socket automatically if needed\n\nOf
-  course make sure that all the used paths are correct!\n\n### Without systemd\n\nSpacecookie
-  does not require systemd nor depend on it. Since socket activation only uses an
-  environment variable and a type unix socket, it is very lightweight and can be utilized
-  without using a systemd library or dbus.\n\nFor example, it should be pretty easy
-  to write a [runit](http://smarden.org/runit/) service file.\n\n### On NixOS\n\nOn
-  [NixOS](https://nixos.org/nixos/) it is best to use the service module [`services.spacecookie`](https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/services/networking/spacecookie.nix).
-  Setting up Spacecookie is as simple as adding the following lines to your `configuration.nix`:\n\n\tservices.spacecookie.enable
-  = true;\n\tservices.spacecookie.hostname = \"localhost\";\n\nOf course you should
-  replace `localhost` with the domain name or IP address your server is reachable
-  through. Additionally you can specify the directory from which Spacecookie serves
-  content using `services.spacecookie.root`, default is `/srv/gopher`.\n\n## Adding
-  Content\n\nSpacecookie acts as a simple file server, only excluding files that start
-  with a dot.\nIt generates gopher menus automatically; however you can use custom
-  ones by adding a gophermap file.\n\nSpacecookie checks for `.gophermap` in every
-  directory it serves and, if present, uses the menu specified in there.\n\nSuch a
-  file looks like this:\n\n\tYou can just start writing text that\n\twill be displayed
-  by the gopher client\n\twithout a link to a file. Empty lines are\n\talso possible.\n\n\t1Menu
-  Entry for a directory full of funny stuff\t/funny\n\tiFunny Image\t/funy.jpg\n\tgcat
-  gif\t/cat.gif\n\t0about me\t/about.txt\n\t1Floodgap's gopher server\t/\tgopher.floodgap.com\t70\n\nSo
-  what does that all mean? These are the rules for a gophermap file:\n\n* comment
-  lines (called info lines in spacecookie's code) are just lines of text. They must
-  not contain a tab! They will be displayed as lines of text by the gopher client.\n*
-  menu entries for files or directories start with a single char which specifies the
-  file type, followed by the text for that file without a space or tab between them!
-  Then the path is added after a tab.\n* \"Links\" to other servers are like file/directory
-  menu entries but the server's hostname and its port must be added (tab-separated).\n\nThe
-  file type characters are defined in [RFC1436](https://tools.ietf.org/html/rfc1436#page-10).
-  Detailed documentation on the gophermap format [can be found here](./docs/gophermap-pygopherd.txt).\n\n##
-  Portability\n\nSpacecookie's portability is mostly limited by [haskell-socket](https://github.com/lpeterse/haskell-socket).\n`haskell-socket`
-  should work on any POSIX-compliant Operating system,  so Spacecookie should support
-  those\nplatforms as well.\n\nHowever I personally have only tested Spacecookie on
-  GNU/Linux (with and without systemd) so far. Feel free to send me an email or generate
-  a [build report](http://hackage.haskell.org/package/spacecookie/reports/)\nif you've
-  built spacecookie (or failed to do so) on another platform!\n\nWindows is currently
-  not supported as we use some Unix-specific features, but there is probably\nlittle
-  demand for it as well.\n\n## HTTP Support?\n\nSpacecookie will never support HTTP
-  to keep the code simple and clean. You can\nhowever use an HTTP to Gopher Proxy
-  with Spacecookie just fine. Any proxy\nsupporting RFC1436 should work, my own [gopher-proxy](https://github.com/sternenseemann/gopher-proxy)\nmight
-  work for you."
+  course make sure that all the used paths are correct!\n\nHow the systemd integration
+  works is explained in\n[spacecookie(1)](https://sternenseemann.github.io/spacecookie/spacecookie.1.html#SYSTEMD_INTEGRATION).\n\n###
+  On NixOS\n\n[NixOS](https://nixos.org/nixos/) provides a service module for spacecookie:\n[`services.spacecookie`](https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/services/networking/spacecookie.nix).\nSetting
+  up spacecookie is as simple as adding the following line to your `configuration.nix`:\n\n\tservices.spacecookie.enable
+  = true;\n\nFor all available options, refer to the NixOS manual:\n\n* [NixOS stable](https://nixos.org/manual/nixos/stable/options.html#opt-services.spacecookie.enable)\n*
+  [NixOS unstable](https://nixos.org/manual/nixos/unstable/options.html#opt-services.spacecookie.enable)\n\n##
+  Adding Content\n\nspacecookie acts as a simple file server, only excluding files\nor
+  directories that start with a dot. It generates gopher menus\nautomatically, but
+  you can also use custom ones by adding a\ngophermap file.\n\nspacecookie checks
+  for `.gophermap` in every directory it serves and,\nif present, uses the menu specified
+  in there.\n\nSuch a file looks like this:\n\n\tYou can just start writing text that\n\twill
+  be displayed by the gopher client\n\twithout a link to a file. Empty lines are\n\talso
+  possible.\n\n\t1Menu Entry for a directory full of funny stuff\t/funny\n\tIFunny
+  Image\t/funny.jpg\n\tgcat gif\t/cat.gif\n\t0about me\t/about.txt\n\t1Floodgap's
+  gopher server\t/\tgopher.floodgap.com\t70\n\nAs you can see, it largely works like
+  the actual gopher menu a server will\nsend to clients, but allows to omit redundant
+  information and to insert\nlines that are purely informational and not associated
+  with a file.\n[spacecookie.gophermap(5)](https://sternenseemann.github.io/spacecookie/spacecookie.gophermap.5.html)\nexplains
+  syntax and semantics in more detail.\n\nThe format is compatible with the ones supported
+  by\n[Bucktooth](gopher://gopher.floodgap.com/1/buck/) and\n[pygopherd](https://github.com/jgoerzen/pygopherd).\nIf
+  you notice any incompatibilities, please open an issue.\n\n## Portability\n\nspacecookie
+  is regularly tested on GNU/Linux via CI, but\nshould also work on other Unix-like
+  operating systems.\nMost portability problems arise due to\n[haskell-socket](https://github.com/lpeterse/haskell-socket)\nwhich
+  is for example known\n[not to work on OpenBSD](https://github.com/lpeterse/haskell-socket/issues/63).\n\nWindows
+  support would be possible, but could be tricky as gopher\nexpects Unix-style directory
+  separators in paths. I personally\ndon't want to invest time into it, but would
+  accept patches adding\nWindows support.\n"
 license-name: GPL-3.0-only
