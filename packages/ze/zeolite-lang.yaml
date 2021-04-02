@@ -1,6 +1,6 @@
 homepage: https://github.com/ta0kira/zeolite
 changelog-type: markdown
-hash: dce8ebd0166b81eb2aa2aec04d6a41e1f62e51c567850eb6836a157e42b7275b
+hash: 155c2dcb6a7d35082b7936c7348ec6e22d6f2b0da07477de588197c02f87b954
 test-bench-deps:
   base: -any
   filepath: -any
@@ -10,6 +10,143 @@ maintainer: Kevin P. Barry <ta0kira@gmail.com>
 synopsis: Zeolite is a statically-typed, general-purpose programming language.
 changelog: |
   # Revision history for zeolite-lang
+
+  ## 0.16.0.0  -- 2021-04-01
+
+  ### Language
+
+  * **[breaking]** Disallows param filters in `@value interface` and
+    `@type interface`. Param filters are only used to allow procedures to call
+    `@type` and `@value` functions. Previously, they were enforced in all
+    situations where param substitution occurred, but this is no longer the case.
+    (See further down in this list.)
+
+  * **[breaking]** Removes support for internal type params for values. This was
+    an obscure feature that was never documented and was only used in some
+    integration tests that had not been touched in over 2 years. This breaks most
+    hand-written C++ extensions, but they can be fixed by removing the
+    `ParamTuple` argument passed to the base-class constructor in `ExtValue_Foo`
+    for C++ extension `Foo`.
+
+  * **[breaking]** Adds the `traverse` built-in syntax, which automatically
+    iterates over a container that exposes the (new) `Order<|#x>`
+    `@value interface`. (This is breaking because `traverse`, `Order`, and
+    `DefaultOrder` are now reserved.)
+
+    ```text
+    traverse (container.defaultOrder() -> Foo value) {
+      // executed once per Foo in the container
+    }
+    ```
+
+  * **[breaking]** Marks `@category` member variables as read-only when
+    initializing other member variables. Essentially, this just means that you can
+    no longer do something like this:
+
+    ```text
+    @category Int foo <- 1
+    @category Int bar <- (foo <- 2)
+    ```
+
+  * **[new]** Removes the requirement that type instances (e.g., `Type<Int>`)
+    satisfy the requirements of the type's parameter filters when not being used
+    in a function call.
+
+    ```text
+    concrete Type<|#x> {
+      #x requires Foo
+    }
+    ```
+
+    In the example above, `Type<Bar>` was universally disallowed if `Bar` could
+    not be converted to `Foo`. The new behavior is to enforce that restriction
+    only when calling `@type` functions, initializing values (e.g.,
+    `Type<#x>{ }`), and using the type as a param in a function call.
+
+    Since `#x` is covariant in this example, you could convert a `Type<Bar>` to a
+    `Type<any>`, even though `any` is not a child of `Foo`.
+
+  * **[new]** Removes variance checks for category-level param filters. Variance
+    was originally *not* checked, but then the checks were added prior to version
+    `0.1.0.0` for obscure mathematical reasons that no longer make sense.
+
+    In particular, filters such as `#x defines Equals<#x>` *were not* previously
+    allowed except when `#x` was invariant, but now it is allowed for all
+    variances.
+
+    The revised perspective is that param filters form a meta-type for param
+    substitutions as inputs, with the constructed type as the output. Once the
+    output is received, the input constraints are no longer recoverable.
+
+    Note that category-level param variance is still checked when params are used
+    on the right side of filters for function params. This is because not doing so
+    could result in bad argument and return types when inheriting functions.
+
+    Params also still cannot have *both* upper and lower bounds at the same time.
+
+  * **[new]** When inferring type parameters for function calls (e.g.,
+    `call<?>(foo)`), allows `all` to be a valid lower bound and `any` to be a
+    valid upper bound. Previously, an inferred type of `all` in covariant
+     positions and `any` in contravariant positions would cause inference to fail.
+
+  * **[new]** Allows `$ReadOnly[...]$` and `$Hidden[...]$` for member variables in
+    definitions of `concrete` categories.
+
+  * **[new]** Makes `Argv` available to all threads. Previously, it was only
+    available to the main thread. (Even though `Argv` is exposed via `lib/util`,
+    this change also affects C++ extensions that use `Argv` from `logging.hpp`.)
+
+  * **[fix]** Fixes regression with function names used in stack traces.
+    Previously, if a function was inherited and the types were not overridden,
+    the category name in the trace would be that of the parent, rather than that
+    of the one defining the procedure.
+
+  ### Compiler CLI
+
+  * **[breaking]** Removes the default compiler mode when calling `zeolite`. The
+    previous default was `-c`, which creates a new `.zeolite-module` for
+    incremental library compilation. The default was removed because accidentally
+    typing `zeolite -f foo` instead of `zeolite -t foo` would overwrite the
+    `.zeolite-module` for `foo` rather than running its tests.
+
+  * **[breaking]** Updates how `$TraceCreation$` is implemented in C++. This only
+    breaks hand-written C++ extensions that use the `CAPTURE_CREATION` macro,
+    which now must pass a string-literal category name as a macro argument,
+    e.g., `CAPTURE_CREATION("Foo")`.
+
+  * **[new]** Adds the `--log-traces` option for testing mode (`zeolite -t`) to
+    capture a record of every line of Zeolite code executed when running tests.
+
+  * **[fix]** Fixes dependency resolution for C++ extensions that define
+    `$ModuleOnly$` categories.
+
+  * **[behavior]** Improves the efficiency of call dispatching and `reduce` calls
+    for categories that inherit a lot of `interface`s. This is unlikely to affect
+    performance when a category has less than 10 direct or indirect parent
+    `interface`s.
+
+  ### Libraries
+
+  * **[new]** Adds `ThreadCondition` to `lib/thread`, which allows threads to wait
+    for an arbitrary condition signaled by another thread. (Similar to
+    `pthread_cond_t` in POSIX.)
+
+  * **[new]** Adds `EnumeratedBarrier` to `lib/thread`, which can be use to
+    synchronize a fixed number of threads. (Similar to `pthread_barrier_t` in
+    POSIX, but with strict validation to help prevent deadlocks.)
+
+  * **[new]** Adds `Realtime` to `lib/thread`, to allow threads to sleep based on
+    wall time.
+
+  * **[new]** Adds `Counter` and `Repeat` to `lib/util`, to help create sequences
+    for use with the new `traverse` built-in syntax.
+
+  * **[new]** Implements forward and reverse iteration to `SearchTree` in
+    `lib/container`.
+
+  ### Examples
+
+  * Adds `example/primes`, as a demonstration of multithreading.
 
   ## 0.15.0.0  -- 2021-03-24
 
@@ -652,8 +789,9 @@ all-versions:
 - 0.13.0.0
 - 0.14.0.0
 - 0.15.0.0
+- 0.16.0.0
 author: Kevin P. Barry
-latest: 0.15.0.0
+latest: 0.16.0.0
 description-type: haddock
 description: |-
   Zeolite is an experimental general-purpose programming language. See
