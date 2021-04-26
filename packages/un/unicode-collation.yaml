@@ -1,15 +1,17 @@
 homepage: https://github.com/jgm/unicode-collation
 changelog-type: markdown
-hash: 723c1094784d64e6c46bfe0527051625ee58095dcc92d2510dff41b9f36fb2c8
+hash: 4e92a82fff19e26e1ee46d7c945b3a4939a32c0c7e6beadbff9a91f1e16b5295
 test-bench-deps:
   bytestring: -any
   base: '>=4.9 && <4.16'
+  unicode-transforms: '>=0.3.7.1'
   text: -any
   doctest: '>=0.8'
   th-lift-instances: -any
   quickcheck-instances: -any
   tasty-bench: -any
   text-icu: -any
+  tasty-quickcheck: -any
   tasty-hunit: -any
   tasty: -any
   QuickCheck: -any
@@ -20,6 +22,56 @@ changelog: |+
   # Changelog
 
   `unicode-collation` uses [PVP Versioning](https://pvp.haskell.org).
+
+  ## 0.1.3
+
+  * Add `collateWithUnpacker` (#4).  This allows the library to be
+    used with types other than Text.  Alternatively we could use a
+    typeclass such as mono-traversable, but this seems a lighter-weight
+    solution and keeps dependencies down.
+
+  * Add Text.Collate.Normalize, exporting `toNFD`.  By doing our
+    own normalization, we avoid a dependency on unicode-transforms,
+    and we gain the ability to do normalization incrementally (lazily).
+    This is useful because in practice, the ordering of two
+    strings is very often decided on the basis of one or two
+    initial characters; normalizing the whole string is thus a
+    waste of time.
+
+  * Improve benchmark suite, with more varied samples.
+
+  * Remove dependency on bytestring-lexing; use Data.Text.Read
+    instead.
+
+  * Add internal module Text.Collate.UnicodeData.
+    This generates unicode data from `data/UnicodeData.txt`.
+    Remove `data/DerivedCombiningClass.txt`, which is no longer
+    needed. to get canonical combining class data.
+
+  * Remove dependency on filepath.
+
+  * Fix getCollationElements behaviour with discontiguous matches
+    (Christian Despres, #5).  The getCollationElements function
+    now implements a more or less exact translation of section
+    S2.1 of the main UCA algorithm. Since DUCET does not satisfy
+    well-formedness condition 5, that function cannot rearrange
+    the unblocked non-starters as it was doing previously.  We now
+    pass all conformance tests.
+
+  * Unit test: skip conformance tests that yield invalid code
+    points, as allowed by the spec (#6).  "Implementations that do
+    not weight surrogate code points the same way as reserved code
+    points may filter out such lines lines in the test cases,
+    before testing for conformance." Uncomment the commented-out
+    lines in the collation tests.
+
+  * Rename internal CombiningClass module -> CanonicalCombiningClass.
+
+  * Generalize `matchLongestPrefix` to `Foldable`.
+    Rewrite using `foldM` for clarity.
+
+  * Rewrite `recursivelyDecompose` using a fold.
+
 
   ## 0.1.2
 
@@ -69,22 +121,20 @@ changelog: |+
 basic-deps:
   bytestring: -any
   base: '>=4.9 && <4.16'
-  unicode-transforms: '>=0.3.7.1'
   text: ==1.2.*
-  filepath: -any
   parsec: -any
   th-lift-instances: -any
   containers: -any
   binary: -any
-  bytestring-lexing: '>=0.5 && <0.6'
   unicode-collation: -any
   template-haskell: -any
 all-versions:
 - '0.1'
 - 0.1.1
 - 0.1.2
+- 0.1.3
 author: John MacFarlane
-latest: 0.1.2
+latest: 0.1.3
 description-type: markdown
 description: |+
   # unicode-collation
@@ -107,20 +157,76 @@ description: |+
 
   ## Conformance
 
-  The library passes UCA conformance tests (except for tests
-  involving unmatched surrogates and a few Tibetan characters,
-  which seem to be changed in unexpected ways by Text.pack or
-  normalization).
+  The library passes all UCA conformance tests.
 
-  Localized collations have not been tested extensively.
+  Localized collations have not been tested as extensively.
 
   ## Performance
 
+  As might be expected, this library is slower than `text-icu`,
+  which wraps a heavily optimized C library.  How much slower
+  depends quite a bit on the input.
+
+  On a sample of ten thousand random Unicode strings, we get a
+  factor of about 3:
+
   ```
-    sort a list of 10000 random Texts: OK (2.19s)
-      8.2 ms ± 599 μs,  27 MB allocated, 911 KB copied
-    sort same list with text-icu:      OK (2.04s)
-      2.0 ms ± 112 μs, 7.1 MB allocated, 147 KB copied
+    sort a list of 10000 random Texts (en):
+      6.0 ms ± 580 μs,  22 MB allocated, 911 KB copied
+    sort same list with text-icu (en):
+      2.1 ms ± 122 μs, 7.1 MB allocated, 149 KB copied
+  ```
+
+  Performance is worse on a sample drawn from a smaller character
+  set including predominantly composed accented letters, which mut
+  be decomposed as part of the algorithm:
+
+  ```
+    sort a list of 10000 Texts (composed latin) (en):
+       15 ms ± 1.1 ms,  40 MB allocated, 921 KB copied
+    sort same list with text-icu (en):
+      2.3 ms ± 212 μs, 6.9 MB allocated, 140 KB copied
+  ```
+
+  Much of the impact here comes from normalization (decomposition).
+  If we use a pre-normalized sample and disable normalization
+  in the collator, it's much faster:
+
+  ```
+    sort same list but pre-normalized (en-u-kk-false):
+      5.7 ms ± 508 μs,  19 MB allocated, 887 KB copied
+  ```
+
+  On plain ASCII, we get a factor of 3 again:
+
+  ```
+    sort a list of 10000 ASCII Texts (en):
+      4.3 ms ±  66 μs,  16 MB allocated, 892 KB copied
+    sort same list with text-icu (en):
+      1.4 ms ± 107 μs, 6.2 MB allocated, 140 KB copied
+  ```
+
+  Note that this library does incremental normalization,
+  so when strings can mostly be distinguished on the basis
+  of the first two characters, as in the first sample, the
+  impact is much less.  On the other hand, performance is
+  much slower on a sample of texts which differ only after
+  the first 32 characters:
+
+  ```
+    sort a list of 10000 random Texts that agree in first 32 chars:
+      118 ms ± 8.2 ms, 430 MB allocated, 713 KB copied
+    sort same list with text-icu (en):
+      3.0 ms ± 226 μs, 8.8 MB allocated, 222 KB copied
+  ```
+
+  However, in the special case where the texts are identical,
+  the algorithm can be short-circuited entirely and sorting
+  is very fast:
+
+  ```
+    sort a list of 10000 identical Texts (en):
+      911 μs ±  34 μs, 468 KB allocated,  10 KB copied
   ```
 
   ## Localized collations
@@ -246,5 +352,8 @@ description: |+
   - Unicode Technical Standard #10:
     Unicode Collation Algorithm:
     <https://www.unicode.org/reports/tr10>
+  - Unicode Technical Standard #215:
+    Unicode Normalization Forms:
+    <https://unicode.org/reports/tr15/>
 
 license-name: BSD-2-Clause
