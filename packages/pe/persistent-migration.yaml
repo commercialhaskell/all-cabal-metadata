@@ -1,6 +1,6 @@
 homepage: https://github.com/brandonchinn178/persistent-migration#readme
 changelog-type: markdown
-hash: fc5e12fba98de900f1272014fa9c018c60a69cb6919d3e856eab3d859cee5333
+hash: 7f40dde77f7afaa17da3791a106b4b8bd9e454ee99bbf643b021b389bebd857e
 test-bench-deps:
   exceptions: -any
   bytestring: -any
@@ -25,50 +25,43 @@ test-bench-deps:
   yaml: -any
 maintainer: Brandon Chinn <brandonchinn178@gmail.com>
 synopsis: Manual migrations for the persistent library
-changelog: ! '## persistent-migration 0.1.0
-
+changelog: |
+  ## persistent-migration 0.2.0
 
   Breaking changes:
+  * Moved some types out of `Database.Persist.Migration.Operation` and into `Database.Persist.Migration.Core`
 
-  * Remove prefixes from operations (#31)
-
-  * Refactored module structure (#34)
-
-  * New migration format with batched operations (#36)
-
-  * `Operation` is now a sum type instead of a newtype wrapper around `Migrateable`
-  (#58)
-
-  * Interpolation now done with `MigrateSql`, e.g. in `RawOperation` (#62)
-
-  * Fix bug in `CreateTable` having multiple `Unique` constraints (#63)
-
+  Fixes:
+  * Fix for GHC 8.8
 
   Other changes:
+  * Re-export `rawSql` in `Database.Persist.Migration`
 
+  ## persistent-migration 0.1.0
+
+  Breaking changes:
+  * Remove prefixes from operations (#31)
+  * Refactored module structure (#34)
+  * New migration format with batched operations (#36)
+  * `Operation` is now a sum type instead of a newtype wrapper around `Migrateable` (#58)
+  * Interpolation now done with `MigrateSql`, e.g. in `RawOperation` (#62)
+  * Fix bug in `CreateTable` having multiple `Unique` constraints (#63)
+
+  Other changes:
   * Add new operations: RenameTable, AddConstraint, DropConstraint (#33)
-
   * Use hpack (#42)
-
   * Allow specifying defaults in columns (#52)
-
   * Add new operation: RenameColumn (#55)
-
 
   ## persistent-migration 0.0.2
 
-
   * Generalize `hasMigration` and `checkMigration` to `MonadIO`
-
 
   ## persistent-migration 0.0.1
 
-
   * Initial implementation
-
-'
 basic-deps:
-  base: ! '>=4.7 && <5'
+  base: '>=4.7 && <5'
   time: -any
   persistent: -any
   unordered-containers: -any
@@ -80,55 +73,138 @@ all-versions:
 - 0.0.1
 - 0.0.2
 - 0.1.0
+- 0.2.0
 author: Brandon Chinn <brandonchinn178@gmail.com>
-latest: 0.1.0
+latest: 0.2.0
 description-type: markdown
-description: ! "# persistent-migration\n\n[![CircleCI](https://circleci.com/gh/brandonchinn178/persistent-migration/tree/master.svg?style=svg)](https://circleci.com/gh/brandonchinn178/persistent-migration/tree/master)\n\nThis
-  is a migration library for the\n[persistent](http://www.stackage.org/package/persistent)
-  package.\n\nBy default, persistent provides a way to do automatic migrations; how
-  to\nquickly and conveniently update the schema to match the definitions of the\nmodels.
-  Because of its automatic nature, it will also balk at any operations\nthat may delete
-  data (\"unsafe\" migrations).\n\nHowever, in a lot of production cases, you don't
-  actually want this automatic\nmigration. You might want to be able to run certain
-  unsafe migrations because\nyou know a column is safe to delete. You might want to
-  be able to copy and\ntransform data from one column to another and then delete the
-  old column. You\nmight want explicit/manual migrations for other reasons.\n\nThis
-  package exposes an `Operation` data type that will be converted into SQL\nby a persistent
-  backend. To define a series of migrations, write a list of\nthese `Operations` and
-  call `runMigration` from the appropriate backend module.\nEach `Operation` represents
-  a movement from one version of the schema to\nanother. `runMigration` will check
-  to see the current version of the schema and\nrun the `Operations` necessary to
-  get from the current version to the latest\nversion.\n\n```\nimport Database.Persist.Migration\nimport
-  Database.Persist.Sql (PersistValue(..), rawSql)\n\ncreatePerson :: CreateTable\ncreatePerson
-  = CreateTable\n  { name = \"person\"\n  , schema =\n      [ Column \"id\" SqlInt32
-  [NotNull, AutoIncrement]\n      , Column \"name\" SqlString [NotNull]\n      , Column
-  \"age\" SqlInt32 [NotNull]\n      , Column \"alive\" SqlBool [NotNull]\n      ,
-  Column \"hometown\" SqlInt64 [References (\"cities\", \"id\")]\n      ]\n  , constraints
-  =\n      [ PrimaryKey [\"id\"]\n      , Unique \"person_identifier\" [\"name\",
-  \"age\", \"hometown\"]\n      ]\n  }\n\nmigrateHeight :: RawOperation\nmigrateHeight
-  = RawOperation \"Separate height into height_feet, height_inches\" $\n  map migrateHeight'
-  <$> rawSql \"SELECT id, height FROM person\" []\n  where\n    migrateHeight' (Single
-  id', Single height) =\n      let (feet, inches) = quotRem height 12\n      in MigrateSql
-  \"UPDATE person SET height_feet = ?, height_inches = ? WHERE id = ?\"\n        [
-  PersistInt64 feet\n        , PersistInt64 inches\n        , PersistInt64 id'\n        ]\n\nmigration
-  :: Migration\nmigration =\n  -- first migration path should create all the tables\n
-  \ [ 0 ~> 1 := [createPerson]\n\n  -- can define shorter migration paths for equivalent
-  operations; version 2, in this case, should result\n  -- in the same schema, regardless
-  of the path taken to get there.\n  , 1 ~> 2 := [DropColumn (\"person\", \"alive\")]\n
-  \ , 0 ~> 2 :=\n    [ createPerson{ctSchema = filter ((/= \"alive\") . colName) $
-  ctSchema createPerson}\n    ]\n\n  -- example for adding columns\n  , 2 ~> 3 :=\n
-  \   [ AddColumn \"person\" (Column \"gender\" SqlString []) Nothing\n      -- Adding
-  a non-null column needs a default for existing rows.\n    , AddColumn \"person\"
-  (Column \"height\" SqlInt32 [NotNull]) (Just $ PersistInt64 0)\n    ]\n\n  -- example
-  for more complex migrations; here, we split up the height field into feet and inches
-  fields\n  , 3 ~> 4 :=\n    [ AddColumn \"person\" (Column \"height_feet\" SqlInt32
-  []) (Just $ PersistInt64 0)\n    , AddColumn \"person\" (Column \"height_inches\"
-  SqlInt32 []) (Just $ PersistInt64 0)\n    , migrateHeight\n    , DropColumn (\"person\",
-  \"height\")\n    ]\n  ]\n```\n\n```\nimport Database.Persist.Migration (checkMigration,
-  defaultSettings)\nimport Database.Persist.Migration.Postgres (runMigration)\n\n--
-  the migration defined above\nimport MyMigration (migration)\n\n-- the migration
-  from persistent's mkMigrate\nimport MyMigration.Migrate (migrationDef)\n\nmain =
-  do\n  -- run the usual migration\n  runMigration defaultSettings migration\n\n  --
-  fails if persistent detects more migrations not accounted for\n  checkMigration
-  migrationDef\n```\n\nFor more examples, see `test/integration/Migration.hs`.\n"
+description: |
+  # persistent-migration
+
+  [![CircleCI](https://circleci.com/gh/brandonchinn178/persistent-migration/tree/master.svg?style=svg)](https://circleci.com/gh/brandonchinn178/persistent-migration/tree/master)
+  [![Hackage](https://img.shields.io/hackage/v/persistent-migration.svg)](https://hackage.haskell.org/package/persistent-migration)
+
+  This is a migration library for the
+  [persistent](http://www.stackage.org/package/persistent) package.
+
+  ## Overview
+
+  By default, persistent provides a way to do automatic migrations; how to
+  quickly and conveniently update the schema to match the definitions of the
+  models. Because of its automatic nature, it will also balk at any operations
+  that may delete data ("unsafe" migrations).
+
+  However, in a lot of production cases, you don't actually want this automatic
+  migration. You might want to be able to run certain unsafe migrations because
+  you know a column is safe to delete. You might want to be able to copy and
+  transform data from one column to another and then delete the old column. You
+  might want explicit/manual migrations for other reasons.
+
+  This package exposes an `Operation` data type that will be converted into SQL
+  by a persistent backend. To define a series of migrations, write a list of
+  these `Operations` and call `runMigration` from the appropriate backend module.
+  Each `Operation` represents a movement from one version of the schema to
+  another. `runMigration` will check to see the current version of the schema and
+  run the `Operations` necessary to get from the current version to the latest
+  version.
+
+  ## Usage
+
+  ```haskell
+  import Database.Persist.Migration
+
+  createPerson :: CreateTable
+  createPerson = CreateTable
+    { name = "person"
+    , schema =
+        [ Column "id" SqlInt32 [NotNull, AutoIncrement]
+        , Column "name" SqlString [NotNull]
+        , Column "age" SqlInt32 [NotNull]
+        , Column "alive" SqlBool [NotNull]
+        , Column "hometown" SqlInt64 [References ("cities", "id")]
+        ]
+    , constraints =
+        [ PrimaryKey ["id"]
+        , Unique "person_identifier" ["name", "age", "hometown"]
+        ]
+    }
+
+  migrateHeight :: RawOperation
+  migrateHeight = RawOperation "Separate height into height_feet, height_inches" $
+    map migrateHeight' <$> rawSql "SELECT id, height FROM person" []
+    where
+      migrateHeight' (Single id', Single height) =
+        let (feet, inches) = quotRem height 12
+        in MigrateSql "UPDATE person SET height_feet = ?, height_inches = ? WHERE id = ?"
+          [ PersistInt64 feet
+          , PersistInt64 inches
+          , PersistInt64 id'
+          ]
+
+  migration :: Migration
+  migration =
+    -- first migration path should create all the tables
+    [ 0 ~> 1 := [createPerson]
+
+    -- can define shorter migration paths for equivalent operations; version 2, in this case, should result
+    -- in the same schema, regardless of the path taken to get there.
+    , 1 ~> 2 := [DropColumn ("person", "alive")]
+    , 0 ~> 2 :=
+      [ createPerson{ctSchema = filter ((/= "alive") . colName) $ ctSchema createPerson}
+      ]
+
+    -- example for adding columns
+    , 2 ~> 3 :=
+      [ AddColumn "person" (Column "gender" SqlString []) Nothing
+        -- Adding a non-null column needs a default for existing rows.
+      , AddColumn "person" (Column "height" SqlInt32 [NotNull]) (Just $ PersistInt64 0)
+      ]
+
+    -- example for more complex migrations; here, we split up the height field into feet and inches fields
+    , 3 ~> 4 :=
+      [ AddColumn "person" (Column "height_feet" SqlInt32 []) (Just $ PersistInt64 0)
+      , AddColumn "person" (Column "height_inches" SqlInt32 []) (Just $ PersistInt64 0)
+      , migrateHeight
+      , DropColumn ("person", "height")
+      ]
+    ]
+  ```
+
+  ```haskell
+  import Database.Persist.Migration (checkMigration, defaultSettings)
+  import Database.Persist.Migration.Postgres (runMigration)
+
+  -- the migration defined above
+  import MyMigration (migration)
+
+  -- the migration from persistent's mkMigrate
+  import MyMigration.Migrate (migrationDef)
+
+  main = do
+    -- run the usual migration
+    runMigration defaultSettings migration
+
+    -- fails if persistent detects more migrations not accounted for
+    checkMigration migrationDef
+  ```
+
+  For more examples, see `test/integration/Migration.hs`.
+
+  ## FAQs
+
+  * I don't know the `SqlType` corresponding to my column's Haskell type
+
+  As a general rule, complicated JSON serialization will be `SqlBlob`, but
+  it might be `SqlString` for simpler data types. You can always choose one,
+  and see if Persistent complains about it needing to be another type.
+
+  For example, you might want to put `SqlBlob` first, and see if Persistent
+  errors with something like:
+
+  ```
+  More migrations detected:
+   * ALTER TABLE table ALTER COLUMN col TYPE VARCHAR
+  ```
+
+  If Persistent tries to change the type to `VARCHAR`, then it probably
+  wants `SqlString` instead.
 license-name: BSD-3-Clause
