@@ -1,12 +1,14 @@
 homepage: https://www.instana.com/
 changelog-type: markdown
-hash: da923c453113751642d755d8f6a8b2e1ddb8fde4359bfc5db965b94d7a14e1dc
+hash: 0bcbd7aeff88d35d5d7168d761f39aca111e9fd02a4022317ede0b711187a2b5
 test-bench-deps:
   http-client: -any
   regex-pcre: -any
   exceptions: -any
   bytestring: -any
   ekg-core: -any
+  wai: -any
+  case-insensitive: -any
   instana-haskell-trace-sdk: -any
   unix: -any
   base: '>=4.7 && <5'
@@ -15,6 +17,7 @@ test-bench-deps:
   retry: -any
   process: -any
   HUnit: -any
+  array: -any
   regex-compat: -any
   hslogger: -any
   regex-tdfa: -any
@@ -23,6 +26,7 @@ test-bench-deps:
   scientific: -any
   http-types: -any
   aeson: -any
+  vector: -any
   aeson-extra: -any
   directory: -any
 maintainer: bastian.krol@instana.com
@@ -30,12 +34,16 @@ synopsis: SDK for adding custom Instana tracing support to Haskell applications.
 changelog: |+
   # Changelog for instana-haskell-trace-sdk
 
+  ## 0.7.00
+  - Add support for W3C trace context.
+  - Fix: Interprete log levels provided via `INSTANA_LOG_LEVEL` and `INSTANA_LOG_LEVEL_STDOUT` case insensitive.
+
   ## 0.6.2.0
   - Fix: Ignore incoming X-INSTANA-T/-S if website monitoring correlation data is present.
   - Add support for X-INSTANA-SYNTHETIC
 
   ## 0.6.1.0
-  - Fix: Capture HTTP status code in `postProcessHttpRespons` even if an the currently active span is an exit.
+  - Fix: Capture HTTP status code in `postProcessHttpRespons` even if the currently active span is an exit.
 
   ## 0.6.0.0
   - Fix: Pass span ID of exit span downstream with X-INSTANA-S instead of the entry span's span ID.
@@ -140,8 +148,9 @@ all-versions:
 - 0.6.0.0
 - 0.6.1.0
 - 0.6.2.0
+- 0.7.0.0
 author: Bastian Krol
-latest: 0.6.2.0
+latest: 0.7.0.0
 description-type: markdown
 description: "# Instana Haskell Trace SDK &nbsp; [![Build Status](https://circleci.com/gh/instana/haskell-trace-sdk.svg?style=svg)](https://circleci.com/gh/instana/haskell-trace-sdk)\n\n\nMonitor
   your Haskell application with [Instana](https://www.instana.com/)! \U0001F389\n\nDisclaimer\n----------\n\nThe
@@ -164,7 +173,7 @@ description: "# Instana Haskell Trace SDK &nbsp; [![Build Status](https://circle
   to your dependencies (for example to the `build-depends` section of your cabal file).
   If you are using [stack](https://docs.haskellstack.org/en/stable/README/) you might
   need to add the SDK (with the version number you want to use) to the `extra-deps`
-  section in your `stack.yaml` file:\n\n```\nextra-deps:\n- instana-haskell-trace-sdk-0.6.2.0\n```\n\nDepending
+  section in your `stack.yaml` file:\n\n```\nextra-deps:\n- instana-haskell-trace-sdk-0.7.0.0\n```\n\nDepending
   on the stack resolver you use, you might also need to add `aeson-extra` to your
   extra-deps:\n\n```\n- aeson-extra-0.4.1.3@sha256:8ad8e4d28e46280ea98af2e94dcaaf524c396c9d91b1eba867961efc6e7f923f,2997\n```\n\nUsage\n-----\n\n<i>Example
   app: Take a look at the [Monad Shop](https://github.com/instana/monad-shop) To see
@@ -205,46 +214,49 @@ description: "# Instana Haskell Trace SDK &nbsp; [![Build Status](https://circle
   :: InstanaContext -> IO ()\nrunApp instana = do\n  -- do your thing here :-)\n```\n\n###
   Creating Spans\n\n#### Trace HTTP Entries Automatically\n\nYou can let the SDK automatically
   create entry spans for all incoming HTTP requests in a WAI application by using
-  it as a WAI middleware plug-in. Note that exit spans still need to be created manually
-  via the `withHttpExit` or `startHttpExit`/`completeExit` functions (see below).\n\nThe
-  middleware plug-in will also add an additional HTTP response header (`Server-Timing`)
-  to HTTP responses. This header enables website monitoring back end correlation.\n\n```\nimport
-  qualified Instana.Wai.Middleware.Entry as InstanaWaiMiddleware\n\nmain = do\n  Warp.run
-  3000 $ InstanaWaiMiddleware.traceHttpEntries instana $ app\n```\n\n#### Bracket
-  Style (High Level API)\n\nAll functions starting with `with` accept (among other
-  parameters) an IO action. The SDK will start a span before, then execute the given
-  IO action and complete the span afterwards. Using this style is recommended over
-  the low level API that requires you to start and complete spans yourself.\n\n* `withRootEntry`:
-  Creates an entry span that is the root of a trace (it has no parent span).\n* `withEntry`:
-  Creates an entry span that has a parent span.\n* `withHttpEntry`: A convenience
-  function that examines an incoming HTTP request for Instana tracing headers and
-  creates an entry span. It will automatically add the correct metadata to the span.
-  Note that you do not need to handle incoming HTTP requests at all when using the
-  Instana WAI middleware plug-in (see above).\n* `withHttpEntry_`: A variant of `withHttpEntry`
+  it as a WAI middleware plug-in. Instana tracing headers as well as W3C trace context
+  headers are automatically taken into account by the plug-in. Note that exit spans
+  still need to be created manually via the `withHttpExit` or `startHttpExit`/`completeExit`
+  functions (see below).\n\nThe middleware plug-in will also add an additional HTTP
+  response header (`Server-Timing`) to HTTP responses. This header enables website
+  monitoring back end correlation.\n\n```\nimport qualified Instana.Wai.Middleware.Entry
+  as InstanaWaiMiddleware\n\nmain = do\n  Warp.run 3000 $ InstanaWaiMiddleware.traceHttpEntries
+  instana $ app\n```\n\n#### Bracket Style (High Level API)\n\nAll functions starting
+  with `with` accept (among other parameters) an IO action. The SDK will start a span
+  before, then execute the given IO action and complete the span afterwards. Using
+  this style is recommended over the low level API that requires you to start and
+  complete spans yourself.\n\n* `withRootEntry`: Creates an entry span that is the
+  root of a trace (it has no parent span).\n* `withEntry`: Creates an entry span that
+  has a parent span.\n* `withHttpEntry`: A convenience function that examines an incoming
+  HTTP request for Instana tracing headers or W3C trace context headers and creates
+  an entry span. It will automatically add the correct metadata to the span. Note
+  that you do not need to handle incoming HTTP requests at all when using the Instana
+  WAI middleware plug-in (see above).\n* `withHttpEntry_`: A variant of `withHttpEntry`
   with a more general type signature, but less features. It will automatically continue
-  the trace from incoming headers just like `withHttpEntry` does, but it will not
-  capture the status code of the HTTP response or add the response header for website
-  monitoring back end correlation (Server-Timing). It is recommended to use `withHttpEntry`
-  instead of this function, if possible. Alternatively, you can also call `postProcessHttpResponse`
-  inside the `withHttpEntry_` block to cover the two missing features mentioned above.
-  Note that you do not need to handle incoming HTTP requests at all when using the
-  Instana WAI middleware plug-in.\n* `withExit`: Creates an exit span. This can only
-  be called inside a `withRootEntry` or an `withEntry` call, as an exit span needs
-  an entry span as its parent.\n* `withHttpExit`: Creates an exit span for a given
-  HTTP client request. It will automatically add the correct metadata to the span
-  so it should be preferred to `withExit` when tracing outgoing HTTP requests. It
-  will also add HTTP headers to the request to propagate the trace context downstream.\n*
-  `postProcessHttpResponse`: Processes the response of an HTTP entry. This function
-  needs be called while the HTTP entry span is still active. It can be used inside
-  a `withHttpEntry_` block or between `startHttpEntry` and `completeEntry`. This function
-  accomplishes two things: It captures the HTTP status code from the response and
-  adds it as an annotation to the currently active span. It also adds an additional
-  HTTP response header (Server-Timing) to the given HTTP response that enables website
-  monitoring back end correlation. Client code should rarely have the need to call
-  this directly. Instead, capture incoming HTTP requests with `withHttpEntry`, which
-  does both of these things automatically.\n\n#### Low Level API/Explicit Start And
-  Complete\n\n* `startRootEntry`: Starts an entry span that is the beginning of a
-  trace (has no parent span). You will need to call `completeEntry` at some point.\n*
+  the trace from incoming headers (Instana headers or W3C trace context) just like
+  `withHttpEntry` does, but it will not capture the status code of the HTTP response
+  or add the response header for website monitoring back end correlation (Server-Timing).
+  It is recommended to use `withHttpEntry` instead of this function, if possible.
+  Alternatively, you can also call `postProcessHttpResponse` inside the `withHttpEntry_`
+  block to cover the two missing features mentioned above. Note that you do not need
+  to handle incoming HTTP requests at all when using the Instana WAI middleware plug-in.\n*
+  `withExit`: Creates an exit span. This can only be called inside a `withRootEntry`
+  or an `withEntry` call, as an exit span needs an entry span as its parent.\n* `withHttpExit`:
+  Creates an exit span for a given HTTP client request. It will automatically add
+  the correct metadata to the span so it should be preferred to `withExit` when tracing
+  outgoing HTTP requests. It will also add Instana tracing HTTP headers as well as
+  W3C trace context HTTP headers HTTP to the request to propagate the trace context
+  downstream.\n* `postProcessHttpResponse`: Processes the response of an HTTP entry.
+  This function needs be called while the HTTP entry span is still active. It can
+  be used inside a `withHttpEntry_` block or between `startHttpEntry` and `completeEntry`.
+  This function accomplishes two things: It captures the HTTP status code from the
+  response and adds it as an annotation to the currently active span. It also adds
+  an additional HTTP response header (Server-Timing) to the given HTTP response that
+  enables website monitoring back end correlation. Client code should rarely have
+  the need to call this directly. Instead, capture incoming HTTP requests with `withHttpEntry`,
+  which does both of these things automatically.\n\n#### Low Level API/Explicit Start
+  And Complete\n\n* `startRootEntry`: Starts an entry span that is the beginning of
+  a trace (has no parent span). You will need to call `completeEntry` at some point.\n*
   `startEntry`: Starts an entry span. You will need to call `completeEntry` at some
   point.\n* `startHttpEntry`: Starts an entry span for an incoming HTTP request. It
   will automatically add the correct metadata to the span. You do not need to handle
@@ -296,10 +308,12 @@ description: "# Instana Haskell Trace SDK &nbsp; [![Build Status](https://circle
   during development.\n\n#### Logging Related Environment Variables\n\n* `INSTANA_LOG_LEVEL`:
   Sets the log level for the SDK's log file. The log file will be written to the system's
   temporary directory (in particular, whatever `System.Directory.getTemporaryDirectory`
-  returns) as `instana-haskell-sdk.{pid}.log`.\n* `INSTANA_LOG_LEVEL_STDOUT`: Sets
-  the level for emitting log messages to stdout.\n* `INSTANA_OVERRIDE_HSLOGGER_ROOT_HANDLER`:
-  Controls whether the SDK sets an hslogger at the root logger level, see below.\n\n####
-  When To Set `INSTANA_OVERRIDE_HSLOGGER_ROOT_HANDLER`\n\nSetting up hslogger correctly
+  returns) as `instana-haskell-sdk.{pid}.log`. All [log priorities from hslogger](http://hackage.haskell.org/package/hslogger-1.3.1.0/docs/System-Log-Logger.html#t:Priority)
+  can be used, case insensitive.\n* `INSTANA_LOG_LEVEL_STDOUT`: Sets the level for
+  emitting log messages to stdout. All [log priorities from hslogger](http://hackage.haskell.org/package/hslogger-1.3.1.0/docs/System-Log-Logger.html#t:Priority)
+  can be used, case insensitive.\n* `INSTANA_OVERRIDE_HSLOGGER_ROOT_HANDLER`: Controls
+  whether the SDK sets an hslogger at the root logger level, see below.\n\n#### When
+  To Set `INSTANA_OVERRIDE_HSLOGGER_ROOT_HANDLER`\n\nSetting up hslogger correctly
   inside a library like the Instana Haskell SDK (as opposed to an application which
   has full control) can be tricky. For the Instana Haskell SDK to be able to correctly
   configure hslogger, it is important to know whether the app in question (or some
