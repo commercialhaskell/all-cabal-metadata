@@ -1,8 +1,8 @@
 homepage: ''
 changelog-type: markdown
-hash: d83952461afcf6cc2fc6998d023395290f2998f75d6e3e6c2a4e42a4d2b20c99
+hash: a2576f6a42dd26ce59cd926e167bab2fba5b9ca66d405324ca4bc6bd3486fa8b
 test-bench-deps:
-  base: ^>=4.15.0.0
+  base: '>=4.11.0.0 && <5'
   example-impl: -any
   mtl: ^>=2.2
   example-logic-that-logs: -any
@@ -18,26 +18,61 @@ changelog: |
 
   * First version. Released on an unsuspecting world.
 basic-deps:
-  base: ^>=4.15.0.0
+  base: '>=4.11.0.0 && <5'
   mtl: ^>=2.2
   dep-t: ^>=0.4.4
 all-versions:
 - 0.1.0.1
+- 0.1.0.2
 author: Daniel Diaz Carrete
-latest: 0.1.0.1
-description-type: haddock
-description: "Using a record-of-functions as the environment of some \nreader-like
-  monad is a common way of structuring Haskell \napplications, somewhat resembling
-  dependency injection in OOP.\n\nWe often want our program logic to be polymorphic
-  over both the\nconcrete monad and the environment. One common solution is to\nabstract
-  the monad using @MonadReader@, and abstract the environment\nusing @HasX@-style
-  typeclasses.\n\nOne minor annoyance though is that invoking the function in the
-  \nenvironment is often a bit cumbersome: you have to ask\nthe environment for the
-  function, and then lift the result of\nthe function back into the reader-like monad.\n\nThis
-  library supports a special twist on @ReaderT@-record-of-functions                     \nstyle:
-  instead of depending only on typeclasses for abstraction, \nwe also use a module
-  signature. This comes with different tradeoffs.\n\nOne benefit is that we support
-  a simpler way of invoking functions from the\nenvironment, using a helper that takes
-  care of both asking the environment\nand lifting function results, and which works
-  uniformly for functions of any\narity."
+latest: 0.1.0.2
+description-type: markdown
+description: "# moo-nad\n\nIn [this Stack Overflow\nquestion](https://stackoverflow.com/questions/61642492/simplifying-the-invocation-of-functions-stored-inside-an-readert-environment),\nI
+  asked how to simplify the invocation of functions stored in a `ReaderT`\nenvironment.\n\nFor
+  example, when invoking a `Int -> String -> _ ()` logging function from the environment,
+  I would\nlike to simply be able to write:\n\n    logic :: ReaderT EnvWithLogger
+  IO ()\n    logic = do\n        self logger 7 \"this is a message\"\n\ninstead of
+  something like\n\n    logic :: ReaderT EnvWithLogger IO ()\n    logic = do\n        e
+  <- ask\n        liftIO $ logger e 7 \"this is a message\"\n\n(Yes, I'm aware that
+  this isn't *that* big of a hassle, and that solving it might\novercomplicate other
+  things. But bear with me.)\n\nThe question received [this\nanswer](https://stackoverflow.com/a/61642757/1364288),
+  which worked like a\ncharm. The answer also included the following comment:\n\n>
+  Implementing variadics with type classes is generally frowned upon because of\n>
+  how fragile they are, but it works well here because the RIO type provides a\n>
+  natural base case\n\nThat got me thinking: is there a way to avoid tying the workings
+  of the\nhelper typeclass to a *concrete* monad, like\n[`RIO`](http://hackage.haskell.org/package/rio)?
+  Can the call-helper code be\nmade to work with a variety of reader-like monads?\n\nAfter
+  [a number of failed attempts](https://github.com/danidiaz/dep-t/issues/1)\nusing
+  a typeclass-only approach, I turned to the solution explored in the\ncurrent repo:
+  *abstract the monad and the environment using a [module\nsignature](https://downloads.haskell.org/ghc/latest/docs/html/users_guide/separate_compilation.html#module-signatures)*.\n\nThat
+  signature is called [`Moo`](./lib/Moo.hsig), and the module [`Moo.Prelude`](./lib/Moo/Prelude.hs)
+  provides the\n`self` and `call` helper methods.\n\n## How to use this library to
+  write program logic that is polymorphic on the monad and the environment?\n\nThis
+  is an alternative to the usual way of abstracting the monad using [mtl](http://hackage.haskell.org/package/mtl).\n\nPut
+  program logic into indefinite libraries which depend\non the [`Moo` module signature](./lib/Moo.hsig).
+  Import [`Moo.Prelude`](./lib/Moo/Prelude.hs) for the call helpers.\n\nYou'll likely
+  need to expand the base `Moo` signature through [signature\nmerging](https://github.com/danidiaz/really-small-backpack-example/tree/master/lesson3-signature-merging)
+  to require extra capabilities from the monad and/or the environment.\n\n(**Note**:
+  this approach is less fine-grained with respect to constraints than\nthe MTL one.
+  When using MTL each individual function can have different\nconstraints. But here,
+  functions from modules that import the same version of\n`Moo` will share the same
+  constraints. If you want constraint differentiation,\nyou'll need to create separate
+  compilation units with different \"enriched\"\nversions of `Moo`.)\n\nYou'll eventually
+  need to write an implementation library that gives concrete instantiations for the
+  monad and the environment.\n\nIn your executable, depend on both your program logic
+  and the implementation library. The magic of [mixing matching](https://github.com/danidiaz/really-small-backpack-example/tree/master/lesson2-signatures)
+  will take place, and you'll end up with a concrete version of your logic.\n\n##
+  Very well; how does an actual example look like?\n\n- See the [example-logic-that-logs](./lib-example-logic-that-logs)
+  internal library for an example of [abstract program logic](./lib-example-logic-that-logs/LogicThatLogs.hs)
+  that imports an [enriched](./lib-example-logic-that-logs/Moo.hsig) version of `Moo`.
+  \n\n- See also the [example-impl](./lib-example-impl) internal library that implements
+  the `Moo` signature.\n\n- The [test suite](./test/tests.hs) creates an actual concrete
+  environment and runs the program logic with it.\n\nBecause we are using Backpack,
+  we need to look at how everything is wired together\nin the [cabal file](./moo-nad.cabal).
+  Notice in particular how: \n\n- The program logic depends on `moo-nad` but *not*
+  on the implementation.\n\n- The implementation *doesn't* depend on `moo-nad`. Implementations
+  in Backpack don't depend on the signatures they implement.\n\n- The test suite depends
+  on the program logic and the implementation.\n\n## caveat emptor\n\nAt the end of
+  the day, this method might involve too much ceremony to be practical. \n\nFeedback
+  welcome. \n\n"
 license-name: BSD-3-Clause
