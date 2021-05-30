@@ -1,8 +1,9 @@
 homepage: https://github.com/cmk/connections
 changelog-type: markdown
-hash: 94647c483904707a6586b9005ca1166f84781e604b552f71adeb5673597661e7
+hash: e5823096db8acfffd947d5026d424e981b784f56a974caa545d03090731477d8
 test-bench-deps:
   base: ==4.*
+  time: '>=1.8.0 && <2.0'
   connections: -any
   hedgehog: -any
 maintainer: chris.mckinlay@gmail.com
@@ -32,16 +33,173 @@ changelog: |
   * Add misc new instances.
 basic-deps:
   base: '>=4.10 && <5.0'
+  time: '>=1.8.0 && <2.0'
   connections: -any
   doctest: '>=0.8'
   containers: '>=0.4.0 && <1.0'
+  extended-reals: '>=0.2.0.0 && <0.3'
 all-versions:
 - 0.1.0
 - 0.2.0
 - 0.3.0
+- 0.3.1
 author: Chris McKinlay
-latest: 0.3.0
-description-type: haddock
-description: A library for order manipulation using Galois connections. See the README
-  for a brief overview.
+latest: 0.3.1
+description-type: markdown
+description: "# connections\n\n[![Build Status](https://travis-ci.com/cmk/connections.svg?branch=master)](https://travis-ci.com/cmk/connections)\n\n`connections`
+  is a library for working with Galois connections on various common preorders.\n\nHosted
+  on [Hackage](https://hackage.haskell.org/package/connections).\n\n* [What is a connection?](#intro)\n*
+  [What can you do with them?](#what)\n* [What's wrong with the numeric conversions
+  in `base`?](#base)\n\n\n\n### What is a connection? <a name=\"intro\"></a>\n\nA
+  [Galois connection](https://en.wikipedia.org/wiki/Galois_connection) between preorders
+  P and Q is a pair of monotone maps `f :: p -> q` and `g :: q -> p` such that `f
+  x <= y` if and only if `x <= g y`. We say that `f` is the left or lower adjoint,
+  and `g` is the right or upper adjoint of the connection.\n\nFor illustration, here
+  is a simple example from [7 Sketches](https://math.mit.edu/~dspivak/teaching/sp18/7Sketches.pdf):\n\n![](img/example.png)\n\nConnections
+  are useful for performing lawful conversions between different types [among other
+  things](#what). This library provides connections between common types, combinators
+  & accessors, including lawful versions of [`floor`](https://hackage.haskell.org/package/connections/docs/Data-Connection-Conn.html#v:floor),
+  [`ceiling`](https://hackage.haskell.org/package/connections/docs/Data-Connection-Conn.html#v:ceiling),
+  [`round`](https://hackage.haskell.org/package/connections/docs/Data-Connection-Conn.html#v:round),
+  and [`truncate`](https://hackage.haskell.org/package/connections/docs/Data-Connection-Conn.html#v:truncate).\n\nThere
+  is also a [class](https://hackage.haskell.org/package/connections/docs/Data-Connection-Class.html#t:Connection)
+  with lawful versions of `fromInteger` and `fromRational`, suitable for use with
+  `-XRebindableSyntax`\n\nLastly, it provides [lattices and algebras](https://hackage.haskell.org/package/connections/docs/Data-Lattice.html).\n\n###
+  How do connections work?\n\nLet's look at a simple connection between `Ordering`
+  and `Bool`:\n\n```\nordbin :: Conn 'L Ordering Bool\nordbin = ConnL f g where\n
+  \ f LT = False\n  f _  = True\n \n  g False = LT\n  g True = GT\n```\n\nThe two
+  component functions are each monotonic (i.e. `x1 <= x2` implies `f x1 <= f x2`),
+  and are 'interlocked' or adjoint in the specific way outlined above: `f x <= y`
+  if and only if `x <= g y`. \n\nWe can easily verify the adjointness property by
+  hand in this case:\n\n`f`/`g`| `False` | `True`  |\n------ | ------- | ------- |\n
+  `LT`  | `=`/`=` | `<`/`<` |\n `EQ`  | `>`/`>` | `=`/`<` |\n `GT`  | `>`/`>` | `=`/`=`
+  |\n\nEach cell represents a pairing of (`x`,`y`) with the two relations `f x _ y`
+  and `x _ g y`. A cell with either `=`/`>`, `>`/`=`, or arrows facing in opposite
+  directions would indictate a failure. See the `test` folder for further examples.\n\nInterestingly,
+  there is a second 'flipped' connection available as well, where the same `g` can
+  serve as the lower end:\n\n```\nbinord :: Conn 'L Bool Ordering\nbinord = ConnL
+  g h where\n  g False = LT\n  g True  = GT\n  \n  h GT = True\n  h _  = False\n```\n\nIt
+  turns out that this situation happens fairly frequently- the three functions are
+  called an adjoint [string](https://ncatlab.org/nlab/show/adjoint+string) or chain
+  of length 3 (i.e. `f` is adjoint to `g` is adjoint to `h`). It is useful to be able
+  to work with these length-3 chains directly, because the choice of two routes back
+  from P to Q is what enables lawful rounding and truncation. \n\nTherefore the connection
+  type in `Data.Connection.Conn` is parametrized over a data kind (e.g. `'L`) that
+  specifies which pair we are talking about (`f`/`g` or `g`/`h`). When a chain is
+  available the data kind is existentialized (see the view pattern `Conn`).\n\nIn
+  our example above, it turns out that a small change in the adjoints on each side
+  enables such a chain:\n\n```\nordbin :: Conn k Ordering Bool\nordbin = Conn f g
+  h\n  where\n    f LT = False\n    f _  = True\n        \n    g False = LT\n    g
+  True = GT\n    \n    h GT = True\n    h _  = False\n```\n\nOnce again we can check
+  the adjointness property for each of the two connections (`f`/`g` or `g`/`h`):\n
+  \n `f`/`g`/`h` |   `False`   |    `True`   |\n------------ | ----------- | -----------
+  |\n `LT`        | `=`/`=`/`=` | `<`/`<`/`<` |\n `EQ`        | `>`/`>`/`=` | `=`/`<`/`<`
+  |\n `GT`        | `>`/`>`/`>` | `=`/`=`/`=` |\n\n\nSee [`Data.Connection.Property`](https://hackage.haskell.org/package/connections/docs/Data-Connection-Property.html)
+  for a list of properties that all connections should satisfy.\n\n\n### What can
+  you do with them? <a name=\"what\"></a>\n\nLots of things!\n\nAt a basic level connections
+  can tell you interesting things about the underlying types themselves:\n\n```\nλ>
+  import Data.Connection\nλ> inner ratf32 (1 / 8)    -- eighths are exactly representable
+  in a float\n1 % 8\nλ> outer ratf32 (1 % 8)\n(0.125,0.125)\nλ> inner ratf32 (1 /
+  7)    -- sevenths are not\n9586981 % 67108864\nλ> outer ratf32 (1 % 7)\n(0.14285713,0.14285715)\n```\n\nYou
+  can use them to safely convert between types obviously:\n\n```\nλ> :t ceiling f64w32\nceiling
+  f64w32 :: Double -> Extended Word32\nλ> ceiling f64w32 pi\nFinite 4\nλ> ceiling
+  f64w32 (0/0)\nPosInf\nλ> floor f64w32 (0/0)\nNegInf\n```\n\n... as well as to round,
+  truncate, take medians, etc.\n\n```\nλ> round f64w32 pi\nFinite 3\nλ> round f64w32
+  (-pi)\nFinite 0\nλ> round f64i32 (-pi)\nFinite (-3)\nλ> median f32f32 1 9 7\n7.0\nλ>
+  median f32f32 1 9 (-1/0)\n1.0\nλ> median f32f32 1 9 (0/0)\n9.0\nλ> median f32f32
+  1 9 (1/0)\n9.0\n```\n\nYou can also lift functions over connections: \n\n```\nλ>
+  :t round1 f64f32\nround1 f64f32 :: (Double -> Double) -> Float -> Float\nλ> f x
+  = let m = 16777215 in (m + x) - m\nλ> f 2.0 :: Float\n1.0\nλ> round1 f64f32 f 2.0
+  \ -- Avoid loss of precision\n2.0\n```\n\n... and use various combinators to combine
+  them:\n\n```\nλ> :t divide rati16 f32i16\ndivide rati16 f32i16 :: Conn k (Rational,
+  Float) (Extended Int16)\nλ> maximize (divide rati16 f32i16) 2.99 3.01\nFinite 4\nλ>
+  maximize (divide rati16 f32i16) 2.99 (0/0)\nPosInf\nλ> minimize (divide rati16 f32i16)
+  2.99 (0/0)\nNegInf\n```\n\nIn particular connections form a category, which means
+  they compose:\n\n```\nλ> :t MkSystemTime\nMkSystemTime :: Int64 -> Word32 -> SystemTime\nλ>
+  :t connL ratf64 >>> ratsys\nconnL ratf64 >>> ratsys :: Conn 'L Double (Extended
+  SystemTime)\nλ> ceiling (connL ratf64 >>> ratsys) pi\nFinite (MkSystemTime {systemSeconds
+  = 3, systemNanoseconds = 141592654})\nλ> diffSystemTime x y = inner (connL ratf64
+  >>> ratsys) $ round2 ratsys (-) (Finite x) (Finite y)\nλ> :t diffSystemTime\ndiffSystemTime
+  :: SystemTime -> SystemTime -> Double\nλ> diffSystemTime (MkSystemTime 0 0) (MkSystemTime
+  0 maxBound)\n-4.294967295\nλ> divMod (maxBound @Word32) (10^9)\n(4,294967295)\n```\n\n\n\n###
+  What's wrong with the numeric conversions in `base`? <a name=\"base\"></a>\n\nFrom
+  an industrial user's perspective, `base` is unfortunately in pretty bad shape. Every
+  class in the image below not colored yellow or orange has problems in my opinion.
+  Every 'numerical' class (blue or pink) has serious problems either in the interface,
+  the instances, or both.\n\n![](img/haskell-typeclasses.png)\n\nWith respect to numerical
+  conversions there are two classes of problem: \n\n* the non-integral instances of
+  `Ord` (e.g. `Float`, `Double`, `Rational`, `Scientific`, etc.)\n* the interfaces
+  of `Integral`, `Num`, `Real`, `Fractional`, and `RealFrac`\n\n\n#### Orders: total
+  and partial \n\nThe root problem here is quite old: `NaN` values (e.g. `0/0`, `0
+  * 1/0`, `1/0 - 1/0`, etc) are not comparable to any finite number, so fractional
+  and floating point types cannot be totally ordered.\n\nHowever the `Ord` instances
+  of `Float`, `Double`, and `Rational` ignore this, leading to nonsensical behavior:\n\n```\nλ>
+  import GHC.Real (Ratio(..))\nλ> 0 :% 0 < -1\nFalse\nλ> 0 :% 0 == -1\nFalse\nλ> 0
+  :% 0 <= -1\nTrue\nλ> compare @Float (0/0) (1/0)\nGT\nλ> compare @Float (1/0) (0/0)\nGT\nλ>
+  max @Float 0 (-0.0) \n-0.0\nλ> max @Float (-0.0) 0\n0.0\n```\n\nThe behavior isn't
+  consistent accross types either:\n\n```\nλ> 0 :% 0 <= 0 :% 0\nTrue\nλ> (0/0 :: Float)
+  <= 0/0\nFalse\n```\n\nThis is dangerous and can lead to bugs [well outside of numerical
+  applications](https://github.com/ocaml/ocaml/issues/5222). Fortunately the solution
+  is fairly simple: create a [`Preorder`](https://hackage.haskell.org/package/connections/docs/Data-Order.html#t:Preorder)
+  class with lawful instances for types with `NaN` values. Rust does something [similar](https://doc.rust-lang.org/std/cmp/trait.PartialOrd.html).\n\n\n\n####
+  Coercive conversions\n\nThe second set of problems is with the various conversion
+  methods defined in `Integral`, `Num`, `Real` and `Fractional`:\n\n```\nfromInteger
+  :: Num a => Integer -> a\ntoInteger :: Integral a => a -> Integer\nfromRational
+  :: Fractional a => Rational -> a\ntoRational :: Real a => a -> Rational\n```\n\nThe
+  problem with the conversion methods is that they are all lawless: the classes do
+  not define any equational laws that the user can expect instances to obey. Predictably,
+  the result is chaos:\n\n```\nλ> toInteger @Int8 128\n-128\nλ> fromInteger @Int8
+  128\n-128\nλ> toRational @Float (0/0)\n(-510423550381407695195061911147652317184)
+  % 1\nλ> fromRational @Float (0/0)\n*** Exception: Ratio has zero denominator\n```\n\nOne
+  could object that the examples above are exceptional. Unfortunately, surprises can
+  occur in completely mundane situations as well:\n\n```\nλ> fromRational @Float 5000000.2
+  -- your fintech app is under-charging 20¢ on every $5M transaction\n5000000.0\nλ>
+  fromRational @Float 5000000.3 -- or is it over-charging 20¢?\n5000000.5\n```\n\nWorse,
+  these conversion methods in turn give rise to the aptly-named [coercions](hackage.haskell.org/package/base/docs/src/GHC-Real.html#fromIntegral):\n\n```\nrealToFrac
+  :: (Real a, Fractional b) => a -> b\nrealToFrac = fromRational . toRational\n\nfromIntegral
+  :: (Integral a, Num b) => a -> b\nfromIntegral = fromInteger . toInteger\n```\n\nIf
+  you're not careful, these 'just make it type-check' functions will get slotted in
+  everywhere in your application. Sometimes that's ok, but if your application has
+  to deal with small, large, infinite, or otherwise exceptional values then the resultant
+  behavior will make your (or somebody's) life miserable:\n\n```\nλ> realToFrac @Float
+  @Double (1/0)\n3.402823669209385e38\nλ> realToFrac @Double @Float (1/0)\nInfinity\nλ>
+  realToFrac @Rational @Double (1 :% 0)\nInfinity\nλ> realToFrac @Double @Rational
+  (1/0)\n179769313486231590772930519078902473361797697894230657273430081157732675805500963132708477322407536021120113879871393357658789768814416622492847430639474124377767893424865485276302219601246094119453082952085005768838150682342462881473913110540827237163350510684586298239947245938479716304835356329624224137216
+  % 1\nλ> fromIntegral @Int8 @Word8 128\n128\nλ> fromIntegral @Int8 @Word 128\n18446744073709551488\nλ>
+  fromIntegral @Int8 @Natural 128 -- your colleagues will appreciate this _underflow_
+  exception \n*** Exception: arithmetic underflow\n```\n\nWhat happened in that last
+  example to create an underflow exception? If anything you would expect overflow.
+  \n\nThis is what happened:\n\n```\nλ> toInteger @Int8 128\n-128\nλ> fromInteger
+  @Natural (-128)\n*** Exception: arithmetic underflow\n```\n\nIt's a good example
+  of why composition is only your friend if it comes with composable guarantees. \n\n\nFinally,
+  let's look at [`RealFrac`](www.hackage.haskell.org/package/base/docs/GHC-Real.html#t:RealFrac):\n\n```
+  \ \n-- | Extracting components of fractions.\nclass  (Real a, Fractional a) => RealFrac
+  a where\n\n    -- | The function 'properFraction' takes a real fractional number
+  @x@\n    -- and returns a pair @(n,f)@ such that @x = n+f@, and:\n    --\n    --
+  * @n@ is an integral number with the same sign as @x@; and\n    --\n    -- * @f@
+  is a fraction with the same type and sign as @x@,\n    --   and with absolute value
+  less than @1@.\n    --\n    -- The default definitions of the 'ceiling', 'floor',
+  'truncate'\n    -- and 'round' functions are in terms of 'properFraction'.\n    properFraction
+  \     :: (Integral b) => a -> (b,a)\n    \n    -- | @'truncate' x@ returns the integer
+  nearest @x@ between zero and @x@\n    truncate            :: (Integral b) => a ->
+  b\n    \n    -- | @'round' x@ returns the nearest integer to @x@;\n    --   the
+  even integer if @x@ is equidistant between two integers\n    round               ::
+  (Integral b) => a -> b\n    \n    -- | @'ceiling' x@ returns the least integer not
+  less than @x@\n    ceiling             :: (Integral b) => a -> b\n    \n    -- |
+  @'floor' x@ returns the greatest integer not greater than @x@\n    floor               ::
+  (Integral b) => a -> b\n\n    {-# MINIMAL properFraction #-}\n```\n\nBy now you
+  might be suspicious of these claims. If so, your suspicion would be rewarded:\n\n\n```\nλ>
+  properFraction @Float @Int 3000000.1\n(3000000,0.0)\nλ> ceiling @Float @Int 3000000.1\n3000000\n```\n\nThe
+  situation again is especially bad for floating point types, which are forced to
+  go through `Integer` and/or `Rational`:\n\n```\nλ> properFraction @Float @Int (1/0)\n(0,0.0)\nλ>
+  ceiling @Float @Int (1/0)\n0\nλ> properFraction @Float @Integer (1/0)\n(340282366920938463463374607431768211456,0.0)\nλ>
+  ceiling @Float @Integer (1/0)\n340282366920938463463374607431768211456\nλ> realToFrac
+  @Float @Rational (1/0)\n340282366920938463463374607431768211456 % 1\n```\n\nEven
+  conversions between `Float` and `Double`, which should be straightforward, are impacted:\n\n```\nλ>
+  realToFrac @Float @Double (1/0)\n3.402823669209385e38\nλ> import GHC.Float (float2Double)\nλ>
+  float2Double (1/0)\nInfinity\n```\n\nThe meta-problem behind all of these problems
+  is the mis-specification of the numeric type classes in `base`. Functions that can
+  only be meaningfully given laws in pairs (like `toRational` and `fromRational`)
+  are instead broken up between different classes, laws are either non-existant or
+  (worse) misleading, and users are left to fend for themselves.\n\n"
 license-name: BSD-3-Clause
