@@ -1,8 +1,8 @@
 homepage: ''
-changelog-type: markdown
-hash: dfa860f30923d1d0cdeceeb0e9959a55fed4c9f84c8302abb4194424a9457981
+changelog-type: ''
+hash: 136474748fa34b44e5319c4fc89bab705bb82c6f1c20c5f398130e30c06fd767
 test-bench-deps: {}
-maintainer: fresheyeball@protonmail.com
+maintainer: isaac.shapira@platonic.systems
 synopsis: A programming model for declarative, high performance user interface.
 changelog: ''
 basic-deps:
@@ -15,7 +15,9 @@ basic-deps:
   category: '>=0.2 && <0.3'
   ghcjs-dom: '>=0.9.4 && <0.20'
   containers: -any
+  mtl: -any
   transformers: -any
+  deepseq: -any
   wai-app-static: -any
   jsaddle: '>=0.9.7 && <0.20'
 all-versions:
@@ -23,13 +25,14 @@ all-versions:
 - 0.1.0.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.3.1.0
 author: Isaac Shapira
-latest: 0.3.0.0
+latest: 0.3.1.0
 description-type: markdown
-description: |+
+description: |
   # Shpadoinkle Core
 
-  [![Goldwater](https://gitlab.com/fresheyeball/Shpadoinkle/badges/master/pipeline.svg)](https://gitlab.com/fresheyeball/Shpadoinkle)
+  [![Goldwater](https://gitlab.com/platonic/shpadoinkle/badges/master/pipeline.svg)](https://gitlab.com/platonic/shpadoinkle)
   [![Haddock](https://img.shields.io/badge/haddock-master-informational)](https://shpadoinkle.org/core)
   [![BSD-3](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
   [![built with nix](https://img.shields.io/badge/built%20with-nix-41439a)](https://builtwithnix.org)
@@ -37,187 +40,5 @@ description: |+
   [![Hackage Deps](https://img.shields.io/hackage-deps/v/Shpadoinkle.svg)](http://packdeps.haskellers.com/reverse/Shpadoinkle)
   [![Hackage CI](https://matrix.hackage.haskell.org/api/v2/packages/Shpadoinkle/badge)](https://matrix.hackage.haskell.org/#/package/Shpadoinkle)
 
-  Shpadoinkle is a Haskell UI programming paradigm.
-
-  ## The core concept
-
-  Is to model the user interface as a pure function from some model `a` to Html.
-  This is not a new idea in the slightest. Declaratively describing the view in terms
-  of the model through a data structure is the dominant approach in UI today. And
-  for good reason.
-
-  If all we need is to render something based on some `a` we can have `Html` be a
-  simple data structure where `Html :: Type`:
-
-  ```haskell
-  view :: a -> Html
-  ```
-
-  This might look something like:
-
-  ```haskell
-  view :: Text -> Html
-  view username =
-    H "div" [ ("class", "greeting") ] [ Text $ "Hi there!" <> username ]
-  ```
-
-  ## Events and effects
-
-  Which is all well and good, and something we might expect from a static renderer,
-  like Heist, or Blaze. Shpadoinkle handles this by allowing for `Html` to have two
-  type variables associated with events, `Html :: (Type -> Type) -> Type -> Type`.
-
-  The first is typically some Monad you want to use in response to events `m`, and
-  the second is the payload of those events, typically the model for your view `a`.
-
-  These variables in `Html m a` are strickly about event listeners, so any view
-  that doesn't have event listeners should be parametic in both `m` and `a`.
-
-  look at a toggle as an example:
-
-  ```haskell
-  toggle :: Applicative m => Bool -> Html m Bool
-  toggle b = h "div" []
-    [ text $ "Currently it's " <> if b then "ON" else "OFF"
-    , h "button" [ listen "click" (not b) ] [ text "Toggle" ]
-    ]
-  ```
-
-  That's it, we have a stateful view. When the user click's on
-  the "Toggle" button the state will switch. Because we do a pure
-  state transition in this function, `m` need only be `Applicative`.
-  We could put `Identity` here if we wanted to, but keeping `m` general
-  helps our views compose.
-
-  But what if we need to do _more_? Well we can update our `m` to
-  have more functionality. We can add some logging to the console:
-
-  ```haskell
-  toggle :: Bool -> Html IO Bool
-  toggle b = h "div" []
-    [ text $ "Currently it's " <> if b then "ON" else "OFF"
-    , h "button"
-      [ listen' "click" $ do
-          putStrLn "We toggled!"
-          return $ not b
-      ] [ text "Toggle" ]
-    ]
-  ```
-
-  What if we want to access some record of capabilities? Or update some
-  concurrent memory thing? Let's say we have an enterprise grade Monad:
-
-  ```haskell
-  newtype App a = App { runApp :: RIO (TVar Metrics) a }
-    deriving (Functor, Applicative, Monad, MonadReader (TVar Metrics), MonadIO, MonadJSM)
-
-
-  toggle :: Bool -> Html App Bool
-  toggle b = h "div" []
-    [ text $ "Currently it's " <> if b then "ON" else "OFF"
-    , h "button"
-      [ listen' "click" $ do
-          metrics <- ask
-          liftIO $ do
-            atomically . modifyTVar metrics $
-              \m -> m { toggleCount = toggleCount m + 1 }
-            putStrLn "We toggled!"
-          return $ not b
-      ] [ text "Toggle" ]
-    ]
-  ```
-
-  ## Composing views
-
-  In Shpadoinkle we can compose views without impedance if the types match,
-  or are parametric. For example:
-
-  ```haskell
-  hero :: Html m a
-  hero = h "h1" [] [ text "Online String Reverse" ]
-
-  input :: Html m Text
-  input = h "input" [ onInput id ] []
-
-  view :: Text -> Html m Text
-  view s = h "div" []
-    [ hero  -- no impedance, this Html is fully generic
-    , input -- no impedance, this Html has matching types `(Text ~ Text)`
-    , text $ "Reversed: \"" <> reverse s <> "\""
-    ]
-  ```
-
-  If you have nesting, with different types,
-  we can resolve the mismatch using 'fmap' like so:
-
-  ```haskell
-  input :: Html m Text
-  input = h "input" [ onInput id ] []
-
-  view :: (Int, Text) -> Html m (Int, Text)
-  view (i,t) = h "div" []
-
-    -- here we update the `Text` side of the model
-    -- with the value produced by `input`, and we
-    -- increment the `Int` as well.
-    [ (\t_ -> (i + 1, t_)) <$> input
-    , text $ "Reversed: \"" <> reverse t <> "\""
-    , text $ "you have reversed " <> pack (show i) <> " strings"
-    ]
-  ```
-
-  ## The primitive
-
-  The Shpadoinkle programming model core primitive is the `shpadoinkle` function.
-
-  ```haskell
-  shpadoinkle
-    :: (Shpadoinkle b m a, Territory t, Eq a) =>
-    => (m ~> JSM) -> (t a -> b m ~> m) -- How to render
-    -> a -> t a                        -- What is our model
-    -> (a -> Html (b m) a)             -- What to render
-    -> b m RawNode -> JSM ()           -- Actually render
-  ```
-
-  This is the machine that runs a Shpadoinkle view. To run we need
-  the following ingredients:
-
-  ### `m ~> JSM`
-
-  We need a _Natural Transformation_ from our `m` to `JSM`, so that
-  we can perform the needed JavaScript effects in JSM from the `m`
-  you provide.
-
-  ### `t a -> b m ~> m`
-
-  This a function that takes a state container of some kind `t`,
-  and returns a _Natural Transformation_ from our Shpadoinkle backend `b`,
-  to our monad `m`. Backends kind of works like Monad Transformers, where
-  `b` wraps our Monad `m`, and needs to be unwrappable.
-
-  ### `a`
-
-  This is the initial value of our model. This will be passed to our view
-  for the first render.
-
-  ### `t a`
-
-  This is the state container `t` that will drive the view. When the state
-  changes, we should re-render the view. The semantic behind determing when
-  to do this, is upto you via the `Territory` type class. Typically this is
-  just a `TVar` as that is the provided cannonical implimentation.
-
-  ### `a -> Html (b m) a`
-
-  This is the view function, you actual application to render. It takes
-  the model and returns the html to render, such that it's events produce the
-  same model.
-
-  ### `b m RawNode`
-
-  This is the raw node we that will wrap our view. If you want the Shpadoinkle view
-  to be the entire page, then you want to pass `document.body` as this node.
-  You could use this to embed a Shpadoinkle application into another application,
-  (such a Reflex-dom or Miso).
-
+  ## [Documentation ->](https://shpadoinkle.org/packages/core)
 license-name: BSD-3-Clause
