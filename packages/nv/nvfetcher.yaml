@@ -1,22 +1,29 @@
 homepage: https://github.com/berberman/nvfetcher
 changelog-type: markdown
-hash: e95489c33471ab9d5fec01d9e9886fa90b24c88abffedc7f109b1d6d91255d9d
+hash: e45464b8b77d28fa614b2cc32bebc6de206f186ea687dd163cd483933867ed9b
 test-bench-deps: {}
 maintainer: berberman <berberman.yandex.com>
 synopsis: Generate nix sources expr for the latest version of packages
-changelog: |
-  # Revision history for nvfetcher
-
-  ## 0.2.0.0
-
-  * Generated package sources will be sorted alphabetically.
-  * CLI program now supports `nix-git-prefetch` configurations in TOML.
-  * Lenses are added for some data types.
-  * CLI options are no loger inherited from Shake. Now `nvfetcher` has its own CLI options with completion support.
-
-  ## 0.1.0.0
-
-  * First version. Released on an unsuspecting world.
+changelog: "# Revision history for nvfetcher\n\n## 0.3.0.0\n\nThere are massive enhancements
+  since the last release:\n\n* Add support for nvchecker [list options](https://nvchecker.readthedocs.io/en/latest/usage.html#list-options)\n*
+  Refactor TOML config parsing\n* Remove version specification in fetcher config (`fetch.url
+  = url:version` -> `fetch.url = url`)\n* Add support for calculating [`cargoLock`](https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/rust.section.md#importing-a-cargolock-file)
+  for `rustPlatform.buildRustPackage`\n* Add support for nvchecker [global options](https://nvchecker.readthedocs.io/en/latest/usage.html#global-options)\n*
+  Remove ambiguous branch specification (`git.branch`) from git fetcher\n* Enable
+  parallelism by default\n* Add a global retry option\n* Rename `.shake` to `_build`\n*
+  Generate nix output file in `_build`, and symlink it to `../sources.nix` (You have
+  to keep `_build` as the `nvfetcher` run result)\n* Support extracting arbitrary
+  files from fetched package source\n* Add nvchecker upstream sources [`src.webpage`](https://nvchecker.readthedocs.io/en/latest/usage.html#search-in-a-webpage)
+  and [`src.httpheader`](https://nvchecker.readthedocs.io/en/latest/usage.html#search-in-an-http-header)\n*
+  Add nvchecker upstream source `src.github_tag`\n* Share CLI between `runNvfetcher`
+  (use `nvfetcher` in the DSL way) and `nvfetcher` executable program \n* Nix related
+  improvements:\n  * Add a development shell `ghcWithNvfetcher` for people who want
+  to use `nvfetcher` as a Haskell library\n  * Generate command line completion for
+  the executable\n   \n\n## 0.2.0.0\n\n* Generated package sources will be sorted
+  alphabetically.\n* CLI program now supports `nix-git-prefetch` configurations in
+  TOML.\n* Lenses are added for some data types.\n* CLI options are no loger inherited
+  from Shake. Now `nvfetcher` has its own CLI options with completion support.\n\n##
+  0.1.0.0\n\n* First version. Released on an unsuspecting world.\n"
 basic-deps:
   shake: '>=0.19.4 && <0.20'
   free: '>=5.1.5 && <5.2'
@@ -24,22 +31,27 @@ basic-deps:
   bytestring: -any
   extra: '>=1.7.9 && <1.8'
   base: '>=4.8 && <5'
+  unordered-containers: -any
   text: -any
   nvfetcher: -any
+  parsec: -any
+  data-default: '>=0.7.1 && <0.8'
   containers: -any
   validation-selective: -any
   binary: -any
-  optparse-simple: -any
+  optparse-simple: '>=0.1.1 && <0.2'
+  binary-instances: '>=1.0.1 && <1.1'
   transformers: -any
   microlens: -any
   aeson: '>=1.5.6 && <1.6'
   neat-interpolation: '>=0.5.1 && <0.6'
-  tomland: ^>=1.3.2
+  tomland: '>=1.3.2 && <1.4'
 all-versions:
 - 0.1.0.0
 - 0.2.0.0
+- 0.3.0.0
 author: berberman
-latest: 0.2.0.0
+latest: 0.3.0.0
 description-type: markdown
 description: |
   # nvfetcher
@@ -50,8 +62,6 @@ description: |
 
   nvfetcher is a tool to automate packages updates in flakes repos. It's built on top of [shake](https://www.shakebuild.com/),
   integrating [nvchecker](https://github.com/lilydjwg/nvchecker).
-  It's very simple -- most complicated works are done by nvchecker, nvfetcher just wires it with prefetch tools,
-  producing only one artifact as the result of build.
   nvfetcher cli program accepts a TOML file as config, which defines a set of package sources to run.
 
   ## Overview
@@ -103,6 +113,10 @@ description: |
   and nvfetcher will help us keep their version and prefetched SHA256 sums up-to-date, stored in `sources.nix`.
   Shake will help us handle necessary rebuilds -- we check versions of packages during each run, but only prefetch them when needed.
 
+
+  `sources.nix` is a symlink of `_build/generated.nix`, which means that the "build" results produced by `nvfetcher` are under `_build`,
+  so you have to keep this directory for further use.
+
   ### Live examples
 
   How to use the generated sources file? Here are some examples:
@@ -126,6 +140,14 @@ description: |
   ```
 
   To use it as a Haskell library, the package is available on [Hackage](https://hackage.haskell.org/package/nvfetcher).
+  If you want to use the Haskell library from flakes, there is also a shell `ghcWithNvfetcher`:
+
+  ```
+  $ nix develop github:berberman/nvfetcher#ghcWithNvfetcher
+  $ runghc Main.hs
+  ```
+
+  where you can define packages in `Main.hs`. See [Haskell library](#Haskell-library) for details.
 
   ## Usage
 
@@ -145,35 +167,77 @@ description: |
     -l,--changelog FILE      Dump version changes to a file
     -j NUM                   Number of threads (0: detected number of processors)
                              (default: 0)
+    -r,--retry NUM           Times to retry of some rules (nvchecker, prefetch,
+                             nix-instantiate, etc.) (default: 3)
     -t,--timing              Show build time
     -v,--verbose             Verbose mode
-    TARGET                   Two targets are available: build and clean
+    TARGET                   Two targets are available: 1.build 2.clean
+                             (default: "build")
   ```
 
-  Each *package* corresponds to a TOML table, whose name is encoded as table key;
-  there are two fields and four optional git prefetch configuration in each table:
-  * a nvchecker configuration, how to track version updates
-    * `src.github = owner/repo` - the latest gituhb release
-    * `src.pypi = pypi_name` - the latest pypi release
-    * `src.git = git_url` - the latest commit of a repo
-    * `src.archpkg = archlinux_pkg_name` -- the latest version of an archlinux package
-    * `src.aur = aur_pkg_name` -- the latest version of an aur package
-    * `src.manual = v` -- a fixed version, which never updates
-    * `src.repology = project:repo` -- the latest version from repology
-  * a nix fetcher function, how to fetch the package given the version number. `$ver` is available, which will be set to the result of nvchecker.
-    * `fetch.github = owner/repo` or `owner/repo:rev` (default to `$ver` if no `rev` specified)
-    * `fetch.pypi = pypi_name` or `pypi_name:ver` (default to `$ver` if no `ver` specified)
-    * `fetch.git = git_url` or `git_url:rev` (default to `$ver` if no `rev` specified)
-    * `fetch.url = url`
-
-  * optional git prefetch configuration, which makes sense only when the fetcher equals to `fetch.github` or `fetch.git`.
-  They can exist simultanesouly.
-    * `git.branch = branch_name` - branch to fetch
-    * `git.deepClone` - a bool value to control deep clone
-    * `git.fetchSubmodules` - a bool value to control fetching submodules
-    * `git.leaveDotGit` - a bool value to control leaving dot git
-
+  Each *package* corresponds to a TOML table, whose name is encoded as table key, with
+  two required fields and three optional fields in each table.
   You can find an example of the configuration file, see [`nvfetcher_example.toml`](nvfetcher_example.toml).
+
+  #### Nvchecker
+
+  Version source -- how do we track upstream version updates?
+  * `src.github = owner/repo` - the latest gituhb release
+  * `src.github_tag = owner/repo` - the max github tag, usually used with list options (see below)
+  * `src.pypi = pypi_name` - the latest pypi release
+  * `src.git = git_url` (and an optional `src.branch = git_branch`) - **the latest commit** of a repo
+  * `src.archpkg = archlinux_pkg_name` -- the latest version of an archlinux package
+  * `src.aur = aur_pkg_name` -- the latest version of an aur package
+  * `src.manual = v` -- a fixed version, which never updates
+  * `src.repology = project:repo` -- the latest version from repology
+  * `src.webpage = web_url` and `src.regex` -- a string in webpage that matches with regex
+  * `src.httpheader = request_url` and `src.regex` -- a string in http header that matches with regex
+
+
+  Optional list options for some version sources (`src.github_tag`, `src.webpage`, and `src.httpheader`),
+  see the corresponding [nvchecker documentation](https://nvchecker.readthedocs.io/en/latest/usage.html#list-options) for details.
+  * `src.include_regex`
+  * `src.exclude_regex`
+  * `src.sort_version_key`
+  * `src.ignored`
+
+
+  Optional global options for all kinds of version sources,
+  see the corresponding [nvchecker documentation](https://nvchecker.readthedocs.io/en/latest/usage.html#global-options) for details. You can tweak obtained version number using this option, e.g. stripping the prefix `v` or transforming the result by regex.
+  * `src.prefix`
+  * `src.from_pattern`
+  * `src.to_pattern`
+
+  #### Nix fetcher
+
+  How do we fetch the package source if we have the target version number?
+  `$ver` is available in string, which will be set to the result of nvchecker.
+
+  * `fetch.github = owner/repo`
+  * `fetch.pypi = pypi_name`
+  * `fetch.git = git_url`
+  * `fetch.url = url`
+
+
+  Optional `nix-prefetch-git` config, which make sense only when the fetcher equals to `fetch.github` or `fetch.git`.
+  They can exist simultanesouly.
+    * `git.deepClone`
+    * `git.fetchSubmodules`
+    * `git.leaveDotGit`
+
+
+  #### Extract src
+
+  Optional *extract src* config, files are extracted into build directory, and then read by `readFile` in generated nix expr.
+    * `extract = [ "file_1", "file_2", ...]` - file paths are relative to the source root
+
+  #### Rust support
+
+  `rustPlatform.buildRustPackage` now accepts an attribute [`cargoLock`](https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/rust.section.md#importing-a-cargolock-file) to vendor dependencies from `Cargo.lock`,
+  so we can use this instead TOFU `cargoSha256` for Rust packageing. `nvfetcher` supports automating this process,
+  extracting the lock file to build and calculating `cargoLock.outputHashes`, as long as you set the config
+  * `cargo_lock = cargo_lock_path` - relative to the source root
+
 
   ### Haskell library
 
