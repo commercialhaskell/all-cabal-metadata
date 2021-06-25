@@ -1,10 +1,19 @@
 homepage: https://github.com/Bodigrim/tasty-bench
 changelog-type: markdown
-hash: 4f00fdafc3aba6e48366a3684c427618d98c0b1b130cd9cab35c9498796c9a65
+hash: f747a2dc8f7235d978a5ec71dbf347a2d4289617884e569e638590ab15ea6a68
 test-bench-deps: {}
 maintainer: Andrew Lelechenko <andrew.lelechenko@gmail.com>
 synopsis: Featherlight benchmark framework
 changelog: |
+  # 0.3
+
+  * Report mean time with 3 significant digits.
+  * Report peak memory usage, when run with `+RTS -T`.
+  * Run benchmarks only once, if `RelStDev` is infinite.
+  * Make `Benchmarkable` constructor public.
+  * Expose `measureCpuTime` helper to run benchmarks manually.
+  * Expose `CsvPath`, `BaselinePath`, `SvgPath`.
+
   # 0.2.5
 
   * Fix comparison against baseline.
@@ -42,7 +51,7 @@ changelog: |
 basic-deps:
   base: '>=4.3 && <5'
   containers: '>=0.4'
-  tasty: '>=1.4'
+  tasty: '>=0.11.3'
   deepseq: '>=1.1'
 all-versions:
 - '0.1'
@@ -50,11 +59,12 @@ all-versions:
 - 0.2.2
 - 0.2.3
 - 0.2.5
-author: ''
-latest: 0.2.5
+- '0.3'
+author: Andrew Lelechenko
+latest: '0.3'
 description-type: markdown
 description: |
-  # tasty-bench [![Hackage](http://img.shields.io/hackage/v/tasty-bench.svg)](https://hackage.haskell.org/package/tasty-bench) [![Stackage Nightly](http://stackage.org/package/tasty-bench/badge/nightly)](http://stackage.org/nightly/package/tasty-bench)
+  # tasty-bench [![Hackage](http://img.shields.io/hackage/v/tasty-bench.svg)](https://hackage.haskell.org/package/tasty-bench) [![Stackage LTS](http://stackage.org/package/tasty-bench/badge/lts)](http://stackage.org/lts/package/tasty-bench) [![Stackage Nightly](http://stackage.org/package/tasty-bench/badge/nightly)](http://stackage.org/nightly/package/tasty-bench)
 
   Featherlight benchmark framework (only one file!) for performance measurement
   with API mimicking [`criterion`](http://hackage.haskell.org/package/criterion)
@@ -69,7 +79,9 @@ description: |
   So if you already depend on `tasty` for a test suite, there
   is nothing else to install.
 
-  Compare this to `criterion` (10+ modules, 50+ dependencies) and `gauge` (40+ modules, depends on `basement` and `vector`).
+  Compare this to `criterion` (10+ modules, 50+ dependencies) and `gauge` (40+ modules, depends on `basement` and `vector`). A build on a clean machine is up to 16x
+  faster than `criterion` and up to 4x faster than `gauge`. A build without dependencies
+  is up to 6x faster than `criterion` and up to 8x faster than `gauge`.
 
   ## How is it possible?
 
@@ -207,9 +219,26 @@ description: |
   for [68%](https://en.wikipedia.org/wiki/68%E2%80%9395%E2%80%9399.7_rule)
   of samples only, double it to estimate the behavior in 95% of cases.
 
-  When benchmarking multithreaded algorithms, note
-  that `tasty-bench` reports total elapsed CPU time across all cores, while
-  `criterion` and `gauge` print wall-clock time.
+  ## Wall-clock time vs. CPU time
+
+  What time are we talking about?
+  Both `criterion` and `gauge` by default report wall-clock time, which is
+  affected by any other application which runs concurrently.
+  While ideally benchmarks are executed on a dedicated server without any other load,
+  but — let's face the truth — most of developers run benchmarks
+  on a laptop with a hundred other services and a window manager, and
+  watch videos while waiting for benchmarks to finish. That's the cause
+  of a notorious "variance introduced by outliers: 88% (severely inflated)" warning.
+
+  To alleviate this issue `tasty-bench` measures CPU time by `getCPUTime`
+  instead of wall-clock time.
+  It does not provide a perfect isolation from other processes (e. g.,
+  if CPU cache is spoiled by others, populating data back from RAM
+  is your burden), but is significantly more stable.
+
+  Caveat: this means that for multithreaded algorithms
+  `tasty-bench` reports total elapsed CPU time across all cores, while
+  `criterion` and `gauge` print maximum of core's wall-clock time.
 
   ## Statistical model
 
@@ -218,8 +247,10 @@ description: |
   1. Set _n_ ← 1.
   2. Measure execution time _tₙ_ of _n_ iterations
      and execution time _t₂ₙ_ of _2n_ iterations.
-  3. Find _t_ which minimizes deviation of (_nt_, _2nt_) from (_tₙ_, _t₂ₙ_).
-  4. If deviation is small enough (see `--stdev` below),
+  3. Find _t_ which minimizes deviation of (_nt_, _2nt_) from (_tₙ_, _t₂ₙ_),
+     namely _t_ ← (_tₙ_ + _2t₂ₙ_) / _5n_.
+  4. If deviation is small enough (see `--stdev` below)
+     or time is running out soon (see `--timeout` below),
      return _t_ as a mean execution time.
   5. Otherwise set _n_ ← _2n_ and jump back to Step 2.
 
@@ -254,20 +285,23 @@ description: |
   Configuring RTS to collect GC statistics
   (e. g., via `cabal bench --benchmark-options '+RTS -T'`
   or `stack bench --ba '+RTS -T'`) enables `tasty-bench` to estimate and report
-  memory usage such as allocated and copied bytes:
+  memory usage:
 
   ```
   All
     fibonacci numbers
       fifth:     OK (2.13s)
-         63 ns ± 3.4 ns, 223 B  allocated,   0 B  copied
+         63 ns ± 3.4 ns, 223 B  allocated,   0 B  copied, 2.0 MB peak memory
       tenth:     OK (1.71s)
-        809 ns ±  73 ns, 2.3 KB allocated,   0 B  copied
+        809 ns ±  73 ns, 2.3 KB allocated,   0 B  copied, 4.0 MB peak memory
       twentieth: OK (3.39s)
-        104 μs ± 4.9 μs, 277 KB allocated,  59 B  copied
+        104 μs ± 4.9 μs, 277 KB allocated,  59 B  copied, 5.0 MB peak memory
 
   All 3 tests passed (7.25s)
   ```
+
+  This data is reported as per `RTSStats` fields: `allocated_bytes`, `copied_bytes`
+  and `max_mem_in_use_bytes`.
 
   ## Combining tests and benchmarks
 
@@ -338,7 +372,7 @@ description: |
     Alternatively bake it into
     `cabal` file as `ghc-options: "-with-rtsopts=-A32m"`.
 
-    For GHC >= 8.10 consider switching benchmarks to a non-moving garbage collector,
+    For GHC ≥ 8.10 consider switching benchmarks to a non-moving garbage collector,
     because it decreases GC pauses and corresponding noise: `+RTS --nonmoving-gc`.
 
   * If benchmark results look malformed like below, make sure that you are
@@ -357,7 +391,13 @@ description: |
     Unhandled resource. Probably a bug in the runner you're using.
     ```
 
-    this is probably caused by `env` or `envWithCleanup` affecting benchmarks structure.
+  or
+
+    ```
+    Unexpected state of the resource (NotCreated) in getResource. Report as a tasty bug.
+    ```
+
+    this is likely caused by `env` or `envWithCleanup` affecting benchmarks structure.
     You can use `env` to read test data from `IO`, but not to read benchmark names
     or affect their hierarchy in other way. This is a fundamental restriction of `tasty`
     to list and filter benchmarks without launching missiles.
@@ -418,14 +458,14 @@ description: |
 
   ```bash
   cabal build --enable-benchmarks my-bench
-  MYBENCH=`cabal list-bin my-bench`
+  MYBENCH=$(cabal list-bin my-bench)
   ```
 
   Now list all benchmark names (hopefully, they do not contain newlines),
   escape quotes and slashes, and run each of them separately:
 
   ```bash
-  $MYBENCH -l | sed -e 's/[\"]/\\\\\\&/g' | while read name; do $MYBENCH -p '$0 == "'$name'"'; done
+  $MYBENCH -l | sed -e 's/[\"]/\\\\\\&/g' | while read -r name; do $MYBENCH -p '$0 == "'"$name"'"'; done
   ```
 
   ## Comparison against baseline
@@ -441,10 +481,6 @@ description: |
   All.fibonacci numbers.tenth,637152,46744
   All.fibonacci numbers.twentieth,81369531,3342646
   ```
-
-  Note that columns do not match CSV reports of `criterion` and `gauge`.
-  If desired, missing columns can be faked with
-  `awk 'BEGIN {FS=",";OFS=","}; {print $1,$2,$2,$2,$3/2,$3/2,$3/2}'` or similar.
 
   Now modify implementation and rerun benchmarks
   with `--baseline FILE` key. This produces a report as follows:
@@ -470,6 +506,28 @@ description: |
   only problematic benchmarks, or even
   [`tasty-rerun`](http://hackage.haskell.org/package/tasty-rerun) package
   to focus on rerunning failing items only.
+
+  Note that columns in CSV report are different from what `criterion` or `gauge`
+  would produce. If names do not contain commas, missing columns can be faked this way:
+
+  ```sh
+  cat tasty-bench.csv \
+  | awk 'BEGIN {FS=",";OFS=","}; {print $1,$2/1e12,$2/1e12,$2/1e12,$3/2e12,$3/2e12,$3/2e12}' \
+  | sed '1s/.*/Name,Mean,MeanLB,MeanUB,Stddev,StddevLB,StddevUB/'
+  ```
+
+  To fake `gauge` in `--csvraw` mode use
+
+  ```sh
+  cat tasty-bench.csv \
+  | awk 'BEGIN {FS=",";OFS=","}; {print $1,1,$2/1e12,0,$2/1e12,$2/1e12,0,$6+0,0,0,0,0,$4+0,0,$5+0,0,0,0,0}' \
+  | sed '1s/.*/name,iters,time,cycles,cpuTime,utime,stime,maxrss,minflt,majflt,nvcsw,nivcsw,allocated,numGcs,bytesCopied,mutatorWallSeconds,mutatorCpuSeconds,gcWallSeconds,gcCpuSeconds/'
+  ```
+
+  Please refer to `gawk` manual, if you wish to process names with
+  [commas](https://www.gnu.org/software/gawk/manual/gawk.html#Splitting-By-Content)
+  or
+  [quotes](https://www.gnu.org/software/gawk/manual/gawk.html#More-CSV).
 
   ## Comparison between benchmarks
 
@@ -519,7 +577,9 @@ description: |
   Users can dump results into CSV with `--csv FILE`
   and plot them using `gnuplot` or other software. But for convenience
   there is also a built-in quick-and-dirty SVG plotting feature,
-  which can be invoked by passing `--svg FILE`.
+  which can be invoked by passing `--svg FILE`. Here is a sample of its output:
+
+  ![Plotting](./example.svg)
 
   ## Command-line options
 
@@ -538,13 +598,16 @@ description: |
     in seconds. Use it when benchmarks tend to take too long: `tasty-bench` will make
     an effort to report results (even if of subpar quality) before timeout. Setting
     timeout too tight (insufficient for at least three iterations)
-    will result in a benchmark failure.
+    will result in a benchmark failure. One can adjust it locally for a group
+    of benchmarks, e. g., `localOption (mkTimeout 100000000)` for 100 seconds.
 
   * `--stdev`
 
     Target relative standard deviation of measurements in percents (5% by default).
     Large values correspond to fast and loose benchmarks, and small ones to long and precise.
-    If it takes far too long, consider setting `--timeout`,
+    It can also be adjusted locally for a group of benchmarks,
+    e. g., `localOption (RelStDev 0.02)`.
+    If benchmarking takes far too long, consider setting `--timeout`,
     which will interrupt benchmarks, potentially before reaching the target deviation.
 
   * `--csv`
@@ -560,8 +623,46 @@ description: |
     Upper bounds of acceptable slow down / speed up in percents. If a benchmark is unacceptably slower / faster than baseline (see `--baseline`),
     it will be reported as failed. Can be used in conjunction with
     a standard `tasty` option `--hide-successes` to show only problematic benchmarks.
+    Both options can be adjusted locally for a group of benchmarks,
+    e. g., `localOption (FailIfSlower 0.10)`.
 
   * `--svg`
 
     File to plot results in SVG format.
+
+  * `+RTS -T`
+
+    Estimate and report memory usage.
+
+  ## Custom command-line options
+
+  As usual with `tasty`, it is easy to extend benchmarks with custom command-line options.
+  Here is an example:
+
+  ```haskell
+  import Data.Proxy
+  import Test.Tasty.Bench
+  import Test.Tasty.Ingredients.Basic
+  import Test.Tasty.Options
+  import Test.Tasty.Runners
+
+  newtype RandomSeed = RandomSeed Int
+
+  instance IsOption RandomSeed where
+    defaultValue = RandomSeed 42
+    parseValue = fmap RandomSeed . safeRead
+    optionName = pure "seed"
+    optionHelp = pure "Random seed used in benchmarks"
+
+  main :: IO ()
+  main = do
+    let customOpts  = [Option (Proxy :: Proxy RandomSeed)]
+        ingredients = includingOptions customOpts : benchIngredients
+    opts <- parseOptions ingredients benchmarks
+    let RandomSeed seed = lookupOption opts
+    defaultMainWithIngredients ingredients benchmarks
+
+  benchmarks :: Benchmark
+  benchmarks = bgroup "All" []
+  ```
 license-name: MIT
