@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: b77e507fd1b22fa92954da195292f311571ad68f3d3cee103b08f2d916189709
+hash: 9dcda801cbe413de18fe9e3c298b7829c5343ba3283d9242ecac156067a35987
 test-bench-deps:
   symantic-parser: -any
   bytestring: '>=0.10'
@@ -9,12 +9,16 @@ test-bench-deps:
   tasty-golden: '>=2.3'
   unordered-containers: -any
   text: '>=1.2'
+  megaparsec: '>=9.0'
   strict: '>=0.4'
   filepath: '>=1.4'
+  criterion: '>=1.5'
   process: '>=1.6'
-  containers: '>=0.5'
+  containers: '>=0.5.10.1'
   hashable: '>=1.2.6'
-  transformers: '>=0.4'
+  attoparsec: '>=0.13'
+  transformers: '>=0.5'
+  random: '>=1.1'
   tasty: '>=0.11'
   deepseq: '>=1.4'
   template-haskell: '>=2.16'
@@ -22,6 +26,35 @@ test-bench-deps:
 maintainer: Julien Moutinho <julm+symantic-parser@sourcephile.fr>
 synopsis: Parser combinators statically optimized and staged via typed meta-programming
 changelog: |
+  ## symantic-parser-0.2.0.20210703
+
+  * Fix mutual let bindings by defining them all together.
+  * Add a fixpoint to analyse the minimal reads and raisable exceptions
+    of each let binding in the `Machine`.
+    Those analyses respectively enable to minimize calls to `checkHorizon`,
+    and minimize the number of `catchHandler`s passed to `call`s and `jump`s.
+    Computed values appear in golden tests.
+  * Add golden tests for `TemplateHaskell` splices using `runQ`
+    which is enough here and avoids to have a custom `Setup.hs`
+    in order to correctly run an external `ghc`
+    like [singletons](https://hackage.haskell.org/package/singletons-base-3.0/src/Setup.hs) does.
+  * Add preliminary support for error reporting using exceptions,
+    based upon: [A Parsing Machine for Parsing Expression Grammars with Labeled Failures](https://dl.acm.org/doi/10.1145/2851613.2851750)
+  * Add benchmarks for Brainfuck parsers.
+  * Change `ValueCode` to `Production` which relies upon `Data.Functor.Product`,
+    to be able to leverage type-classes to handle the burden of defining both
+    `Identity` and `CodeQ` for `Production` expressions.
+  * Rename `Symantic.Univariant` to `Symantic.Typed`.
+  * Add `Language.Haskell.TH.Show` utility to avoid
+    adding a `Symantic.Typed.View` entry into `Production`
+    which would make writing `Production`s even more painful.
+    This adds the benefit of printing any Haskell code,
+    instead of only operators having symantics, eg. in `Symantic.Typed.Lang`.
+    However `Symantic.Typed.View` is no longer used now,
+    and thus `lam1`s no longer singled-out, not a big deal though.
+  * Major refactoring.
+  * Minor other optimizations and fixes.
+
   ## symantic-parser-0.1.0.20210201
 
   * Add error reporting using the farthest position reached.
@@ -45,39 +78,57 @@ basic-deps:
   base: '>=4.10 && <5'
   unordered-containers: -any
   text: -any
+  symantic-base: '>=0.1'
   array: -any
   containers: -any
   ghc-prim: -any
   hashable: -any
   transformers: -any
+  deepseq: '>=1.4'
+  pretty: '>=1.1'
   template-haskell: '>=2.16'
 all-versions:
 - 0.0.0.20210101
 - 0.0.0.20210102
 - 0.1.0.20210201
+- 0.2.0.20210703
 author: Julien Moutinho <julm+symantic-parser@sourcephile.fr>
-latest: 0.1.0.20210201
+latest: 0.2.0.20210703
 description-type: markdown
 description: |
   ### Main differences with respect to `ParsleyHaskell`
 
-  - Extensible primitive grammar combinators, including their underlying optimization passes, by leveraging reciprocal injections between a tagless-final encoding of syntaxes (aka. type-classes) and a corresponding tagful-initial encoding to pattern-match syntaxes (aka. data-instances). This enable a very principled, yet flexible source code. Moreover `DefaultSignatures` are supplied to succinctly derive new semantics (aka. type-class-instances) using automatic `trans`formations.
+  - Primitive grammar combinators are extensible, including the optimization pass for which they are the current top-level combinator.
 
-  - Error messages based upon the farthest input position reached (not yet implemented in `ParsleyHaskell`).
+  - Error messages are based upon the farthest input position reached (not yet implemented in `ParsleyHaskell`) and a there is a preliminary support for error messages based upon [labeled failures](https://dl.acm.org/doi/10.1145/2851613.2851750).
 
-  - Minimal input length checks ("horizon" checks) required for a successful parsing are factorized using a different static analysis than `ParsleyHaskell`'s "piggy bank" which I've not understood well. This analyis can see beyond calls to subroutines, but maybe `ParsleyHaskell`'s analysis can also be adjusted to do the same. Both analysis are not well documented and studied.
+  - Minimal input length checks ("horizon" checks) required for a successful parsing are statically computed using a [polyfix](http://okmij.org/ftp/Computation/fixed-point-combinators.html#Poly-variadic) to see beyond calls to subroutines, which is not (yet) possible in `ParsleyHaskell`.
 
-  - No dependency upon GHC plugins: `lift-plugin` and `idioms-plugin`, because those are plugins hence introduce a bit of complexity in the build processes using this parser, but most importantly they are experimental and mostly cosmetics, since they only enable a cleaner usage of the parsing combinators, by lifting Haskell code in `pure` to integrate the `TemplateHaskell` needed. I do not understand them that much and do not feel confortable to maintain them come the day that their authors abandon them.
+  - No dependency upon GHC plugins: `lift-plugin`, `idioms-plugin` or `parsley-garnish` for users. Those provide convenient syntaxic-sugar (by quoting an Haskell expression as itself and its `TemplateHaskell` equivalent) for writing grammar productions, but are experimental, but I do not understand them that much and do not feel confortable to maintain them in case their authors abandon them.
 
-  - No dependency upon `dependent-map` by keeping observed sharing inside `def` and `ref` combinators, instead of passing by a `DMap`. And also when introducing the join-points optimization, where fresh `TemplateHaskell` names are also directly used instead of passing by a `DMap`.
+  - No dependency upon `dependent-map` by keeping observed sharing in `def` and `ref` combinators, instead of passing by a `DMap`. And also when introducing the join-points optimization, where fresh `TemplateHaskell` names are also directly used instead of passing by a `DMap`.
 
-  - No support for general purpose registers in the `Machine` producing the `TemplateHaskell` splices (maybe it will come if I need and understand what's done in `ParsleyHaskell`).
+  - No support (yet?) for general purpose registers in the `Machine` producing the `TemplateHaskell` splices. Hence `symantic-parser` generates parser much slower than `ParsleyHaskell`, comparable to `attoparsec` in the Brainfuck benchmark.
 
-  - License is `GPL-3.0-or-later` not `BSD-3-Clause`.
+  - License is `AGPL-3-or-later` not `BSD-3-Clause`.
+
+  - Testing grammars have their generated machines and `TemplateHaskell` splices followed by golden tests.
 
   ### Main goals
 
   - For me to better understand [ParsleyHaskell](https://github.com/j-mie6/ParsleyHaskell), and find a manageable balance between simplicity of the codebase and features of the parser. And by doing so, challenging and showcasing symantic techniques.
 
-  - To support the parsing of tree-like data structures instead of only string-like data structures. Eg. to validate XML using RelaxNG in [symantic-xml](http://hackage.haskell.org/package/symantic-xml) or to perform routing of HTTP requests in [symantic-http-server](http://hackage.haskell.org/package/symantic-http-server). This is currently done in those packages using `megaparsec`, but `megaparsec` is not conceived for such input, and is less principled when it comes to optimizing, like merging alternatives.
-license-name: GPL-3.0-or-later
+  - To support the parsing of tree-like data structures instead of only string-like data structures. Eg. to validate XML using RelaxNG in [symantic-xml](https://hackage.haskell.org/package/symantic-xml) or to perform routing of HTTP requests in [symantic-http-server](http://hackage.haskell.org/package/symantic-http-server). This is currently done in those packages using `megaparsec`, but `megaparsec` is not conceived for such input, and is less principled when it comes to optimizing, like merging alternatives.
+
+  ### Implementation techniques
+
+  #### Typed Tagless-Final
+  The syntax of grammars are term-level combinators defined in type-classes,
+  and their semantics are data-types having instances of those type-classes.
+  And the same technique is applied for machine instructions and grammar productions.
+
+  For automatic deriving, `DefaultSignatures` are supplied using automatic `trans`formations, see `Symantic.Typed.Trans`.
+
+  For pattern-matching, data-families indexed by the syntaxic type-class are supplied,
+  see `Symantic.Typed.Data`.
+license-name: AGPL-3.0-or-later
