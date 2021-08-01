@@ -1,6 +1,6 @@
 homepage: https://github.com/ta0kira/zeolite
 changelog-type: markdown
-hash: 5f7cc3393a4e5857a45e07fad9f266e3fe784e9beba6ff6d4111706b14f441d6
+hash: 345b09a0e0001fbf336b4ee2f20b71fb5f0c193ad714ebfd14f486cd76abe269
 test-bench-deps:
   base: -any
   filepath: -any
@@ -10,6 +10,110 @@ maintainer: Kevin P. Barry <ta0kira@gmail.com>
 synopsis: Zeolite is a statically-typed, general-purpose programming language.
 changelog: |
   # Revision history for zeolite-lang
+
+  ## 0.18.0.0  -- 2021-08-01
+
+  ### Compiler CLI
+
+  * **[breaking]** Creates a single shared library per Zeolite module, and uses
+    dynamic linking as the default for binaries and `testcase`s. `--fast` mode
+    still uses static linking, and static linking can be enabled for a binary
+    using the `link_mode:` field in `.zeolite-module`:
+
+    ```text
+    root: "../.."
+    path: "your/module"
+    private_deps: [
+      "lib/util"
+    ]
+    mode: binary {
+      category: YourProgram
+      function: run
+      link_mode: static
+    }
+    ```
+
+  * **[breaking]** Eliminates dynamic memory allocation for `Bool`, `Char`,
+    `Float`, and `Int`, including `optional` and `weak` variants. This improves
+    the efficiency of code that makes a lot of function calls using those types.
+
+    Note that when used as variable types, those types *already* avoided dynamic
+    allocation. This therefore only applies to passing them in function calls, and
+    using them with `optional` and `weak`.
+
+    This breaks *all* existing C++ extensions:
+
+    - `S<TypeValue>` must be replaced with `BoxedValue`.
+    - Calls to `S_get` (only for `ValueType`) must be replaced with calls to the
+      `BoxedValue` constructor.
+    - `W<TypeValue>` must be replaced with `WeakValue`.
+    - Calls to `W_get` must be replaced with calls to the `WeakValue` constructor.
+    - Calls to `->AsBool()`, `->AsChar()`, `->AsFloat()`, `->AsInt()`,
+      `->AsCharBuffer()`, and `->AsString()` must now use `.` instead of `->`.
+    - `Present`, `Require`, and `Strong` are now in `BoxedValue::` instead of in
+      `TypeValue::`.
+
+    (Running `zeolite --templates` again will provide the correct type
+    signatures and local argument aliasing.)
+
+  * **[breaking]** Updates `zeolite -c` (library mode) and `zeolite -m` (binary
+    mode) to generate a new `.zeolite-module` and exit. Previously, both modes
+    would create `.zeolite-module` and then attempt to compile it. The purpose of
+    this change is to make users more aware that `.zeolite-module` can/should be
+    edited, rather than attempting to generate a "correct" config entirely from
+    CLI flags.
+
+  * **[new]** Updates recompile mode (`zeolite -r`) to reorder modules explicitly
+    specified in the command based on dependencies. For example, in the command
+    `zeolite -r foo bar`, if `foo` depends on `bar`, `bar` will be compiled first.
+    Previously, modules would be compiled in the order they were specified.
+
+    Note that this *will not* account for *indirect* dependencies unless recursive
+    mode (`-R`) is used. This is because dealing with the intermediate dependency
+    would be ambiguous when not recompiling recursively.
+
+  * **[behavior]** Even more optimization for function calls using 4 or fewer
+    arguments, returns, or function params.
+
+  * **[behavior]** Updates the `fail` built-in to use `SIGTERM` instead of
+    `SIGABRT` to terminate the process, to prevent core dumps when `fail` is used
+    to signal an unhandled error.
+
+  ### Language
+
+  * **[breaking]** Adds the `Bounded` `@type interface` for getting the
+    `minBound()` and `maxBound()` of a type, and implements it for `Int` and
+    `Char`. (This is breaking because `Bounded` is now reserved.)
+
+  * **[breaking]** Makes `Char` unsigned when converting to `Int` using `asInt()`.
+    Previously, the value was signed, i.e., between -128 and 127. This change
+    makes the `Int` values line up better with hex and oct `Char` escapes. The
+    conversion from `Int` to `Char` (with `asChar()`) *is not* affected.
+
+  * **[new]** Updates param inference (e.g., `call<?>(foo)`) to handle param
+    filters containing multiple inferred params. Previously, if a function had a
+    filter such as `#x requires #y` and both `#x` and `#y` were inferred,
+    inference would fail because params were inferred one at a time.
+
+  * **[new]** Adds the `timeout` field to `testcase`, to specify the number of
+    seconds to allow each `unittest` to run. The default is `30`, which should be
+    more than enough for most individual tests. The primary purpose of setting a
+    default is to prevent a deadlock or infinite loop from blocking continuous
+    integration (CI) runners.
+
+  * **[new]** Updates parsing to allow calling functions on value intializers, and
+    `Bool`, `Char`, and `String` literals without needing `()`. For example,
+    `Type{ foo }.bar()`, `true.asInt()`, `'0'.asInt()`, `"abc".defaultOrder()`.
+    `Int` and `Float` literals still require `()`; otherwise, the use of `.` would
+    be ambiguous.
+
+  ### Libraries
+
+  * **[new]** Adds `ParseChars` helper to `lib/util`, to parse `Float` and `Int`
+    from `String`s.
+
+  * **[new]** Adds `monoSeconds()` to `Realtime` in `lib/util`, to get a
+    monotonic wall time in seconds.
 
   ## 0.17.0.0  -- 2021-04-06
 
@@ -835,6 +939,7 @@ basic-deps:
   base: -any
   filepath: -any
   containers: -any
+  mtl: -any
   zeolite-internal: -any
   directory: -any
 all-versions:
@@ -874,8 +979,9 @@ all-versions:
 - 0.16.0.0
 - 0.16.1.0
 - 0.17.0.0
+- 0.18.0.0
 author: Kevin P. Barry
-latest: 0.17.0.0
+latest: 0.18.0.0
 description-type: haddock
 description: |-
   Zeolite is an experimental general-purpose programming language. See
@@ -909,7 +1015,7 @@ description: |-
 
   @
   ZEOLITE_PATH=$(zeolite --get-path)
-  zeolite -p "$ZEOLITE_PATH" -f -I lib\/util -m HelloDemo example\/hello
+  zeolite -p "$ZEOLITE_PATH\/example\/hello" -I lib\/util --fast HelloDemo hello-demo.0rx
   $ZEOLITE_PATH\/example\/hello\/HelloDemo
   @
 
