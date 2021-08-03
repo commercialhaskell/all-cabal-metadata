@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: dc8123b201438dd3ca6b3075411f679f8e7d5a5d24ae4693c4aef4109c890662
+hash: 737e14adb81bcb84172a5e0618114116d744d1e904ad97bcf81bbd6139381136
 test-bench-deps: {}
 maintainer: tdbgamer@gmail.com
 synopsis: Flink stateful functions SDK
@@ -22,7 +22,9 @@ basic-deps:
   lens-family: '>=2 && <2.2'
   wai: '>=3 && <3.3'
   base: '>=4.0 && <4.15'
+  time: ==1.9.3
   text: '>=1.0 && <1.3'
+  uuid: ==1.3.15
   proto-lens-protobuf-types: '>=0.5 && <0.8'
   servant-server: '>=0.16 && <0.19'
   servant: '>=0.16 && <0.19'
@@ -31,6 +33,7 @@ basic-deps:
   mtl: '>=2 && <2.3'
   proto-lens-runtime: '>=0.5 && <0.8'
   http-types: '>=0.10 && <0.13'
+  microlens: ==0.4.12.0
   aeson: '>=1.0 && <2.0'
   http-media: '>=0.7 && <0.9'
 all-versions:
@@ -38,181 +41,68 @@ all-versions:
 - 0.1.0.1
 - 0.2.0.0
 - 0.3.0.0
+- 0.4.0.0
 author: Timothy Bess
-latest: 0.3.0.0
+latest: 0.4.0.0
 description-type: markdown
-description: |
-  # Flink Stateful Functions Haskell SDK
-  [![Hackage](https://img.shields.io/hackage/v/flink-statefulfun.svg)](https://hackage.haskell.org/package/flink-statefulfun) [![Build](https://img.shields.io/travis/tdbgamer/flink-statefulfun-hs.svg)](https://travis-ci.com/github/tdbgamer/flink-statefulfun-hs) [![Join the chat at https://gitter.im/tdbgamer/flink-statefulfun-hs](https://badges.gitter.im/tdbgamer/flink-statefulfun-hs.svg)](https://gitter.im/tdbgamer/flink-statefulfun-hs?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-
-  Provides a typed API for creating [flink stateful functions](https://flink.apache.org/news/2020/04/07/release-statefun-2.0.0.html). Greeter example is in [example/greeter/main/Main.hs](example/greeter/main/Main.hs)
-
-  ## How to run example
-
-  ```bash
-  cd example
-  docker-compose build
-  docker-compose up -d
-  docker-compose logs -f event-generator
-  ```
-
-  ## How to compile locally
-
-  1. [Install nix](https://nixos.org/download.html)
-  2. [Install cachix](https://github.com/cachix/cachix#installation)
-  3. Setup nix cache.
-  ```bash
-  cachix use iohk
-  cachix use static-haskell-nix
-  cachix use flink-statefulfun
-  ```
-  4. Compile inside a nix shell.
-  ```bash
-  nix-shell
-  cabal build
-  ```
-
-  ## Tutorial
-
-  ### Define our protobuf messages
-  ```protobuf
-  // Example.proto
-  syntax = "proto3";
-
-  package example;
-
-  message GreeterRequest {
-    string name = 1;
-  }
-
-  message GreeterResponse {
-    string greeting = 1;
-  }
-  ```
-
-  ### Declare a function
-
-  ```haskell
-  import Network.Flink.Stateful
-  import qualified Proto.Example as EX
-  import qualified Proto.Example_Fields as EX
-
-  printer :: StatefulFunc () m => EX.GreeterResponse -> m ()
-  printer msg = liftIO $ print msg
-  ```
-
-  This declares a simple function that takes an `GreeterResponse` protobuf
-  type as an argument and simply prints it. `StatefulFunc` makes this a Flink
-  stateful function with a state type of `()` (meaning it requires no state).
-
-  ### Declaring a function with state
-
-  ```haskell
-  import Data.Aeson (FromJSON, ToJSON)
-  import Data.Text (Text)
-  import qualified Data.Text as T
-  import GHC.Generics
-
-  newtype GreeterState = GreeterState
-    { greeterStateCount :: Int
-    }
-    deriving (Generic, Show)
-
-  instance ToJSON GreeterState
-  instance FromJSON GreeterState
-
-  counter :: StatefulFunc GreeterState m => EX.GreeterRequest -> m ()
-  counter msg = do
-    newCount <- (+ 1) <$> insideCtx greeterStateCount
-    let respMsg = "Saw " <> T.unpack name <> " " <> show newCount <> " time(s)"
-
-    sendMsg ("printing", "printer") (response $ T.pack respMsg)
-    modifyCtx (\old -> old {greeterStateCount = newCount})
-    where
-      name = msg ^. EX.name
-      response :: Text -> EX.GreeterResponse
-      response greeting =
-        defMessage
-          & EX.greeting .~ greeting
-  ```
-
-  The `StatefulFunc` typeclass gives us access to the `GreeterState` that we are sending to and
-  from Flink on every batch of incoming messages our function receives. For every message,
-  this function will calculate its new count, send a message to the printer function we
-  made earlier, then update its state with the new count.
-
-  Internally this is batched over many events before sending state back to Flink for efficiency.
-
-  NOTE: For JSON (or anything other than protobuf) messages, you must use `sendByteMsg` instead.
-  When communicating with other SDKs, you'll likely want to use `sendMsg` and protobuf.
-
-  ### Serve HTTP API
-
-  ```haskell
-  import qualified Data.ByteString.Lazy.Char8 as BSL
-  import qualified Data.Map as Map
-  import Network.Wai.Handler.Warp (run)
-  import Network.Wai.Middleware.RequestLogger
-
-  main :: IO ()
-  main = do
-    putStrLn "http://localhost:8000/"
-    run 8000 (logStdout $ createApp functionTable)
-
-  greeterState = BSL.toStrict . encode $ GreeterState 0
-
-  functionTable :: FunctionTable
-  functionTable =
-    Map.fromList
-      [ (("printing", "printer"), ("", flinkWrapper . protoInput $ printer)),
-        (("greeting", "counter"), (greeterState, flinkWrapper . protoInput . jsonState $ counter))
-      ]
-  ```
-
-  The `FunctionTable` is a Map of `(namespace, functionType)` to `(initialState, wrappedFunction)`.
-  `jsonState` is a helper to serialize your function state as `JSON` for storage in the flink
-  backend. `protoState` can also be used if that is your preference. `flinkWrapper` transforms
-  your function into one that takes arbitrary `ByteString`s so that every function in the
-  `FunctionTable` Map is homogenous. `protoInput` indicates that the input message should be
-  deserialized as protobuf. `jsonInput` can be used instead to deserialize the messages as JSON.
-
-  `createApp` is used to turn the `FunctionTable` into a `Warp` `Application` which can be served
-  using the `run` function provided by `Warp`.
-
-  NOTE: JSON messages may not play nice with other SDKs, you'll probably want to stick with protobuf
-  if you're communicating with another SDK without knowing too much Flink Statefun internals.
-
-  ### Create module YAML
-
-  To use the functions that are now served from the API, we now need to declare it in the `module.yaml`.
-
-  ```yaml
-  version: "1.0"
-  module:
-    meta:
-      type: remote
-    spec:
-      functions:
-        - function:
-            meta:
-              kind: http
-              type: greeting/counter
-            spec:
-              endpoint: http://localhost:8000/statefun
-              states:
-                - flink_state
-              maxNumBatchRequests: 500
-              timeout: 2min
-        - function:
-            meta:
-              kind: http
-              type: printing/printer
-            spec:
-              endpoint: http://localhost:8000/statefun
-              maxNumBatchRequests: 500
-              timeout: 2min
-  ```
-
-  Flink Statefun supports multiple states, but for simplicity the SDK just serializes the whole
-  record and hard codes `flink_state` as the only state value it uses.
+description: "# Flink Stateful Functions Haskell SDK\n[![Hackage](https://img.shields.io/hackage/v/flink-statefulfun.svg)](https://hackage.haskell.org/package/flink-statefulfun)
+  [![Build](https://img.shields.io/travis/tdbgamer/flink-statefulfun-hs.svg)](https://travis-ci.com/github/tdbgamer/flink-statefulfun-hs)
+  [![Join the chat at https://gitter.im/tdbgamer/flink-statefulfun-hs](https://badges.gitter.im/tdbgamer/flink-statefulfun-hs.svg)](https://gitter.im/tdbgamer/flink-statefulfun-hs?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)\n\nProvides
+  a typed API for creating [flink stateful functions](https://flink.apache.org/news/2020/04/07/release-statefun-2.0.0.html).
+  Greeter example is in [example/greeter/main/Main.hs](example/greeter/main/Main.hs)\n\n##
+  How to run example\n\n```bash\ncd example\ndocker-compose build\ndocker-compose
+  up -d\ndocker-compose logs -f event-generator\n```\n\n## How to compile locally\n\n1.
+  [Install nix](https://nixos.org/download.html)\n2. [Install cachix](https://github.com/cachix/cachix#installation)\n3.
+  Setup nix cache.\n```bash\ncachix use iohk\ncachix use static-haskell-nix\ncachix
+  use flink-statefulfun\n```\n4. Compile inside a nix shell.\n```bash\nnix-shell\ncabal
+  build\n```\n\n## Tutorial\n\n### Define our protobuf messages\n```protobuf\n// Example.proto\nsyntax
+  = \"proto3\";\n\npackage example;\n\nmessage GreeterRequest {\n  string name = 1;\n}\n\nmessage
+  GreeterResponse {\n  string greeting = 1;\n}\n```\n\n### Declare a function\n\n```haskell\nimport
+  Network.Flink.Stateful\nimport qualified Proto.Example as EX\nimport qualified Proto.Example_Fields
+  as EX\n\nprinter :: StatefulFunc () m => EX.GreeterResponse -> m ()\nprinter msg
+  = liftIO $ print msg\n```\n\nThis declares a simple function that takes an `GreeterResponse`
+  protobuf\ntype as an argument and simply prints it. `StatefulFunc` makes this a
+  Flink\nstateful function with a state type of `()` (meaning it requires no state).\n\n###
+  Declaring a function with state\n\n```haskell\nimport Data.Aeson (FromJSON, ToJSON)\nimport
+  Data.Text (Text)\nimport qualified Data.Text as T\nimport GHC.Generics\n\nnewtype
+  GreeterState = GreeterState\n  { greeterStateCount :: Int\n  }\n  deriving (Generic,
+  Show)\n\ninstance ToJSON GreeterState\ninstance FromJSON GreeterState\n\ncounter
+  :: StatefulFunc GreeterState m => EX.GreeterRequest -> m ()\ncounter msg = do\n
+  \ newCount <- (+ 1) <$> insideCtx greeterStateCount\n  let respMsg = \"Saw \" <>
+  T.unpack name <> \" \" <> show newCount <> \" time(s)\"\n\n  sendMsgProto (\"printing\",
+  \"printer\") (response $ T.pack respMsg)\n  modifyCtx (\\old -> old {greeterStateCount
+  = newCount})\n  where\n    name = msg ^. EX.name\n    response :: Text -> EX.GreeterResponse\n
+  \   response greeting =\n      defMessage\n        & EX.greeting .~ greeting\n```\n\nThe
+  `StatefulFunc` typeclass gives us access to the `GreeterState` that we are sending
+  to and\nfrom Flink on every batch of incoming messages our function receives. For
+  every message,\nthis function will calculate its new count, send a message to the
+  printer function we\nmade earlier, then update its state with the new count.\n\nInternally
+  this is batched over many events before sending state back to Flink for efficiency.\n\nNOTE:
+  For JSON (or anything other than protobuf) messages, you must use `sendByteMsg`
+  instead.\nWhen communicating with other SDKs, you'll likely want to use `sendMsg`
+  and protobuf.\n\n### Serve HTTP API\n\n```haskell\nimport qualified Data.ByteString.Lazy.Char8
+  as BSL\nimport qualified Data.Map as Map\nimport Network.Wai.Handler.Warp (run)\nimport
+  Network.Wai.Middleware.RequestLogger\n\nmain :: IO ()\nmain = do\n  putStrLn \"http://localhost:8000/\"\n
+  \ run 8000 (logStdout $ createApp functionTable)\n\nfunctionTable :: FunctionTable\nfunctionTable
+  =\n  Map.fromList\n    [ ((FuncType \"greeting\" \"greeterEntry\"), flinkWrapper
+  () (Expiration NONE 0) (greeterEntry . getProto)),\n      ((FuncType  \"greeting\"
+  \"counter\"), flinkWrapper (JsonSerde (GreeterState 0)) (Expiration AFTER_CALL 5)
+  (jsonState . counter . getProto))\n    ]\n```\n\nThe `FunctionTable` is a Map of
+  `(namespace, functionType)` to `wrappedFunction`.\n`jsonState` is a helper to serialize
+  your function state as `JSON` for storage in the flink\nbackend. `protoState` can
+  also be used if that is your preference. `flinkWrapper` transforms\nyour function
+  into one that takes arbitrary `ByteString`s so that every function in the\n`FunctionTable`
+  Map is homogenous. `protoInput` indicates that the input message should be\ndeserialized
+  as protobuf. `jsonInput` can be used instead to deserialize the messages as JSON.\n\n`createApp`
+  is used to turn the `FunctionTable` into a `Warp` `Application` which can be served\nusing
+  the `run` function provided by `Warp`.\n\nNOTE: JSON messages may not play nice
+  with other SDKs, you'll probably want to stick with protobuf\nif you're communicating
+  with another SDK without knowing too much Flink Statefun internals.\n\n### Create
+  module YAML\n\nTo use the functions that are now served from the API, we now need
+  to declare it in the `module.yaml`.\n\n```yaml\nversion: \"3.0\"\nmodule:\n  meta:\n
+  \   type: remote\n  spec:\n    endpoints:\n      - endpoint:\n        meta: \n          kind:
+  http\n        spec:\n          functions: greeting/*\n          urlPathTemplate:
+  http://localhost:8000/statefun\n```\n\nFlink Statefun supports multiple states,
+  but for simplicity the SDK just serializes the whole\nrecord and hard codes `flink_state`
+  as the only state value it uses.\n"
 license-name: MPL-2.0
