@@ -1,6 +1,6 @@
 homepage: https://hub.darcs.net/thielema/lapack/
 changelog-type: markdown
-hash: f652e7bdc2c8daa4c9b67d0dd9392b4296183a3a06fc6459cfd7c8f7906423ca
+hash: 881abf2329bc8d07ed127c78c40eeb7f1833a8aae52fba0df85acadef5f8e96c
 test-bench-deps:
   data-ref: '>=0.0.1 && <0.1'
   lapack: -any
@@ -15,6 +15,7 @@ test-bench-deps:
   tfp: -any
   quickcheck-transformer: '>=0.3 && <0.4'
   ChasingBottoms: '>=1.2.2 && <1.4'
+  comfort-array-shape: -any
   monoid-transformer: '>=0.0.4 && <0.1'
   transformers: -any
   random: '>=1.1 && <1.2'
@@ -23,6 +24,36 @@ maintainer: Henning Thielemann <haskell@henning-thielemann.de>
 synopsis: Numerical Linear Algebra using LAPACK
 changelog: |
   # Change log for the `lapack` package
+
+  ## 0.4
+
+   * Unified `Matrix` type that provides the same type parameters
+     across all special types.
+     This reduces the use of type functions and improves type inference.
+
+   * Unified `transpose` and `adjoint` functions enabled by the new `Matrix` type.
+
+   * `Unpacked` format:
+     We now support data type and according functions
+     for unpacked triangular, symmetric and Hermitian matrices.
+     Enables declaration e.g. of Hessenberg matrices.
+
+   * There are now two types of square matrices:
+
+      * `Square`: height and width shapes match exactly
+
+      * `LiberalSquare`: only the sizes of height and width match
+
+   * `Square.eigensystem`:
+     Use liberal square as transformation matrix,
+     such that the eigenvalue array has `ShapeInt` shape.
+     The dimension of the input square matrix does not make sense
+     as shape for the eigenvalue array.
+
+   * `Square.fromGeneral` -> `fromFull`
+
+   * `Orthogonal.affineKernelFromSpan` -> `affineFiberFromFrame`,
+     `Orthogonal.affineSpanFromKernel` -> `affineFrameFromFiber`
 
   ## 0.3.2
 
@@ -58,18 +89,21 @@ changelog: |
      but it is consistent
      with the other eigenvalue and singular value decompositions.
 basic-deps:
+  Stream: '>=0.4.7 && <0.5'
   netlib-ffi: '>=0.1.1 && <0.2'
   fixed-length: '>=0.2 && <0.3'
   base: '>=4.5 && <5'
   text: '>=1.2 && <1.3'
-  lapack-ffi: '>=0.0.1 && <0.1'
+  lapack-ffi: '>=0.0.3 && <0.1'
   lazyio: '>=0.1 && <0.2'
   semigroups: '>=0.18.3 && <1.0'
   guarded-allocation: '>=0.0 && <0.1'
-  utility-ht: '>=0.0.10 && <0.1'
+  utility-ht: '>=0.0.13 && <0.1'
+  tagged: '>=0.7 && <0.9'
   non-empty: '>=0.3 && <0.4'
-  comfort-array: '>=0.4 && <0.5'
-  tfp: '>=1.0.1 && <1.1'
+  comfort-array: '>=0.5 && <0.6'
+  tfp: '>=1.0.2 && <1.1'
+  comfort-array-shape: '>=0.0 && <0.1'
   blaze-html: '>=0.7 && <0.10'
   blas-ffi: '>=0.0 && <0.2'
   transformers: '>=0.4 && <0.6'
@@ -88,8 +122,9 @@ all-versions:
 - 0.3.0.1
 - 0.3.1
 - 0.3.2
+- '0.4'
 author: Henning Thielemann <haskell@henning-thielemann.de>
-latest: 0.3.2
+latest: '0.4'
 description-type: markdown
 description: |
   ## Installation
@@ -187,6 +222,21 @@ description: |
   [HTML](https://hackage.haskell.org/package/blaze-html)
   for HyperHaskell.
 
+  You may tell GHCi to use `Format` class instead of `Show`:
+
+  ~~~~
+  Fmt> let lapackPrint x = x##"%.3f"
+  Fmt> :set -interactive-print lapackPrint
+  ~~~~
+
+  You may permanently configure this one in your local `.ghci` file.
+  If you want to display values via `Show` class,
+  you can always fall back by:
+
+  ~~~~
+  Fmt> print "Hello"
+  ~~~~
+
 
   ## Matrix vs. Vector
 
@@ -234,51 +284,155 @@ description: |
   or use the decompositions for solving simultaneous linear equations.
 
 
-  ## Type tags for content constraints
+  ## Matrix type parameters
 
-  Full matrices have additional type tags to distinguish
-  between four cases of the size relations between
-  the height and the width of a full matrix.
-  In a matrix of type `Matrix.Full vert horiz height width a`
-  the type variables mean:
+  LAPACK supports a variety of special matrix types,
+  e.g. dense, banded, triangular, symmetric, Hermitian matrices
+  and our Haskell interface supports them, too.
+  There are two layers:
+  The low level layer addresses how matrices are stored for LAPACK.
+  Matrices and vectors are stored in the `Array` type
+  from `comfort-array:Data.Array.Comfort.Storable`
+  using shape types from `Numeric.LAPACK.Matrix.Layout`.
+  The high level layer provides a matrix type
+  in `Numeric.LAPACK.Matrix.Array`
+  with mathematically relevant type parameters.
+  The matrix type is:
 
-  ~~~~
-  vert  height
-  Small Small - Square matrix   height==width
-  Big   Small - Tall matrix     size height >= size width
-  Small Big   - Wide matrix     size height <= size width
-  Big   Big   - General matrix  height and width arbitrary
-  ~~~~
+      ArrayMatrix pack property lower upper meas vert horiz height width a
 
-  The relations are defined using two type tags
-  in order to support matrix transposition without hassle.
-  Using `Small Small` for square matrices
-  and `Big Big` for general matrices appears to be arbitrary,
-  but is chosen such that altering `Small` to `Big`
-  generalizes the size relation.
+  The type parameters are from right to left:
 
-  Likewise we use the `Triangular` matrix type
-  also to represent diagonal and symmetric matrices.
-  For `Matrix.Triangular lo diag up size a` we have the cases:
+   * `a` - the element type
 
-  ~~~~
-  lo    up
-  Empty Empty - Diagonal matrix
-  Empty Full  - Upper triangular matrix
-  Full  Empty - Lower triangular matrix
-  Full  Full  - Symmetric matrix
-  ~~~~
+   * `height` and `width` are the vertical and horizontal shapes of the matrix
 
-  The `diag` type tag can be `NonUnit` or `Unit`.
-  `Unit` can be used for matrices
-  that always have a unit diagonal by construction.
-  The property of a unit diagonal is preserved by some operations
-  and enables some optimizations by LAPACK.
-  E.g. solving with a unit triangular matrix does not require division
-  and thus cannot fail due to division by zero.
-  `NonUnit` is a bit of a misnomer.
-  A `NonUnit` matrix can still have a unit diagonal,
-  but in general it has not and no optimizations will take place.
+   * `meas vert horiz` form a group with following possible assignments:
+
+      meas    | vert    | horiz   | name           | condition
+      --------|---------|---------|----------------|:-------------------------:
+      `Shape` | `Small` | `Small` | Square matrix  | height == width
+      `Size`  | `Small` | `Small` | Liberal square | size height == size width
+      `Size`  | `Big`   | `Small` | Tall matrix    | size height >= size width
+      `Size`  | `Small` | `Big`   | Wide matrix    | size height <= size width
+      `Size`  | `Big`   | `Big`   | General matrix | arbitrary height and width
+
+      Think of `meas` as the measurement
+      that goes into the relation of dimensions.
+      You can either compare shapes (`meas ~ Shape`)
+      or their sizes (`meas ~ Size`).
+      For `vert` and `horiz` the possible values mean:
+
+      * `Small`: The corresponding dimension is equal
+         to the minimum of `height` and `width`.
+
+      * `Big`: The corresponding dimension has no further restrictions,
+         but it is of course at least the minimum of `height` and `width`.
+
+      The names `Small` and `Big` fit best to tall and wide matrices.
+      The remaining combinations `Small Small` for `Square`
+      and `Big Big` for `General` appear to be arbitrary, but they help to
+      e.g. treat square and tall matrices the same way, where sensible.
+      Turning `Shape` into `Size` or `Small` into `Big`
+      relaxes a dimension relation.
+
+   * `lower upper` count the numbers of non-zero off-diagonals.
+
+      Off course, stored off-diagonals can consist entirely of zeros.
+      Thus more precisely we have to say, that `lower` and `upper` tell
+      that all values outside the numbered bands are zero.
+
+      `lower` and `upper` can be:
+
+      * `Filled` - no restriction on the number of off-diagonals.
+
+      * `Bands n`,
+        where `n` is a natural number unarily encoded in types.
+
+        `Empty` is a synonym for `Bands U0`.
+
+   * `property` can be
+
+      * `Arbitrary` -
+        this type does not make any further promises about the matrix elements
+
+      * `Unit` - matrix is triangular with a unit diagonal
+
+        It can be used for matrices
+        that always have a unit diagonal by construction.
+        This property is preserved by some operations
+        and enables optimizations by LAPACK.
+        Solving with a unit triangular matrix does not require division
+        and thus cannot fail due to division by zero.
+
+      * `Symmetric` - matrix is symmetric
+
+      * `Hermitian` - matrix is Hermitian (also supported for real elements)
+
+        The internal `Hermitian` property also has three type tags `neg zero pos`
+        to restrict the range of values of bilinear-forms.
+        This way you can denote positive definiteness and semidefiniteness.
+
+   * `pack` can `Packed` or `Unpacked`.
+
+     `Unpacked` means that the full matrix
+     bounded by `height` and `width` is stored.
+     `Packed` format is supported
+     for triangular, symmetric, Hermitian and banded matrices.
+
+     For banded matrices you should always prefer the packed format.
+     For triangular, symmetric and Hermitian matrices
+     LAPACK does not always support packed format natively
+     and our Haskell interface converts forth and back silently.
+     I also think that unpacked triangular formats
+     enjoy better support by vectorized block algorithms.
+     Thus, the unpacked triangular format may be better for performance
+     although it requires twice as much space as the packed format.
+     The packed triangular format however is still
+     the default format for conversion to and from lists,
+     because this prevents the user from declaring non-zero values
+     in the empty area of a triangular matrix.
+
+
+  Let us examine some examples:
+
+   * Diagonal matrix:
+
+      `ArrayMatrix Packed Arbitrary Empty Empty Shape Small Small sh sh a`
+
+   * Packed upper triangular matrix:
+
+      `ArrayMatrix Packed Arbitrary Empty Filled Shape Small Small sh sh a`
+
+   * Unpacked unit lower triangular matrix:
+
+      `ArrayMatrix Unpacked Unit Filled Empty Shape Small Small sh sh a`
+
+   * Complex-valued symmetric matrix:
+
+      `ArrayMatrix Packed Symmetric Filled Filled Shape Small Small sh sh (Complex a)`
+
+   * Tall banded matrix:
+
+      `ArrayMatrix Packed Arbitrary (Bands sub) (Bands super) Size Big Small height width a`
+
+  The type tags have a mathematical meaning
+  and this pays off for operations on matrices.
+  E.g. matrix multiplication adds off-diagonals.
+  Matrix inversion fills non-zero triangular matrix parts.
+  The five supported relations for matrix dimensions are transitive,
+  and thus matrix multiplication maintains a dimension relation,
+  e.g. tall times tall is tall.
+
+  Please note, that not all type parameter combinations are supported.
+  Some restrictions are dictated by mathematics,
+  e.g. Hermitian matrices must always be square,
+  matrices with unit diagonal must always be triangular and so on.
+  Some combinations are simply not supported, because they do not add value.
+  E.g. a (square) diagonal matrix is always symmetric
+  but we allow `Symmetric` only together with `Filled`.
+  Forbidden combinations are often not prevented at the type level,
+  but you will not be able to construct a matrix of a forbidden type.
 
 
   ## Infix operators
@@ -319,4 +473,31 @@ description: |
   But sometimes this may mean that you have to mix
   left and right associative operators,
   and thus you may still need parentheses.
+
+
+  ## Type errors
+
+  You might encounter cryptic type errors
+  that refer to the encoding of particular matrix types
+  via matrix type parameters.
+
+  E.g. the error
+
+      Couldn't match type `Numeric.LAPACK.Matrix.Extent.Big`
+                     with `Numeric.LAPACK.Matrix.Extent.Small`
+
+  may mean that you passed `Square`
+  where `General` or `Tall` was expected.
+  You may solve the problem with a function
+  like `Square.toFull` or `Square.fromFull`.
+
+  The error
+
+      Couldn't match type `Type.Data.Bool.False`
+                     with `Type.Data.Bool.True`
+
+  most likely refers to non-matching definiteness warranties
+  in a `Hermitian` matrix.
+  You may try a function like `Hermitian.assureFullRank`
+  or `Hermitian.relaxIndefinite` to fix the issue.
 license-name: BSD-3-Clause
