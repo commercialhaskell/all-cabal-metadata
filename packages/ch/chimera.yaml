@@ -1,23 +1,61 @@
 homepage: https://github.com/Bodigrim/chimera#readme
-changelog-type: ''
-hash: 1cacfe53e2ce9eda0eec6ae8b51af6c5626e0202333c08080f87d30bf9ed8b19
+changelog-type: markdown
+hash: faeea0b173d2ef45f4bf64ec0f3734ad8c3964c1893185a1a05c31ed9c7133a7
 test-bench-deps:
   tasty-smallcheck: -any
-  base: ! '>=4.5 && <5'
+  base: '>=4.5 && <5'
   chimera: -any
-  gauge: -any
+  tasty-bench: '>=0.2.4'
   tasty-quickcheck: -any
   mtl: -any
   tasty-hunit: -any
   random: -any
   tasty: -any
-  QuickCheck: ! '>=2.10'
+  QuickCheck: '>=2.10'
   vector: -any
 maintainer: andrew.lelechenko@gmail.com
-synopsis: Lazy infinite streams with O(1) indexing
-changelog: ''
+synopsis: Lazy infinite streams with O(1) indexing and applications for memoization
+changelog: |
+  # 0.3.2.0
+
+  * Implement `tabulateFix'`.
+  * Compatibility fixes.
+
+  # 0.3.1.0
+
+  * Define `Monad`, `MonadFix`, `MonadZip` instances.
+  * Define `Distributive` and `Representable` instances.
+  * Speed up `index`.
+
+  # 0.3.0.0
+
+  * Make `Chimera` polymorphic by vector type
+  * Implement `memoize` and `memoizeFix`.
+  * Implement `cycle` and `iterate`.
+  * Implement `mapSubvectors` and `zipSubvectors`
+  * Make boxed `tabulateFix` even lazier.
+  * Speed up `Data.Chimera.WheelMapping`.
+
+  # 0.2.0.0
+
+  * Generalize bit streams to `Chimera` datatype.
+  * Define `Applicative` instance.
+  * Implement `toList`, `trueIndices` and `falseIndices`.
+  * Make boxed `tabulateFix` lazier.
+
+  # 0.1.0.2
+
+  * Compatibility fixes.
+
+  # 0.1.0.1
+
+  * Compatibility fixes.
+
+  # 0.1.0.0
+
+  * Initial release.
 basic-deps:
-  base: ! '>=4.9 && <5'
+  base: '>=4.9 && <5'
   adjunctions: -any
   distributive: -any
   mtl: -any
@@ -26,16 +64,17 @@ all-versions:
 - 0.2.0.0
 - 0.3.0.0
 - 0.3.1.0
+- 0.3.2.0
 author: Bodigrim
-latest: 0.3.1.0
+latest: 0.3.2.0
 description-type: markdown
 description: |
-  # chimera
+  # chimera [![Hackage](http://img.shields.io/hackage/v/chimera.svg)](https://hackage.haskell.org/package/chimera) [![Stackage LTS](http://stackage.org/package/chimera/badge/lts)](http://stackage.org/lts/package/chimera) [![Stackage Nightly](http://stackage.org/package/chimera/badge/nightly)](http://stackage.org/nightly/package/chimera)
 
   Lazy infinite compact streams with cache-friendly O(1) indexing
   and applications for memoization.
 
-  ----
+  ## Introduction
 
   Imagine having a function `f :: Word -> a`,
   which is expensive to evaluate. We would like to _memoize_ it,
@@ -128,6 +167,75 @@ description: |
   isPrime' = memoizeFix isPrimeF
   ```
 
+  ## Example 3
+
+  No manual on memoization is complete
+  without Fibonacci numbers:
+
+  ```haskell
+  fibo :: Word -> Integer
+  fibo = memoizeFix $ \f n -> if n < 2 then toInteger n else f (n - 1) + f (n - 2)
+  ```
+
+  No cleverness involved: just write a recursive function
+  and let `memoizeFix` take care about everything else:
+
+  ```haskell
+  > fibo 100
+  354224848179261915075
+  ```
+
+  ## What about non-`Word` arguments?
+
+  `Chimera` itself can memoize only `Word -> a` functions, which sounds restrictive.
+  That is because we decided to outsource
+  enumerating of user's datatypes to other packages, e. g.,
+  [`cantor-pairing`](http://hackage.haskell.org/package/cantor-pairing).
+  Use `fromInteger . fromCantor` to convert data to `Word`
+  and `toCantor . toInteger` to go back.
+
+  Also, `Data.Chimera.ContinuousMapping` covers several simple cases,
+  such as `Int`, pairs and triples.
+
+  ## Benchmarks
+
+  How important is to store cached data as a flat array instead of a lazy binary tree?
+  Let us measure the maximal length of [Collatz sequence](https://oeis.org/A006577),
+  using `chimera` and `memoize` packages.
+
+  ```haskell
+  {-# LANGUAGE TypeApplications #-}
+  import Data.Chimera
+  import Data.Function.Memoize
+  import Data.Ord
+  import Data.List
+  import Data.Time.Clock
+
+  collatzF :: Integral a => (a -> a) -> (a -> a)
+  collatzF f n = if n <= 1 then 0 else 1 + f (if even n then n `quot` 2 else 3 * n + 1)
+
+  measure :: (Integral a, Show a) => String -> (((a -> a) -> (a -> a)) -> (a -> a)) -> IO ()
+  measure name memo = do
+    t0 <- getCurrentTime
+    print $ maximumBy (comparing (memo collatzF)) [0..1000000]
+    t1 <- getCurrentTime
+    putStrLn $ name ++ " " ++ show (diffUTCTime t1 t0)
+
+  main :: IO ()
+  main = do
+    measure "chimera" Data.Chimera.memoizeFix
+    measure "memoize" (Data.Function.Memoize.memoFix @Int)
+  ```
+
+  Here `chimera` appears to be 20x faster than `memoize`:
+
+  ```
+  837799
+  chimera 0.428015s
+  837799
+  memoize 8.955953s
+  ```
+
   ## Magic and its exposure
 
   Internally `Chimera` is represented as a _boxed_ vector
@@ -138,9 +246,9 @@ description: |
   ```
 
   Assuming 64-bit architecture, the outer vector consists of 65 inner vectors
-  of sizes 1, 1, 2, 2<sup>2</sup>, ..., 2<sup>63</sup>. Since the outer vector
+  of sizes 1, 1, 2, 2², ..., 2⁶³. Since the outer vector
   is boxed, inner vectors are allocated on-demand only: quite fortunately,
-  there is no need to allocate all 2<sup>64</sup> elements at once.
+  there is no need to allocate all 2⁶⁴ elements at once.
 
   To access an element by its index it is enough to find out to which inner
   vector it belongs, which, thanks to the doubling pattern of sizes,
@@ -152,16 +260,20 @@ description: |
   over a thin set of indices.
 
   One can argue that this structure is not infinite,
-  because it cannot handle more than 2<sup>64</sup> elements.
+  because it cannot handle more than 2⁶⁴ elements.
   I believe that it is _infinite enough_ and no one would be able to exhaust
   its finiteness any time soon. Strictly speaking, to cope with indices out of
   `Word` range and `memoize`
   [Ackermann function](https://en.wikipedia.org/wiki/Ackermann_function),
   one could use more layers of indirection, raising access time
-  to O([log<sup>*</sup>](https://en.wikipedia.org/wiki/Iterated_logarithm) n).
+  to O([log ⃰](https://en.wikipedia.org/wiki/Iterated_logarithm) n).
   I still think that it is morally correct to claim O(1) access,
   because all asymptotic estimates of data structures
   are usually made under an assumption that they contain
   less than `maxBound :: Word` elements
   (otherwise you can not even treat pointers as a fixed-size data).
+
+  ## Additional resources
+
+  * [Lazy streams with O(1) access](https://github.com/Bodigrim/my-talks/raw/master/londonhaskell2020/slides.pdf), London Haskell, 25.02.2020.
 license-name: BSD-3-Clause
