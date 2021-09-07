@@ -1,17 +1,48 @@
 homepage: https://github.com/fjvallarino/libmdbx-hs#readme
 changelog-type: markdown
-hash: e9beb145db5a649e9d9cad23ae3b97979f77c8bcad43011859e3cf364335eaf3
+hash: 1d20bfea8e37e5c7e712b5ecb99b64fe1c4628470985111765276defb4168253
 test-bench-deps:
+  bytestring: '>=0.10 && <0.12'
   base: '>=4.12 && <5'
+  hspec: '>=2.4 && <3.0'
   text: ==1.2.*
+  data-default: '>=0.5 && <0.8'
+  HUnit: ==1.6.*
   libmdbx: -any
+  binary: '>=0.8 && <0.11'
+  store: '>=0.5 && <0.8'
   mtl: '>=2.1 && <2.3'
+  store-core: ==0.4.*
+  directory: ==1.3.*
 maintainer: fjvallarino@gmail.com
 synopsis: Bindings for libmdbx, an embedded key/value store
 changelog: |
+  ### 0.2.0.0
+
+  * Add support for setting database geometry.
+  * Add `delRange` to remove a range of keys.
+  * Add `getRangePairs` to retrieve the keys alongside the values.
+  * Add `NullByteString` and `NullText` types. The `Binary` and `Store` instances
+    for these types are encoded as NULL terminated strings, which allows for using
+    them in custom key types with libmdbx. This is not possible with `ByteString`
+    and `Text`, since their `Binary` and `Store` instances are serialized with the
+    size field first. Given that libmdbx compares keys as an unstructured sequence
+    of bytes, this can cause issues since longer strings are considered _greater
+    than_ shorter ones, even if their content indicates otherwise.
+  * Since the library now provides `Store` instances for `NullByteString` and
+    `NullText`, [Store](https://hackage.haskell.org/package/store) was made a
+    dependency for the library itself and not just for the examples.
+  * The same happens with [Binary](https://hackage.haskell.org/package/binary). It
+    is also marked as the recommended serialization library for keys since it
+    uses big endian for encoding, eliminating issues when comparing keys with
+    libmdbx's comparison function.
+  * Make `Database` module Strict. Recommend making user types strict.
+  * Update to latest version of libmdbx.
+  * Add test cases.
+
   ### 0.1.0.4
 
-  * Require base 4.12 (deriving via is only available since GHC 8.6)
+  * Require base 4.12 (deriving via is only available since GHC 8.6).
   * Remove dependency on string-interpolate.
 
   ### 0.1.0.1 - 0.1.0.3
@@ -27,17 +58,21 @@ basic-deps:
   bytestring: '>=0.10 && <0.12'
   base: '>=4.12 && <5'
   text: ==1.2.*
+  data-default: '>=0.5 && <0.8'
   libmdbx: -any
+  binary: '>=0.8 && <0.11'
   store: '>=0.5 && <0.8'
   mtl: '>=2.1 && <2.3'
+  store-core: ==0.4.*
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
 - 0.1.0.2
 - 0.1.0.3
 - 0.1.0.4
+- 0.2.0.0
 author: Francisco Vallarino
-latest: 0.1.0.4
+latest: 0.2.0.0
 description-type: markdown
 description: |
   # libmdbx-hs
@@ -49,41 +84,76 @@ description: |
 
   _**libmdbx** is an extremely fast, compact, powerful, embedded,
   transactional [key-value database](https://en.wikipedia.org/wiki/Key-value_database),
-  with [permissive license](./LICENSE)._
+  with permissive license._
 
   _Historically, **libmdbx** is a deeply revised and extended descendant of the amazing
   [Lightning Memory-Mapped Database](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database).
-  **libmdbx** inherits all benefits from _LMDB_, but resolves some issues and adds [a set of improvements](#improvements-beyond-lmdb)._
+  **libmdbx** inherits all benefits from _LMDB_, but resolves some issues and adds a set of improvements._
 
   ## Usage
 
   ### Low level interface
 
-  Using libmdbx low level interface involves the following steps:
+  Using libmdbx's low level interface involves the following steps:
 
   - Opening an environment. This is the equivalent of a database.
   - Opening a database. This is the equivalent of a table.
   - Creating a transaction.
-  - Performing CRUD operations/using a cursor.
+  - Performing CRUD operations, or using a cursor.
   - Committing or aborting the transaction.
 
-  You can check [Hackage](https://hackage.haskell.org/package/libmdbx-hs/Mdbx-API.html)
-  for the low level interface or [libmdbx](https://erthink.github.io/libmdbx)
+  See [Hackage](https://hackage.haskell.org/package/libmdbx-hs/Mdbx-API.html) for
+  the low level interface or [libmdbx's](https://erthink.github.io/libmdbx)
   documentation for more details on internals.
 
   ### High level interface
 
-  Alternatively you can use the higher level interface which, although it provides
-  a more limited set of operations, takes care of transaction handling and makes
-  the common use cases really simple.
+  Alternatively you can use the high level interface which, although providing
+  a limited set of operations, takes care of transaction handling and makes the
+  common use cases really simple.
 
-  For the high level interface check [Hackage](https://hackage.haskell.org/package/libmdbx-hs/Mdbx-Database.html)
+  ```haskell
+  data User = User {
+    _username :: !Text,
+    _password :: !Text
+  } deriving (Eq, Show, Generic, Store)
+
+  deriving via (MdbxItemStore User) instance MdbxItem User
+
+  openEnvDbi :: IO MdbxEnv
+  openEnvDbi = envOpen "./test.db" def [MdbxNosubdir, MdbxCoalesce, MdbxLiforeclaim]
+
+  userKey :: User -> Text
+  userKey user = "user-" <> _username user
+
+  main :: IO ()
+  main = bracket openEnvDbi envClose $ \env -> do
+    db <- dbiOpen env Nothing []
+
+    putItem env db (userKey user1) user1
+    putItem env db (userKey user2) user2
+
+    getItem env db (userKey user2) >>= print @(Maybe User)
+    getRange env db (userKey user1) (userKey user2) >>= print @[User]
+    where
+      user1 = User "john" "secret"
+      user2 = User "mark" "password"
+  ```
+
+  For the high level interface see [Hackage](https://hackage.haskell.org/package/libmdbx-hs/Mdbx-Database.html)
   or the sample application [here](app/Main.hs).
 
   ### Common
 
   In both scenarios, you will want to check [Hackage](https://hackage.haskell.org/package/libmdbx-hs/Mdbx-Types.html)
   for information on how to make your data types compatible with libmdbx-hs.
+
+  It is recommended that your serializable data types have strict fields, to avoid
+  issues related to lazy IO. The library loads data from pointers that are valid
+  only during a transaction; delaying the operation may cause an invalid read and
+  consequently a crash.
+
+  Write operations should always be performed from the same OS thread.
 
   ## Dependencies
 
