@@ -1,6 +1,6 @@
 homepage: https://github.com/tweag/ormolu
 changelog-type: markdown
-hash: 369a66e0205c416c35d823e1da6cc12f53d09051e8a5019eacfef0a819887467
+hash: 2f3dedde8d57f816bf465a2075c4f6bb5827fa9eda1fd087d62a37c3789e1bc5
 test-bench-deps:
   path: '>=0.6 && <0.10'
   base: '>=4.12 && <5.0'
@@ -13,6 +13,41 @@ test-bench-deps:
 maintainer: Mark Karpov <mark.karpov@tweag.io>
 synopsis: A formatter for Haskell source code
 changelog: |
+  ## Ormolu 0.3.0.0
+
+  * Data declarations with multiline kind signatures are now formatted
+    correctly. [Issue 749](https://github.com/tweag/ormolu/issues/749).
+
+  * Infix arrow command formations are formatted like usual operators.
+    This fixes [Issue 748](https://github.com/tweag/ormolu/issues/748).
+
+  * `do` arrow commands are formatted more flexibly. Fixes [Issue
+    753](https://github.com/tweag/ormolu/issues/753).
+
+  * Source code is always read and written using UTF8 and ignoring the native
+    line ending conventions. [Issue
+    717](https://github.com/tweag/ormolu/issues/717).
+
+  * Opt-in support to respect default-extensions and default-language
+    from .cabal files. [Issue 517](https://github.com/tweag/ormolu/issues/517).
+
+  * Empty case expressions are now rendered with braces. [Issue
+    765](https://github.com/tweag/ormolu/issues/765).
+
+  * Omit braces on repeated application of `do` blocks. [Issue
+    735](https://github.com/tweag/ormolu/issues/735).
+
+  * Improved handling of disabled regions. [PR 773](
+    https://github.com/tweag/ormolu/pull/773).
+     * Disabled regions are now exactly preserved, in particular
+       empty lines and trailing spaces. [Issue
+       673](https://github.com/tweag/ormolu/issues/673).
+     * Strings like `-}` can now be present in disabled regions.
+       [Issue 708](https://github.com/tweag/ormolu/issues/708).
+     * As a side effect, using the magic comments like in
+       [Issue 601](https://github.com/tweag/ormolu/issues/601)
+       is no longer supported.
+
   ## Ormolu 0.2.0.0
 
   * Now standalone kind signatures are grouped with type synonyms. [Issue
@@ -69,7 +104,7 @@ changelog: |
     Previously, if an extension was disabled via the CLI, it could not be
     re-enabled per file.
 
-  * `LexicalNegation` is no longer enabled by default. Also, spaces after
+  * `NegativeLiterals` is no longer enabled by default. Also, spaces after
     negation via `-` are removed where possible. [Issue
     694](https://github.com/tweag/ormolu/issues/694).
 
@@ -79,7 +114,8 @@ changelog: |
   * Added support for left-to-right arrow application. [Issue
     737](https://github.com/tweag/ormolu/issues/737).
 
-  * Now `--mode check` fails on missing trailing blank lines.
+  * Now `--mode check` fails on missing trailing blank lines. [Issue
+    743](https://github.com/tweag/ormolu/issues/743).
 
   * Fixed indentation of arrow forms in do blocks. [Issue
     739](https://github.com/tweag/ormolu/issues/739).
@@ -350,6 +386,7 @@ changelog: |
 basic-deps:
   exceptions: '>=0.6 && <0.11'
   bytestring: '>=0.2 && <0.12'
+  Cabal: ^>=3.4
   base: '>=4.12 && <5.0'
   Diff: '>=0.4 && <1.0'
   text: '>=0.2 && <1.3'
@@ -363,6 +400,7 @@ basic-deps:
   mtl: '>=2.0 && <3.0'
   optparse-applicative: '>=0.14 && <0.17'
   ormolu: -any
+  directory: ^>=1.3
 all-versions:
 - 0.0.1.0
 - 0.0.2.0
@@ -378,8 +416,9 @@ all-versions:
 - 0.1.4.0
 - 0.1.4.1
 - 0.2.0.0
+- 0.3.0.0
 author: ''
-latest: 0.2.0.0
+latest: 0.3.0.0
 description-type: markdown
 description: |
   # Ormolu
@@ -396,6 +435,7 @@ description: |
       * [Editor integration](#editor-integration)
       * [GitHub actions](#github-actions)
       * [Magic comments](#magic-comments)
+      * [Account for .cabal files](#account-for-cabal-files)
       * [Exit codes](#exit-codes)
   * [Limitations](#limitations)
   * [Running on Hackage](#running-on-hackage)
@@ -430,19 +470,20 @@ description: |
   $ nix-build -A ormolu
   ```
 
-  Or with `cabal-install` from the Nix shell:
+  Note that you will need to add [IOHK Hydra binary
+  cache][iohk-hydra-binary-cache], otherwise building may take a very long
+  time.
 
-  ```console
-  $ nix-shell --run "cabal new-build"
-  ```
-
-  Alternatively, `stack` could be used with a `stack.yaml` file as follows.
+  Alternatively, `stack` could be used with a `stack.yaml` file as follows:
 
   ```console
   $ cat stack.yaml
-  resolver: lts-16.0
+  resolver: lts-18.6
   packages:
   - '.'
+  extra-deps:
+  - Cabal-3.4.0.0
+  - ghc-lib-parser-9.0.1.20210324
 
   $ stack build # to build
   $ stack install # to install
@@ -451,25 +492,16 @@ description: |
   To use Ormolu directly from GitHub with Nix, this snippet may come in handy:
 
   ```nix
-  # This overlay adds Ormolu straight from GitHub.
-  self: super:
-
-  let source = super.fetchFromGitHub {
+  let
+    pkgs = import <nixpkgs> { };
+    source = pkgs.fetchFromGitHub {
         owner = "tweag";
         repo = "ormolu";
-        rev = "de279d80122b287374d4ed87c7b630db1f157642"; # update as necessary
-        sha256 = "0qrxfk62ww6b60ha9sqcgl4nb2n5fhf66a65wszjngwkybwlzmrv"; # same
+        rev = "c1d8a8083cf1492545b8deed342c6399fe9873ea"; # update as necessary
+        # do not forget to update the hash:
+        sha256 = "sha256-3XxKuWqZnFa9s3mY7OBD+uEn/fGxPmC8jdevx7exy9o=";
       };
-      ormolu = import source { pkgs = self; };
-  in {
-    haskell = super.haskell // {
-      packages = super.haskell.packages // {
-        "${ormolu.ormoluCompiler}" = super.haskell.packages.${ormolu.ormoluCompiler}.override {
-          overrides = ormolu.ormoluOverlay;
-        };
-      };
-    };
-  }
+  in (import source {  }).ormoluExe # this is e.g. the executable derivation
   ```
 
   ### Arch Linux
@@ -543,9 +575,20 @@ description: |
   This allows us to disable formatting selectively for code between these
   markers or disable it for the entire file. To achieve the latter, just put
   `{- ORMOLU_DISABLE -}` at the very top. Note that for Ormolu to work the
-  source code must still be parseable even when the disabled regions are
-  omitted. Because of that the magic comments cannot be placed arbitrarily,
-  but rather must enclose independent top-level definitions.
+  fragments where Ormolu is enabled must be parseable on their own. Because of
+  that the magic comments cannot be placed arbitrarily, but rather must
+  enclose independent top-level definitions.
+
+  ### Account for .cabal files
+
+  Many cabal and stack projects use `default-extensions` to enable GHC
+  language extensions in all source files. With the
+  `--cabal-default-extensions` flag, Ormolu will take them into consideration
+  during formatting.
+
+  When you format input from stdin, you can pass `--stdin-input-file` which
+  will give Ormolu the location of the Haskell source file that should be used
+  as the starting point for searching for a suitable .cabal file.
 
   ### Exit codes
 
@@ -559,6 +602,8 @@ description: |
   5         | AST of original and formatted code differs
   6         | Formatting is not idempotent
   7         | Unrecognized GHC options
+  8         | Cabal file parsing failed
+  9         | Missing input file path when using stdin input and accounting for .cabal files
   100       | In checking mode: unformatted files
   101       | Inplace and check modes do not work with stdin
   102       | Other issue (with multiple input files)
@@ -597,6 +642,7 @@ description: |
 
   Copyright © 2018–present Tweag I/O
 
+  [iohk-hydra-binary-cache]: https://input-output-hk.github.io/haskell.nix/tutorials/getting-started/#setting-up-the-binary-cache
   [aur]: https://aur.archlinux.org/packages/ormolu
   [contributing]: https://github.com/tweag/ormolu/blob/master/CONTRIBUTING.md
   [design-cpp]: https://github.com/tweag/ormolu/blob/master/DESIGN.md#cpp
