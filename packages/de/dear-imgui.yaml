@@ -1,11 +1,15 @@
 homepage: ''
 changelog-type: markdown
-hash: 3b4a6db0743b37aed615ac5d404e5c5c06a93abc36ad33d03d5f0ff9ed77dac3
+hash: ebe5a624d48254defb462a48cebeebb6a9b422f14d0d55d789581b75848ee744
 test-bench-deps: {}
 maintainer: ollie@ocharles.org.uk, aenor.realm@gmail.com
 synopsis: Haskell bindings for Dear ImGui.
 changelog: |
   # Changelog for dear-imgui
+
+  ## [1.2.1]
+
+  - Added `DearImGui.Raw.IO` with attribute setters.
 
   ## [1.2.0]
 
@@ -61,8 +65,9 @@ all-versions:
 - 1.0.2
 - 1.1.0
 - 1.2.0
+- 1.2.1
 author: Oliver Charles
-latest: 1.2.0
+latest: 1.2.1
 description-type: markdown
 description: |
   # Dear ImGui.hs
@@ -121,38 +126,35 @@ description: |
 
     runManaged do
       -- Create a window using SDL. As we're using OpenGL, we need to enable OpenGL too.
-      w <- do
+      window <- do
         let title = "Hello, Dear ImGui!"
         let config = defaultWindow { windowGraphicsContext = OpenGLContext defaultOpenGL }
         managed $ bracket (createWindow title config) destroyWindow
 
       -- Create an OpenGL context
-      glContext <- managed $ bracket (glCreateContext w) glDeleteContext
+      glContext <- managed $ bracket (glCreateContext window) glDeleteContext
 
       -- Create an ImGui context
       _ <- managed $ bracket createContext destroyContext
 
       -- Initialize ImGui's SDL2 backend
-      _ <- managed_ $ bracket_ (sdl2InitForOpenGL w glContext) sdl2Shutdown
+      _ <- managed_ $ bracket_ (sdl2InitForOpenGL window glContext) sdl2Shutdown
 
       -- Initialize ImGui's OpenGL backend
       _ <- managed_ $ bracket_ openGL2Init openGL2Shutdown
 
-      liftIO $ mainLoop w
+      liftIO $ mainLoop window
 
 
   mainLoop :: Window -> IO ()
-  mainLoop w = do
-    -- Process the event loop
-    untilNothingM pollEventWithImGui
-
+  mainLoop window = unlessQuit do
     -- Tell ImGui we're starting a new frame
     openGL2NewFrame
     sdl2NewFrame
     newFrame
 
     -- Build the GUI
-    bracket_ (begin "Hello, ImGui!") end do
+    withWindowOpen "Hello, ImGui!" do
       -- Add a text widget
       text "Hello, ImGui!"
 
@@ -170,12 +172,25 @@ description: |
     render
     openGL2RenderDrawData =<< getDrawData
 
-    glSwapWindow w
+    glSwapWindow window
 
-    mainLoop w
+    mainLoop window
 
     where
-      untilNothingM m = m >>= maybe (return ()) (\_ -> untilNothingM m)
+      -- Process the event loop
+      unlessQuit action = do
+        shouldQuit <- checkEvents
+        if shouldQuit then pure () else action
+
+      checkEvents = do
+        pollEventWithImGui >>= \case
+          Nothing ->
+            return False
+          Just event ->
+            (isQuit event ||) <$> checkEvents
+
+      isQuit event =
+        SDL.eventPayload event == SDL.QuitEvent
   ```
 
   # Hacking
