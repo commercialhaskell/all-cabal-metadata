@@ -1,11 +1,32 @@
 homepage: ''
 changelog-type: markdown
-hash: 55571a2ea2002cc85b998e110470279cb9ea9540d2d69402329ccb7750292d1e
+hash: eb15b14c5f1b4f14eb207efb63e84d245d46a4c7b68924df441331f164b8ed93
 test-bench-deps: {}
 maintainer: fd@taz.de
 synopsis: AMQP toolset for the command line
 changelog: |
   # Revision history for haskell-amqp-utils
+
+  ## 0.6.3.2  -- 2021-10-25
+
+  * update README
+
+  ## 0.6.3.1  -- 2021-09-08
+
+  * avoid setCurrentDirectory which is not thread-safe
+  * start watch before initial scan
+  * put filename without directory into filename header
+
+  ## 0.6.3.0  -- 2021-09-06
+
+  * watch multiple dirs in hotfolder mode
+  * drop hinotify < 0.3.10 compatibility
+  * use RawFilePath for file names
+  * fix handling of non-ascii filenames in agitprop hotfolder
+
+  ## 0.6.2.4  -- 2021-08-30
+
+  * depend on tls >= 1.5.0 (thread safety for writes)
 
   ## 0.6.2.2  -- 2021-08-25
 
@@ -151,6 +172,7 @@ changelog: |
 
   * First version. Released on an unsuspecting world.
 basic-deps:
+  rawfilepath: -any
   bytestring: -any
   unix: '>=2.7'
   base: '>=4.6 && <5'
@@ -158,7 +180,7 @@ basic-deps:
   time: -any
   amqp: '>=0.19'
   text: -any
-  tls: '>=1.3.9'
+  tls: '>=1.5.0'
   filepath: -any
   process: -any
   network: '>2.6'
@@ -167,7 +189,8 @@ basic-deps:
   containers: -any
   x509-system: -any
   utf8-string: -any
-  hinotify: '>=0.3.8'
+  hinotify: '>=0.3.10'
+  filepath-bytestring: -any
   directory: -any
 all-versions:
 - 0.2.1.4
@@ -193,8 +216,9 @@ all-versions:
 - 0.6.1.0
 - 0.6.1.1
 - 0.6.2.2
+- 0.6.3.2
 author: Frank Doepper
-latest: 0.6.2.2
+latest: 0.6.3.2
 description-type: markdown
 description: |
   # haskell-amqp-utils
@@ -214,7 +238,7 @@ description: |
       Options:
         -r BINDINGKEY  --bindingkey=BINDINGKEY          AMQP binding key
         -X[EXE]        --execute[=EXE]                  Callback Script File (implies -t) (-X without arg: /usr/lib/haskell-amqp-utils/callback)
-        -a ARG         --args=ARG                       additional argument for -X callback
+        -a ARG         --args=ARG, --arg=ARG            additional argument for -X callback
         -t[DIR]        --tempdir[=DIR], --target[=DIR]  tempdir (default: no file creation, -t without arg: /tmp)
         -f INT         --prefetch=INT                   Prefetch count. (0=unlimited, 1=off, default: 1)
         -A             --ack                            Toggle ack messages (default: True)
@@ -277,7 +301,7 @@ description: |
 
       Options:
         -r ROUTINGKEY    --routingkey=ROUTINGKEY            AMQP routing key
-        -f INPUTFILE     --inputfile=INPUTFILE              Message input file (default: -)
+        -f INPUTFILE     --inputfile=INPUTFILE              Message input file (default: <stdin>)
         -l               --linemode                         Toggle line-by-line mode (default: False)
         -C               --confirm                          Toggle confirms (default: False)
                          --msgid=ID                         Message ID
@@ -322,6 +346,8 @@ description: |
 
   Line-by-line mode sends one message per INPUTFILE line.
 
+  In "hotfolder mode" multiple directories can be watched and sent with distinct routingkeys.
+
   #### examples
 
   Send a message containing a file and put the filename into a fileName
@@ -329,32 +355,39 @@ description: |
 
       agitprop -x amq.topic -r test -F fileName -f agitprop.hs
 
+  Watch two directories dir1 and dir2 and send files from dir1 with routingkey r1
+  and files from dir2 with routingkey r2, ignoring everything which is not *.txt
+  or *.zip, and set Content-Type and Content-Encoding automatically, and move all
+  sent files to subdir "done" (dir1/done and dir2/done, respectively):
+
+      agitprop -x amq.topic -F fileName -m -S .txt -S .zip -d -udone -r r1 -f dir1 -r r2 -f dir2
+
   ### plane
   An RPC client.
 
       plane [options]
 
       Options:
-        -r ROUTINGKEY    --routingkey=ROUTINGKEY    AMQP routing key
-        -f INPUTFILE     --inputfile=INPUTFILE      Message input file (default: -)
-        -O OUTPUTFILE    --outputfile=OUTPUTFILE    Message output file (default: -)
-        -t SECONDS       --rpc_timeout=SECONDS      How long to wait for reply (default: 5.0)
-                         --corrid=CORRID            Message CorrelationID
-                         --exp=EXP                  Message Expiration
-        -h HEADER=VALUE  --header=HEADER=VALUE      Message Headers
-        -l INT           --charlimit=INT            limit number of shown body chars (default: unlimited)
-        -x EXCHANGE      --exchange=EXCHANGE        AMQP Exchange (default: "")
-        -o SERVER        --server=SERVER            AMQP Server (default: localhost)
-        -y VHOST         --vhost=VHOST              AMQP Virtual Host (default: /)
-        -p PORT          --port=PORT                Server Port Number (default: 5672)
-        -T               --tls                      Toggle TLS (default: False)
-        -c CERTFILE      --cert=CERTFILE            TLS Client Certificate File
-        -k KEYFILE       --key=KEYFILE              TLS Client Private Key File
-        -U USERNAME      --user=USERNAME            Username for Auth
-        -P PASSWORD      --pass=PASSWORD            Password for Auth
-        -s INT           --heartbeats=INT           heartbeat interval (0=disable, default: set by server)
-        -n NAME          --name=NAME                connection name, will be shown in RabbitMQ web interface
-        -w SECONDS       --connect_timeout=SECONDS  timeout for establishing initial connection (default: 600)
+        -r ROUTINGKEY, -Q ROUTINGKEY  --routingkey=ROUTINGKEY, --qname=ROUTINGKEY  AMQP routing key
+        -f INPUTFILE                  --inputfile=INPUTFILE                        Message input file (default: <stdin>)
+        -O OUTPUTFILE                 --outputfile=OUTPUTFILE                      Message output file (default: -)
+        -t SECONDS                    --rpc_timeout=SECONDS                        How long to wait for reply (default: 5.0)
+                                      --corrid=CORRID                              Message CorrelationID
+                                      --exp=EXP                                    Message Expiration
+        -h HEADER=VALUE               --header=HEADER=VALUE                        Message Headers
+        -l INT                        --charlimit=INT                              limit number of shown body chars (default: unlimited)
+        -x EXCHANGE                   --exchange=EXCHANGE                          AMQP Exchange (default: "")
+        -o SERVER                     --server=SERVER                              AMQP Server (default: localhost)
+        -y VHOST                      --vhost=VHOST                                AMQP Virtual Host (default: /)
+        -p PORT                       --port=PORT                                  Server Port Number (default: 5672)
+        -T                            --tls                                        Toggle TLS (default: False)
+        -c CERTFILE                   --cert=CERTFILE                              TLS Client Certificate File
+        -k KEYFILE                    --key=KEYFILE                                TLS Client Private Key File
+        -U USERNAME                   --user=USERNAME                              Username for Auth
+        -P PASSWORD                   --pass=PASSWORD                              Password for Auth
+        -s INT                        --heartbeats=INT                             heartbeat interval (0=disable, default: set by server)
+        -n NAME                       --name=NAME                                  connection name, will be shown in RabbitMQ web interface
+        -w SECONDS                    --connect_timeout=SECONDS                    timeout for establishing initial connection (default: 600)
 
   #### examples
 
@@ -369,7 +402,7 @@ description: |
 
       Options:
         -X[EXE]       --execute[=EXE]                  Callback Script File (implies -t) (-X without arg: /usr/lib/haskell-amqp-utils/callback)
-        -a ARG        --args=ARG                       additional argument for -X callback
+        -a ARG        --args=ARG, --arg=ARG            additional argument for -X callback
         -t[DIR]       --tempdir[=DIR], --target[=DIR]  tempdir (default: no file creation, -t without arg: /tmp)
         -f INT        --prefetch=INT                   Prefetch count. (0=unlimited, 1=off, default: 1)
         -A            --ack                            Toggle ack messages (default: True)
