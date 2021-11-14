@@ -1,6 +1,6 @@
 homepage: https://github.com/ta0kira/zeolite
 changelog-type: markdown
-hash: d8c1d18cba63d501d08af6ca140f07e9dd73f510a17c1e9dc62420a4cb5e038d
+hash: 974e2f8af003626b6a2d15e9330ca9f4291f58394e5b8810bace311dc10cba5c
 test-bench-deps:
   base: -any
   filepath: -any
@@ -10,6 +10,168 @@ maintainer: Kevin P. Barry <ta0kira@gmail.com>
 synopsis: Zeolite is a statically-typed, general-purpose programming language.
 changelog: |
   # Revision history for zeolite-lang
+
+  ## 0.20.0.0  -- 2021-11-13
+
+  ### Language
+
+  * **[breaking]** Adds the `immutable` category property. This makes all `@value`
+    members read-only, and requires their types to also be `immutable`. (This is
+    breaking because `immutable` is now reserved.)
+
+  * **[breaking]** Allows temporarily postponing variable initialization using the
+    `defer` keyword. (This is breaking because `defer` is now reserved.)
+
+  * **[breaking]** Adds compilation error if multiple functions match the name of
+    a function used in a call. This can happen when multiple `requires` or
+    `defines` types have a function with the same name.
+
+  * **[fix]** Fixes merging of multiple functions with the same name inherited
+    *internally* multiple times.
+
+    ```text
+    @value interface Base0 {
+      call (Int) -> ()
+    }
+
+    @value interface Base1 {
+      call (String) -> ()
+    }
+
+    concrete Type {}
+
+    define Type {
+      refines Base0
+      refines Base1
+
+      // This was previously missed when checking for an explicit merge of call.
+      @value call (Formatted) -> ()
+      call (_) {}
+    }
+    ```
+
+  * **[fix]** Removes the `types` reserved word, which was previously used for
+    internal types.
+
+  * **[fix]** Fixes `update` calls in `traverse`. Previously, the `update` was not
+    called for `continue`.
+
+  * **[new]** Adds `$DisableCoverage$` `unittest` pragma, to disable trace
+    collection in `--log-traces` when the `unittest` is executed.
+
+  * **[new]** Updates `String.builder()` to accept `Formatted` values, rather than
+    just accepting `String`.
+
+  * **[new]** Updates param inference to infer a param that is only used in
+    filters for another param, if that other param occurs as a top-level argument.
+
+    ```text
+    // The caller can infer both #x and #y, even though there is no arg with #y.
+    @type call<#x,#y>
+      #x requires Foo<#y>
+    (#x) -> ()
+    ```
+
+  * **[behavior]** Reduces memory size of `Bool`, `Char`, `Float`, `Int`, and
+    references to all other value objects.
+
+  * **[behavior]** Efficiency improvements for passing values in function calls.
+
+  * **[behavior]** Skips calling `get` in `traverse` if the value is discarded.
+
+    ```text
+    // The _ suppresses the call to get() on the returned Order<Int> value.
+    traverse (Counter.zeroIndexed(100) -> _) {
+      // ...
+    }
+    ```
+
+  * **[behavior]** Makes dispatching of function calls quite a bit more efficient.
+
+  ### Compiler CLI
+
+  * **[breaking]** Updates caching of `TypeInstance` (i.e., `@type`)
+    implementations in C++.
+
+    - The argument type for `CreateType_Foo` for extension `Foo` must now be a
+      `const` `&`. For types with params, the `InstanceCache` should be made
+      global and `static`.
+    - A new function `void RemoveType_Foo` taking the same `params` argument as
+      the above must be added, which will be called when the `TypeInstance` is
+      destructed. For types with params, call `Remove` on the `InstanceCache`.
+      Otherwise, it can be a no-op `{}`.
+
+    (You can also just rerun in `--templates` mode and copy the updated `Create`
+    and `Remove` functions.)
+
+    Example for `concrete Foo<#x>`:
+
+    ```c++
+    static auto& Foo_instance_cache = *new InstanceCache<1, Type_Foo>([](const Params<1>::Type& params) {
+        return S_get(new ExtType_Foo(CreateCategory_Foo(), params));
+      });
+
+    S<const Type_Foo> CreateType_Foo(const Params<1>::Type& params) {
+      return Foo_instance_cache.GetOrCreate(params);
+    }
+
+    void RemoveType_Foo(const Params<1>::Type& params) {
+      Foo_instance_cache.Remove(params);
+    }
+    ```
+
+  * **[breaking]** Removes all passing of `Param_self` in C++ extensions. Use
+    `PARAM_SELF` where `Param_self` was previously used, and delete the
+    `Param_self` argument from function signatures. This breaks all existing
+    extensions that have `@type` functions.
+
+  * **[breaking]** Makes all references to `TypeInstance` `const` in C++, since
+    Zeolite prohibits `@type` members in `concrete` categories.
+
+    All extensions with `@type` functions need to be updated:
+
+    - Make all `Call_foo` overrides `const` for `@type` functions.
+    - Update `@value` constructors to take `S<const Type_Foo>` instead of
+      `S<Type_Foo>`.
+    - Update local params (e.g., `Param_foo`) to have type
+      `S<const TypeInstance>`.
+    - Update `CreateType_Foo` to return `S<const Type_Foo>` instead of
+      `S<Type_Foo>`.
+
+  * **[breaking]** Removes `AnonymousOrder` C++ class, previously used for
+    creating iterators for C++ extensions.
+
+  * **[new]** Adds `--show-traces` mode to `zeolite` to output a list of possible
+    trace contexts when `--log-traces` is used in `-t` mode.
+
+  * **[new]** Adds `--missed-lines` mode to `zeolite` to output all code lines
+    for a module that are not in a provided file that was created by
+    `--log-traces` in `-t` mode.
+
+  * **[new]** `@value` function implementations for `immutable` categories are
+    marked as `const` in C++ extensions.
+
+  * **[new]** Allows modules to have additional subdirectories, specified in
+    `.zeolite-module` with the `extra_paths:` list section. This allows modules to
+    separate `.0rx` and `.0rt` files from public `.0rp` files.
+
+  ### Libraries
+
+  * **[breaking]** Removes iterators from `lib/util` (`iterator.0rp`) because they
+    were awkward, inefficient, and had no current intended use-cases.
+
+  * **[breaking]** Requires the key param in `SearchTree` and `AutoBinaryTree` in
+    `lib/container` to be `immutable`.
+
+  * **[breaking]** Requires the value param in `TreeSet` in `lib/container` to be
+    `immutable`.
+
+  * **[breaking]** Requires the value param in `CategoricalTree` in `lib/math` to
+    be `immutable`.
+
+  * **[new]** Adds the `LinkedNode` and `ForwardNode` linked-list types to
+    `lib/container`, and adds the `sortList`, `sortListWith`, and `reverseList`
+    functions to `Sorting`.
 
   ## 0.19.0.0  -- 2021-10-25
 
@@ -1026,8 +1188,9 @@ all-versions:
 - 0.18.0.1
 - 0.18.1.0
 - 0.19.0.0
+- 0.20.0.0
 author: Kevin P. Barry
-latest: 0.19.0.0
+latest: 0.20.0.0
 description-type: haddock
 description: |-
   Zeolite is an experimental general-purpose programming language. See
