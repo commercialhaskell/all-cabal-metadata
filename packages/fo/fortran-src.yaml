@@ -1,6 +1,6 @@
 homepage: https://github.com/camfort/fortran-src#readme
 changelog-type: markdown
-hash: 40081de1ae4f8d5627b735211e24683e050640a83137d722f785f6a2714af70d
+hash: 6d7e1eb8befaa703a679ad162da3462fcd3a3fb7c2416436260609227ec3e4f0
 test-bench-deps:
   bytestring: '>=0.10 && <0.12'
   base: '>=4.6 && <5'
@@ -17,11 +17,40 @@ test-bench-deps:
   mtl: '>=2.2 && <3'
   temporary: '>=1.2 && <1.4'
   deepseq: ==1.4.*
+  QuickCheck: '>=2.10 && <2.15'
   pretty: '>=1.1 && <2'
   directory: '>=1.2 && <2'
-maintainer: me@madgen.net
-synopsis: Parsers and analyses for Fortran standards 66, 77, 90 and 95.
+maintainer: |-
+  me@madgen.net,
+  Ben Orchard
+synopsis: Parsers and analyses for Fortran standards 66, 77, 90, 95 and 2003 (partial).
 changelog: |
+  ### 0.7.0 (Dec 09, 2021)
+    * No longer treat `!` in strings as comments in continuation reformatter
+      (thanks @envp) #179
+    * CI builds on Mac; more release automation #181 #189
+    * Handle nonstandard kind parameter in parsing & type analysis #188
+    * Fix renamer ambiguity resulting in unusual name-related breakages (e.g.
+      `ValVariable` not getting transformed to `ValIntrinsic`) #190
+    * Fully parse logical literals early (don't leave as `String`) #185
+      * Code that touches `ValLogical` will have to be updated -- it should mean
+        removal of user-side parsing.
+    * Explicitly parse integer literal kind parameter #191
+      * The `String` representation stored should now always be safe to `read` to
+        a Haskell `Integral`.
+    * Provide real literals in a semi-parsed "decomposed" format #193
+      * Kind parameters are also made explicit.
+      * Libraries with custom real literal parsing should be able to replace it
+        with `readRealLit :: (Fractional a, Read a) => RealLit -> a`.
+    * BOZ literal constants receive their own `Value` constructor (instead of
+      sharing one with integers) #194
+      * Also parse them to an intermediate data type and provide handling
+        functions.
+
+  Note that kind parameters are disabled in fixed form parsers (F77, F66), so for
+  codebases targeting older standards, many changes will be along the lines of
+  `ValInteger x` -> `ValInteger x _`.
+
   ### 0.6.1 (Sep 17, 2021)
     * Properly include test data in package dist (in preparation for placing on
       Stackage)
@@ -172,40 +201,80 @@ all-versions:
 - 0.5.0
 - 0.6.0
 - 0.6.1
-author: Mistral Contrastin, Matthew Danish, Dominic Orchard, Andrew Rice
-latest: 0.6.1
+- 0.7.0
+author: |-
+  Mistral Contrastin,
+  Matthew Danish,
+  Dominic Orchard,
+  Andrew Rice
+latest: 0.7.0
 description-type: markdown
 description: |
   # fortran-src
-  ![CI status badge](https://github.com/camfort/fortran-src/workflows/CI/badge.svg)
+  ![CI status badge](https://github.com/camfort/fortran-src/actions/workflows/ci.yml/badge.svg)
 
-  Provides lexing, parsing, and basic analyses of Fortran code covering standards: FORTRAN 66, FORTRAN 77, Fortran 90, Fortran 95 and part of Fortran 2003. Includes data flow and basic block analysis, a renamer, and type analysis. For example usage, see the 'camfort' project (https://github.com/camfort/camfort), which uses fortran-src as its front end.
+  Provides lexing/parsing and early static analyses of Fortran code. The following
+  Fortran standards are covered:
 
-  For features that output graphs, the intended usage is to pipe it into the command 'dot -Tpdf' and redirect that into a PDF file. The 'dot' command is part of the GraphViz project (https://www.graphviz.org/), please see their manual for the many other options that can be explored for visualisation purposes.
+    * FORTRAN 66 (ANSI X3.9-1966)
+    * FORTRAN 77 (ANSI X3.9-1978 / ISO 1539:1980)
+    * Fortran 90 (ISO/IEC 1539:1991)
+    * Fortran 95 (ISO/IEC 1539-1:1997
+    * Fortran 2003 (partial)
 
-      Usage: fortran-src [OPTION...] <file>
-        -v VERSION, -F VERSION  --fortranVersion=VERSION         Fortran version to use, format: Fortran[66/77/77Legacy/77Extended/90]
-        -a ACTION               --action=ACTION                  lex or parse action
-        -t                      --typecheck                      parse and run typechecker
-        -R                      --rename                         parse and rename variables
-        -B                      --bblocks                        analyse basic blocks
-        -S                      --supergraph                     analyse super graph of basic blocks
-        -r                      --reprint                        Parse and output using pretty printer
-                                --dot                            output graphs in GraphViz DOT format
-                                --dump-mod-file                  dump the information contained within mod files
-        -I DIR                  --include-dir=DIR                directory to search for precompiled 'mod files'
-        -c                      --compile                        compile an .fsmod file from the input
-                                --show-block-numbers[=LINE-NUM]  Show the corresponding AST-block identifier number next to every line of code.
-                                --show-flows-to=AST-BLOCK-ID     dump a graph showing flows-to information from the given AST-block ID; prefix with 's' for supergraph
-                                --show-flows-from=AST-BLOCK-ID   dump a graph showing flows-from information from the given AST-block ID; prefix with 's' for supergraph
+  Parsing is configurable, and you can select the Fortran standard to target,
+  including special extended modes for nonstandard FORTRAN 77.
+
+  Includes data flow and basic block analysis, a renamer, and type analysis.
+
+  This package primarily exports a Haskell library, but also builds an executable
+  that can be used for testing and debugging. For example usage, see the
+  [CamFort](https://github.com/camfort/camfort) project, which uses fortran-src as
+  its front end.
+
+  ## Obtaining
+  We provide [prebuilt binaries](https://github.com/camfort/fortran-src/releases)
+  for Windows, Mac and Linux.
+
+  ## Usage
+  Add `fortran-src` as a dependency in your Haskell project. We're on
+  [Hackage](https://hackage.haskell.org/package/fortran-src) and also on
+  [Stackage](https://www.stackage.org/package/fortran-src).
+
+  ### Command-line tool
+  You can also invoke `fortran-src` on the command line.
+
+  For features that output graphs, the intended usage is to pipe it into the
+  command `dot -Tpdf` and redirect that into a PDF file. The `dot` command is part
+  of the [GraphViz project](https://www.graphviz.org/), please see their manual
+  for the many other options that can be explored for visualisation purposes.
+
+  ```
+  Usage: fortran-src [OPTION...] <file>
+    -v VERSION, -F VERSION  --fortranVersion=VERSION         Fortran version to use, format: Fortran[66/77/77Legacy/77Extended/90]
+    -a ACTION               --action=ACTION                  lex or parse action
+    -t                      --typecheck                      parse and run typechecker
+    -R                      --rename                         parse and rename variables
+    -B                      --bblocks                        analyse basic blocks
+    -S                      --supergraph                     analyse super graph of basic blocks
+    -r                      --reprint                        Parse and output using pretty printer
+                            --dot                            output graphs in GraphViz DOT format
+                            --dump-mod-file                  dump the information contained within mod files
+    -I DIR                  --include-dir=DIR                directory to search for precompiled 'mod files'
+    -c                      --compile                        compile an .fsmod file from the input
+                            --show-block-numbers[=LINE-NUM]  Show the corresponding AST-block identifier number next to every line of code.
+                            --show-flows-to=AST-BLOCK-ID     dump a graph showing flows-to information from the given AST-block ID; prefix with 's' for supergraph
+                            --show-flows-from=AST-BLOCK-ID   dump a graph showing flows-from information from the given AST-block ID; prefix with 's' for supergraph
+  ```
 
   ## Building
   fortran-src supports building with Stack or Cabal. You should be able to build
-  and use without any dependencies other than GHC itself.
+  and use without any system dependencies other than GHC itself. Haskell library
+  dependencies are listed in `package.yaml`.
 
-  As of 2021-04-28, fortran-src supports and is regularly tested on **GHC 8.6,
-  8.8, 8.10 and 9.0**. Releases prior to/newer than those may have issues. We
-  welcome fixes that would let us support a wider range of compilers.
+  fortran-src supports **GHC 8.4 through GHC 9.0**. We regularly test at least the
+  minimum and maximum supported GHCs. Releases prior to/newer than those may have
+  issues. We welcome fixes that would let us support a wider range of compilers.
 
   You will likely need **at least 3 GiBs of memory** to build fortran-src.
 
@@ -250,21 +319,16 @@ description: |
   cabal build
   ```
 
+  ### Testing
+  Unit tests are stored in `test`. Run with `stack test` or `cabal test`.
+
   ## Usage
   ### As a dependency
-  fortran-src is available on Hackage, so add `fortran-src` to your project
-  dependencies. That's all.
+  fortran-src is available on Hackage and Stackage, so for Cabal or Stack projects
+  you should only need to add `fortran-src` to your project dependencies.
 
-  If you're using Stack, note that Stackage retains an old version watch out,
-  because TODO
-
-  TODO you can stuff a Hackage reference into `stack.yaml` using
-  `extra-deps`, like:
-
-  fortran-src is available on Hackage. Stackage has a very old version and is
-  definitely not what you want, but you can specify a newer Hackage version in
-  `stack.yaml` to use it conveniently with Stack-based projects.
-
+  If you need a specific version of fortran-src in a Stack setup, you can stuff a
+  Hackage reference into `stack.yaml` using `extra-deps`, like:
 
   ```yaml
   resolver: ...
@@ -283,6 +347,20 @@ description: |
   cabal install fortran-src
   ```
 
-  Otherwise, we suggest building from source if you want to use the fortran-src
-  CLI tool. See [#Build from source](#build-from-source) for details.
+  We provide prebuilt binaries for some platforms: see the
+  [Releases](https://github.com/camfort/fortran-src/releases) tab.
+
+  Otherwise, you can build from source and use convenience commands like `cabal
+  run`, `stack run`. See [#Building](#building) for details.
+
+  ## Contributing
+  We welcome bug reports, fixes and feature proposals. Add an issue or create a
+  pull request on the GitHub repository.
+
+  ## Support
+  You may be able to find maintainers on the [Libera.Chat](https://libera.chat/)
+  IRC network. Check in #fortran-src and #camfort . Otherwise, you could get into
+  contact with one of the team on the [CamFort team
+  page](https://camfort.github.io/team.html) -- or create an issue describing your
+  problem and we'll have a look.
 license-name: Apache-2.0
