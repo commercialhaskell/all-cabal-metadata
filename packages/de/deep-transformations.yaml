@@ -1,6 +1,6 @@
 homepage: https://github.com/blamario/grampa/tree/master/deep-transformations
-changelog-type: ''
-hash: 6cdd47f0c20e03db9def45a75987cd9a397b52a3196ae7f3e35a8645876f4e8f
+changelog-type: markdown
+hash: a9862bf4480da0d7b5867dd8d054df85e6f5b0337e3de920e83e942d097d3adc
 test-bench-deps:
   rank2classes: -any
   base: -any
@@ -8,16 +8,42 @@ test-bench-deps:
   doctest: '>=0.8'
 maintainer: blamario@protonmail.com
 synopsis: Deep natural and unnatural tree transformations, including attribute grammars
-changelog: ''
+changelog: |
+  # Revision history for deep-transformations
+
+  ## 0.2 -- 2022-03-27
+
+  * Changes necessary to compile with GHC 9.2.2
+  * Excluded GHC 8.2.2 from `deep-transformations` and GitHub CI
+  * Increased the `deep-transformations`' bottom bound of base dependency
+  * Fixed `deep-transformations` compilation with GHC 9.0.1
+  * Added an explicit implementation `mappend = (<>)`
+  * Used haskell-ci to generate GitHub CI
+  * Incremented upper dependency bounds
+  * Added `AG.Generics.Keep`
+  * Added `knitKeeping` and `applyDefaultWithAttributes` to `AG`
+  * Dropped `fullMapDefault`
+  * Switch the README's attribute grammar functor to map upwards
+  * Removed unused code
+  * Added `infixl 4` declarations for all `<$>` methods
+  * Added the `AG.Monomorphic` module
+  * Fixed `Transformation.Shallow.TH` for repeated type parameters
+  * Added `Transformation.Deep.Sum`
+
+  ## 0.1 -- 2020-11-11
+
+  First version
 basic-deps:
   rank2classes: '>=1.4.1 && <1.5'
-  base: '>=4.7 && <5'
-  generic-lens: ==2.0.*
-  template-haskell: '>=2.11 && <2.17'
+  base: '>=4.11 && <5'
+  generic-lens: '>=1.2 && <2.3'
+  transformers: '>=0.5 && <0.7'
+  template-haskell: '>=2.11 && <2.19'
 all-versions:
 - '0.1'
+- '0.2'
 author: Mario Blažević
-latest: '0.1'
+latest: '0.2'
 description-type: markdown
 description: |
   Deep transformations
@@ -53,6 +79,7 @@ description: |
   import Data.Coerce (coerce)
   import Data.Functor.Const
   import Data.Functor.Identity
+  import Data.Monoid
   import qualified Rank2
   import Transformation (Transformation, At)
   import qualified Transformation
@@ -301,11 +328,17 @@ description: |
      type Domain DeadCodeEliminator = Identity
      type Codomain DeadCodeEliminator = AG.Semantics DeadCodeEliminator
 
+  instance DeadCodeEliminator `Transformation.At` Decl Sem Sem where
+    ($) = AG.applyDefault runIdentity
+
+  instance DeadCodeEliminator `Transformation.At` Expr Sem Sem where
+    ($) = AG.applyDefault runIdentity
+
   instance Full.Functor DeadCodeEliminator Decl where
-    (<$>) = AG.fullMapDefault runIdentity
+    (<$>) = Full.mapUpDefault
 
   instance Full.Functor DeadCodeEliminator Expr where
-    (<$>) = AG.fullMapDefault runIdentity
+    (<$>) = Full.mapUpDefault
   ~~~
 
   We also need another bit of a boilerplate instance that can be automatically generated with Template Haskell functions
@@ -381,11 +414,11 @@ description: |
   because they don't have any children.
 
   ~~~ {.haskell}
-  instance AG.Attribution DeadCodeEliminator Expr Identity Identity where
-    attribution DeadCodeEliminator (Identity e@(EVar v)) (AG.Inherited env, _) =
-      (AG.Synthesized (maybe e id $ env v), EVar v)
-    attribution DeadCodeEliminator (Identity e@(Con n)) (AG.Inherited env, _) =
-      (AG.Synthesized e, Con n)
+  instance AG.Attribution DeadCodeEliminator Expr Sem Identity where
+    attribution DeadCodeEliminator (Identity (EVar v)) (AG.Inherited env, _) =
+      (AG.Synthesized (maybe (EVar v) id $ env v), EVar v)
+    attribution DeadCodeEliminator (Identity (Con n)) (AG.Inherited env, _) =
+      (AG.Synthesized (Con n), Con n)
   ~~~
 
   The `Add` and `Mul` nodes' rules need only to pass their inheritance down and to re-join the synthesized child
@@ -410,7 +443,7 @@ description: |
     attribution DeadCodeEliminator (Identity (Let _decl expr))
                 (AG.Inherited env, (Let (AG.Synthesized ~(env', decl')) (AG.Synthesized expr'))) =
       (AG.Synthesized (maybe id (bin Let) decl' expr'),
-       Let (AG.Inherited (env, Full.foldMap GetVariables expr)) (AG.Inherited $ \v-> env' v <|> env v))
+       Let (AG.Inherited (env, Deep.foldMap GetVariables expr')) (AG.Inherited $ \v-> env' v <|> env v))
   ~~~
 
   ### Declaration rules
@@ -418,7 +451,7 @@ description: |
   The rules for `Decl` are a bit more involved.
 
   ~~~ {.haskell}
-  instance AG.Attribution DeadCodeEliminator Decl Identity Identity where
+  instance AG.Attribution DeadCodeEliminator Decl Sem Identity where
   ~~~
 
   A single variable binding can be in three distinct situations. If the variable is not referenced at all, we can just
