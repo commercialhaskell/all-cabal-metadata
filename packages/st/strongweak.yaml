@@ -1,10 +1,28 @@
 homepage: https://github.com/raehik/strongweak#readme
 changelog-type: markdown
-hash: 61162370ca9d45ba2dffa331974c45b07ae91d2e79014d2723c259584d9002be
-test-bench-deps: {}
+hash: cce3ac14ba42b7d004c4511d4787375b127f890cd3085e539ce1328eda309520
+test-bench-deps:
+  either: '>=5.0.1.1 && <5.1'
+  base: '>=4.14 && <5'
+  vector-sized: '>=1.5.0 && <1.6'
+  hspec: '>=2.7 && <2.10'
+  quickcheck-instances: '>=0.3.26 && <0.4'
+  refined: '>=0.6.3 && <0.7'
+  generic-random: '>=1.5.0.1 && <1.6'
+  prettyprinter: '>=1.7.1 && <1.8'
+  strongweak: -any
+  QuickCheck: '>=2.14.2 && <2.15'
+  vector: '>=0.12.3.1 && <0.13'
 maintainer: Ben Orchard <thefirstmuffinman@gmail.com>
 synopsis: Convert between strong and weak representations of types
 changelog: |
+  ## 0.2.0 (2022-05-31)
+  Initial Hackage release (dependency issues prevented uploading).
+
+    * fix field indexing in generic errors
+    * add unsafe strengthening
+    * add property and error tests
+
   ## 0.1.0 (2022-05-16)
   Initial release.
 
@@ -12,39 +30,114 @@ changelog: |
     * generic derivations
     * super explicit errors
 basic-deps:
+  either: '>=5.0.1.1 && <5.1'
   base: '>=4.14 && <5'
   vector-sized: '>=1.5.0 && <1.6'
   refined: '>=0.6.3 && <0.7'
   prettyprinter: '>=1.7.1 && <1.8'
-  validation: '>=1.1.2 && <1.2'
+  vector: '>=0.12.3.1 && <0.13'
 all-versions:
 - 0.1.0
+- 0.2.0
 author: Ben Orchard
-latest: 0.1.0
+latest: 0.2.0
 description-type: markdown
 description: |
+  [lib-refined-hackage]: https://hackage.haskell.org/package/refined
+
   # strongweak
-  Definitions for transforming between types.
+  Convert between pairs of "weak" and "strong"/"validated" types, with good
+  errors and generic derivers.
 
-    * `strong -> weak` drops invariants (e.g. going from a bounded to an unbounded
-      numeric type)
-    * `weak -> Maybe strong` introduces invariants
+  ## Definition of strong and weak types
+  Take a pair of types `(strong, weak)`. We state the following:
 
-  This is not a `Convertible` library that enumerates transformations between
-  types into a dictionary.
+    * You may safely convert ("weaken") any `strong` value to a `weak` value.
+    * You can try to convert ("strengthen") any `weak` value to a `strong` value,
+      but it may fail.
 
-    * A "strong" type has exactly one "weak" representation.
-    * Weakening a type is safe.
-    * Strengthening a type may fail.
+  As a rule, a weak type should be *easier to use* than its related strong type.
+  That is, it should have fewer invariants to consider or maintain. You could
+  weaken an `a` to a `Maybe a`, but since a `Maybe a` is harder to use, it's not a
+  candidate for this library.
 
+  As an arbitrary limitation for ease of use, a strong type has only one
+  associated weak type. The same weak type may be used for multiple strong types.
+
+  ### Examples
+  The [refined][lib-refined-hackage] library defines a `newtype Refined p a =
+  Refined a`. To get a `Refined`, you must test its associated predicate. You may
+  recover the unrefined value by removing the newtype wrapper. Thus, you may
+  strengthen `a`s into `Refined p a`s, and weaken vice versa.
+
+  The `WordX` family are like bounded `Natural`s. We can consider `Natural` as a
+  weak type, which can be strengthened into e.g. `Word8` by asserting
+  well-boundedness.
+
+  ## Cool points
+  ### Validates as much as possible
+  This is primarily a validation library. Thus, we don't fail on the first error
+  -- we attempt to validate every part of a data type, and collate the errors into
+  a big list. (`ApplicativeDo` plus `Validation` is magical.)
+
+  ### One definition, strong + weak views
+  Using a type-level `Strength` switch and the `SW` type family, you can write a
+  single datatype definition and receive both a strong and a weak representation,
+  which the generic derivers can work with. See the `Strongweak.SW` module for
+  details.
+
+  ### Generic strengthening is extremely powerful
   There are generic derivers for generating `Strengthen` and `Weaken` instances
-  for arbitrary data types. The `Strengthen` instances annotate errors
+  between arbitrary data types. The `Strengthen` instances annotate errors
   extensively, telling you the datatype & record for which strengthening failed -
-  recursively, for nested types.
+  recursively, for nested types!
 
-  This is a validation library. We don't fail on the first error -- we attempt to
-  validate every part of a data type, and collate the errors into a list. This
-  happens magically in the generic deriver, but if you're writing your own
-  instances, you may want `ApplicativeDo` so you can use do notation. So it'll
-  monadic, but actually everything will get checked.
+  Note that the generic derivers work with any pair of matching data types. But
+  they must match very closely: both types are traversed in tandem, so every pair
+  of fields must be compatible. If you need to do calculation to move between your
+  strong and weak types, consider splitting it into calculation -> strengthening
+  and using the generic derivers. Or write your own instances.
+
+  ### Backdoors included
+  Sometimes you have can guarantee that a weak value can be safely strengthened,
+  but the compiler doesn't know - a common problem in parsing. In such cases, you
+  may use efficient unsafe strengthenings, which don't perform invariant checks.
+
+  ## What this library isn't
+  ### Not a convertible
+  This is not a `Convertible` library that enumerates transformations between
+  types into a dictionary. A strong type has exactly one weak representation, and
+  strengthening may fail while weakening cannot. For safe conversion enumeration
+  via typeclasses, consider Taylor Fausak's
+  [witch](https://hackage.haskell.org/package/witch) library.
+
+  ### Not particularly speedy
+  The emphasis is on safety, possibly at the detriment of performance. However, my
+  expectation is that you only strengthen & weaken at the "edges" of your program,
+  and most of the time will be spent transforming weak representations. This may
+  improve performance if it means invariants don't have to be continually asserted
+  inline, but it also may slow things down e.g. `Natural`s are slower than
+  `Word`s.
+
+  ## Generic derivation algorithm
+  As far as I understand, `Strengthen` and `Weaken` generic derivations are safe,
+  in that they will either fail with a type error, or give you a correct instance.
+  Both work in a similar manner:
+
+    * Both datatypes are traversed in tandem.
+    * When both datatypes are at a field:
+      * If both types are identical, the value is rewrapped with no changes.
+      * Else, if the input type can be transformed into the output type, it is.
+        (Strengthening will wrap any errors at this stage with metadata collected
+        from the datatype's generic representation.
+      * Else, the pair of fields are not compatible, and the derivation fails.
+
+  Note this may fail for types with a manually-derived `Generic` instance:
+
+    * The types' SOP tree structures must match.
+      * I don't think GHC itself guarantees this, so if you receive surprising
+        derivation errors, the types might have differing generic representation
+        structure (even if the "flat" representation may be identical).
+    * Strengthening requires that metadata is present for all parts of the
+      representation (datatype, constructor, selector).
 license-name: MIT
