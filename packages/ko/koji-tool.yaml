@@ -1,6 +1,6 @@
 homepage: https://github.com/juhp/koji-tool
 changelog-type: markdown
-hash: 6ab07e48dd468727b48a2c0bee124f3496495ff18e2f212f6a73b7e20b4b3bce
+hash: 8f4c0da44fdddcceb94d80656034a4db68e2c3e2b59dfd4c98b08c1273d487db
 test-bench-deps:
   base: '>=4 && <5'
   simple-cmd: -any
@@ -9,14 +9,22 @@ synopsis: Koji CLI tool for querying tasks and installing builds
 changelog: |
   # Version history of koji-tool
 
+  ## 0.9.2 (2022-06-12)
+  - progress: print build duration
+  - install: place rpms in a nvr subdirectory
+  - progress: show duration of build and finished tasks
+  - install: when downloading check if local files' timestamp within build time
+  - progress: no longer quit after srpm build
+  - tasks --install now takes install options string
+
   ## 0.9.1 (2022-05-29)
   - 'find': add "install", "tail", "notail", and archs support
   - 'install': --rpm option to install directly with rpm instead of dnf
   - 'tasks': add --install option
   - 'tasks': major rework of the log file handling
-  - 'tasks --tail': fix output when still running
-  - 'tasks': compact task output shows duration
-  - 'builds': now outputs packages/ archive url
+  - 'tasks --tail': fix output when task still running
+  - 'tasks': compact output shows duration
+  - 'builds': now outputs packages archive url
 
   ## 0.9 (2022-05-20)
   - rename 'quick' command to 'find'
@@ -166,8 +174,9 @@ all-versions:
 - 0.8.7
 - '0.9'
 - 0.9.1
+- 0.9.2
 author: Jens Petersen <petersen@redhat.com>
-latest: 0.9.1
+latest: 0.9.2
 description-type: markdown
 description: |
   # koji-tool
@@ -195,7 +204,7 @@ description: |
   ## Commands
   ```shellsession
   $ koji-tool --version
-  0.9.1
+  0.9.2
   $ koji-tool --help
   Query and track Koji tasks, and install rpms from Koji.
 
@@ -306,7 +315,7 @@ description: |
                          [(-B|--before TIMESTAMP) | (-F|--from TIMESTAMP)]
                          [-m|--method METHOD] [-d|--details] [-D|--debug]
                          [(-P|--only-package PKG) | (-N|--only-nvr PREFIX)]
-                         [-T|--tail] [-i|--install]
+                         [-T|--tail] [-i|--install INSTALLOPTS]
                          [(-b|--build BUILD) | (-p|--pattern NVRPAT) |
                            PACKAGE|TASKID]
     Query Koji tasks (by default lists most recent buildArch tasks)
@@ -330,7 +339,7 @@ description: |
     -P,--only-package PKG    Filter task results to specified package
     -N,--only-nvr PREFIX     Filter task results by NVR prefix
     -T,--tail                Fetch the tail of build.log
-    -i,--install             install the package
+    -i,--install INSTALLOPTS Install the package with 'install' options
     -b,--build BUILD         List child tasks of build
     -p,--pattern NVRPAT      Build tasks of matching pattern
     -h,--help                Show this help text
@@ -366,36 +375,8 @@ description: |
   https://kojipkgs.fedoraproject.org/work/tasks/5316/86685316/build.log (13kB)
   ```
 
-  ## koji-tool find
-  This provides shortcuts to a few select common searches
-
-  ### Usage
-  `koji-tool find my builds` shows your 10 most recent koji builds (equivalent to `koji-tool builds --mine`)
-
-  `koji-tool find my last fail` shows your most recent task failure including the tail of the build.log (equivalent to `koji-tool tasks -MLT -s fail`).
-
-  `koji-tool find last complete build` shows the latest completed koji build (equivalent to `koji-tool builds -L -s complete`).
-
-  ### Help
-  ```shellsession
-  $ koji-tool find
-  koji-tool: find handles these words:
-
-  my mine
-  last latest
-  fail failure failed
-  complete completed completion close closed finish finished
-  current building open
-  build builds
-  detail details detailed
-  install
-  tail
-  notail
-  x86_64 aarch64 ppc64le s390x i686 armv7hl
-  PACKAGE
-  USER\'s
-
-  ```
+  It is also possible to install packages from a task using `--install "..."`.
+  See the install command documentation below for more details.
 
   ## koji-tool install
 
@@ -407,7 +388,7 @@ description: |
   Note this command is intended for development and testing purposes
   and should not be necessary/used normally on production systems,
   but it can be very helpful for quickly testing an specific package build or
-  update.
+  update locally.
 
   ### Usage
 
@@ -451,7 +432,7 @@ description: |
   $ koji-tool install --help
   Usage: koji-tool install [-n|--dry-run] [-D|--debug] [-y|--yes] [-H|--hub HUB]
                            [-P|--packages-url URL] [-l|--list] [-L|--latest]
-                           [-r|--rpm] [-N|--no-reinstall]
+                           [-t|--check-remote-time] [-r|--rpm] [-N|--no-reinstall]
                            [-b|--prefix SUBPKGPREFIX]
                            [(-a|--all) | (-A|--ask) | [-p|--package SUBPKG]
                              [-x|--exclude SUBPKG]] [-d|--disttag DISTTAG]
@@ -468,6 +449,7 @@ description: |
     -P,--packages-url URL    KojiFiles packages url [default: Fedora]
     -l,--list                List builds
     -L,--latest              Latest build
+    -t,--check-remote-time   Check remote rpm timestamps
     -r,--rpm                 Use rpm instead of dnf
     -N,--no-reinstall        Do not reinstall existing NVRs
     -b,--prefix SUBPKGPREFIX Prefix to use for subpackages [default: base package]
@@ -475,10 +457,41 @@ description: |
     -A,--ask                 ask for each subpackge [default if not installed]
     -p,--package SUBPKG      Subpackage (glob) to install
     -x,--exclude SUBPKG      Subpackage (glob) not to install
-    -d,--disttag DISTTAG     Override the disttag
+    -d,--disttag DISTTAG     Select a disttag different to system
     -R,--nvr                 Give an N-V-R instead of package name
     -V,--nv                  Give an N-V instead of package name
     -h,--help                Show this help text
+  ```
+
+  ## koji-tool find
+  This provides shortcuts to a few select common searches
+
+  ### Usage
+  `koji-tool find my builds` shows your 10 most recent koji builds (equivalent to `koji-tool builds --mine`)
+
+  `koji-tool find my last fail` shows your most recent task failure including the tail of the build.log (equivalent to `koji-tool tasks -MLT -s fail`).
+
+  `koji-tool find last complete build` shows the latest completed koji build (equivalent to `koji-tool builds -L -s complete`).
+
+  ### Help
+  ```shellsession
+  $ koji-tool find
+  koji-tool: find handles these words:
+
+  my mine
+  last latest
+  fail failure failed
+  complete completed completion close closed finish finished
+  current building open
+  build builds
+  detail details detailed
+  install
+  tail
+  notail
+  x86_64 aarch64 ppc64le s390x i686 armv7hl
+  PACKAGE
+  USER\'s
+
   ```
 
   ## koji-tool progress
@@ -506,7 +519,7 @@ description: |
   The `buildlog-sizes` command is similar but runs once over nvr patterns.
 
   ## Installation
-  koji-tool is packaged in Fedora 35+
+  koji-tool is packaged in Fedora
 
   ## Build
   `cabal-rpm builddep && cabal install || stack install`
