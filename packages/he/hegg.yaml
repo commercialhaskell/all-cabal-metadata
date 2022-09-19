@@ -1,20 +1,32 @@
 homepage: https://github.com/alt-romes/hegg
 changelog-type: markdown
-hash: 4c16ecdec12c585ca5b9ad9abf1479048d311941b9f8a3225f9dd0cf978163a7
+hash: ec0c111e3b40286b5c747e69bb0504de7283fae1fa7bd1bf1dfabc9acbff733d
 test-bench-deps:
-  base: '>=4.4 && <5'
-  deriving-compat: '>=0.6 && <0.7'
-  containers: '>=0.4 && <0.7'
-  hegg: '>=0.1 && <0.2'
-  tasty-quickcheck: '>=0.10 && <0.11'
-  tasty-hunit: '>=0.10 && <0.11'
-  tasty: '>=1.4 && <1.5'
+  base: -any
+  deriving-compat: ==0.6.*
+  containers: -any
+  tasty-bench: '>=0.2 && <0.4'
+  hegg: -any
+  tasty-quickcheck: ==0.10.*
+  tasty-hunit: ==0.10.*
+  tasty: ==1.4.*
 maintainer: Rodrigo Mesquita <rodrigo.m.mesquita@gmail.com>
 synopsis: Fast equality saturation in Haskell
 changelog: |
-  # Revision history for hsym
+  # Revision history for hegg
 
-  ## 0.1.0.0 -- YYYY-mm-dd
+  ## 0.2.0.0 -- 2022-09-19
+
+  * Expose `runEqualitySaturation` to run equality saturation on existing e-graphs
+      whole instead of focusing on individual expressions
+  * (Very) significant performance improvements!
+  * Make `CostFunction` polymorphic over the `Cost` type, requiring that type
+      to instance `Ord`
+  * Make e-graph abstract. The internal structure can still be modified through
+      the available lenses in `Data.Equality.Graph.Lens`
+  * Fix a bug related to `NodeMap`'s size.
+
+  ## 0.1.0.0 -- 2022-08-25
 
   * First version. Released on an unsuspecting world.
 basic-deps:
@@ -23,30 +35,104 @@ basic-deps:
   transformers: '>=0.4 && <0.7'
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Rodrigo Mesquita <romes>
-latest: 0.1.0.0
-description-type: haddock
-description: |-
-  Fast equality saturation and equality graphs based on "egg:
-  Fast and Extensible Equality Saturation" and "Relational E-matching".
-
-  This package provides e-graphs (see 'Data.Equality.Graph'),
-  a data structure which efficiently represents a congruence
-  relation over many expressions
-
-  Secondly, it provides functions for doing equality
-  saturation (see 'Data.Equality.Saturation'), an
-  optimization/term-rewriting technique that applies rewrite
-  rules non-destructively to an expression represented in an
-  e-graph until saturation, and then extracts the best
-  representation.
-
-  Equality matching (see 'Data.Equality.Matching') is done as
-  described in "Relational E-Matching"
-
-  For a walkthrough of writing a simple symbolic
-  simplification program see the [hegg symbolic
-  tutorial](https://github.com/alt-romes/hegg#equality-saturation-in-haskell).
-
-  Additional information can be found [in the README](https://github.com/alt-romes/hegg).
+latest: 0.2.0.0
+description-type: markdown
+description: "## hegg\n\nFast equality saturation in Haskell\n\nBased on [*egg: Fast
+  and Extensible Equality Saturation*](https://arxiv.org/pdf/2004.03082.pdf), [*Relational
+  E-matching*](https://arxiv.org/pdf/2108.02290.pdf) and the [rust implementation](https://github.com/egraphs-good/egg).\n\n###
+  Equality Saturation and E-graphs\n\nSuggested material on equality saturation and
+  e-graphs for beginners\n* (tutorial) https://docs.rs/egg/latest/egg/tutorials/_01_background/index.html\n*
+  (5m video) https://www.youtube.com/watch?v=ap29SzDAzP0\n\n## Equality saturation
+  in Haskell\n\nTo get a feel for how we can use `hegg` and do equality saturation
+  in Haskell,\nwe'll write a simple numeric *symbolic* manipulation library that can
+  simplify expressions\naccording to a set of rewrite rules by leveraging equality
+  saturation.\n\nIf you've never heard of symbolic mathematics you might get some
+  intuition from\nreading [Let’s Program a Calculus\nStudent](https://iagoleal.com/posts/calculus-symbolic/)
+  first.\n\n### Syntax\n\nWe'll start by defining the abstract syntax tree for our
+  simple symbolic expressions:\n```hs\ndata SymExpr = Const Double\n             |
+  Symbol String\n             | SymExpr :+: SymExpr\n             | SymExpr :*: SymExpr\n
+  \            | SymExpr :/: SymExpr\ninfix 6 :+:\ninfix 7 :*:, :/:\n\ne1 :: SymExpr\ne1
+  = (Symbol \"x\" :*: Const 2) :/: (Const 2) -- (x*2)/2\n```\n\nYou might notice that
+  `(x*2)/2` is the same as just `x`. Our goal is to get\nequality saturation to do
+  that for us.\n\nOur second step is to instance `Language` for our `SymExpr`\n\n###
+  Language\n\n`Language` is the required constraint on *expressions* that are to be\nrepresented
+  in e-graph and on which equality saturation can be run:\n\n```hs\nclass (Analysis
+  l, Traversable l, Ord1 l) => Language l\n```\n\nTo declare a `Language` we must
+  write the \"base functor\" of `SymExpr` \n(i.e. use a type parameter where the recursion
+  points used to be in the original `SymExpr`),\nthen instance `Traversable`, `Ord1`,
+  and write an `Analysis` instance for it (see next section).\n\n```hs\ndata SymExpr
+  a = Const Double\n               | Symbol String\n               | a :+: a\n               |
+  a :*: a\n               | a :/: a\n               deriving (Functor, Foldable, Traversable)\ninfix
+  6 :+:\ninfix 7 :*:, :/:\n```\n\nSuggested reading on defining recursive data types
+  in their parametrized\nversion: [Introduction To Recursion\nSchemes](https://blog.sumtypeofway.com/posts/introduction-to-recursion-schemes.html)\n\nIf
+  we now wanted to represent an expression, we'd write it in its\nfixed-point form\n\n```hs\ne1
+  :: Fix SymExpr\ne1 = Fix (Fix (Fix (Symbol \"x\") :*: Fix (Const 2)) :/: (Fix (Const
+  2))) -- (x*2)/2\n```\n\nWe've already automagically derived `Functor`, `Foldable`
+  and `Traversable`\ninstances, and can use the following template haskell functions
+  from `derive-compat` to derive `Ord1`.\n```hs\nderiveEq1   ''SymExpr\nderiveOrd1
+  \ ''SymExpr\n```\n\nThen, we define an `Analysis` for our `SymExpr`.\n\n### Analysis\n\nE-class
+  analysis is first described in [*egg: Fast and Extensible Equality\nSaturation*](https://arxiv.org/pdf/2004.03082.pdf)
+  as a way to make equality\nsaturation more *extensible*.\n\nWith it, we can attach
+  *analysis data* from a semilattice to each e-class. More\ncan be read about e-class
+  analysis in the [`Data.Equality.Analsysis`]() module and\nin the paper.\n\nWe could
+  easily define constant folding (`2+2` being simplified to `4`) through\nan `Analysis`
+  instance, but for the sake of simplicity we'll simply define the\nanalysis data
+  as `()` and always ignore it.\n\n```hs\ninstance Analysis SymExpr where\n  type
+  Domain SymExpr = ()\n  makeA _ _ = ()\n  joinA _ _ = ()\n```\n\n### Language, again\n\nWith
+  this setup, we can now express that `SymExpr` forms a `Language` which we\ncan represent
+  and manipulate in an e-graph by simply instancing it (there are no\nadditional functions
+  to define).\n```hs\ninstance Language SymExpr\n```\n\n### Equality saturation\n\nEquality
+  saturation is defined as the function\n```hs\nequalitySaturation :: forall l. Language
+  l\n                   => Fix l             -- ^ Expression to run equality saturation
+  on\n                   -> [Rewrite l]       -- ^ List of rewrite rules\n                   ->
+  CostFunction l    -- ^ Cost function to extract the best equivalent representation\n
+  \                  -> (Fix l, EGraph l) -- ^ Best equivalent expression and resulting
+  e-graph\n```\n\nTo recap, our goal is to reach `x` starting from `(x*2)/2` by means
+  of equality\nsaturation.\n\nWe already have a starting expression, so we're missing
+  a list of rewrite rules\n(`[Rewrite l]`) and a cost function (`CostFunction`).\n\n###
+  Cost function\n\nPicking up the easy one first:\n```hs\ntype CostFunction l cost
+  = l cost -> cost\n```\n\nA cost function is used to attribute a cost to representations
+  in the e-graph and to extract the best one.\nThe first type parameter `l` is the
+  language we're going to attribute a cost to, and\nthe second type parameter `cost`
+  is the type with which we will model cost. For\nthe cost function to be valid, `cost`
+  must instance `Ord`.\n\nWe'll say `Const`s and `Symbol`s are the cheapest and then
+  in increasing cost we\nhave `:+:`, `:*:` and `:/:`, and model cost with the `Int`
+  type.\n```hs\ncost :: CostFunction SymExpr Int\ncost = \\case\n  Const  x -> 1\n
+  \ Symbol x -> 1\n  c1 :+: c2 -> c1 + c2 + 2\n  c1 :*: c2 -> c1 + c2 + 3\n  c1 :/:
+  c2 -> c1 + c2 + 4\n```\n\n### Rewrite rules\n\nRewrite rules are transformations
+  applied to matching expressions represented in\nan e-graph.\n\nWe can write simple
+  rewrite rules and conditional rewrite rules, but we'll only look at the simple ones.\n\nA
+  simple rewrite is formed of its left hand side and right hand side. When the\nleft
+  hand side is matched in the e-graph, the right hand side is added to the\ne-class
+  where the left hand side was found.\n```hs\ndata Rewrite lang = Pattern lang :=
+  Pattern lang          -- Simple rewrite rule\n                  | Rewrite lang :|
+  RewriteCondition lang -- Conditional rewrite rule\n```\n\nA `Pattern` is basically
+  an expression that might contain variables and which can be matched against actual
+  expressions.\n```hs\ndata Pattern lang\n    = NonVariablePattern (lang (Pattern
+  lang))\n    | VariablePattern Var\n```\nA patterns is defined by its non-variable
+  and variable parts, and can be\nconstructed directly or using the helper function
+  `pat` and using\n`OverloadedStrings` for the variables, where `pat` is just a synonym
+  for\n`NonVariablePattern` and a string literal `\"abc\"` is turned into a `Pattern`\nconstructed
+  with `VariablePattern`.\n\nWe can then write the following very specific set of
+  rewrite rules to simplify\nour simple symbolic expressions.\n```hs\nrewrites ::
+  [Rewrite SymExpr]\nrewrites =\n  [ pat (pat (\"a\" :*: \"b\") :/: \"c\") := pat
+  (\"a\" :*: pat (\"b\" :/: \"c\"))\n  , pat (\"x\" :/: \"x\")               := pat
+  (Const 1)\n  , pat (\"x\" :*: (pat (Const 1)))   := \"x\"\n  ]\n```\n### Equality
+  saturation, again\n\nWe can now run equality saturation on our expression!\n\n```hs\nlet
+  expr = fst (equalitySaturation e1 rewrites cost)\n```\nAnd upon printing we'd see
+  `expr = Symbol \"x\"`!\n\nThis was a first introduction which skipped over some
+  details but that tried to\nwalk through fundamental concepts for using e-graphs
+  and equality saturation\nwith this library.\n\nThe final code for this tutorial
+  is available under `test/SimpleSym.hs`\n\nA more complicated symbolic rewrite system
+  which simplifies some derivatives and\nintegrals was written for the testsuite.
+  It can be found at `test/Sym.hs`.\n\nThis library could also be used not only for
+  equality-saturation but also for\nthe equality-graphs and other equality-things
+  (such as e-matching) available.\nFor example, using just the e-graphs from `Data.Equality.Graph`
+  to improve GHC's\npattern match checker (https://gitlab.haskell.org/ghc/ghc/-/issues/19272).\n\n##
+  Profiling\n\nNotes on profiling for development.\n\nFor producing the info table,
+  ghc-options must include `-finfo-table-map\n-fdistinct-constructor-tables`\n\n```\ncabal
+  run --enable-profiling hegg-test -- +RTS -p -s -hi -l-agu\nghc-prof-flamegraph hegg-test.prof\neventlog2html
+  hegg-test.eventlog\nopen hegg-test.svg\nopen hegg-test.eventlog.html\n```\n"
 license-name: BSD-3-Clause
