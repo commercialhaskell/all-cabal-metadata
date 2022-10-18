@@ -1,9 +1,9 @@
 homepage: https://github.com/sol/doctest#readme
 changelog-type: markdown
-hash: fd56edde124a92d42c42c74333f0ae74532329d15a6c63d578cbb51f4e7cfd34
+hash: c0e08af88e034f41673477be0350ceae69faea2db03a4c10b289fa9c20d27cbb
 test-bench-deps:
   exceptions: -any
-  ghc: '>=7.0 && <9.3'
+  ghc: '>=8.0 && <9.5'
   setenv: -any
   base: '>=4.5 && <5'
   hspec: '>=2.3.0'
@@ -25,6 +25,9 @@ test-bench-deps:
 maintainer: quasicomputational@gmail.com, Andreas Abel
 synopsis: Test interactive Haskell examples
 changelog: |
+  Changes in 0.20.1
+    - GHC 9.4 compatibility. (#382)
+
   Changes in 0.20.0
     - Allow doctest to be invoked via `cabal repl --with-ghc=doctest`
     - Include `ghc --info` output in `--info`
@@ -185,7 +188,7 @@ changelog: |
    - Give a useful error message if ghc is not executable
 basic-deps:
   exceptions: -any
-  ghc: '>=7.0 && <9.3'
+  ghc: '>=8.0 && <9.5'
   base: '>=4.5 && <5'
   syb: '>=0.3'
   code-page: '>=0.1'
@@ -254,23 +257,49 @@ all-versions:
 - 0.18.2
 - 0.19.0
 - 0.20.0
+- 0.20.1
 author: Simon Hengel <sol@typeful.net>
-latest: 0.20.0
+latest: 0.20.1
 description-type: markdown
 description: |
   # Doctest: Test interactive Haskell examples
 
-  `doctest` is a small program, that checks [examples in Haddock comments](http://www.haskell.org/haddock/doc/html/ch03s08.html#id566093).  It is similar
-  to the [popular Python module with the same name](http://docs.python.org/library/doctest.html).
+  `doctest` is a tool that checks
+  [examples](https://www.haskell.org/haddock/doc/html/ch03s08.html#idm140354810775744)
+  and
+  [properties](https://www.haskell.org/haddock/doc/html/ch03s08.html#idm140354810771856)
+  in Haddock comments.
+  It is similar in spirit to the [popular Python module with the same name](https://docs.python.org/3/library/doctest.html).
 
+  * [Getting started](#getting-started)
+     * [Installation](#installation)
+     * [A basic example](#a-basic-example)
+     * [Running doctest for a Cabal package](#running-doctest-for-a-cabal-package)
+  * [Writing examples and properties](#writing-examples-and-properties)
+     * [Example groups](#example-groups)
+        * [A note on performance](#a-note-on-performance)
+     * [Setup code](#setup-code)
+     * [Multi-line input](#multi-line-input)
+     * [Multi-line output](#multi-line-output)
+     * [Matching arbitrary output](#matching-arbitrary-output)
+     * [QuickCheck properties](#quickcheck-properties)
+     * [Hiding examples from Haddock](#hiding-examples-from-haddock)
+     * [Using GHC extensions](#using-ghc-extensions)
+  * [Limitations](#limitations)
+  * [Doctest in the wild](#doctest-in-the-wild)
+  * [Development](#development)
+  * [Contributors](#contributors)
+
+
+  # Getting started
 
   ## Installation
 
   `doctest` is available from
   [Hackage](http://hackage.haskell.org/cgi-bin/hackage-scripts/package/doctest).
-  Install it, by typing:
+  Install it with:
 
-      cabal install doctest
+      cabal update && cabal install doctest
 
   Make sure that Cabal's `bindir` is on your `PATH`.
 
@@ -286,15 +315,14 @@ description: |
 
       set PATH="%AppData%\cabal\bin\;%PATH%"
 
-  For more information, see the [section on paths in the Cabal User Guide](http://www.haskell.org/cabal/users-guide/installing-packages.html#paths-in-the-simple-build-system).
-
-  ## Usage
+  ## A basic example
 
   Below is a small Haskell module.
   The module contains a Haddock comment with some examples of interaction.
   The examples demonstrate how the module is supposed to be used.
 
   ```haskell
+  -- src/Fib.hs
   module Fib where
 
   -- | Compute Fibonacci numbers
@@ -310,6 +338,7 @@ description: |
   fib 0 = 0
   fib 1 = 1
   fib n = fib (n - 1) + fib (n - 2)
+
   ```
 
   (A comment line starting with `>>>` denotes an _expression_.
@@ -318,21 +347,74 @@ description: |
   [REPL](http://en.wikipedia.org/wiki/Read-eval-print_loop) (e.g. ghci)
   prints to `stdout` and `stderr` when evaluating that expression.)
 
-  With `doctest` you may check whether the implementation satisfies the given examples, by typing:
+  With `doctest` you can check whether the implementation satisfies the given
+  examples:
 
-      doctest Fib.hs
+  ```
+  doctest src/Fib.hs
+  ```
 
-  You may produce Haddock documentation for that module with:
 
-      haddock -h Fib.hs -o doc/
+  ## Running `doctest` for a Cabal package
 
-  `doctest` will fail on comments that `haddock` also doesn't like.
-  Sometimes (e.g., [#251](https://github.com/sol/doctest/issues/251)), this means that `doctest` will fail on input that GHC accepts.
+  The easiest way to run `doctest` for a Cabal package is via `cabal repl --with-ghc=doctest`.
 
-  `doctest` likes UTF-8. If you are running it with, e.g., `LC_ALL=C`,
-  you may need to invoke `doctest` with `LC_ALL=C.UTF-8`.
+  This doesn't make a big difference for a simple package, but in more involved
+  situations `cabal` will make sure that all dependencies are available and it
+  will pass any required GHC options to `doctest`.
 
-  ### Example groups
+  A simple `.cabal` file for `Fib` looks like this:
+
+  ```cabal
+  -- fib.cabal
+  cabal-version: 1.12
+
+  name:           fib
+  version:        0.0.0
+  build-type:     Simple
+
+  library
+    build-depends: base == 4.*
+    hs-source-dirs: src
+    exposed-modules: Fib
+    default-language: Haskell2010
+
+  ```
+
+  With a `.cabal` file in place, it is possible to run `doctest` via `cabal repl`:
+
+  ```
+  $ cabal repl --with-ghc=doctest
+  ...
+  Examples: 2  Tried: 2  Errors: 0  Failures: 0
+  ```
+
+
+  Notes:
+
+  - If you use properties you need to pass `--build-depends=QuickCheck` and
+    `--build-depends=template-haskell` to `cabal repl`.
+
+  - `doctest` always uses the version of GHC it was compiled with.  Reinstalling
+    `doctest` with `cabal install doctest --overwrite-policy=always` before each
+    invocation ensures that it uses the same version of GHC as is on the `PATH`.
+  - Technically, `cabal build` is not necessary. `cabal repl --with-ghc=doctest`
+    will build any dependencies as needed.  However, it's more robust to run
+    `cabal build` first (specifically it is not a good idea to build
+    `ghc-paths` with `--with-ghc=doctest`).
+
+  So a more robust way to call `doctest` is as follows:
+
+  ```
+  cabal install doctest --overwrite-policy=always && cabal build && cabal repl --build-depends=QuickCheck --build-depends=template-haskell --with-ghc=doctest
+  ```
+
+  (This is what you want to use on CI.)
+
+
+  # Writing examples and properties
+
+  ## Example groups
 
   Examples from a single Haddock comment are grouped together and share the same
   scope.  E.g. the following works:
@@ -354,9 +436,9 @@ description: |
   -- >>> print n
   ```
 
-  `print n` is not tried, because `let n = x + y` fails (`y` is not in scope!).
+  `print n` is skipped, because `let n = x + y` fails (as `y` is not in scope).
 
-  #### A note on performance
+  ### A note on performance
 
   By default, `doctest` calls `:reload` between each group to clear GHCi's scope
   of any local definitions. This ensures that previous examples cannot influence
@@ -372,7 +454,7 @@ description: |
   `--preserve-it` flag (which keeps the value of GHCi's `it` value between
   examples).
 
-  ### Setup code
+  ## Setup code
 
   You can put setup code in a [named chunk][named-chunks] with the name `$setup`.
   The setup code is run before each example group.  If the setup code produces
@@ -402,7 +484,7 @@ description: |
   place it anywhere inbetween top level declarations as well.
 
 
-  ### Multi-line input
+  ## Multi-line input
   GHCi supports commands which span multiple lines, and the same syntax works for doctest:
 
   ```haskell
@@ -446,7 +528,7 @@ description: |
   broken = 3
   ```
 
-  ### Multi-line output
+  ## Multi-line output
   If there are no blank lines in the output, multiple lines are handled
   automatically.
 
@@ -481,7 +563,7 @@ description: |
   doubleSpace = (intercalate "\n\n") . lines
   ```
 
-  ### Matching arbitrary output
+  ## Matching arbitrary output
   Any lines containing only three dots (`...`) will match one or more lines with
   arbitrary content. For instance,
 
@@ -502,10 +584,10 @@ description: |
   -- foo ... baz
   ```
 
-  ### QuickCheck properties
+  ## QuickCheck properties
 
-  Haddock (since version 2.13.0) has markup support for properties.  Doctest can
-  verify properties with QuickCheck.  A simple property looks like this:
+  Haddock has markup support for properties.  Doctest can verify properties with
+  QuickCheck.  A simple property looks like this:
 
   ```haskell
   -- |
@@ -542,8 +624,8 @@ description: |
   ```
 
   If you see an error like the following, ensure that
-  [QuickCheck](http://hackage.haskell.org/package/QuickCheck) is a dependency
-  of the test-suite or executable running `doctest`.
+  [QuickCheck](http://hackage.haskell.org/package/QuickCheck) is visible to
+  `doctest` (e.g. by passing `--build-depends=QuickCheck` to `cabal repl`).
 
   ```haskell
   <interactive>:39:3:
@@ -558,7 +640,7 @@ description: |
       In the splice: $(polyQuickCheck (mkName "doctest_prop"))
   ```
 
-  ### Hiding examples from Haddock
+  ## Hiding examples from Haddock
 
   You can put examples into [named chunks][named-chunks], and not refer to them
   in the export list.  That way they will not be part of the generated Haddock
@@ -572,18 +654,19 @@ description: |
 
   [named-chunks]: http://www.haskell.org/haddock/doc/html/ch03s05.html
 
-  ### Using GHC extensions
+  ## Using GHC extensions
 
   There's two sets of GHC extensions involved when running Doctest:
 
   1. The set of GHC extensions that are active when compiling the module code
-  (excluding the doctest examples). The easiest way to specify these extensions
-  is through [LANGUAGE pragmas][language-pragma] in your source files.
-  (Doctest will not look at your cabal file.)
-  2. The set of GHC extensions that are active when executing the Doctest
-  examples. (These are not influenced by the LANGUAGE pragmas in the file.) The
-  recommended way to enable extensions for Doctest examples is to switch them
-  on like this:
+     (excluding the doctest examples). The easiest way to specify these
+     extensions is through [LANGUAGE pragmas][language-pragma] in your source
+     files.
+
+  1. The set of GHC extensions that are active when executing the Doctest
+     examples. (These are not influenced by the LANGUAGE pragmas in the file.)
+     The recommended way to enable extensions for Doctest examples is to switch
+     them on like this:
 
   ```haskell
   -- |
@@ -610,68 +693,49 @@ description: |
   -- >>> :set -XTupleSections
   ```
 
-  [language-pragma]: http://www.haskell.org/ghc/docs/latest/html/users_guide/pragmas.html#language-pragma
+  [language-pragma]: https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/exts/pragmas.html#language-pragma
 
-  ### Limitations
-
-  Due to [a GHC bug](https://gitlab.haskell.org/ghc/ghc/-/issues/20670), running
-  `:set -XTemplateHaskell` within `ghci` may unload any modules that were
-  specified on the command line.
-
-  To address this `doctest >= 0.19.0` does two things:
-
-  1. Doctest always enables `-XTemplateHaskell`.  So it is safe to use Template
-     Haskell in examples without enabling the extension explicitly.
-  1. Doctest filters out `-XTemplateHaskell` from single-line `:set`-statements.
-     So it is still safe to include `:set -XTemplateHaskell` in examples for
-     documentation purposes.  It may just not work as intended in `ghci` due to
-     that GHC bug.
-
-  Doctest does not filter out `-XTemplateHaskell` from multi-line
-  `:set`-statements.  So if you e.g. use
-
-  ```
-  >>> :{
-  :set -XTemplateHaskell
-  :}
-  ```
-  then you are on your own.
+  # Limitations
 
 
-  ### Cabal integration
+  - Doctests only works on platforms that have support for GHC's `--interactive` mode (`ghci`).
 
-  Doctest provides both, an executable and a library.  The library exposes a
-  function `doctest` of type:
 
-  ```haskell
-  doctest :: [String] -> IO ()
-  ```
+  - Due to [a GHC bug](https://gitlab.haskell.org/ghc/ghc/-/issues/20670), running
+    `:set -XTemplateHaskell` within `ghci` may unload any modules that were
+    specified on the command-line.
 
-  Doctest's own `main` is simply:
+    To address this `doctest >= 0.19.0` does two things:
 
-  ```haskell
-  main = getArgs >>= doctest
-  ```
+    1. Doctest always enables `-XTemplateHaskell`.  So it is safe to use Template
+      Haskell in examples without enabling the extension explicitly.
+    1. Doctest filters out `-XTemplateHaskell` from single-line `:set`-statements.
+      So it is still safe to include `:set -XTemplateHaskell` in examples for
+      documentation purposes.  It may just not work as intended in `ghci` due to
+      that GHC bug.
 
-  Consequently, it is possible to create a custom executable for a project, by
-  passing all command-line arguments that are required for that project to
-  `doctest`.  A simple example looks like this:
+    Doctest does not filter out `-XTemplateHaskell` from multi-line
+    `:set`-statements.  So if you e.g. use
 
-  ```haskell
-  -- file doctests.hs
-  import Test.DocTest
-  main = doctest ["-isrc", "src/Main.hs"]
-  ```
+    ```
+    >>> :{
+    :set -XTemplateHaskell
+    :}
+    ```
+    then you are on your own.
 
-  And a corresponding Cabal test suite section like this:
+    Note that all platforms that support `--interactive` also support
+    `-XTemplateHaskell`.  So this approach does not reduce Doctest's platform
+    support.
 
-      test-suite doctests
-        type:          exitcode-stdio-1.0
-        ghc-options:   -threaded
-        main-is:       doctests.hs
-        build-depends: base, doctest >= 0.8
+  - Modules that are rejected by `haddock` will not work with `doctest`.  This
+    can mean that `doctest` fails on input that is accepted by GHC (e.g.
+    [#251](https://github.com/sol/doctest/issues/251)).
 
-  ## Doctest in the wild
+  - Doctest works best with UTF-8.  If your locale is e.g. `LC_ALL=C`, you may
+    want to invoke `doctest` with `LC_ALL=C.UTF-8`.
+
+  # Doctest in the wild
 
   You can find real world examples of `Doctest` being used below:
 
@@ -679,23 +743,17 @@ description: |
     * [base Data/Functor.hs](https://github.com/ghc/ghc/blob/669cbef03c220de43b0f88f2b2238bf3c02ed64c/libraries/base/Data/Functor.hs#L34-L64)
 
 
-  ## Doctest extensions
-
-    * [doctest-discover](https://github.com/karun012/doctest-discover)
-
-  ## Development [![Build Status](https://secure.travis-ci.org/sol/doctest.png)](http://travis-ci.org/sol/doctest)
-
-  Join in at `#hspec` on freenode.
+  # Development
 
   Discuss your ideas first, ideally by opening an issue on GitHub.
 
   Add tests for new features, and make sure that the test suite passes with your
   changes.
 
-      cabal configure --enable-tests && cabal build && cabal exec cabal test
+      cabal build --enable-tests && cabal exec -- cabal test --test-show-details=direct
 
 
-  ## Contributors
+  # Contributors
 
    * Adam Vogt
    * Alan Zimmerman
