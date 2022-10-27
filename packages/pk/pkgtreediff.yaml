@@ -1,11 +1,20 @@
 homepage: https://github.com/juhp/pkgtreediff
 changelog-type: markdown
-hash: a608f4cfe4c722928d03fd73943f76188326837f5c791b82f10a0da7737d3287
-test-bench-deps: {}
+hash: fa8d129a21630aaa45a770c5b50f25eb4d705d1b6784a43ccb3b75b2a5f6d71d
+test-bench-deps:
+  base: '>=4 && <5'
+  simple-cmd: -any
 maintainer: juhpetersen@gmail.com
 synopsis: RPM package tree diff tool
 changelog: |
   # Changelog
+
+  # 0.6.0 (2022-10-27)
+  - significant processing performance improvement: drop expensive nub
+  - allow multiple mode options and separate summary & rst options
+  - add support for package list files via http
+  - fix local filesystem recursion
+  - initial testsuite
 
   ## 0.5.0 (2021-11-03)
   - use rpm-nvr library for NVRA type (API changes) and rpmVerCompare
@@ -49,6 +58,7 @@ changelog: |
 basic-deps:
   http-client: '>=0.5.0'
   pkgtreediff: -any
+  bytestring: -any
   extra: -any
   base: <5
   text: -any
@@ -57,9 +67,10 @@ basic-deps:
   simple-cmd-args: -any
   filepath: -any
   async: -any
-  http-directory: '>=0.1.4 && (<0.1.6 || >=0.1.8)'
+  http-directory: '>=0.1.10'
   koji: -any
   http-client-tls: -any
+  http-types: -any
   Glob: -any
   simple-cmd: '>=0.1.4'
   directory: -any
@@ -71,8 +82,9 @@ all-versions:
 - '0.4'
 - 0.4.1
 - 0.5.0
+- 0.6.0
 author: Jens Petersen
-latest: 0.5.0
+latest: 0.6.0
 description-type: markdown
 description: |
   # pkgtreediff
@@ -82,82 +94,103 @@ description: |
   [![Stackage Lts](http://stackage.org/package/pkgtreediff/badge/lts)](http://stackage.org/lts/package/pkgtreediff)
   [![Stackage Nightly](http://stackage.org/package/pkgtreediff/badge/nightly)](http://stackage.org/nightly/package/pkgtreediff)
 
-  `pkgtreediff` compares the NVRs (name-version-release) of RPM packages in OS package trees and/or installations:
+  `pkgtreediff` compares the NVRs (name-version-release) of RPM packages
+  in OS package trees and/or installations:
 
   - An OS tree can be referenced by an url or directory containing a tree of rpm files.
-  - A file containing a list(s) of rpm NVRs can also be compared.
+  - A text file/url containing a list of rpm NVRs can also be compared.
   - Commands can also be used to get installed RPMs, eg:
     - `"rpm -qa"`
     - `"ssh myhost rpm -qa"`
     - `"podman run --rm myimage rpm -qa"`
+    - `"sudo dnf -q repoquery --qf '%{name}-%{version}-%{release}.%{arch}'"`
   - A koji tag: koji://tag@KojiHubUrl (or koji://tag@fedora)
 
   ## Usage examples
 
-  ### Containers
+  ### Help
+  ```shellsession
+  $ pkgtreediff --version
+  0.6.0
+  $ pkgtreediff -h
+  Package tree comparison tool
 
+  Usage: pkgtreediff [--version] [-r|--recursive] [-d|--subdir SUBDIR]
+                     [(-R|--ignore-release) | (-V|--ignore-version)]
+                     [(-N|--new) | (-D|--deleted) | (-U|--updated) |
+                       (-u|--downgraded)]
+                     [(-s|--show-summary) | (-S|--no-summary)] [-R|--rst]
+                     [-p|--pattern PKGPATTERN] [-t|--timeout SECONDS]
+                     URL|DIR|FILE|KOJITAG|CMD1 URL|DIR|FILE|KOJITAG|CMD2
+    pkgtreediff compares the packages in two OS trees or instances
+
+  Available options:
+    -h,--help                Show this help text
+    --version                Show version
+    -r,--recursive           Recursive down into subdirectories
+    -d,--subdir SUBDIR       Select specific subdir (eg x86_64 or source)
+    -R,--ignore-release      Only show version changes (ignore release)
+    -V,--ignore-version      Only show package changes (ignore version-release)
+    -N,--new                 Show only added packages
+    -D,--deleted             Show only removed packages
+    -U,--updated             Show only upgraded packages
+    -u,--downgraded          Show only downgraded packages
+    -s,--show-summary        Show summary of changes (default when >20 changes)
+    -S,--no-summary          Do not display summary
+    -R,--rst                 Use ReSTructured Text format
+    -p,--pattern PKGPATTERN  Limit packages to glob matches
+    -t,--timeout SECONDS     Maximum seconds to wait for http response before
+                             timing out (default 30)
+  ```
+
+  ### Containers
   Compare the content of two rpm based containers versions,
   filtering for new added packages:
 
   ```shellsession
-  $ pkgtreediff --new "podman run --rm fedora:34 rpm -qa" "podman run --rm fedora:35 rpm -qa"
-  libfsverity-1.4-4.fc35.x86_64
-  mpdecimal-2.5.1-2.fc35.x86_64
+  $ pkgtreediff --new "podman run --rm fedora:36 rpm -qa" "podman run --rm fedora:37 rpm -qa"
+  libb2-0.98.1-7.fc37.x86_64
   ```
 
   ### Package trees
 
-  Package source changes between Fedora 33 and 34 Server at GA (ignoring release bumps):
+  Package source changes between Fedora 35 and 36 Server at GA
+  (ignoring release bumps):
 
   ```shellsession
-  $ pkgtreediff --ignore-release https://dl.fedoraproject.org/pub/fedora/linux/releases/{33,34}/Server/source/tree/Packages/
-  ModemManager.src: 1.14.2-1.fc33 -> 1.14.10-2.fc34
-  NetworkManager.src: 1.26.2-2.fc33 -> 1.30.2-1.fc34
-  PackageKit.src: 1.2.1-1.fc33 -> 1.2.3-1.fc34
-  abrt.src: 2.14.4-6.fc33 -> 2.14.5-2.fc34
-  :
-  bash.src: 5.0.17-2.fc33 -> 5.1.0-2.fc34
-  bash-completion.src: 2.8-9.fc33 -> 2.11-2.fc34
-  - bcache-tools-1.0.8-19.fc33.src
-  bcm283x-firmware.src: 20201008-2.63b1922.fc33 -> 20210407-1.8c7c524.fc34
-  bind.src: 9.11.23-1.fc33 -> 9.16.11-5.fc34
-  binutils.src: 2.35-10.fc33 -> 2.35.1-41.fc34
-  :
-  cockpit.src: 229-1.fc33 -> 241-1.fc34
-  colord.src: 1.4.4-5.fc33 -> 1.4.5-2.fc34
-  + compsize-1.5-1.fc34.src
-  conmon.src: 2.0.21-3.fc33 -> 2.0.27-1.fc34
-  container-selinux.src: 2.145.0-1.fc33 -> 2.158.0-1.gite78ac4f.fc34
-  containernetworking-plugins.src: 0.8.7-1.fc33 -> 0.9.1-4.fc34
-  + containers-common-1-13.fc34.src
-  - copy-jdk-configs-3.7-7.fc33.src
-  - createrepo_c-0.15.11-4.fc33.src
-  + criu-3.15-3.fc34.src
-  crun.src: 0.15-5.fc33 -> 0.18-5.fc34
+  $ pkgtreediff --ignore-release https://download.fedoraproject.org/pub/fedora/linux/releases/{35,36}/Server/source/tree/Packages/
+  ModemManager.src: 1.18.2-1.fc35 -> 1.18.6-1.fc36
+  NetworkManager.src: 1.32.12-1.fc35 -> 1.36.4-1.fc36
+  PackageKit.src: 1.2.4-3.fc35 -> 1.2.5-1.fc36
+  abrt.src: 2.14.6-9.fc35 -> 2.15.1-1.fc36
   :
   :
-  vim.src: 8.2.1770-1.fc33 -> 8.2.2637-1.fc34
-  + vulkan-loader-1.2.162.0-2.fc34.src
-  wayland.src: 1.18.0-2.fc33 -> 1.19.0-1.fc34
-  webkit2gtk3.src: 2.30.1-1.fc33 -> 2.32.0-2.fc34
-  wget.src: 1.20.3-8.fc33 -> 1.21.1-2.fc34
+  - tree-1.8.0-7.fc35.src
+  + tree-pkg-2.0.1-2.fc36.src
+  tzdata.src: 2021b-1.fc35 -> 2022a-1.fc36
   :
-  zchunk.src: 1.1.5-3.fc33 -> 1.1.9-2.fc34
-  zstd.src: 1.4.5-5.fc33 -> 1.4.9-1.fc34
+  xorg-x11-xauth.src: 1.1-9.fc35 -> 1.1.1-2.fc36
+  + xrdb-1.2.1-3.fc36.src
+  xxhash.src: 0.8.0-4.fc35 -> 0.8.1-2.fc36
+  yelp.src: 41.1-1.fc35 -> 42.1-1.fc36
+  yelp-xsl.src: 41.0-1.fc35 -> 42.0-1.fc36
+  zchunk.src: 1.1.15-2.fc35 -> 1.2.1-1.fc36
+  zstd.src: 1.5.0-2.fc35 -> 1.5.2-1.fc36
 
   Summary
-  Updated: 330
+  Updated: 293
   Downgraded: 0
-  Added: 63
-  Deleted: 98
+  Added: 36
+  Deleted: 21
   Arch changed: 0
-  Total packages: 932 -> 897
+  Total packages: 915 -> 930
   ```
 
+  For very large repos like Everything it should be faster
+  to use a repoquery command.
+
   ### Hosts
-
   Compare the packages on local and another host:
-
   ```
   pkgtreediff "rpm -qa" "ssh otherhost rpm -qa"
   ```
@@ -165,15 +198,13 @@ description: |
   Any types of sources can be compared, together with the use of flags.
 
   ### Koji
-
   Compare koji tags using the `koji://tag@kojihub` syntax:
-
   ```
   pkgtreediff koji://dist-c8-updates-build@centos koji://dist-c8_1-updates-build@centos
   ```
 
-  Please avoid using koji tag to compare full releases as it is more efficient to
-  query URL or CMD trees.
+  Please avoid using koji tags to compare full releases as it is more efficient
+  to query URL or CMD trees.
 
   ## Builds
   pkgtreediff is packaged in Fedora.
@@ -184,11 +215,10 @@ description: |
   ([more details](https://copr.fedorainfracloud.org/coprs/petersen/pkgtreediff/monitor/detailed)).
 
   ## RPM version ordering
+  RPM version ordering is somewhat [complicated](https://blog.jasonantman.com/2014/07/how-yum-and-rpm-compare-versions/).
+  For example "1.2.1~rc1" < "1.2.1" (greater for ^).
+
   pkgtreediff use the [rpm-nvr](https://hackage.haskell.org/package/rpm-nvr)
   library implementation of the `rpmvercmp()` algorithm,
   though it has not been verified to behave identically.
-
-  RPM version ordering is somewhat involved
-  <https://blog.jasonantman.com/2014/07/how-yum-and-rpm-compare-versions/>.
-  For example "1.2.1~rc1" < "1.2.1" (greater for ^).
 license-name: GPL-3.0-only
