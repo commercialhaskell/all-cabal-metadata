@@ -1,0 +1,181 @@
+homepage: https://github.com/typeclasses/supply-chain-core
+changelog-type: markdown
+hash: c994e10e1f52e30b56c9312310c5f7cd88ab8475d7031230b2e40e178e112e6b
+test-bench-deps:
+  base: ^>=4.16 || ^>=4.17
+  tasty-hedgehog: ^>=1.3 || ^>=1.4
+  supply-chain-core: -any
+  tasty-hunit: ^>=0.10
+  tasty: ^>=1.3 || ^>=1.4
+maintainer: Chris Martin, Julie Moronuki
+synopsis: Composable request-response pipelines
+changelog: |
+  # 0.0.0.0 (2022-11-08)
+
+  * Initial release
+basic-deps:
+  base: ^>=4.16 || ^>=4.17
+all-versions:
+- 0.0.0.0
+author: Chris Martin
+latest: 0.0.0.0
+description-type: markdown
+description: |
+  ## Story
+
+  The initial idea for this library stemmed from the [pipes] library. The
+  interfaces of a pipes [Proxy] are given by four types: What the proxy sends
+  upstream, receives from upstream, sends downstream, and receives from
+  downstream. A value of type `Proxy a' a b' b m r` is depicted in the pipes
+  documentation as follows:
+
+  ```
+  Upstream | Downstream
+      +---------+
+      |         |
+  a' <==       <== b'
+      |         |
+  a  ==>       ==> b
+      |    |    |
+      +----|----+
+           v
+           r
+  ```
+
+  A pipes server (focusing on downstream side) can accept exactly one of request
+  (`b'`) and issue exactly one type of response (`b`). The response type cannot
+  vary based on what type of request it is responding to.
+
+  When interfaces are described by a *type constructor* rather than a pair of
+  types, then we can pair types of requests with appropriate responses. I first
+  saw this approach in the [haxl] library. The [Facebook example] in haxl's
+  documentation gives this example of what it calls a "data source API":
+
+  ```haskell
+  data FacebookReq response =
+       (response ~ Object)   => GetObject Id
+     | (response ~ User)     => GetUser UserId
+     | (response ~ [Friend]) => GetUserFriends UserId
+  ```
+
+  The kind of `FacebookReq` is `Type -> Type`. The phantom type variable
+  `response` here indicates what type of response a data source must give in
+  response to a `FacebookReq response`. For example, the `GetUser` constructor
+  produces a request of type `FacebookReq User`, and so the data source returns a
+  value of type `User`.
+
+  This pattern can also be found in the [effectful] library, where a similar sort
+  of type constructor is called a "dynamic effect". To take just one example of a
+  dynamic effect that the library offers, its [dynamic State effect] (analogous to
+  [StateT] of the [transformers] library) is defined as follows:
+
+  ```haskell
+  data State s m response =
+        (response ~ s)  => Get
+      | (response ~ ()) => Put s
+      | (response ~ a)  => State (s -> (a, s))
+      | (response ~ a)  => StateM (s -> m (a, s))
+  ```
+
+  The kind of `State s m` is, again, `Type -> Type`, and a constraint on each
+  constructor specifies what type of corresponding response is expected.
+
+  Let us return our attention to the pipes [Proxy] type. When we attempt to alter
+  `Proxy` to employ the type constructor interface style as discussed in the
+  previous two examples, it becomes apparent that much of the generality and
+  symmetry that the pipes library enjoys must be sacrificed. Our library has only
+  "pull" streams, in which a vendor's action is always a response to a downstream
+  request. Pipes discusses "push" streams, in which upstream actors may take
+  initiative, and we offer nothing of the sort.
+
+  Also unlike pipes, we have separate `Vendor` and `Job` types, whereas pipes
+  unifies upstream and downstream ideas into a single type called `Proxy`, of
+  which `Producer` and `Consumer` are merely aliases with a few of the type
+  parameters fixed. Although we have opted not to to so, it would be possible for
+  supply-chain to mimic the pipes design, observing that `loop` and `once`
+  demonstrate an isomorphism between `Vendor up (Unit product) action` and
+  `Job up action product` and that would permit unifying `Vendor` and `Job` in
+  the pipes style.
+
+  ```haskell
+  loop :: Job up action product -> Vendor up (Unit product) action
+  once :: Vendor up (Unit product) action -> Job up action product
+  ```
+
+  This approach is tempting chiefly because it permits a single connection
+  operator (which pipes calls `>->`) where supply-chain has two (`>->` and `>-`).
+  But in our library, this unification appears to cause more problems than it
+  solves, and type aliases in general tend to result in poor developer
+  experiences.
+
+  I also explored the possibility of defining a pipes-like unified `>->` operator
+  as a multi-parameter typeclass method, with one instance for vendor-to-vendor
+  connection and another for vendor-to-job connection. This can be made to work,
+  and with the help of [functional dependencies] can even lend itself to
+  sufficient type inference despite a large number of type parameters involved. In
+  practice, however, the complication that the polymorphism introduces to type
+  errors and typed hole feedback outweighs the benefit of an overloaded connection
+  operator.
+
+  Another difference between supply-chain and pipes is that `Vendor` cannot
+  return. The ability of a `Producer` or `Pipe` to return is a point of difficulty
+  for me as a pipes user, because in a pipes chain `a >-> b >-> c` very rarely is
+  there any reason why `a` or `b` would ever return and "shut the pipeline down
+  early". The advantage of this approach in pipes is that it allows `Producer`
+  (being simply an alias for `Proxy`) to be monad, whereas to define a `Vendor`
+  one must take the additional step of applying the `Vendor` constructor to a
+  function whose actual monadic context is `Job`. The advantage of the
+  supply-chain approach is that the type signatures for vendors are not burdened
+  with an irrelevant type parameter representing the return type of something that
+  will never actually return.
+
+  The influence of the [effectful] library, in spirit if not manifest in any
+  concrete technique, deserves remark. A job's upstream interface and action
+  context correspond to what the effectful library calls "dynamic effects" and
+  "static effects" respectively. Our `(>-)` function corresponds roughly to what
+  effectful describes as "reinterpeting" the job's upstream interface.
+
+  What effectful has that supply-chain lacks is its mechanism for combining
+  multiple interfaces (which they call "effects") via the type-level list which
+  parameterizes the [Eff] type.
+
+  ```haskell
+  data Eff (es :: [Effect]) a
+
+  type Effect = (Type -> Type) -> Type -> Type
+  ```
+
+  I have left this feature out because I do not currently have any pressing need
+  for it, I find it too difficult to use, and I am not convinced that it needs to
+  be built into this library. It is possible to express the combination of two
+  supply-chain interfaces as:
+
+  ```haskell
+  data Either interface1 interface2 response =
+      Left (interface1 response) | Right (interface2 response)
+  ```
+
+  `Either` may be nested to produce interface combinations larger than two.
+  Although this approach is cumbersome, it does suggest that more clever
+  conveniences could be designed.
+
+    [pipes]: https://hackage.haskell.org/package/pipes
+
+    [Proxy]: https://github.com/Gabriella439/pipes/blob/e43acc24100dca20cdb901d91a7553143b2c1369/src/Pipes/Internal.hs#L72-L76
+
+    [haxl]: https://hackage.haskell.org/package/haxl
+
+    [Facebook example]: https://github.com/facebook/Haxl/blob/ef52a522fb851be8ed0a38bcd370d29310d5bba0/example/facebook/readme.md?plain=1#L35-L38
+
+    [effectful]: https://hackage.haskell.org/package/effectful
+
+    [dynamic State effect]: https://github.com/haskell-effectful/effectful/blob/b6cd978db35d66dbfa82ce74b0d011833411248a/effectful-core/src/Effectful/State/Dynamic.hs#L38-L42
+
+    [transformers]: https://hackage.haskell.org/package/transformers
+
+    [StateT]: https://hackage.haskell.org/package/transformers-0.6.0.4/docs/Control-Monad-Trans-State-Strict.html
+
+    [functional dependencies]: https://downloads.haskell.org/~ghc/latest/docs/users_guide/exts/functional_dependencies.html
+
+    [Eff]: https://github.com/haskell-effectful/effectful/blob/c385b16b2b756cf27f60116714dfbcc7dc1c272d/effectful-core/src/Effectful/Internal/Monad.hs#L104-L122
+license-name: Apache-2.0
