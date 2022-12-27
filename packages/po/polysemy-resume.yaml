@@ -1,25 +1,52 @@
 homepage: https://github.com/tek/polysemy-resume#readme
-changelog-type: ''
-hash: 4ad4c539d312aaa432315a15fdc051577e850a95ad67f94bb5d54656b06fad93
+changelog-type: markdown
+hash: d29bcdaace2381002f3c6dc90a0be18a5a2ec6595de845a4f7e9b7f3fe1c72d6
 test-bench-deps:
-  polysemy-plugin: -any
+  polysemy-plugin: '>=0.4.3 && <0.5'
   polysemy-resume: -any
   stm: -any
   base: '>=4.12 && <5'
-  tasty-hedgehog: -any
-  text: -any
   polysemy-test: '>=0.6'
-  hedgehog: -any
-  incipit-core: '>=0.3'
-  polysemy: -any
+  incipit-core: '>=0.4'
+  polysemy: ==1.8.*
   tasty: -any
 maintainer: hackage@tryp.io
 synopsis: Polysemy error tracking
-changelog: ''
+changelog: |
+  # Unreleased
+
+  # 0.6.0.0
+
+  * Add `replaceStop`, shorthand for `mapStop . const`.
+  * Add `∀` to `Stop` interpreters.
+  * Add resumers that transform to `Fail`.
+  * Move `Scoped` interpreters from `polysemy-conc`, since `Scoped` is now in `polysemy`.
+  * Support GHC 9.4.
+
+  # 0.5.0.0
+
+  * Add interceptors.
+  * Change modules for effects to `Polysemy.Resume.Effect`.
+  * Add `stopEitherAs`.
+  * Add exception catching `stop` combinators.
+
+  # 0.2.0.0
+
+  * Add combinators `resumeOr` and `resumingOr`, which take an additional branch for the success case.
+  * Improve `raiseResumable`:
+    * Don't discard resources
+    * Allow interpreter to change type of `a`
+  * Add operator versions of `resume` (`!!`) and `resumeAs` (`<!`), (`!>`).
+  * Add combinators `resumeWith` and `resumingWith` that ignore the error and execute an action, plus their operator
+    variants `(!>>)` and `(<<!)`.
+
+  # 0.1.0.0
+
+  * initial release
 basic-deps:
   base: '>=4.12 && <5'
-  incipit-core: '>=0.3'
-  polysemy: '>=1.6'
+  incipit-core: '>=0.4'
+  polysemy: ==1.8.*
   transformers: -any
 all-versions:
 - 0.1.0.0
@@ -31,8 +58,214 @@ all-versions:
 - 0.3.0.0
 - 0.4.0.0
 - 0.5.0.0
+- 0.6.0.0
 author: Torsten Schmits
-latest: 0.5.0.0
-description-type: haddock
-description: See https://hackage.haskell.org/package/polysemy-resume/docs/Polysemy-Resume.html
+latest: 0.6.0.0
+description-type: markdown
+description: |
+  # About
+
+  This library provides the Polysemy effects 'Resumable' and 'Stop' for the
+  purpose of safely connecting throwing and catching errors across different
+  interpreters.
+
+  # Example
+
+  Given these two effects and an error:
+
+  ```haskell
+  import Polysemy.Resume (Resumable, Stop, resumable, resumableFor, resume, runStop, stop)
+
+  data Stopper :: Effect where
+    StopBang :: Stopper m ()
+    StopBoom :: Stopper m ()
+
+  makeSem ''Stopper
+
+  data Resumer :: Effect where
+    MainProgram :: Resumer m Int
+
+  makeSem ''Resumer
+
+  data Boom =
+    Boom { unBoom :: Text }
+    |
+    Bang { unBang :: Int }
+    deriving (Eq, Show)
+  ```
+
+  we implement an interpreter for `Stopper` that may throw the error `Boom`, but
+  we do not want to hardcode that fact into the effect constructors, as in:
+
+  ```haskell
+  data Stopper :: Effect where
+    StopBang :: Stopper m (Either Boom ())
+  ```
+
+  because we might want to provide alternative interpreters that do not have this
+  requirement, and `Boom` might contain information about the interpreter
+  implementation that we don't want to leak into the effect signature.
+
+  On the other hand, having no guarantee that the consumer program knows about or
+  catches the error requires us to manually ensure we handle them at the
+  appropriate location.
+  This is especially critical due to the fact that using `catch` requires an
+  `Error` membership, which in turn requires the `Error` to be handled outside of
+  the consumer again, hiding any new uses of the throwing interpreter in another
+  part of the program.
+
+  A first attempt at making this situation safer is to introduce a wrapping
+  effect:
+
+  ```haskell
+  data Resumable err eff m a where
+    Resumable ::
+      ∀ err eff r a .
+      Weaving eff (Sem r) a ->
+      Resumable err eff (Sem r) (Either err a)
+  ```
+
+  which we now use instead of the raw `eff` in consumers:
+
+  ```haskell
+  interpretResumer ::
+    Member (Resumable Boom Stopper) r =>
+    InterpreterFor Resumer r
+  interpretResumer =
+    interpret \ MainProgram ->
+      resume (192 <$ stopBang) \ _ ->
+        pure 237
+  ```
+
+  For a nicer syntax, there is a type alias for `Resumable`:
+
+  ```haskell
+  Member (Stopper !! Boom) r =>
+  ```
+
+  We have now marked the interpreter for `Resumer`, which consumes `Stopper`, as
+  being capable of handling the `Boom` error when it occurs in `Stopper`.
+  The function `resume` takes an error handler as its second argument with which
+  we can catch `Boom`.
+
+  The interpreter for `Stopper` could look like this:
+
+  ```haskell
+  interpretStopper ::
+    Member (Stop Boom) r =>
+    InterpreterFor Stopper r
+  interpretStopper =
+    interpret \case
+      StopBang -> stop (Bang 13)
+      StopBoom -> stop (Boom "ouch")
+  ```
+
+  Instead of `Error`, we are using `Stop` here, which is identical except for not
+  providing `Catch`.
+  This only serves to be more explicit about the intention of the error, but
+  a regular `Error` can be converted with `stopOnError`.
+
+  In order to convert this interpreter to a `Resumable`, we use `resumable`:
+
+  ```haskell
+  >>> run $ resumable interpretStopper (interpretResumer mainProgram)
+  237
+  ```
+
+  `resumable` weaves `interpretStopper` and its `Stop` together into
+  a `Resumable`, which is then consumed entirely by `resume` inside
+  `interpretResumer`, so no additional effects have to be handled.
+
+  ## Higher-Order Effects
+
+  Converting an interpreter with `resumable` only works in rather simple
+  conditions.
+  If there are higher-order effects involved, you may get incorrect semantics,
+  for example when inserting a `finally` around the entire resumable program:
+
+  ```haskell
+  resumable (interpretStopper (sem `finally` releaseResources))
+  ```
+
+  In this case, `releaseResources` is executed after each use of `StopBang` or
+  `StopBoom`.
+  This requires the use of `interpretResumable` and `interpretResumableH`, which
+  take handler functions like `interpret`:
+
+  ```haskell
+  interpretStopper ::
+    InterpreterFor (Stopper !! Boom) r
+  interpretStopper =
+    interpretResumable \case
+      StopBang -> stop (Bang 13)
+      StopBoom -> stop (Boom "ouch")
+  ```
+
+  ## Partial Error Handling
+
+  Of course, one requirement in the problem description still remains
+  unsatisfied: We might want to hide implementation details of `interpretStopper`
+  from consumers.
+  We can do that by transforming the `Boom` error into a more abstract version at
+  the interpretation site:
+
+  ```haskell
+  newtype Blip =
+    Blip { unBlip :: Int }
+    deriving (Eq, Show)
+
+  bangOnly :: Boom -> Maybe Blip
+  bangOnly = \case
+    Bang n -> Just (Blip n)
+    Boom _ -> Nothing
+  ```
+
+  Now `Boom` might have contained information about e.g. an http client backend,
+  and we're transforming that into an error that just says "http error".
+  If a consumer also deals with that backend, we might keep that information.
+
+  This modified error can now be used for `Resumable`.
+  First, we change the `Resumer` interpreter to use `Blip`:
+
+  ```haskell
+  interpretResumerPartial ::
+    Member (Resumable Blip Stopper) r =>
+    InterpreterFor Resumer r
+  interpretResumerPartial =
+    interpret \ MainProgram ->
+      resume (192 <$ stopBang) \ (Blip num) ->
+        pure (num * 3)
+  ```
+
+  Then we use a different adapter function for `interpretStopper`:
+
+  ```haskell
+  >>> runError (resumableFor bangOnly interpretStopper (interpretResumerPartial mainProgram))
+  Right 39
+  ```
+
+  `resumableFor` transforms the error and passes it to the consumer if it is
+  a `Just`, and rethrows it if not.
+  Since the error was only partially handled and unhandled errors get thrown as
+  `Error`, we have to call `runError` on the result, to obtain an `Either`.
+
+  If the consumer uses a constructor that throws an unhandled variant of the
+  error, it propagates to the call site:
+
+  ```haskell
+  interpretResumerPartialUnhandled ::
+    Member (Resumable Blip Stopper) r =>
+    InterpreterFor Resumer r
+  interpretResumerPartialUnhandled =
+    interpret \ MainProgram ->
+      resume (192 <$ stopBoom) \ (Blip num) ->
+        pure (num * 3)
+
+  >>> runError ((resumableFor bangOnly interpretStopper) (interpretResumerPartialUnhandled mainProgram))
+  Left (Boom "ouch")
+  ```
+
+  # Thanks
+
+  to @KingOfTheHomeless for providing the initial implementation and lots of consultation!
 license-name: BSD-2-Clause-Patent
