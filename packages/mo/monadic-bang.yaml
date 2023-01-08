@@ -1,0 +1,181 @@
+homepage: https://github.com/JakobBruenker/monadic-bang
+changelog-type: markdown
+hash: f45bc88f526b5551ee9495d1970db77adfc757aebc877fa642809c6ad5f81740
+test-bench-deps:
+  exceptions: ^>=0.10
+  ghc: -any
+  base: -any
+  monadic-bang: -any
+  ghc-paths: ^>=0.1.0.12
+  ghc-boot: '>=9.4'
+  transformers: -any
+maintainer: jakob.bruenker@gmail.com
+synopsis: GHC plugin to desugar ! into do-notation
+changelog: |
+  # Revision history for monadic-bang
+
+  ## 0.1.0.0 -- 2023-01-07
+
+  * First version. Released on an unsuspecting world.
+basic-deps:
+  ghc: '>=9.4'
+  base: '>=4.17.0.0 && <5'
+  containers: ^>=0.6.4.1
+  fused-effects: ^>=1.1.1.2
+  transformers: ^>=0.5.6.2
+all-versions:
+- 0.1.0.0
+author: Jakob Brünker
+latest: 0.1.0.0
+description-type: markdown
+description: "# Monadic Bang\n\nThis is a GHC Parser plugin for GHC 9.4 and above,
+  intended to make monadic code within `do`-blocks more concise and nicer to work
+  with. Works with HLS.\n\nThis is heavily inspired by [Idris's !-notation](https://idris2.readthedocs.io/en/latest/tutorial/interfaces.html#notation),
+  but with some [important differences](#comparison-with-idriss--notation).\n\n##
+  Contents\n\n1. [Motivating Examples](#motivating-examples)\n2. [Usage](#usage)\n3.
+  [Cute Things](#cute-things)\n4. [Caveats](#caveats)\n5. [Details](#details)\n6.
+  [Comparison with Idris's `!`-notation](#comparison-with-idriss--notation)\n\n##
+  Motivating Examples\n\nLet's look at a few examples where Haskell syntax can be
+  a bit annoying when it comes to monads - and what this plugin allows you to write
+  instead:\n\nWhen you use `Reader` or `State`, you will often have to use `<-` to
+  bind fairly simple expressions:\n\n```haskell\nlaunchMissile :: StateT Int IO ()\nlaunchMissile
+  = do\n  count <- get\n  liftIO . putStrLn $ \"Missile no. \" <> show count <> \"
+  has been launched\"\n  modify' (+ 1)\n```\n\n```haskell\nhelp :: Reader Config String\nhelp
+  = do\n  manualLink <- asks (.links.manual)\n  email <- asks (.contact.email)\n  pure
+  $\n    \"You can find help by going to \" <> manualLink <>\n    \" or writing us
+  at \" <> email\n```\n\nWith Monadic Bang, you can instead write\n```haskell\nlaunchMissile
+  :: StateT Int IO ()\nlaunchMissile = do\n  liftIO . putStrLn $ \"Missile no. \"
+  <> show !get <> \" has been launched\"\n  modify' (+ 1)\n```\n\n```haskell\nhelp
+  :: Reader Config String\nhelp = do\n  pure $\n    \"You can find help by going to
+  \" <> (!ask).links.manual <>\n    \" or writing us at \" <> (!ask).contact.email\n```\n\nWith
+  `IORefs`, `STRefs`, mutable arrays, and so on, you'll often have to write code that
+  looks like this, having to use somewhat redundant variable names:\n\n```haskell\naddIORefs
+  :: IORef Int -> IORef Int -> IO Int\naddIORefs aRef bRef = do\n  a <- readIORef
+  aRef\n  b <- readIORef bRef\n  pure $ a + b\n```\n\nWith Monadic Bang, you can write\n\n```haskell\naddIORefs
+  :: IORef Int -> IORef Int -> IO Int\naddIORefs a b = do pure $ !(readIORef a) +
+  !(readIORef b)\n```\n\nImplicit parameter definitions have somewhat more limited
+  syntax than regular definitions: You can't write something like `?foo <- action`.
+  \ \nThat lead me to have to write this in a Vulkan program:\n\n```haskell\ninitQueues
+  = do\n  let getQueue = getDeviceQueue ?device\n  graphicsQueue <- getQueue ?graphicsQueueFamily
+  0\n  presentQueue  <- getQueue ?presentQueueFamily  0\n  computeQueue  <- getQueue
+  ?computeQueueFamily  1\n  let ?graphicsQueue = graphicsQueue\n      ?presentQueue
+  \ = presentQueue\n      ?computeQueue  = computeQueue\n  pure Dict\n```\n\nwith
+  Monadic Bang, I can write\n\n```haskell\ninitQueues = do\n  let getQueue = getDeviceQueue
+  ?device\n  let ?graphicsQueue = !(getQueue ?graphicsQueueFamily 0)\n      ?presentQueue
+  \ = !(getQueue ?presentQueueFamily  0)\n      ?computeQueue  = !(getQueue ?computeQueueFamily
+  \ 1)\n  pure Dict\n```\n\nTake this (slightly adapted) code used for the test suite
+  of this very plugin:\n\n```haskell\nsettings :: MonadIO m => m Settings\nsettings
+  = ... -- some long function body\n\ninitialDynFlags :: MonadIO m => m DynFlags\ninitialDynFlags
+  = do\n  settings' <- settings\n  dflags <- defaultDynFlags settings' llvmConfig\n
+  \ pure $ dflags{generalFlags = addCompileFlags $ generalFlags dflags}\n```\n\nWith
+  this plugin, I can instead write\n\n```haskell\nsettings :: MonadIO m => m Settings\nsettings
+  = ... -- some long function body\n\ninitialDynFlags :: MonadIO m => m DynFlags\ninitialDynFlags
+  = do\n  dflags <- defaultDynFlags !settings llvmConfig\n  pure $ dflags{generalFlags
+  = addCompileFlags $ generalFlags dflags}\n```\n\nOr, to take some more code from
+  this plugin's implementation\n\n```haskell\ndo logger <- getLogger\n   liftIO $
+  logMsg logger MCInfo (UnhelpfulSpan UnhelpfulNoLocationInfo) m\n```\nWhy have `logger`
+  *and* `getLogger` when you can instead write\n\n```haskell\ndo liftIO $ logMsg !getLogger
+  MCInfo (UnhelpfulSpan UnhelpfulNoLocationInfo) m\n```\n\nThe pattern you might have
+  noticed here is that this plugin is convenient\nwhenever you have a `do`-block with
+  a `<-` that doesn't do pattern matching,\nwhose bound variable is only used once,
+  and has a short right-hand side.  While\nthat might sound like a lot of qualifiers,
+  it does occur fairly often in\npractice.\n\n## Usage\n\nTo use this plugin, you
+  have to add `monadic-bang` to the `build-depends` stanza in your `.cabal` file.
+  Then you can either add `-fplugin=MonadicBang` to the `ghc-options` stanza, or add\n\n```haskell\n{-#
+  OPTIONS -fplugin=MonadicBang #-}\n```\n\nto the top of the files you want to use
+  it in.\n\nThis should also allow HLS to pick up on the plugin, as long as you use
+  HLS 1.9.0.0 or above.\n\nThe plugin supports a couple of options, which you can
+  provide via invocations of `-fplugin-opt=MonadicBang:<option>`. The options are:\n\n-
+  `-ddump`: Print the altered AST\n- `-preserve-errors`: Keep parse errors about `!`
+  outside of `do` in their original form, rather then a more relevant explanation.
+  This is mainly useful if another plugin expects those errors.\n\n## Cute Things\n\n###
+  Idiom Brackets Alternative\n\nIn some cases where idiom brackets would be ideal,
+  `!` can be a reasonable alternative. For example, compare these four options:\n\n```haskell\n1.
+  liftA2 (&&) (readIORef useMetric) (readIORef useCelsius)\n2. (&&) <$> readIORef
+  useMetric <*> readIORef useCelsius\n   -- hypothetical idiom brackets:\n3. [| readIORef
+  useMetric && readIORef useCelsius |]\n   -- Monadic Bang:\n4. do pure (!(readIORef
+  useMetric) && !(readIORef useCelsius))\n```\n\nwhile `<$>` and `<*>` are probably
+  better here for prefix functions, `!` plays nicer with infix operators.\n\nIf you
+  have `-XApplicativeDo` enabled, this even works with `Applicative` instances.\n\n###
+  Nested `!`\n\n`!` can easily be nested. E.g. you could have\n\n```haskell\ndo putStrLn
+  !(readFile (!getArgs !! 1))\n```\n\nFor how this is desugared, see [Desugaring](#desugaring)\n\n###
+  Using `-XQualifiedDo`\n\n`!` always has to be used inside a `do`-block, but it *can*
+  be a qualified `do`-block. For example, if you use `-XLinearTypes`, you could write
+  things like\n\n```haskell\n{-# LANGUAGE QualifiedDo, BlockArguments, OverloadedStrings
+  #-}\nimport Prelude.Linear\nimport Control.Functor.Linear as Linear\nimport System.IO.Resource.Linear\n\nmain
+  :: IO ()\nmain = run Linear.do\n  Linear.pure !(move Linear.<$> hClose !(hPutStrLn
+  !(openFile \"tmp\" WriteMode) \"foo\"))\n```\n\nwhich would be desugared as\n\n```Haskell\nmain
+  :: IO ()\nmain = run Linear.do\n  a <- openFile \"tmp\" WriteMode\n  b <- hPutStrLn
+  a \"foo\"\n  c <- move Linear.<$> hClose b\n  Linear.pure c\n```\n\n### List comprehensions\n\nList
+  comprehensions are kind of just special `do`-blocks, so `!` can be used here as
+  well (and also in monad comprehensions). Example:\n\n```haskell\n[ x + ![1, 2, 3]
+  | x <- [60, 70, ![800, 900]] ]\n```\nThis would be equivalent to\n```haskell\n[
+  x + b | a <- [800, 900], x <- [60, 70, a], b <- [1, 2, 3]]\n```\n\nThe reason `b
+  <- ...` at the end here instead of the beginning is that everything that appears
+  to the left of the `|` in a list comprehension is essentially comparable to the
+  last statement of a `do`-block (+ `pure`).\n\n### Get Rid of `<-`\n\nIn principle,
+  every instance of `pattern <- action` in a `do`-block could be replaced by `let
+  pattern = !action`. Should they? That's a separate question, though it could be
+  a viable style.\n\nThe implicit parameter example in the first section is a valid
+  use case of this.\n\n### Monadic Variants\n\nOftentimes, some generic function exists,
+  but then it turns out that a monadic variant of said function would be useful as
+  well. For example, hoogle finds at least a dozen different packages offering `whenM`.
+  With this plugin, you can instead write\n\n```haskell\nmain = do\n  when (null !getArgs)
+  $ print usage\n  ...\n```\n\n⚠️ NB: This would not work for e.g. `whileM`. In implementations
+  of `whileM`, the condition is re-evaluated after every iteration. If you wrote e.g.
+  `while (!(readIORef i) > 0)`, it would only be evaluated once, before the first
+  iteration.\n\n## Caveats\n\nThere are a few disadvantages to using this that are
+  worth mentioning:\n\n- Since the plugin modifies the source code, the location info
+  in error messages might look a bit strange, since it contains the desugared version.
+  This shouldn't be an issue if you use HLS or another tool to highlight errors within
+  your editor.\n- HLint currently does not work with this plugin (HLint will show
+  you a parse error if you try to use `!`.)\n- If there are fatal parse errors in
+  the source code, unfortunately each `!` will also be highlighted as a parse error.
+  This is unavoidable at the moment, since the plugin can only intercept those messages
+  if the module is otherwise successfully parsed.\n- Arguably this makes `do`-desugaring
+  slightly more confusing - e.g., compare the following:\n\n  ```haskell\n  do put
+  4\n     put 5 >> print !get\n  ``` \n  \n  ```haskell\n  do put 4\n     put 5\n
+  \    print !get\n  ```  \n  \n  With the usual desugaring rules, whether you use
+  `>>` or a new line shouldn't make a difference, but here, the first snippet will
+  print `4`, while the second snippet will print `5`.\n\n## Details\n\nWhile the above
+  information should cover most use cases, there are some details that could sometimes
+  be relevant\n\n### Desugaring\n\nThe desugaring is essentially what one would expect
+  from comparing the motivating examples with the versions using `!`.\n\nTo illustrate
+  with a fairly extensive example:\n\n```haskell\nx = g do\n  foo\n  bar <- !a + !(!b
+  ++ !c)\n  baz <- case !d of\n    (!f -> e) -> do !g e\n```\n\nis desugared into\n\n```haskell\nx
+  = g do\n  foo\n  <!a> <- a\n  <!b> <- b\n  <!c> <- c\n  <!(!b ++ !c)> <- <!b> ++
+  <!c>\n  bar <- <!a> + <!(!b ++ !c)>\n  <!d> <- d\n  <!f> <- f\n  baz <- case <!d>
+  of\n    (<!f> -> e) -> do\n      <!g> <- g\n      <!g> e\n```\n\nwhere `<!a>` etc.
+  are simply special variable names.\n\nSo, broadly speaking, the order in which things
+  are bound is top-to-bottom (statement-wise), inside-out, and left-to-right.\n\nThis
+  can be important when the order of effects matters - though if order does matter,
+  `!` might not be the clearest way to express things.\n\n`!` will only bubble up
+  to the nearest `do`-block. To illustrate:\n\n```haskell\nx = do when nuclearStrikeDetected
+  $ log !launchMissiles\n\ny = do when nuclearStrikeDetected $ do log !launchMissiles\n```\n\n`x`
+  will launch the missiles regardless of whether or not a strike has been detected.
+  But it will only log the results in the case of detection.\n`y` will only launch
+  the missiles (and log the results) if a strike has been detected.\n\nThe desugaring:\n\n```haskell\nx
+  = do\n  <!launchMissiles> <- launchMissiles\n  when nuclearStrikeDetected $ log
+  <!launchMissiles>\n\ny = do\n  when nuclearStrikeDetected $ do\n    <!launchMissiles>
+  <- launchMissiles\n    log <!launchMissiles>\n```\n\nThe story for `case` and `if`
+  expressions is similar, `!` in the individual branches will *all* be executed unless
+  the branches have their own `do`-blocks.\n\n### Variable scope\n\nA variable can
+  be used inside a `!` if\n- it was bound outside the current `do`-block\n- or it
+  was bound before the statement the `!` is in\n- or it is bound inside the `!`\n\nIn
+  other words, this is legal:\n```haskell\nf x = do\n  let a = a\n  foo !(let b =
+  b in x + a + b)\n```\nbut this is not:\n```haskell\nc = do\n  let a = a in foo !a\n```\nThat's
+  because this would be desugared as\n```haskell\nc = do\n  <!a> <- a\n  let a = a
+  in foo <!a>\n```\nbut `a` is not in scope in the second line.\n\n### Where it can
+  be used\n\nIt can be used in any expression that is somewhere inside a `do`-block.
+  In particular, this includes for example `where`-blocks in `case`-expressions:\n\n```haskell\nmain
+  = do\n  putStrLn case !getLine of\n    \"print args\" -> prettyArgs \"\\n\"\n      where
+  prettyArgs sep = intercalate sep !getArgs\n    \"greeting\" -> \"hello there!\"\n```\n\nand
+  view patterns\n\n```haskell\ndo (extract !getSettings -> contents) <- readArchive\n
+  \  print contents\n```\n\n## Comparison with Idris's `!`-notation\n\nThe main difference
+  is that Idris will insert a `do` if there is none - e.g. this is legal in Idris:\n\n```haskell\nf
+  : IO ()\nf = putStrLn !getLine\n```\n\nbut (assuming it's at top-level) wouldn't
+  be with this plugin; you would have to write `f = do putStrLn !getLine` instead.\n\nSome
+  other differences:\n- In Idris, `!`'d expressions cannot escape outside of a lambda
+  expression (it effectively inserts a new `do` at the beginning of the lambda body
+  instead)\n- The same difference applies to `let` bindings that define functions\n"
+license-name: MIT
