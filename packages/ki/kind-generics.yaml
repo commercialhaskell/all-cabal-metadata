@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: c8b6087aa770a717515dde7c96848ce525c0db204d84e52ed9f1e8aca3986402
+hash: 189204a5a9fb4549aaa6edeea062f783bd9b09459c2f5b6600fa182e2415e2bd
 test-bench-deps: {}
 maintainer: trupill@gmail.com
 synopsis: Generic programming in GHC style for arbitrary kinds and GADTs.
@@ -19,8 +19,9 @@ changelog: |-
 
   * Split functionality between `kind-apply`, `kind-generics`, and `kind-generics-deriving`.
 basic-deps:
+  first-class-families: '>=0.8 && <0.9'
   base: '>=4.12 && <5'
-  kind-apply: '>=0.3'
+  kind-apply: '>=0.4 && <0.5'
 all-versions:
 - 0.1.0.0
 - 0.1.1.0
@@ -33,8 +34,9 @@ all-versions:
 - 0.4.1.2
 - 0.4.1.3
 - 0.4.1.4
+- 0.5.0.0
 author: Alejandro Serrano
-latest: 0.4.1.4
+latest: 0.5.0.0
 description-type: markdown
 description: |
   # `kind-generics`: generic programming for arbitrary kinds and GADTs
@@ -116,7 +118,7 @@ description: |
 
   ```haskell
   class GenericK (f :: k) where
-    type RepK f :: LoT k -> *
+    type family RepK f :: LoT k -> *
     fromK :: f :@@: x -> RepK f x
     toK   :: RepK f x -> f :@@: x
   ```
@@ -165,7 +167,7 @@ description: |
   instance GenericK (Either a b) where ...
   ```
 
-  Sometimes it is not possible to write all of these instances, due to restrictions in GHC's type system. The most common case is a data type making use of a type family -- we cannot write something like `Fam :$: Var0` because type families cannot be partially applied. The `kind-generics-th` package contains a thorough description of these limitations.
+  Sometimes it is not possible to write all of these instances, due to restrictions in GHC's type system. The `kind-generics-th` package contains a thorough description of these limitations.
 
   ## Describing fields: the functor `Field`
 
@@ -260,6 +262,44 @@ description: |
 
   You just need to apply the `Exists` and `SuchThat` constructors every time there is an existential or constraint, respectively. However, since the additional information required by those types is implicitly added by the compiler, you do not need to write anything else.
 
+  ## Atoms for families: `Eval`
+
+  If a field contains a type family application, it can be represented by
+  defunctionalization. For example:
+
+  ```haskell
+  type family F a
+
+  data T a = C (F a)
+  ```
+
+  `F` can be defunctionalized as follows, using `Fcf.Eval` from
+  [`first-class-families`](https://hackage.haskell.org/package/first-class-families).
+
+  ```haskell
+  data DF a
+  type Fcf.Eval (DF a) = F a
+  ```
+
+  All type family applications can thus be rewritten as the application of one
+  common `Fcf.Eval` to a matchable application. This can then be represented by
+  one `Atom` constructor, also named `Eval`:
+
+  ```haskell
+  instance GenericK T where
+    type RepK T = Field (Eval (Kon DF :@: Var0))
+
+    fromK (C x) = Field x
+    toK (Field x) = C x
+  ```
+
+  `kind-generics-th` can generate `GenericK` instances for such types involving
+  type families. It also takes care of defunctionalizing type families as needed,
+  following a more sophisticated approach than described above, that avoids
+  declaring lots of artificial data types. For more details, see
+  [`fcf-family`](https://hackage.haskell.org/package/fcf-family)
+  and the documentation of `kind-generics-th`.
+
   ## Implementing a generic operation with `kind-generics`
 
   The last stop in our journey through `kind-generics` is being able to implement a generic operation. At this point we assume that the reader is comfortable with the definition of generic operations using `GHC.Generics`, so only the differences with that style are pointed out.
@@ -305,7 +345,7 @@ description: |
 
   ```haskell
   class GShow (f :: LoT k -> *) where
-    type ReqsShow f (x :: LoT k) :: Constraint
+    type family ReqsShow f (x :: LoT k) :: Constraint
     gshow :: ReqsShow f x => f x -> String
 
   gshow' :: forall t. (GenericK t LoT0
