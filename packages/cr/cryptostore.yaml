@@ -1,6 +1,6 @@
 homepage: https://github.com/ocheron/cryptostore
 changelog-type: markdown
-hash: 11fef09c281eb08ce897dcce3de7e2fcfbdcb143b374765659e8f0214d2a6e80
+hash: 3a63b66effc7af0a21cab487e9252553603f8a89eec63b8bffad60b76e466095
 test-bench-deps:
   bytestring: -any
   hourglass: -any
@@ -18,6 +18,29 @@ maintainer: olivier.cheron@gmail.com
 synopsis: Serialization of cryptographic data types
 changelog: |
   # Revision history for cryptostore
+
+  ## 0.3.0.0 - 2023-01-14
+
+  * API change in PKCS5, PKCS8 and PKCS12 modules to handle better password-based
+    encryption derived from an empty password.  All encryption/decryption
+    functions now expect an opaque `ProtectionPassword` data type.  Conversion
+    functions `toProtectionPassword` and `fromProtectionPassword` are provided.
+    Additionnally in the PKCS12 module, the type `OptProtected` is replaced with
+    `OptAuthenticated` when dealing with password integrity.  Similarly at that
+    level, function `recover` is to be replaced with `recoverAuthenticated`.
+
+  * Added support for KMAC (Keccak Message Authentication Code) in CMS
+    authenticated data, through constructors `KMAC_SHAKE128` and `KMAC_SHAKE256`.
+
+  * CMS key agreement now supports derivation with HKDF along with X9.63.  Data
+    type `KeyAgreementParams` is modified to include a KDF instead of simply the
+    digest algorithm.  HKDF has assigned OIDs only for standard DH and cannot be
+    used with cofactor DH.
+
+  * Added CMS utility functions to deal with the `signingTime` attribute.
+
+  * Changed `withSignerCertificate` validation callback API to include the
+    `signingTime` value when available.
 
   ## 0.2.3.0 - 2022-11-05
 
@@ -91,15 +114,16 @@ all-versions:
 - 0.2.1.0
 - 0.2.2.0
 - 0.2.3.0
+- 0.3.0.0
 author: Olivier Chéron
-latest: 0.2.3.0
+latest: 0.3.0.0
 description-type: markdown
 description: |
   # cryptostore
 
-  [![Build Status](https://travis-ci.org/ocheron/cryptostore.png?branch=master)](https://travis-ci.org/ocheron/cryptostore)
-  [![BSD](https://b.repl.ca/v1/license-BSD-blue.png)](https://en.wikipedia.org/wiki/BSD_licenses)
-  [![Haskell](https://b.repl.ca/v1/language-haskell-lightgrey.png)](https://haskell.org/)
+  [![Build Status](https://github.com/ocheron/cryptostore/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/ocheron/cryptostore/actions/workflows/tests.yml)
+  [![BSD](https://img.shields.io/badge/License-BSD-blue)](https://en.wikipedia.org/wiki/BSD_licenses)
+  [![Haskell](https://img.shields.io/badge/Language-Haskell-lightgrey)](https://haskell.org/)
 
   This package allows to read and write cryptographic objects to/from ASN.1.
 
@@ -147,8 +171,8 @@ description: |
   > :set -XOverloadedStrings
   > :m Crypto.PubKey.RSA Crypto.Store.PKCS8 Data.X509 Crypto.Store.PKCS5
   > privKey <- PrivKeyRSA . snd <$> generate (2048 `div` 8) 0x10001
-  > salt <- generateSalt 8
-  > let kdf = PBKDF2 salt 2048 Nothing PBKDF2_SHA256
+  > salt <- generateSalt 16
+  > let kdf = PBKDF2 salt 200000 Nothing PBKDF2_SHA256
   > encParams <- generateEncryptionParams (CBC AES256)
   > let pbes = PBES2 (PBES2Parameter kdf encParams)
   > writeEncryptedKeyFile "/path/to/privkey.pem" pbes "mypassword" privKey
@@ -156,8 +180,8 @@ description: |
   ```
 
   Parameters used in this example are AES-256-CBC as cipher, PBKDF2 as
-  key-derivation function, with an 8-byte salt, 2048 iterations and SHA-256 as
-  pseudorandom function.
+  key-derivation function, with a 16-byte salt, 200,000 iterations and SHA-256
+  as pseudorandom function.
 
   ## Public Keys and Signed Objects
 
@@ -189,13 +213,28 @@ description: |
   API to read PKCS #12 files requires some password at each layer.  This API is
   available in module `Crypto.Store.PKCS12`.
 
+  Reading a binary PKCS #12 file using a single password doing both integrity
+  and privacy (usual case):
+
+  ```haskell
+  > :set -XOverloadedStrings
+  > :m Crypto.Store.PKCS12
+  > Right p12 <- readP12File "/path/to/file.p12"
+  > let Right (password, pkcs12) = recoverAuthenticated "mypassword" p12
+  > let Right contents = recover password (unPKCS12 pkcs12)
+  > getAllSafeX509Certs contents
+  [SignedExact {getSigned = ...}]
+  > recover password (getAllSafeKeys contents)
+  Right [PrivKeyRSA ...]
+  ```
+
   Reading a binary PKCS #12 file using distinct integrity and privacy passwords:
 
   ```haskell
   > :set -XOverloadedStrings
   > :m Crypto.Store.PKCS12
   > Right p12 <- readP12File "/path/to/file.p12"
-  > let Right pkcs12 = recover "myintegrityassword" p12
+  > let Right (_, pkcs12) = recoverAuthenticated "myintegritypassword" p12
   > let Right contents = recover "myprivacypassword" (unPKCS12 pkcs12)
   > getAllSafeX509Certs contents
   [SignedExact {getSigned = ...}]
@@ -219,15 +258,15 @@ description: |
   >     contents = SafeContents [keyBag]
 
   -- Encrypt the contents
-  > salt <- generateSalt 8
-  > let kdf = PBKDF2 salt 2048 Nothing PBKDF2_SHA256
+  > salt <- generateSalt 16
+  > let kdf = PBKDF2 salt 200000 Nothing PBKDF2_SHA256
   > encParams <- generateEncryptionParams (CBC AES256)
   > let pbes = PBES2 (PBES2Parameter kdf encParams)
   >     Right pkcs12 = encrypted pbes "mypassword" contents
 
   -- Save to PKCS #12 with integrity protection (same password)
-  > salt' <- generateSalt 8
-  > let iParams = (DigestAlgorithm SHA256, PBEParameter salt' 2048)
+  > salt' <- generateSalt 16
+  > let iParams = (DigestAlgorithm SHA256, PBEParameter salt' 200000)
   > writeP12File "/path/to/privkey.p12" iParams "mypassword" pkcs12
   Right ()
   ```
@@ -241,28 +280,28 @@ description: |
 
   -- Read PKCS #12 content as credential
   > Right p12 <- readP12File "/path/to/file.p12"
-  > let Right pkcs12 = recover "myintegrityassword" p12
+  > let Right (_, pkcs12) = recoverAuthenticated "myintegritypassword" p12
   > let Right (Just cred) = recover "myprivacypassword" (toCredential pkcs12)
   > cred
   (CertificateChain [...], PrivKeyRSA (...))
 
   -- Scheme to reencrypt the key
-  > saltK <- generateSalt 8
-  > let kdfK = PBKDF2 saltK 2048 Nothing PBKDF2_SHA256
+  > saltK <- generateSalt 16
+  > let kdfK = PBKDF2 saltK 200000 Nothing PBKDF2_SHA256
   > encParamsK <- generateEncryptionParams (CBC AES256)
   > let sKey = PBES2 (PBES2Parameter kdfK encParamsK)
 
   -- Scheme to reencrypt the certificate chain
   > saltC <- generateSalt 8
-  > let kdfC = PBKDF2 saltC 1024 Nothing PBKDF2_SHA256
+  > let kdfC = PBKDF2 saltC 100000 Nothing PBKDF2_SHA256
   > encParamsC <- generateEncryptionParams (CBC AES128)
   > let sCert = PBES2 (PBES2Parameter kdfC encParamsC)
 
   -- Write the content back to a new file
   > let Right pkcs12' = fromCredential (Just sCert) sKey "myprivacypassword" cred
-  > salt <- generateSalt 8
-  > let iParams = (DigestAlgorithm SHA256, PBEParameter salt 2048)
-  > writeP12File "/path/to/newfile.p12" iParams "myintegrityassword" pkcs12'
+  > salt <- generateSalt 16
+  > let iParams = (DigestAlgorithm SHA256, PBEParameter salt 200000)
+  > writeP12File "/path/to/newfile.p12" iParams "myintegritypassword" pkcs12'
   ```
 
   Variants `toNamedCredential` and `fromNamedCredential` are also available when
@@ -311,8 +350,8 @@ description: |
   -- Encrypt the Content Encryption Key with a Password Recipient Info,
   -- i.e. a KDF will derive the Key Encryption Key from a password
   -- that the recipient will need to know
-  > salt <- generateSalt 8
-  > let kdf = PBKDF2 salt 2048 Nothing PBKDF2_SHA256
+  > salt <- generateSalt 16
+  > let kdf = PBKDF2 salt 200000 Nothing PBKDF2_SHA256
   > keParams <- generateEncryptionParams (CBC AES128)
   > let pri = forPasswordRecipient "mypassword" kdf (PWRIKEK keParams)
 
@@ -386,7 +425,7 @@ description: |
   > :m Crypto.Store.CMS Data.Default.Class
   > [SignedDataCI signedEncapData] <- readCMSFile "/path/to/signed.pem"
   > signedData <- fromAttached signedEncapData
-  > let doValidation chain = null <$> validateNoFQHN store def noServiceID chain
+  > let doValidation _ chain = null <$> validateNoFQHN store def noServiceID chain
   > verifySignedData (withSignerCertificate doValidation) signedData
   Right (DataCI "Some trustworthy content")
   ```
