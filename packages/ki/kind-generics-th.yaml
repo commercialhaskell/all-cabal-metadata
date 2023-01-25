@@ -1,20 +1,21 @@
 homepage: ''
 changelog-type: ''
-hash: b89ecc14c30db1593dfc1776fa773c79986a3f006195ba987adfa360969133b7
+hash: 2f62dde94951e2c9d94f7bd25cfda522ddd8dc3f98793d9a113c8d6fe31262ff
 test-bench-deps:
   base: '>=4.12 && <5'
   kind-generics: '>=0.4'
   kind-generics-th: -any
-  template-haskell: '>=2.14 && <2.19'
+  template-haskell: -any
 maintainer: trupill@gmail.com
 synopsis: Template Haskell support for generating `GenericK` instances
 changelog: ''
 basic-deps:
   base: '>=4.12 && <5'
+  fcf-family: '>=0.1 && <0.3'
   th-abstraction: '>=0.4 && <0.5'
-  kind-generics: '>=0.4'
+  kind-generics: '>=0.5'
   ghc-prim: '>=0.5.3'
-  template-haskell: '>=2.14 && <2.19'
+  template-haskell: '>=2.14 && <2.20'
 all-versions:
 - 0.1.0.0
 - 0.1.1.0
@@ -24,8 +25,9 @@ all-versions:
 - 0.2.2.1
 - 0.2.2.2
 - 0.2.2.3
+- 0.2.3.0
 author: Alejandro Serrano
-latest: 0.2.2.3
+latest: 0.2.3.0
 description-type: markdown
 description: |
   # `kind-generics-th`: Template Haskell support for generating `GenericK` instances
@@ -66,6 +68,37 @@ description: |
   * `PolyKinds` (if using a poly-kinded data type)
   * `TemplateHaskell`
   * `TypeFamilies`
+  * `UndecidableInstances` (if using a data type involving type families)
+
+  ### Type families
+
+  If the data type uses a type family (more precisely, if a type
+  variable occurs in a type family application), `deriveGenericK`
+  will warn that it won't generate all of the instances that you'd
+  normally expect, and it will tell you what to do if you do want those
+  instances or if you want to silence the warning.
+
+  ```haskell
+  type family F a
+  data T a = C (F a)
+
+  $(deriveGenericK ''T)
+  ```
+
+  Warning message:
+
+  ```
+  Found type family in definition of ''T. Some instances have been skipped.
+  Declared instances:
+      instance GenericK (T a)
+  Skipped instances:
+      instance GenericK T
+  To enable type family support and obtain those skipped instances:
+      $(preDeriveGenericK ''T)
+      $(postDeriveGenericK ''T)
+  To silence this warning:
+      $(deriveGenericKQuiet ''T)
+  ```
 
   ## How many `GenericK` instances are generated
 
@@ -106,42 +139,6 @@ description: |
 
      * `instance GenericK (Baz k a)`
      * `instance GenericK (Baz k)  `
-  3. Data types with type family applications. In the following example:
-
-     ```haskell
-     type family Fam a
-     newtype WrappedFam a = WrapFam (Fam a)
-     ```
-
-     It is impossible to write a `GenericK` instance for a partial application
-     of `WrappedFam`, since the representation type would necessarily need to
-     partially apply `Fam`, which GHC does not permit. Therefore,
-     `$(deriveGenericK ''WrappedFam)` will only generate a single instance for
-     `GenericK (WrappedFam a)`.
-
-     There are some uses of type families that are not supported altogether.
-     For instance, if a type family is applied to an _existentially_ quantified
-     type variable, as in the following example:
-
-     ```haskell
-     data ExFam where
-       MkExFam :: forall a. Fam a -> ExFam
-     ```
-
-     Representing `ExFam` would fundamentally require a partial application of
-     `Fam`, as `type RepK ExFam = Exists * (Field (Fam :$: Var0))`. As a result,
-     it is impossible to give `ExFam` a `GenericK` instance.
-
-     Note that not all type families are problematic. For instance:
-
-     ```haskell
-     type family Fam2 :: * -> *
-     newtype WrappedFam2 a = WrapFam2 (Fam2 a)
-     ```
-
-     In this example, `Fam2` is perfectly fine to partially apply, so
-     `$(deriveGenericK ''WrappedFam2)` will generate two instances (as opposed
-     to just one, as was the case for `WrappedFam`).
 
   ## Limitations
 
@@ -152,7 +149,20 @@ description: |
   known limitations of `deriveGenericK`:
 
   1. Data constructors with rank-_n_ field types (e.g., `(forall a. a -> a)`)
-     are currently not supported.
+     are partially supported: `forall` and constraints `c =>` are allowed only
+     at the root of a field's type.
+
+     ```haskell
+     data Ok = Ok
+        { a :: forall a. a -> a
+        , b :: forall a b. Eq a => a -> b
+        }
+
+     data NotOk = NotOk
+        { c :: (forall a. a -> a) -> Bool
+        }
+     ```
+
   2. Data constructors with unlifted field types (e.g., `Int#` or `(# Bool #)`)
      are unlikely to work.
   3. GADTs that make use of certain forms of kind equalities are currently not
@@ -185,4 +195,7 @@ description: |
      into the explicitly existential form is not straightforward, however. In
      particular, `deriveGenericK` only detects the `k ~ *` part correctly at the
      moment, so it will generate an ill kinded instance for `Quux`.
+  4. While there is support for data types that use type families in their fields,
+     they cannot be dependently typed, *i.e.*, the result type may not
+     depend on visible arguments.
 license-name: BSD-3-Clause
