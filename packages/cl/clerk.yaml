@@ -1,9 +1,20 @@
 homepage: https://github.com/deemp/clerk#readme
 changelog-type: markdown
-hash: 2fe8be10670071ae726c87b64866df12b45d0d39fa7f24033dd17e92fed7fdf9
-test-bench-deps: {}
+hash: 89be1b5c08b6fc38d83e16fd3beba0031b4d0b3456ae3ead09268f68f8bfb408
+test-bench-deps:
+  xlsx: -any
+  bytestring: -any
+  base: -any
+  time: -any
+  text: -any
+  data-default: -any
+  containers: -any
+  lens: -any
+  typed-process: -any
+  mtl: -any
+  transformers: -any
 maintainer: Danila Danko
-synopsis: Declaratively describe spreadsheets and generate xlsx
+synopsis: Declaratively describe spreadsheets
 changelog: |
   # Changelog for `haskell`
 
@@ -17,47 +28,48 @@ changelog: |
 
   ## 0.1.0.0 - YYYY-MM-DD
 basic-deps:
-  xlsx: '>=1.1.0.1'
-  bytestring: '>=0.10.8.0'
-  base: '>=4.9.0.0 && <5.0'
-  time: '>=1.4.0.1'
-  text: '>=0.11.3.1'
-  data-default: '>=0.7.1.1'
-  containers: '>=0.5.0.0'
-  lens: '>=3.8 && <5.3'
-  mtl: '>=2.1'
-  transformers: '>=0.3.0.0'
+  xlsx: -any
+  bytestring: -any
+  base: '>=4.9 && <5.0'
+  time: -any
+  text: -any
+  data-default: -any
+  containers: -any
+  lens: -any
+  mtl: -any
+  transformers: -any
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
 - 0.1.0.2
+- 0.1.0.3
 author: Danila Danko, Nickolay Kudasov
-latest: 0.1.0.2
+latest: 0.1.0.3
 description-type: markdown
 description: |
   # clerk
 
-  `clerk` is a library for declarative spreadsheet generation using a Haskell eDSL.
-
-  It extends upon the [work](https://youtu.be/1xGoa-zEOrQ) of Kudasov by making the tables' layout more flexible.
+  `clerk` provides a Haskell eDSL in a library for declarative spreadsheet generation. `clerk` is built on top of the [xlsx](https://hackage.haskell.org/package/xlsx) package and extends upon the [work](https://youtu.be/1xGoa-zEOrQ) of Nickolay Kudasov by making the tables' layout more flexible.
 
   ## Features
 
-  `clerk` produces a styled spreadsheet with some data and formulas on it. These formulas will be calculated by the target spreadsheet system.
+  `clerk` can be used to produce a styled spreadsheet with some data and formulas on it. These formulas are evaluated when the document is loaded into a target spreadsheet system.
 
-  The library supports
+  The library supports:
 
-  - typed cell references - `Cell Double`
-  - type-safe arithmetic operations - `(a :: Cell Double) + (b :: Cell Double)`
-  - range references - `a |:| b` -> `A1:B1`
-  - formulas - `(e :: Expr Double) = "SUM" |$| [(a |:| b)]` -> `SUM(A1:B1)`
-  - conditional styles, formatting, column widths
+  - Typed cell references. Example: `CellRef Double`.
+  - Type-safe arithmetic operations with them. Example: `(a :: CellRef Double) + (b :: CellRef Double)` produces a `CellRef Double`.
+  - Constructing expressions with given types. Example: `(e :: Expr Double) = "SUM" |$| [a |:| b]`, `e` translates to `SUM(A1:B1)` (actual value depends on the values of `a` and `b`).
+  - Conditional styles, formatting, column widths.
 
-  The example below demonstrates some of these features.
+  The example below demonstrates most of these features.
 
   ## Example
 
-  This is a demo program that uses `clerk` to produce an `xlsx` file that looks as follows:
+  The goal: describe and generate a spreadsheet that calculates the pressure data given some volume data and constants.
+
+  The source code for this example is available in the [example](./example) directory.
+  The program produces an `xlsx` file that looks as follows:
 
   <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/demoValues.png" width = "80%">
 
@@ -65,151 +77,120 @@ description: |
 
   <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/demoFormulas.png" width = "80%">
 
-  This file has a sheet with several tables. These are tables for
-  constants' header, a table per a constant's value (three of them), volume & pressure header, volume & pressure values.
-  Let's see how we can construct such a sheet.
+  The below sections describe how such a spreadsheet can be constructed.
+
+  ### Extensions
+
+  We'll need several language extensions.
+  <!-- FOURMOLU_DISABLE -->
+
+  ```haskell
+  {-# LANGUAGE OverloadedRecordDot #-} -- access the fields of records like a.b
+  {-# LANGUAGE ImportQualifiedPost #-}
+  {-# LANGUAGE RankNTypes #-}
+  {-# LANGUAGE RecordWildCards #-}
+  {-# LANGUAGE DuplicateRecordFields #-}
+  {-# LANGUAGE LambdaCase #-}
+  {-# LANGUAGE InstanceSigs #-}
+  ```
+
+  <!-- FOURMOLU_ENABLE -->
 
   ### Imports
 
-  First, we import the necessary stuff.
+  And import the necessary stuff.
 
   ```haskell
   module Main (main) where
+
   import Clerk
   import Codec.Xlsx qualified as X
   import Codec.Xlsx.Formatted qualified as X
   import Control.Lens ((%~), (&), (?~))
+  import Control.Monad (void)
   import Data.ByteString.Lazy qualified as L
   import Data.Text qualified as T
   import Data.Time.Clock.POSIX (getPOSIXTime)
-  import Control.Monad (void)
   ```
 
-  ### Inputs
+  ### Tables
 
-  Following that, we declare a number of data types that we'll use to store the input values.
+  The tables that we'd like to construct are:
 
-  A type for constants' headers.
+  - A table per a constant's value (three of them)
+  - Volume & pressure table
+  - Constants' header
+  - Volume & pressure header
+
+  #### Constants' values
+
+  <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/constants.png" width = "50%">
+
+  In our case, each constant has the same type of the numeric value - `Double`.
+  However, it might be the case that in another set of constants, they'll have different types.
+  That's why, in our case, we'll construct a table with a single row per a constant and later stack the constants' tables together.
+  We can keep a constant's data in a record.
 
   ```haskell
-  data ConstantsHeader = ConstantsHeader
-      { hConstant :: String
-      , hSymbol :: String
-      , hValue :: String
-      , hUnits :: String
-      }
-
-  constantsHeader :: ConstantsHeader
-  constantsHeader =
-      ConstantsHeader
-          { hConstant = "constant"
-          , hSymbol = "symbol"
-          , hValue = "value"
-          , hUnits = "units"
-          }
+  data ConstantData a = ConstantData
+    { constantName :: String
+    , constantSymbol :: String
+    , constantValue :: a
+    , constantUnits :: String
+    }
   ```
 
-  A type for constants' data.
+  Next, we can group the constants.
 
   ```haskell
-  data ConstantsData a = ConstantsData
-      { name :: String
-      , symbol :: String
-      , value :: a
-      , units :: String
-      }
-  ```
+  data Constants f = Constants
+    { gasConstant :: f Double
+    , numberOfMoles :: f Double
+    , temperature :: f Double
+    }
 
-  Additionally, we declare a helper type that will store all constants together.
-
-  ```haskell
-  data ConstantsInput = ConstantsInput
-      { gas :: ConstantsData Double
-      , nMoles :: ConstantsData Double
-      , temperature :: ConstantsData Double
-      }
+  type ConstantsInput = Constants ConstantData
 
   constants :: ConstantsInput
   constants =
-      ConstantsInput
-          { gas = ConstantsData "GAS CONSTANT" "R" 0.08206 "L.atm/mol.K"
-          , nMoles = ConstantsData "NUMBER OF MOLES" "n" 1 "moles"
-          , temperature = ConstantsData "TEMPERATURE(K)" "T" 273.2 "K"
-          }
-  ```
-
-  A type for the Volume & Pressure header.
-
-  ```haskell
-  data ValuesHeader = ValuesHeader
-      { hVolume :: String
-      , hPressure :: String
+    Constants
+      { gasConstant = ConstantData "GAS CONSTANT" "R" 0.08206 "L.atm/mol.K"
+      , numberOfMoles = ConstantData "NUMBER OF MOLES" "n" 1 "moles"
+      , temperature = ConstantData "TEMPERATURE(K)" "T" 273.2 "K"
       }
-
-  valuesHeader :: ValuesHeader
-  valuesHeader =
-      ValuesHeader
-          { hVolume = "VOLUME (L)"
-          , hPressure = "PRESSURE (atm)"
-          }
   ```
 
-  The last type is for volume inputs. We just generate them
+  Furthermore, we'd like to style the constants' tables, so let's prepare the styles. We'll reuse these styles in other tables.
 
   ```haskell
-  newtype Volume = Volume
-      { volume :: Double
-      }
+  data Colors = LightBlue | LightGreen | Blue | Green
+  instance Show Colors where
+    show :: Colors -> String
+    show = \case
+      LightBlue -> "90CCFFFF"
+      LightGreen -> "90CCFFCC"
+      Blue -> "FF99CCFF"
+      Green -> "FF00FF00"
 
-  volumeData :: [Volume]
-  volumeData = take 10 $ Volume <$> [1 ..]
+  blue :: FormatCell
+  blue = mkColorStyle Blue
+
+  lightBlue :: FormatCell
+  lightBlue = mkColorStyle LightBlue
+
+  green :: FormatCell
+  green = mkColorStyle Green
+
+  mixed :: FormatCell
+  mixed coords idx = mkColorStyle (if even idx then LightGreen else LightBlue) coords idx
   ```
 
-  ### Styles
-
-  Following the headers and data types, we define the styles. Let's start with colors.
-  We select several color codes and store them into `colors`
+  Additionally, we compose a transformation of a `FormatCell` for the number format
 
   ```haskell
-  data Colors = Colors
-      { lightBlue :: T.Text
-      , lightGreen :: T.Text
-      , blue :: T.Text
-      , green :: T.Text
-      }
-
-  colors :: Colors
-  colors =
-      Colors
-          { lightGreen = "90CCFFCC"
-          , lightBlue = "90CCFFFF"
-          , blue = "FF99CCFF"
-          , green = "FF00FF00"
-          }
-  ```
-
-  Next, we convert them to `FormatCell` function
-
-  ```haskell
-  colorBlue :: FormatCell
-  colorBlue = mkColorStyle colors.blue
-
-  colorLightBlue :: FormatCell
-  colorLightBlue = mkColorStyle colors.lightBlue
-
-  colorGreen :: FormatCell
-  colorGreen = mkColorStyle colors.green
-
-  colorMixed :: FormatCell
-  colorMixed coords idx = mkColorStyle (if even idx then colors.lightGreen else colors.lightBlue) coords idx
-  ```
-
-  Additionally, we compose a transform for the number format
-
-  ```haskell
-  -- | allow 2 decimal digits
-  nf2decimal :: FCTransform
-  nf2decimal fc = fc & X.formattedFormat %~ (\ff -> ff & X.formatNumberFormat ?~ X.StdNumberFormat X.Nf2Decimal)
+  use2decimalDigits :: FCTransform
+  use2decimalDigits fcTransform =
+    fcTransform & X.formattedFormat %~ (\format -> format & X.formatNumberFormat ?~ X.StdNumberFormat X.Nf2Decimal)
   ```
 
   And a transform for centering the cell contents
@@ -219,101 +200,118 @@ description: |
   alignCenter = horizontalAlignment X.CellHorizontalAlignmentCenter
   ```
 
-  ### `Builder`s
+  Now, we can make a `RowBuilder` for a constant.
+  We'll later use this builder for each constant separately.
 
-  Now, we are able to compose the `Builder`s for tables.
+  We get a pair of outputs:
 
-  A builder for the constants header.
+  - Top left cell of a constant's table. That is, the cell with that constant's name.
+  - The value of the constant.
 
-  <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/constantsHeader.png" width = "50%">
-
-  ```haskell
-  constantsHeaderBuilder :: Builder ConstantsHeader CellData (Coords, Coords)
-  constantsHeaderBuilder = do
-      tl <- columnWidth 20 (alignCenter <| colorBlue) hConstant
-      columnWidth_ 8 (alignCenter <| colorBlue) hSymbol
-      column_ (alignCenter <| colorBlue) hValue
-      tr <- columnWidth 13 (alignCenter <| colorBlue) hUnits
-      return (unCell tl, unCell tr)
-  ```
-
-  A builder for a constant. We'll use this builder for each constant separately
-  as each constant produces cells of a specific type.
-
-  <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/constants.png" width = "50%">
+  Later, the outputs of this and other `RowBuilder`s will be used to relate the positions of tables on a sheet.
 
   ```haskell
-  constantBuilder :: forall a. ToCellData a => Builder (ConstantsData a) CellData (Coords, Cell a)
+  constantBuilder :: ToCellData a => RowBuilder (ConstantData a) CellData (Coords, CellRef a)
   constantBuilder = do
-      topLeft <- column colorLightBlue name
-      column_ colorLightBlue symbol
-      value <- column (nf2decimal <| colorLightBlue) value
-      column_ colorLightBlue units
-      return (unCell topLeft, value)
+    refTopLeft <- column lightBlue constantName
+    column_ lightBlue constantSymbol
+    refValue <- column (lightBlue +> use2decimalDigits) constantValue
+    column_ lightBlue constantUnits
+    return (unCell refTopLeft, refValue)
   ```
 
-  A builder for values' header.
-
-  <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/valuesHeader.png" width = "50%">
-
-  ```haskell
-  valuesHeaderBuilder :: Builder ValuesHeader CellData Coords
-  valuesHeaderBuilder = do
-      tl <- columnWidth 12 colorGreen hVolume
-      columnWidth_ 16 colorGreen hPressure
-      return (unCell tl)
-  ```
-
-  A builder for volume & pressure (formulas enabled)
+  #### Volume & Pressure values
 
   <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/valuesFormulas.png" width = "50%">
 
-  To pass values in a structured way, we make a helper type.
+  To fill this table, we'll take the some data and combine it with the constants.
 
   ```haskell
-  data ConstantsValues = ConstantsValues
-      { gas :: Cell Double
-      , nMoles :: Cell Double
-      , temperature :: Cell Double
-      }
+  newtype Volume = Volume {volume :: Double}
+
+  volumeData :: [Volume]
+  volumeData = take 10 $ Volume <$> [1 ..]
   ```
 
-  Next, we define a function to produce a builder.
+  To pass the constants' references in a structured way, we make a helper type.
 
   ```haskell
-  valuesBuilder :: ConstantsValues -> Builder Volume CellData ()
-  valuesBuilder cv = do
-      volume' <- column colorMixed volume
-      let pressure' = ex cv.gas |*| ex cv.nMoles |*| ex cv.temperature |/| ex volume'
-      column_ (nf2decimal <| colorMixed) (const pressure')
+  data ConstantsRefs = ConstantsRefs
+    { refGas :: CellRef Double
+    , refNumberOfMoles :: CellRef Double
+    , refTemperature :: CellRef Double
+    }
   ```
 
-  ### `SheetBuilder`
+  Next, we define a function to produce a builder for volume and pressure.
 
-  The `SheetBuilder` is used to place builders onto a sheet and glue them together
+  ```haskell
+  valuesBuilder :: ConstantsRefs -> RowBuilder Volume CellData ()
+  valuesBuilder ConstantsRefs{..} = do
+    refVolume <- column mixed volume
+    let pressure' = refGas |*| refNumberOfMoles |*| refTemperature |/| refVolume
+    column_ (mixed +> use2decimalDigits) (const pressure')
+  ```
+
+  #### Constants' header
+
+  <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/constantsHeader.png" width = "50%">
+
+  We won't use records here. Instead, we'll put the names of the columns straight into the `RowBuilder`.
+
+  The outputs will be the coordinates of the top left cell and the top right cell of this table.
+
+  ```haskell
+  constantsHeaderBuilder :: RowBuilder () CellData (Coords, Coords)
+  constantsHeaderBuilder = do
+    refTopLeft <- columnWidth 20 (blue +> alignCenter) (const "constant")
+    columnWidth_ 8 (blue +> alignCenter) (const "symbol")
+    column_ (blue +> alignCenter) (const "value")
+    refTopRight <- columnWidth 13 (blue +> alignCenter) (const "units")
+    return (unCell refTopLeft, unCell refTopRight)
+  ```
+
+  #### Volume & Pressure header
+
+  <img src = "https://raw.githubusercontent.com/deemp/clerk/master/README/valuesHeader.png" width = "50%">
+
+  For this header, we'll also put the names of columns straight inside the builder.
+
+  ```haskell
+  valuesHeaderBuilder :: RowBuilder () CellData Coords
+  valuesHeaderBuilder = do
+    tl <- columnWidth 12 green (const "VOLUME (L)")
+    columnWidth_ 16 green (const "PRESSURE (atm)")
+    return (unCell tl)
+  ```
+
+  ### Sheet builder
+
+  The `SheetBuilder` is used to place `RowBuilder`s onto a sheet and glue them together.
+  Inside `SheetBuilder`, when a `RowBuilder` is placed onto a sheet, we can use the
+  references that it produces in the subsequent expressions.
 
   ```haskell
   full :: SheetBuilder ()
   full = do
-      (constantsHeaderTL, constantsHeaderTR) <- placeInput (Coords 2 2) constantsHeader constantsHeaderBuilder
-      (gasTL, gas) <- placeInput (overRow (+ 2) constantsHeaderTL) constants.gas constantBuilder
-      (nMolesTL, nMoles) <- placeInput (overRow (+ 1) gasTL) constants.nMoles constantBuilder
-      temperature <- snd <$> placeInput (overRow (+ 1) nMolesTL) constants.temperature constantBuilder
-      valuesHeaderTL <- placeInput (overCol (+ 2) constantsHeaderTR) valuesHeader valuesHeaderBuilder
-      placeInputs_ (overRow (+ 2) valuesHeaderTL) volumeData (valuesBuilder $ ConstantsValues{..})
+    (constantsHeaderTL, constantsHeaderTR) <- placeInput (Coords 2 2) () constantsHeaderBuilder
+    (gasTL, gas) <- placeInput (overRow (+ 2) constantsHeaderTL) constants.gasConstant constantBuilder
+    (nMolesTL, nMoles) <- placeInput (overRow (+ 1) gasTL) constants.numberOfMoles constantBuilder
+    temperature <- snd <$> placeInput (overRow (+ 1) nMolesTL) constants.temperature constantBuilder
+    valuesHeaderTL <- placeInput (overCol (+ 2) constantsHeaderTR) () valuesHeaderBuilder
+    placeInputs_ (overRow (+ 2) valuesHeaderTL) volumeData (valuesBuilder $ ConstantsRefs gas nMoles temperature)
   ```
 
   ### Result
 
-  Now, we can write the result and get the spreadsheet images that you've seen at the top of this tutorial.
+  Finally, we can write the result and get the spreadsheet like the one that you've seen at the top of this tutorial.
 
   ```haskell
   writeWorksheet :: SheetBuilder a -> String -> IO ()
   writeWorksheet tb name = do
-      ct <- getPOSIXTime
-      let
-          xlsx = composeXlsx [("List 1", void tb)]
-      L.writeFile ("example-" <> name <> ".xlsx") $ X.fromXlsx ct xlsx
+    ct <- getPOSIXTime
+    let xlsx = composeXlsx [(T.pack "List 1", void tb)]
+    L.writeFile ("example-" <> name <> ".xlsx") $ X.fromXlsx ct xlsx
 
   writeEx :: IO ()
   writeEx = writeWorksheet full "1"
@@ -338,21 +336,35 @@ description: |
 
   ## Contribute
 
-  ### Prerequisites
+  This project provides a dev environment via a `Nix` flake.
 
-  As this project uses `Nix` for dev environment, study the following prerequisites to set up the project
+  1. With [flakes enabled](https://nixos.wiki/wiki/Flakes#Enable_flakes), run:
 
-  - [Prerequisites](https://github.com/deemp/flakes#prerequisites)
-  - `Haskell` project [template](https://github.com/deemp/flakes/tree/main/templates/codium/haskell#readme)
-  - [Haskell](https://github.com/deemp/flakes/blob/main/README/Haskell.md)
+      ```console
+      nix develop
+      cabal build
+      ```
 
-  Next, run
+  1. This `README.md` is generated from several files. If you edit them, re-generate it.
 
-  ```sh
-  nix develop
-  write-settings-json
-  codium .
-  ```
+      ```console
+      cabal test docs
+      ```
 
-  and open a `Haskell` file. `HLS` should soon start giving you hints.
+  1. (Optionally) Start `VSCodium` with `Haskell` extensions.
+
+      1. Write settings and run `VSCodium`.
+
+          ```console
+          nix run .#writeSettings
+          nix run .#codium .
+          ```
+
+      1. Open a `Haskell` file. `Haskell Language Server` should soon start giving you hints.
+
+  1. Study these links if you'd like to learn more about the tools used in this flake:
+
+      - [Prerequisites](https://github.com/deemp/flakes#prerequisites)
+      - `Haskell` project [template](https://github.com/deemp/flakes/tree/main/templates/codium/haskell#readme)
+      - [Haskell](https://github.com/deemp/flakes/blob/main/README/Haskell.md)
 license-name: BSD-3-Clause
