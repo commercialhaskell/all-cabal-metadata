@@ -1,0 +1,205 @@
+homepage: https://github.com/githubuser/generic-persistence#readme
+changelog-type: ''
+hash: c8743e2e50ced7244a4541eddfd5e3a20f596fb8e991fcf2ec25fffc4ccc4fa9
+test-bench-deps:
+  exceptions: <0.11
+  rio: <0.2
+  ghc: <9.3
+  bytestring: <0.12
+  base: '>=4.7 && <5'
+  time: <1.12
+  HDBC: <2.5
+  hspec: <2.10
+  text: <1.3
+  syb: <0.8
+  ghc-prim: <0.9
+  convertible: <1.2
+  HDBC-sqlite3: <2.4
+  transformers: <0.6
+  generic-persistence: -any
+  QuickCheck: <2.15
+  hspec-discover: <2.10
+maintainer: thma@apache.org
+synopsis: Database persistence using generics
+changelog: ''
+basic-deps:
+  exceptions: <0.11
+  rio: <0.2
+  ghc: <9.3
+  bytestring: <0.12
+  base: '>=4.7 && <5'
+  time: <1.12
+  HDBC: <2.5
+  text: <1.3
+  syb: <0.8
+  ghc-prim: <0.9
+  convertible: <1.2
+  HDBC-sqlite3: <2.4
+  transformers: <0.6
+  generic-persistence: -any
+all-versions:
+- 0.2.0.0
+author: Thomas Mahler
+latest: 0.2.0.0
+description-type: markdown
+description: "# GenericPersistence - A Haskell persistence layer using Generics and
+  Reflection\n\n![GP Logo](gp-logo-300.png)\n\n## Introduction\n\nGenericPersistence
+  is a minimalistic Haskell persistence layer (on top of HDBC). \nThe approach relies
+  on Generics (`Data.Data`, `Data.Typeable`) and Reflection (`Type.Reflection`).\n\nThe
+  *functional goal* of the persistence layer is to provide hassle-free RDBMS persistence
+  for Haskell data types in \nRecord notation (for brevity I call them *Entities*).\n\nThat
+  is, it provides means for inserting, updating, deleting and quering such enties
+  to/from relational databases.\n\nThe main *design goal* is to minimize the *boilerplate*
+  code required:\n\n- no manual instantiation of type classes\n- no implementation
+  of encoders/decoders\n- no special naming convention for types and their attributes
+  \n- no special types to define entities and attributes\n- no Template Haskell scaffolding
+  of glue code\n\nIn an ideal world we would be able to take any POHO (Plain old Haskell
+  Object) \nand persist it to any RDBMS without any additional effort.\n\nA lot of
+  things are still missing:\n\n- A query language\n- Handling of nested transactions\n-
+  Handling auto-incrementing primary keys\n- ...\n\n\n## Short demo\n\nHere now follows
+  a short demo that shows how the library looks and feels from the user's point of
+  view.\n\n```haskell\n-- allows automatic derivation from Entity type class\n{-#
+  LANGUAGE DeriveAnyClass #-}\n\nmodule Main (main) where\n\nimport           Data.Data
+  \            (Data)\nimport           Database.GP           (Entity (..), GP, delete,
+  insert, liftIO,\n                                        persist, retrieveAll, retrieveById,\n
+  \                                       runGP, setupTableFor, update)\nimport           Database.HDBC
+  \        (IConnection (disconnect), fromSql,\n                                        toSql)\nimport
+  \          Database.HDBC.Sqlite3 (connectSqlite3)\n\n\n-- | An Entity data type
+  with several fields, using record syntax.\ndata Person = Person\n  { personID ::
+  Int,\n    name     :: String,\n    age      :: Int,\n    address  :: String\n  }\n
+  \ deriving (Data, Entity, Show) -- deriving Entity allows to handle the type with
+  GenericPersistence\n\ndata Book = Book\n  { book_id :: Int,\n    title   :: String,\n
+  \   author  :: String,\n    year    :: Int\n  }\n  deriving (Data, Show) -- no auto
+  deriving of Entity, so we have to implement the Entity type class:\n\ninstance Entity
+  Book where\n  -- this is the primary key field of the Book data type\n  idField
+  _ = \"book_id\"\n\n  -- this defines the mapping between the field names of the
+  Book data type and the column names of the database table\n  fieldsToColumns _ =
+  [(\"book_id\", \"bookId\"), (\"title\", \"bookTitle\"), (\"author\", \"bookAuthor\"),
+  (\"year\", \"bookYear\")]\n\n  -- this is the name of the database table\n  tableName
+  _ = \"BOOK_TBL\"\n\n  -- this is the function that converts a row from the database
+  table into a Book data type\n  fromRow row = return $ Book (col 0) (col 1) (col
+  2) (col 3)\n    where\n      col i = fromSql (row !! i)\n\n  -- this is the function
+  that converts a Book data type into a row for the database table\n  toRow b = return
+  [toSql (book_id b), toSql (title b), toSql (author b), toSql (year b)]\n\nmain ::
+  IO ()\nmain = do\n  -- connect to a database\n  conn <- connectSqlite3 \"sqlite.db\"\n
+  \ -- take the connection and execute all persistence operations in the GP monad
+  (type alias for RIO Ctx)\n  runGP conn $ do\n    _ <- setupTableFor :: GP Person\n
+  \   _ <- setupTableFor :: GP Book\n\n    let alice = Person 123456 \"Alice\" 25
+  \"123 Main St\"\n        book = Book 1 \"The Hobbit\" \"J.R.R. Tolkien\" 1937\n\n
+  \   -- insert a Person into the database (persist will either insert or update)\n
+  \   persist alice\n\n    -- insert a second Person\n    persist alice {personID
+  = 123457, name = \"Bob\"}\n\n    -- update a Person\n    persist alice {address
+  = \"Elmstreet 1\"}\n\n    -- select a Person from a database\n    alice' <- retrieveById
+  (123456 :: Int) :: GP (Maybe Person)\n    liftIO $ print alice'\n\n    -- select
+  all Persons from the database\n    allPersons <- retrieveAll :: GP [Person]\n    liftIO
+  $ print allPersons\n\n    -- delete a Person\n    delete alice\n\n    -- select
+  all Persons from a database. The deleted Person is not in the result.\n    allPersons'
+  <- retrieveAll :: GP [Person]\n    liftIO $ print allPersons'\n\n    let book2 =
+  Book {book_id = 2, title = \"The Lord of the Ring\", author = \"J.R.R. Tolkien\",
+  year = 1954}\n\n    -- this time we are using insert directly\n    insert book\n
+  \   insert book2\n    allBooks <- retrieveAll :: GP [Book]\n    liftIO $ print allBooks\n\n
+  \   -- explicitly updating a Book\n    update book2 {title = \"The Lord of the Rings\"}\n
+  \   delete book\n\n    allBooks' <- retrieveAll :: GP [Book]\n    liftIO $ print
+  allBooks'\n```\n\n## Handling enumeration fields\n\nSay we have a data type `Book`
+  with an enumeration field of type `BookCategory`:\n\n```haskell\ndata Book = Book\n
+  \ { bookID :: Int,\n    title   :: String,\n    author  :: String,\n    year    ::
+  Int,\n    category :: BookCategory\n  }\n  deriving (Data, Show)\n\ndata BookCategory
+  = Fiction | Travel | Arts | Science | History | Biography | Other\n  deriving (Data,
+  Show, Enum)\n```\n\nIn this case the `Entity` type class instance for `Book` has
+  to be implemented manually, \nas the automatic derivation of `Entity` does not cover
+  this case (yet)\n\n```haskell\ninstance Entity Book where\n  fromRow row = return
+  $ Book (col 0) (col 1) (col 2) (col 3) (col 4)\n    where\n      col i = fromSql
+  (row !! i)\n\n  toRow b = return [toSql (bookID b), toSql (title b), toSql (author
+  b), toSql (year b), toSql (category b)]\n```\n\n`toSql` and `fromSql` expect `Convertible`
+  instances as arguments. This works for `BookCatagory` as GenericPersistence provides
+  `Convertible` instances for all `Enum` types.\n\nIf you do not want to use `Enum`
+  types for your enumeration fields, you can implement `Convertible` instances for
+  your own types:\n\n```haskell\ndata BookCategory = Fiction | Travel | Arts | Science
+  | History | Biography | Other\n  deriving (Data, Show, Read)\n\ninstance Convertible
+  BookCategory SqlValue where\n  safeConvert = Right . toSql . show\n  \ninstance
+  Convertible SqlValue BookCategory where\n  safeConvert = Right . read . fromSql
+  \ \n```\n\n## Handling embedded Objects\n\nSay we have a data type `Article` with
+  an field of type `Author`:\n\n```haskell\ndata Article = Article\n  { articleID
+  :: Int,\n    title     :: String,\n    author    :: Author,\n    year      :: Int\n
+  \ }\n  deriving (Data, Show, Eq)\n\ndata Author = Author\n  { authorID :: Int,\n
+  \   name     :: String,\n    address  :: String\n  }\n  deriving (Data, Show, Eq)
+  \ \n```\n\nIf we don't want to store the `Author` as a separate table, we can use
+  the following approach to embed the `Author` into the `Article` table:\n\n```haskell\ninstance
+  Entity Article where\n  -- in the fields to column mapping we specify that all fields
+  of the \n  -- Author type are also mapped to columns of the Article table:\n  fieldsToColumns
+  :: Article -> [(String, String)]\n  fieldsToColumns _ = [(\"articleID\", \"articleID\"),\n
+  \                      (\"title\", \"title\"), \n                       (\"authorID\",
+  \"authorID\"), \n                       (\"authorName\", \"authorName\"), \n                       (\"authorAddress\",
+  \"authorAddress\"),\n                       (\"year\", \"year\")\n                      ]\n\n
+  \ -- in fromRow we have to manually construct the Author object from the \n  --
+  respective columns of the Article table and insert it \n  -- into the Article object:\n
+  \ fromRow row = return $ Article (col 0) (col 1) author (col 5)\n    where\n      col
+  i = fromSql (row !! i)\n      author = Author (col 2) (col 3) (col 4)\n\n  -- in
+  toRow we have to manually extract the fields of the Author object\n  -- and insert
+  them into the respective columns of the Article table:\n  toRow  a = return [toSql
+  (articleID a), toSql (title a), toSql authID, toSql authorName, toSql authorAddress,
+  toSql (year a)]\n    where \n      authID = authorID (author a)\n      authorName
+  = name (author a)\n      authorAddress = address (author a)\n```\n\n## Handling
+  1:1 references\n\nIf we have the same data types as in the previous example, but
+  we want to store the `Author` in a separate table, we can use the following approach:\n\n```haskell\ndata
+  Article = Article\n  { articleID :: Int,\n    title     :: String,\n    author    ::
+  Author,\n    year      :: Int\n  }\n  deriving (Data, Show, Eq)\n\ndata Author =
+  Author\n  { authorID :: Int,\n    name     :: String,\n    address  :: String\n
+  \ }\n  deriving (Data, Entity, Show, Eq)  -- we derive Entity for Author\n\ninstance
+  Entity Article where\n  -- in the fields to column mapping we specify an additional
+  authorID field \n  -- that will be used to store the id of the referenced Author
+  object:\n  fieldsToColumns :: Article -> [(String, String)]\n  fieldsToColumns _
+  = [(\"articleID\", \"articleID\"),\n                       (\"title\", \"title\"),
+  \n                       (\"authorID\", \"authorID\"),\n                       (\"year\",
+  \"year\")\n                      ]\n\n  -- in fromRow we have to manually retrieve
+  the Author object from the \n  -- database (by using authorID as a foreign key)\n
+  \ fromRow row = do\n    maybeAuthor <- retrieveById (row !! 2) :: GP (Maybe Author)\n
+  \   let author = fromJust maybeAuthor\n    pure $ Article (col 0) (col 1) author
+  (col 3)\n    where\n      col i = fromSql (row !! i)\n\n  -- in toRow we have manually
+  persist the Author object and include\n  -- the authorID of the Author object in
+  the Article row:    \n  toRow a = do \n    persist (author a)\n    return [toSql
+  (articleID a), toSql (title a), toSql $ authorID (author a), toSql (year a)]\n\n```\n##
+  Handling 1:n references\n\nNow let's extend the previous example by also having
+  a list of Àrticle`s in the `Author` type:\n\n```haskell\ndata Article = Article\n
+  \ { articleID :: Int,\n    title     :: String,\n    author    :: Author,\n    year
+  \     :: Int\n  }\n  deriving (Data, Show, Eq)\n\ndata Author = Author\n  { authorID
+  :: Int,\n    name     :: String,\n    address  :: String,\n    articles :: [Article]\n
+  \ }\n  deriving (Data, Show, Eq)  \n```\n\nSo now we have a 1:n relationship between
+  `Author` and `Article`. And in addtion we have the 1:1 relationship between `Article`
+  and `Author` that we have seen in the previous example.\n\nThis situation is a bit
+  more complicated, as we have to handle relationships between `Article` and `Author`
+  at the same time. And we have to make sure that we don't end up in an infinite loop
+  when we persist an `Author` object that contains a list of `Article` objects that
+  in turn contain the same `Author` object. \n\nThe same problem occurs when we retrieve
+  an `Author` object that contains a list of `Article` objects that in turn contain
+  the same `Author` object.\n\nWe can handle this situation by using the following
+  approach:\n\n```haskell\ninstance Entity Article where\n  -- in the fields to column
+  mapping we specify an additional authorID field:\n  fieldsToColumns :: Article ->
+  [(String, String)]\n  fieldsToColumns _ = [(\"articleID\", \"articleID\"),\n                       (\"title\",
+  \"title\"), \n                       (\"authorID\", \"authorID\"),\n                       (\"year\",
+  \"year\")\n                      ]\n\n  -- in fromRow we have to take care that
+  we don't end up in an infinite loop\n  -- so we first place a dummy Article object
+  into the cache and then\n  -- retrieve the Author object either from cache or from
+  the db:\n  fromRow :: [SqlValue] -> GP Article\n  fromRow row = local (extendCtxCache
+  rawArticle) $ do\n    maybeAuthor <- getElseRetrieve (entityId rawAuthor)\n    let
+  author = fromJust maybeAuthor\n    pure $ Article (col 0) (col 1) author (col 3)\n
+  \   where\n      col i = fromSql (row !! i)\n      rawAuthor = (evidence :: Author)
+  {authorID = col 2}\n      rawArticle = Article (col 0) (col 1) rawAuthor (col 3)\n
+  \   \n  toRow a = do \n    persist (author a)\n    return [toSql (articleID a),
+  toSql (title a), toSql $ authorID (author a), toSql (year a)]\n\n\ninstance Entity
+  Author where\n  -- in the fields to column mapping we have anything for the articles
+  field:\n  fieldsToColumns :: Author -> [(String, String)]\n  fieldsToColumns _ =
+  [(\"authorID\", \"authorID\"),\n                       (\"name\", \"name\"), \n
+  \                      (\"address\", \"address\")\n                      ]\n\n  --
+  in fromRow we have to take care that we don't end up in an infinite loop.\n  --
+  So we first place a dummy Author object into the cache and then\n  -- retrieve matching
+  list of  Article objects (from cache or from the db):\n  fromRow :: [SqlValue] ->
+  GP Author\n  fromRow row = local (extendCtxCache rawAuthor) $ do\n    articlesByAuth
+  <- retrieveAllWhere (idField rawAuthor) (idValue rawAuthor) :: GP [Article]\n    pure
+  $ rawAuthor {articles= articlesByAuth}\n    where\n      col i = fromSql (row !!
+  i)\n      rawAuthor = Author (col 0) (col 1) (col 2) []\n\n  -- in toRow we do not
+  safe the articles field to avoid infinite loops:\n  toRow :: Author -> GP [SqlValue]\n
+  \ toRow a = do \n    return [toSql (authorID a), toSql (name a), toSql (address
+  a)]\n```\n\n## Todo\n\n- coding free support for 1:1 and 1:n relationships\n- coding
+  free support for Enums\n- resolution cache with proper Map\n\n"
+license-name: BSD-3-Clause
