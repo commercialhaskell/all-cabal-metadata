@@ -1,6 +1,6 @@
 homepage: ''
 changelog-type: markdown
-hash: 58902b903b191425568f1f28516ef07b0fb78059ca33650249238f6dd31f3681
+hash: 9d35a50eaa17be1b39de225524e8e86d4155ae80847decbf5bd46e6e178d8222
 test-bench-deps:
   base: ^>=4.16 || ^>=4.17
   hspec: ^>=2.8.5 || ^>=2.9 || ^>=2.10
@@ -8,6 +8,16 @@ test-bench-deps:
 maintainer: Chris Martin, Julie Moronuki
 synopsis: Composable, streaming, and efficient left folds
 changelog: |
+  ## 0.1.0.0 (2023-02-20)
+
+  Adds `ShortcutFold` and `ShortcutNonemptyFold`.
+
+  The following have changed from `Fold` to `ShortcutFold`:
+  `and`, `or`, `all`, `any`, `element`, `notElement`, `find`,
+  `lookup`, `index`, `findIndex`, `elementIndex`, `null`.
+
+  `first` has changed from `NonemptyFold` to `ShortcutNonemptyFold`.
+
   ## 0.0.1.0 (2023-02-20)
 
   Add `Fold.Nonempty.effectfulFold`; this was already available from
@@ -25,8 +35,9 @@ basic-deps:
 all-versions:
 - 0.0.0.1
 - 0.0.1.0
+- 0.1.0.0
 author: Gabriella Gonzalez
-latest: 0.0.1.0
+latest: 0.1.0.0
 description-type: markdown
 description: |
   This package defines the `Fold`, `NonemptyFold`, and `EffectfulFold` types and
@@ -41,7 +52,7 @@ description: |
   — *The Gambler* by Don Schlitz, popularized by Kenny Rogers
 
 
-  ## Intro to Fold
+  ## Fold
 
   The `foldl'` function in the `base` package is used when we want a strictly
   evaluated result from traversing a list.
@@ -64,7 +75,7 @@ description: |
   ```haskell
   data Fold a b = Fold
       { initial :: b
-      , step :: b -> a -> b }
+      , step    :: b -> a -> b }
   ```
 
   Or, better yet, we can use a trick to turn the datatype into a `Functor` (which
@@ -73,7 +84,7 @@ description: |
   ```haskell
   data Fold a b = forall x. Fold
       { initial :: x
-      , step :: x -> a -> x
+      , step    :: x -> a -> x
       , extract :: x -> b }
   ```
 
@@ -102,7 +113,7 @@ description: |
   dreamt of in this package.
 
 
-  ## Intro to NonemptyFold
+  ## NonemptyFold
 
   There are some kinds of folding that only work if the input it nonempty.
   Suppose, for example, we want the greatest of all the items. If there are no
@@ -112,7 +123,7 @@ description: |
   ```haskell
   data NonemptyFold a b = forall x. NonemptyFold
       { initial :: a -> x
-      , step :: x -> a -> x
+      , step    :: x -> a -> x
       , extract :: x -> b }
   ```
 
@@ -130,7 +141,7 @@ description: |
   accommodate the possibility of empty input.
 
 
-  ## Intro to EffectfulFold
+  ## EffectfulFold
 
   There is a related function in `base` that does the same thing as `foldl'` but
   in a monadic context:
@@ -158,7 +169,7 @@ description: |
   ```haskell
   data EffectfulFold m a b = forall x. EffectfulFold
       { initial :: m x
-      , step :: x -> a -> m x
+      , step    :: x -> a -> m x
       , extract :: x -> m b }
   ```
 
@@ -166,7 +177,7 @@ description: |
   `Fold.Effectful.fold`.
 
 
-  ## The Applicative instances
+  ## Applicative instances
 
   The `Fold` and `EffectfulFold` applicatives are great for computing multiple folds
   over a collection in one pass over the data. For example, suppose that you want
@@ -189,13 +200,140 @@ description: |
   With `gambler`, we can instead write:
 
   ```haskell
-  import qualified Fold
+  import qualified Fold.Pure as Fold
 
   sumAndLength :: Num a => [a] -> (a, Natural)
   sumAndLength = Fold.runFold $ (,) <$> Fold.sum <*> Fold.length
   ```
 
   This achieves the same result using constant space.
+
+
+  ## ShortcutFold
+
+  Operations like `sum` and `length` inherently require the entirety of the input.
+  But suppose, for example, we want to know whether a list contains a particular
+  item. Once we find the item, we can stop looking. For situations like this, we
+  have `ShortcutFold`.
+
+  ```haskell
+  data ShortcutFold a b = forall x y. ShortcutFold
+      { initial     :: Vitality x y
+      , step        :: y -> a -> Vitality x y
+      , extractDead :: x -> b
+      , extractLive :: y -> b
+      }
+  ```
+
+  ```haskell
+  data Vitality a b = Dead a | Alive Will b
+  ```
+
+  ```haskell
+  data Will = Ambivalent | Tenacious
+  ```
+
+  If `initial` or `step` returns a `Dead` result, then no further input can be fed
+  into the fold. The `Will` type will be discussed below.
+
+  Example of testing for the presence of a particular element:
+
+  ```ghci
+  λ> import qualified Fold.Shortcut as Fold
+
+  λ> Fold.run (Fold.element 'a') "back"
+  True
+
+  λ> Fold.run (Fold.element 'a') "front"
+  False
+  ```
+
+  By running a shortcut fold over a partially-defined input list, we can verify
+  that evaluation does indeed halt once the element is found:
+
+  ```haskell
+  λ> Fold.run (Fold.element 'a') ("ba" ++ undefined)
+  True
+  ```
+
+  ## ShortcutNonemptyFold
+
+  The non-empty variant of `ShortcutFold` is `ShortcutNonemptyFold`.
+
+  ```haskell
+  data ShortcutNonemptyFold a b = forall x y. ShortcutNonemptyFold
+      { initial     :: a -> Vitality x y
+      , step        :: y -> a -> Vitality x y
+      , extractDead :: x -> b
+      , extractLive :: y -> b
+      }
+  ```
+
+  Like `NonemptyFold`, the only thing we've changed here is to add an `a`
+  parameter to the `initial` field.
+
+
+  ## Shortcutting Applicative instances
+
+  Just like `Fold`, `ShortcutFold` can be combined in an applicative manner and
+  the input is traversed in a single pass.
+
+  ```haskell
+  λ> import qualified Fold.Shortcut as Fold
+
+  λ> Fold.run ((,) <$> Fold.index 4 <*> Fold.index 2) "abcdef"
+  (Just 'e',Just 'c')
+  ```
+
+  With an applicative composition, traversal continues as long as any of the
+  constituent parts is alive and still expecting more input. In the example above,
+  `index 2` becomes dead after the third character (`'c'`), but the composition
+  stays alive until the fifth character (`'e'`) results in the completion of
+  `index 4`.
+
+  A fold indicates that it is finished by returning `Dead` as its `Vitality`. But
+  there is one more subtlety: When a fold is `Alive`, it can further specify
+  whether it *wants* to keep receiving more items or not. This disposition is
+  called `Will`. A `Tenacious` will means that the fold wants more input; an
+  `Ambivalent` will mean the fold *can* accept more input, but doesn't care. The
+  difference is that tenacious folds keep larger applicative compositions alive,
+  whereas ambivalent folds do not. Shortcut folds are tagged in the documentation
+  as "(ambivalent)" or "(tenacious)".
+
+  One example of an ambivalent shortcut fold is `length`. We see in the example
+  below that the length fold keeps counting only as long as the other fold it
+  is composed with still needs input.
+
+  ```haskell
+  λ> Fold.run ((,) <$> Fold.length <*> Fold.element 'e') "abcdef"
+  (5,True)
+
+  λ> Fold.run ((,) <$> Fold.length <*> Fold.element 'z') "abcdef"
+  (6,False)
+  ```
+
+  Consider another example:
+
+  ```haskell
+  λ> f1 = ((,) <$> Fold.length <*> Fold.element 'c')
+
+  λ> f2 = ((,) <$> Fold.length <*> Fold.element 'e')
+
+  λ> Fold.run ((,) <$> f1 <*> f2) "abcdef"
+  ((5,True),(5,True))
+  ```
+
+  The example above composes four folds (two `length` folds and two `element`
+  folds). Notice that both of the length folds returned 5 because they keep
+  running until the entire fold stops, regardless of the way they're composed. We
+  can avoid this behavior with the `demotivate` utility, which stops a fold from
+  being so eager. A demotivated fold will stop receiving input when all of its
+  components are either dead or ambivalent.
+
+  ```haskell
+  λ> Fold.run ((,) <$> Fold.demotivate f1 <*> Fold.demotivate f2) "abcdef"
+  ((3,True),(5,True))
+  ```
 
 
   ## Quick start
@@ -206,11 +344,13 @@ description: |
   cabal repl --build-depends gambler
   ```
 
-  The example from the previous section can be run as follows:
+  Import the module corresponding to one of the varieties of fold:
 
   ```haskell
-  λ> import qualified Fold
+  λ> import qualified Fold.Pure as Fold
   ```
+
+  And enjoy.
 
   ```haskell
   λ> Fold.runFold ((,) <$> Fold.sum <*> Fold.length) [1..1000000]
@@ -218,18 +358,23 @@ description: |
   ```
 
 
-  ## Related packages
+  ## Authors
 
-  This `gambler` package is mostly a copy of [foldl], with some features removed
-  to minimize its dependency set. What remains in `gambler` is essentially the
-  same as what can be found in `foldl` version `1.4.13`, subject only to
-  reorganization, renaming, and minor modifications.
+  This package began as mostly a copy of [foldl], with some features removed to
+  minimize its dependency set. What remained in `gambler-0.0` was essentially
+  the same as what could be found in `foldl-1.4.13`, subject only to
+  reorganization, renaming, and minor modifications. The `Fold`, `EffectfulFold`,
+  and `NonemptyFold` types are the work of Gabriella Gonzalez.
 
-    [foldl]: https://hackage.haskell.org/package/foldl
+  `ShortcutFold` and `ShortcutNonemptyFold` were added by Mission Valley Software
+  in `gambler-0.1`.
 
 
   ## Future plans
 
   Once the `Foldable1` class has been added to `base`, the type of
   `Fold.Nonempty.run` may be generalized to accommodate it.
+
+
+    [foldl]: https://hackage.haskell.org/package/foldl
 license-name: BSD-3-Clause
