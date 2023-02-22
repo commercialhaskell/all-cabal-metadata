@@ -1,22 +1,48 @@
 homepage: https://github.com/NicolasT/landlock-hs
 changelog-type: markdown
-hash: 5c49b6664363c0466794de1084a49e1fb6dad3b639857681096d75b69e2a6209
+hash: 0249f85dbdab4a6f1d45c8c40e990b36862745a49eb9e7793f5127799124abb2
 test-bench-deps:
-  base: -any
-  tasty-expected-failure: '>=0.12.3 && <0.13'
-  filepath: ^>=1.4.2.1
-  process: ^>=1.6.9.0
+  base: '>=4.14.2.0 && <4.18'
+  filepath: '>=1.4.2.1 && <1.5'
+  process: '>=1.6.9.0 && <1.7'
   async: '>=2.2.3 && <2.3'
   landlock-internal: -any
+  quickcheck-classes-base: ^>=0.6.2.0
   landlock: -any
   tasty-quickcheck: ^>=0.10.1.2
   tasty-hunit: '>=0.10.0.3 && <0.11'
+  temporary: ==1.3.*
   tasty: '>=1.4.1 && <1.5'
   QuickCheck: ^>=2.14.2
+  directory: ^>=1.3.6.0
 maintainer: ikke@nicolast.be
 synopsis: Haskell bindings for the Linux Landlock API
 changelog: |
   # Revision history for landlock
+
+  ## 0.2.1.0 -- 2023-02-22
+
+  * Use vendored `linux/landlock.h` instead of system-provided header during
+    build.
+
+  * Support Landlock ABI v2 and `LANDLOCK_ACCESS_FS_REFER` as part of it.
+
+  * Support Landlock ABI v3 and `LANDLOCK_ACCESS_FS_TRUNCATE` as part of it.
+
+  * Support GHC 9.4.2 / `base ^>=4.17`.
+
+  * Support `unix ^>=2.8`.
+
+  * Add a new executable,`landlocked`, which permits to run a command in
+    a sandboxed environment.
+
+  * Add a flag, `landlocked`, which allows to not build the `landlocked`
+    executable.
+
+  * Use `capi` foreign imports instead of `ccall` using the `CApiFFI` language
+    extension.
+
+  * Add a Cabal flag, `werror`, to enable compiler `-Werror` and friends.
 
   ## 0.2.0.1 -- 2022-08-24
 
@@ -41,14 +67,17 @@ changelog: |
 
   * First version. Released on an unsuspecting world.
 basic-deps:
-  exceptions: ^>=0.10.4
-  unix: ^>=2.7.2.2
-  base: ^>=4.14.2.0 || ^>=4.15 || ^>=4.16
+  exceptions: '>=0.10.4 && <0.11'
+  unix: '>=2.7.2.2 && <2.9'
+  base: '>=4.14.2.0 && <4.18'
   landlock-internal: -any
+  landlock: -any
+  optparse-applicative: '>=0.16.1.0 && <0.17 || ^>=0.17'
 all-versions:
 - 0.2.0.1
+- 0.2.1.0
 author: Nicolas Trangez
-latest: 0.2.0.1
+latest: 0.2.1.0
 description-type: markdown
 description: |
   # landlock-hs: Haskell bindings for the Linux Landlock API
@@ -66,4 +95,107 @@ description: |
 
   For more information, see the [Landlock homepage](https://landlock.io/) and its
   [kernel documentation](https://docs.kernel.org/userspace-api/landlock.html).
+
+  ## Example
+
+  Here's a simple example, allowing read-only access to the user's SSH public
+  key, full access to `tmp` and the ability to read and execute everything in
+  `/usr`:
+
+  ```haskell
+  import System.Landlock (
+        AccessFsFlag(..)
+      , OpenPathFlags(..)
+      , RulesetAttr(..)
+      , abiVersion
+      , accessFsFlags
+      , accessFsFlagIsReadOnly
+      , defaultOpenPathFlags
+      , isSupported
+      , landlock
+      , pathBeneath
+      , withOpenPath
+      )
+
+  import ReadmeUtils
+
+  -- These tests run with a "fake" pre-populated rootfs
+  -- All files and directories in it are created using the current user,
+  -- readable, writable and (in case of scripts) executable, so without
+  -- Landlock, there would be no permission errors.
+
+  main :: IO ()
+  main = withFakeRoot $ \root -> do
+      -- Check whether Landlock is supported
+      hasLandlock <- isSupported
+
+      unless hasLandlock $
+          fail "Landlock not supported"
+
+      version <- abiVersion
+      -- Find all FS access flags for the running kernel's ABI version
+      allFlags <- lookupAccessFsFlags version
+      let roFlags = filter accessFsFlagIsReadOnly allFlags
+
+      let homeDir = root </> "home" </> "user"
+          publicKey = homeDir </> ".ssh" </> "id_ed25519.pub"
+          privateKey = homeDir </> ".ssh" </> "id_ed25519"
+          tmpDir = root </> "tmp"
+
+      -- Construct the sandbox, locking down everything by default
+      landlock (RulesetAttr allFlags) [] [] $ \addRule -> do
+          -- /tmp is fully accessible
+          withOpenPath tmpDir defaultOpenPathFlags{ directory = True } $ \tmp ->
+              addRule (pathBeneath tmp allFlags) []
+
+          -- SSH public key is readable
+          withOpenPath publicKey defaultOpenPathFlags $ \key ->
+              addRule (pathBeneath key [AccessFsReadFile]) []
+
+          -- (Real) /usr is fully accessible, but read-only (includes executable permissions)
+          withOpenPath "/usr" defaultOpenPathFlags{ directory = True } $ \usr -> do
+              addRule (pathBeneath usr roFlags) []
+
+      -- Can create and write to files in tmp
+      writeFile (tmpDir </> "program.log") "Success!"
+
+      -- Can read SSH key
+      _pubKey <- readFile publicKey
+
+      -- Can execute things in /usr
+      "Linux\n" <- readProcess ("/usr" </> "bin" </> "uname") ["-s"] ""
+
+      -- Can't read SSH private key
+      assertPermissionDenied $
+          readFile privateKey
+
+      -- Can't write to SSH public key
+      assertPermissionDenied $
+          withFile publicKey WriteMode $ \fd ->
+              hPutStrLn fd "Oops, key gone!"
+
+      -- Can't remove SSH public key
+      assertPermissionDenied $
+          removeFile publicKey
+
+      -- Can't create files in homedir
+      assertPermissionDenied $
+          writeFile (homeDir </> "whoops.txt") "This file should not exist!"
+
+      -- Can't read files from (real) /etc
+      assertPermissionDenied $
+          readFile ("/etc" </> "hosts")
+
+    where
+      lookupAccessFsFlags version = case lookup version accessFsFlags of
+          -- In a production implementation, we'd lookup the "best matching" flag
+          -- set, not require an exact match.
+          Nothing -> fail "Unsupported ABI version"
+          Just flags -> return flags
+
+      assertPermissionDenied act = handleJust permissionDenied return $ do
+          _ <- act
+          fail "Expected permission error"
+      permissionDenied e = if isPermissionError e then Just () else Nothing
+  ```
 license-name: BSD-3-Clause
