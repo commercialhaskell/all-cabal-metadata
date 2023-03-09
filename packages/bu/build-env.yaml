@@ -1,0 +1,149 @@
+homepage: https://github.com/bgamari/build-env
+changelog-type: markdown
+hash: 5ee9fe85c9481fe1bd5c06e666a99ef576eafc02305cde0aa775b642c737b199
+test-bench-deps: {}
+maintainer: ben@smart-cactus.org
+synopsis: Compute, fetch and install Cabal build plans into a local environment
+changelog: "# Changelog for `build-env`\r\n\r\n## Version 1.0.0.0 (2022-12-26)\r\n\r\n-
+  First released version.\r\n\r\n## Version 0.1.0.0 (2022-11-16)\r\n\r\n- Initial
+  proof of concept.\r\n"
+basic-deps:
+  bytestring: '>=0.10 && <0.12'
+  base: '>=4.15 && <4.18'
+  time: '>=1.9 && <1.13'
+  text: '>=1.2 && <2.1'
+  filepath: ==1.4.*
+  process: ^>=1.6
+  async: ^>=2.2
+  containers: ==0.6.*
+  transformers: ^>=0.5
+  temporary: ^>=1.3
+  optparse-applicative: '>=0.16 && <0.18'
+  build-env: -any
+  aeson: '>=1.5 && <2.2'
+  directory: ==1.3.*
+all-versions:
+- 1.0.0.0
+author: Ben Gamari & Sam Derbyshire
+latest: 1.0.0.0
+description-type: markdown
+description: "# build-env <a href=\"https://hackage.haskell.org/package/build-env\"
+  alt=\"Hackage\"><img src=\"https://img.shields.io/hackage/v/build-env.svg\" /></a>\r\n\r\n**`build-env`**
+  is a utility to build a set of Cabal packages (computed\r\nby `cabal-install`'s
+  solver) into a free-standing package database.\r\n\r\nThis enables the compilation
+  of Haskell packages (with their dependencies)\r\nin hermetic build environments.\r\n\r\n---\r\n\r\n###
+  Contents\r\n\r\n- [Example](#example)\r\n- [Commands](#commands)\r\n- [What does
+  `build-env` do?](#what-does-build-env-do)\r\n- [Hermetic builds](#hermetic-builds)\r\n
+  \ - [Narrowing a build down (for debugging)](#narrowing-a-build-down-for-debugging)\r\n-
+  [Bootstrapping](#bootstrapping)\r\n  - [Bootstrap arguments](#bootstrap-arguments)\r\n-
+  [Specifying packages](#specifying-packages)\r\n  - [Local packages](#local-packages)\r\n\r\n---\r\n\r\n##
+  Example\r\n\r\n```\r\n$ build-env build lens -f sources -o install -j8\r\n$ ghci
+  -package-db install/package.conf/ -package lens\r\nghci> :ty Control.Lens.Lens\r\nControl.Lens.Lens\r\n
+  \ :: Control.Lens.Type.Lens s t a b\r\n     -> Control.Lens.Reified.ReifiedLens
+  s t a b\r\n```\r\n\r\nIn this example, the `build-env build` invocation:\r\n\r\n
+  \ - computes a build plan for `lens`,\r\n  - fetches `lens` and its dependencies
+  into the `sources` directory,\r\n  - configures and builds all the packages, with
+  up to `8` units building\r\n    concurrently, and registers the libraries into the
+  package database at\r\n    `install/package.conf`.\r\n\r\nWe then tell `ghci` to
+  use this package database, making `lens` available.\r\n\r\n## Commands\r\n\r\n`build-env`
+  has three distinct modes of operation:\r\n\r\n  - `plan` computes a build plan,
+  outputting a `plan.json` Cabal plan.\r\n  - `fetch` fetches sources.\r\n  - `build`
+  executes a build plan.\r\n\r\nEach command subsumes the functionality of the previous
+  ones in the above list.\r\nIn particular, in the previous example, the `build` command
+  computed a build\r\nplan, fetched the sources, and built the plan. The same could
+  have been achieved\r\nwith three separate invocations:\r\n\r\n```\r\n$ build-env
+  plan lens -p lens-plan.json\r\n$ build-env fetch -p lens-plan.json -f sources\r\n$
+  build-env build -p lens-plan.json -f sources -o install -j8 --prefetched\r\n```\r\n\r\nBeing
+  able to separate these steps affords us some extra flexibility, as\r\nsubsequent
+  sections will explain.\r\n\r\n## What does `build-env` do?\r\n\r\n- **plan:** `build-env`
+  calls `cabal build --dry-run` on a dummy\r\n  project with the dependencies and
+  constraints that were asked for.  \r\n  This produces a Cabal plan in the form of
+  a `plan.json`, which `build-env`\r\n  parses.  \r\n  **Required executables:** `cabal`,
+  `ghc`.\r\n- **fetch:** `build-env` calls `cabal get` on each package in the build
+  plan.  \r\n  **Required executables:** `cabal`.\r\n- **build:** `build-env` builds
+  the dependencies by compiling their `Setup`\r\n  scripts and calling `Setup configure`,
+  `Setup build`,\r\n  `Setup haddock` (optional), `Setup copy`, and, for libraries,
+  `Setup register`\r\n  and `ghc-pkg register`.  \r\n  **Required executables:** `ghc`,
+  `ghc-pkg`.\r\n\r\nNote that, when building packages, `build-env` passes the following
+  information\r\nwhen running the `Setup` script:\r\n\r\n  - `with-compiler`, `prefix`
+  and `destdir` options supplied by the user,\r\n  - the default `datadir` option,\r\n
+  \ - `cid`, `datasubdir`, `bindir` and `builddir` options supplied by `build-env`,\r\n
+  \ - package flags and `dependency` arguments, obtained from the build plan,\r\n
+  \ - `<pkg>_datadir` environment variables supplied by `build-env`.\r\n\r\nProblems
+  will likely arise if you pass extra arguments that override any of\r\nthese, for
+  example by using `--configure-arg ARG` on the command line.\r\n\r\n## Hermetic builds\r\n\r\nWhen
+  working in a hermetic build environment, we might need to compute a build\r\nplan
+  and fetch all the dependencies first, before doing an offline build.\r\n\r\nThis
+  can be achieved by two separate `build-env` invocations.\r\n\r\nIn a local environment
+  (with access to internet):\r\n\r\n```\r\n$ build-env fetch lens -f sources --output-plan
+  plan.json\r\n```\r\n\r\nIn a build environment in which `build-env` has been provisioned:\r\n\r\n```\r\n$
+  build-env build --prefetched -p plan.json -f sources -o install -j8\r\n```\r\n\r\nIn
+  this example:\r\n\r\n  - the `fetch` command computes a plan which is written to\r\n
+  \   `plan.json` (using the Cabal JSON plan format), and fetches all\r\n    the required
+  sources, putting them into the `sources` directory;\r\n  - the `build` command reads
+  in the build plan and performs the build.\r\n\r\n### Narrowing a build down (for
+  debugging)\r\n\r\nWhen attempting to execute a large build plan, it can be useful
+  to be able\r\nto refine the build down to a small set of problematic packages, for
+  debugging\r\npurposes. For this, you can use `--only`, e.g.:\r\n\r\n```\r\n$ build-env
+  build --prefetched -p plan.json -f sources -o install --only badPackage\r\n```\r\n\r\nInstead
+  of building the full plan from `plan.json`, this will instead restrict\r\nto only
+  building units from package `badPackage` and their transitive dependencies.  \r\nMultiple
+  `--only` arguments combine additively, e.g. `--only pkg1 --only pkg2`\r\nwill build
+  the units from the build plan that belong to `pkg1` or `pkg2`, and\r\ntransitive
+  dependencies thereof.\r\n\r\nNote that `--only` only affects which packages are
+  built; it does not change\r\nthe computation of the build plan nor which packages
+  are fetched.\r\n\r\nYou can also resume a build where it left off by passing `--resume`;
+  this will\r\navoid rebuilding any of the units that have already been registed in
+  the\r\npackage database.\r\n\r\n## Bootstrapping\r\n\r\nIn the example from [§ Hermetic
+  builds](#hermetic-builds), we ran\r\n`build-env build` to perform a build. However,
+  this requires that the build\r\nenvironment provision `build-env`.\r\n\r\nTo avoid
+  this requirement, it is also possible to ask `build-env` to output\r\na shell script
+  containing the build steps to execute.\r\n\r\nIn a local environment (with access
+  to internet):\r\n\r\n```\r\n$ build-env build lens -f sources -o install --script
+  build_lens.sh\r\n```\r\n\r\nIn a build environment:\r\n\r\n```\r\n$ ./build_lens.sh\r\n```\r\n\r\nThe
+  downside is that we lose any parallelism from this approach, as the\r\ngenerated
+  build script is inherently sequential.\r\n\r\nOne particularly useful application
+  is the bootstrapping of `build-env` itself,\r\nas this supplies a mechanism for
+  the provisioning of `build-env` in build\r\nenvironments.\r\n\r\n### Bootstrap arguments\r\n\r\nIf
+  your build environment provides additional variables that need to be passed\r\nto
+  the build script, you can pass them to the shell script using variables.\r\n\r\nFor
+  example, in the local environment, you can first obtain all the information\r\nneeded
+  to return a build script:\r\n\r\n```\r\n$ build-env fetch lens -f sources --output-plan
+  myPlan.json\r\n```\r\n\r\nNext, compute a build script containing references to
+  variables:\r\n\r\n```\r\n$ build-env build -p myPlan.json -f sources -o install
+  --prefetched --configure-arg \\$\\{myArgs\\} --script script.sh\r\n```\r\n\r\nThis
+  will output a script which passes `$myArgs` to each `Setup configure`\r\ninvocation.
+  In the build environment, you can then set the value of `$myArgs`\r\nbefore running
+  the shell script `script.sh`. Note that the build script\r\n__does not__ insert
+  additional quotation marks around `$myArgs`, which allows\r\npassing multiple arguments
+  at once (this is crucial when one doesn't know\r\nthe number of arguments ahead
+  of time).\r\n\r\nIf you want to set `--fetchdir`, `--prefix` or `--destdir` to variables,\r\nyou
+  should pass the `--variables` flag. This will set these to the values\r\n`$SOURCES`,
+  `$PREFIX` and `$DESTDIR` in the output shell script, respectively.\r\nThese should
+  be set to absolute paths before running the script.  \r\nThe script will also use
+  `$GHC` and `$GHCPKG` variables for the compiler.  \r\n\r\n## Specifying packages\r\n\r\nInstead
+  of passing the required packages through the command line,\r\nit can be more convenient
+  to ask `build-env` to read them from files:\r\n\r\n```\r\n$ build-env build --seeds
+  SEEDS --freeze cabal.config -f sources -o install\r\n```\r\n\r\nThis will build
+  a plan for the packages specified in the `SEEDS` file,\r\nwith versions of packages
+  that aren't in the `SEEDS` file constrained as\r\nspecified by the `cabal.config`
+  file.\r\n\r\nEach line in the seeds file should be one of the following:\r\n\r\n
+  \ - A Cabal unit, in the format `unit +flag1 -flag2 >= 0.1 && < 0.3`.\r\n\r\n    A
+  unit can be of the form `pkgName`, `lib:pkgName`, `exe:pkgName`,\r\n    `pkgName:lib:compName`,
+  ... as per `cabal` component syntax.\r\n\r\n    The unit name must be followed by
+  a space.\r\n\r\n    Flags and constraints are optional.  \r\n    When both are present,
+  flags must precede constraints.  \r\n    Constraints must use valid Cabal constraint
+  syntax.\r\n\r\n  - An allow-newer specification such as:\r\n\r\n    ```\r\n    allow-newer:
+  pkg1:pkg2,pkg3:base,*:ghc\r\n    ```\r\n\r\n    This uses Cabal `allow-newer` syntax.\r\n\r\n
+  \ - An empty line or comment (starting with `--`).\r\n\r\nThe `cabal.config` file
+  should use valid `cabal.project` syntax, e.g.:\r\n\r\n```cabal\r\nconstraints: pkg1
+  == 0.1,\r\n             pkg2 >= 3.0\r\n```\r\n\r\nOnly the constraints are processed;
+  everything else from the `cabal.config`\r\nfile is ignored.\r\n\r\n### Local packages\r\n\r\nTo
+  specify that a package should be found locally rather than fetched from\r\nHackage,
+  use `--local`:\r\n\r\n```\r\nbuild-env build myPkg --local myPkg=../pkgs/myPkg\r\n```\r\n\r\nThe
+  part to the right of the `=` sign corresponds to what you would write\r\nin a `cabal.project`
+  file: the directory in which `myPkg.cabal` is located.\r\n\r\nIf this is a relative
+  path, it will be interpreted relative to the working\r\ndirectory of the `build-env`
+  invocation, which can be overriden by passing\r\n`--cwd <dir>` (works like the `-C`
+  argument to `make`).\r\n"
+license-name: BSD-3-Clause
