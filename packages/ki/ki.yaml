@@ -1,6 +1,6 @@
 homepage: https://github.com/awkward-squad/ki
 changelog-type: markdown
-hash: 0514c5dfdb1d3701ee1910ca7c7903ea54474ab11284728a6c7003af9b8821dc
+hash: 9c8b49218ed32f70ceefd5b8afb1a6f7a7ff9551d63eef4fa709b7d932b8199d
 test-bench-deps:
   ki: -any
   stm: ^>=2.5
@@ -10,6 +10,14 @@ test-bench-deps:
 maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>, Travis Staton <hello@travisstaton.com>
 synopsis: A lightweight structured concurrency library
 changelog: |
+  ## [1.0.1.0] - 2023-04-03
+
+  - Change [#25](https://github.com/awkward-squad/ki/pull/25): Attempting to fork a thread in a closing scope now acts as
+    if it were a child being terminated due to the scope closing. Previously, attempting to fork a thread in a closing
+    scope would throw a runtime exception like `error "ki: scope closed"`.
+  - Change [#27](https://github.com/awkward-squad/ki/pull/27): Calling `awaitAll` on a closed scope now returns `()`
+    instead of blocking forever.
+
   ## [1.0.0.2] - 2023-01-25
 
   - Bugfix [#20](https://github.com/awkward-squad/ki/pull/20): previously, a child thread could deadlock when attempting
@@ -59,8 +67,9 @@ basic-deps:
   containers: ^>=0.6
 all-versions:
 - 1.0.0.2
+- 1.0.1.0
 author: Mitchell Rosen
-latest: 1.0.0.2
+latest: 1.0.1.0
 description-type: markdown
 description: |
   | `ki` | `ki-unlifted` |
@@ -97,4 +106,69 @@ description: |
   # Documentation
 
   [Hackage documentation](https://hackage.haskell.org/package/ki/docs/Ki.html)
+
+  # Example: Happy Eyeballs
+
+  The [Happy Eyeballs](https://en.wikipedia.org/wiki/Happy_Eyeballs) algorithm is a particularly common example used to
+  demonstrate the advantages of structured concurrency, because it is simple to describe, but can be surprisingly
+  difficult to implement.
+
+  The problem can be abstractly described as follows: we have a small set of actions to run, each of which can take
+  arbitrarily long, or fail. Each action is a different way of computing the same value, so we only need to wait for
+  one action to return successfully. We don't want to run the actions one at a time (because that is likely to take too
+  long), nor all at once (because that is an improper use of resources). Rather, we will begin executing the first action,
+  then wait 250 milliseconds, then begin executing the second, and so on, until one returns successfully.
+
+  There are of course a number of ways to implement this algorithm. We'll do something non-optimal, but simple. Let's get
+  the imports out of the way first.
+
+  ```haskell
+  import Control.Concurrent
+  import Control.Monad (when)
+  import Control.Monad.STM (atomically)
+  import Data.Function ((&))
+  import Data.Functor (void)
+  import Data.List qualified as List
+  import Data.Maybe (isJust)
+  import Ki qualified
+  ```
+
+  Next, let's define a `staggeredSpawner` helper that implements the majority of the core algorithm: given a list of
+  actions, spawn them all at 250 millisecond intervals. After all actions are spawned, we block until all of them have
+  returned.
+
+  ```haskell
+  staggeredSpawner :: [IO ()] -> IO ()
+  staggeredSpawner actions = do
+    Ki.scoped \scope -> do
+      actions
+        & map (\action -> void (Ki.fork scope action))
+        & List.intersperse (threadDelay 250_000)
+        & sequence_
+      atomically (Ki.awaitAll scope)
+  ```
+
+  And finally, we wrap this helper with `happyEyeballs`, which accepts a list of actions, and returns when one action
+  returns successfully, or returns `Nothing` if all actions fail. Note that in a real implementation, we may want to
+  consider what to do if an action throws an exception. Here, we trust each action to signal failure by returning
+  `Nothing`.
+
+  ```haskell
+  happyEyeballs :: [IO (Maybe a)] -> IO (Maybe a)
+  happyEyeballs actions = do
+    resultVar <- newEmptyMVar
+
+    let worker action = do
+          result <- action
+          when (isJust result) do
+            _ <- tryPutMVar resultVar result
+            pure ()
+
+    Ki.scoped \scope -> do
+      _ <-
+        Ki.fork scope do
+          staggeredSpawner (map worker actions)
+          tryPutMVar resultVar Nothing
+      takeMVar resultVar
+  ```
 license-name: BSD-3-Clause
