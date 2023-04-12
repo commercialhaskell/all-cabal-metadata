@@ -1,20 +1,28 @@
 homepage: https://streamly.composewell.com
 changelog-type: markdown
-hash: 82ed6c7f8b13c8450fc08f04af369fc984255a1d4e514ec25e2ab9326f6c7b70
+hash: 9eafe187e2b24d2c464db285df4f061b9aebaca2ada5cdd1b2dc0852dbf06b90
 test-bench-deps:
   exceptions: '>=0.8 && <0.11'
   streamly-process: -any
   base: '>=4.8 && <5'
   hspec: '>=2.0 && <3'
-  process: '>=1.0 && <1.7'
   tasty-bench: '>=0.2.5 && <0.4'
+  streamly-core: ==0.1.0.*
   QuickCheck: '>=2.10 && <2.15'
-  streamly: '>=0.8.1 && <0.8.3'
   directory: '>=1.2.2 && <1.4'
 maintainer: streamly@composewell.com
 synopsis: Use OS processes as stream transformation functions
 changelog: |
   # Changelog
+
+  ## 0.3.0 (Apr 2023)
+
+  * Added a `Streamly.System.Command` module
+  * `toChunks` and `toBytes` now make the stdin available to the process being
+    executed.
+  * Allow streamly 0.9.0
+  * Signature changes - removed the IsStream constraint, now all APIs use the
+    monomorphic `Stream` type.
 
   ## 0.2.0.1 (Mar 2022)
 
@@ -34,23 +42,93 @@ changelog: |
   * Initial version.
 basic-deps:
   exceptions: '>=0.8 && <0.11'
-  unix: '>=2.5 && <2.8'
   base: '>=4.8 && <5'
   process: '>=1.0 && <1.7'
-  streamly: ==0.8.1.* || ==0.8.2.*
+  streamly-core: ==0.1.0
+  streamly: ==0.9.0.*
 all-versions:
 - 0.1.0
 - 0.2.0
 - 0.2.0.1
+- 0.3.0
 author: Composewell Technologies
-latest: 0.2.0.1
+latest: 0.3.0
 description-type: markdown
 description: |
   # OS processes as streams
 
-  Run operating system processes as stream source, sink or transformation
-  functions. Use them seamlessly in a streaming data pipeline in the same way
-  as any other Haskell functions.
+  Use operating system (OS) commands in Haskell programs as if they were
+  native Haskell functions, by treating their inputs and outputs as
+  Haskell streams. This allows you to write high-level Haskell scripts
+  that can perform tasks similar to shell scripts, but with C-like
+  performance, and with strong safety guarantees, refactorability, and
+  modularity.
+
+  Use the following imports in the examples below:
+
+  ```haskell
+  >>> :set -XFlexibleContexts
+  >>> :set -XScopedTypeVariables
+  >>> :set -XQuasiQuotes
+  >>> import Data.Function ((&))
+  >>> import Streamly.Unicode.String (str)
+  >>> import qualified Streamly.Data.Array as Array
+  >>> import qualified Streamly.Console.Stdio as Stdio
+  >>> import qualified Streamly.Data.Fold as Fold
+  >>> import qualified Streamly.Data.Stream.Prelude as Stream
+  >>> import qualified Streamly.System.Command as Command
+  >>> import qualified Streamly.Internal.FileSystem.Dir as Dir
+  ```
+
+  ## Commands as streaming functions
+
+  The shell command `echo "hello world" | tr [a-z] [A-Z]` can be written as
+  follows using this package:
+
+  ```haskell
+  >>> :{
+     Command.toBytes [str|echo "hello world"|] -- Stream IO Word8
+   & Command.pipeBytes [str|tr [a-z] [A-Z]|]   -- Stream IO Word8
+   & Stream.fold Stdio.write                   -- IO ()
+   :}
+   HELLO WORLD
+  ```
+
+  ## Shell commands as streaming functions
+
+  If you want to execute the same command using the shell pipe syntax:
+
+  ```haskell
+  >>> :{
+     Command.toBytes [str|sh "-c" "echo 'hello world' | tr [a-z] [A-Z]"|] -- Stream IO Word8
+   & Stream.fold Stdio.write                                              -- IO ()
+   :}
+   HELLO WORLD
+  ```
+
+  ## Running Commands Concurrently
+
+  You can run commands concurrently by using streamly's concurrent combinators.
+
+  Running @grep@ concurrently on many files:
+
+  ```haskell
+  >>> :{
+  grep file =
+     Command.toBytes [str|grep -H "pattern" #{file}|]             -- Stream IO Word8
+   & Stream.handle (\(_ :: Command.ProcessFailure) -> Stream.nil) -- Stream IO Word8
+   & Stream.foldMany (Fold.takeEndBy (== 10) Array.write)         -- Stream IO (Array Word8)
+   :}
+
+  >>> :{
+  pgrep =
+     Dir.readFiles "."             -- Stream IO FilePath
+   & Stream.parConcatMap id grep   -- Stream IO (Array Word8)
+   & Stream.fold Stdio.writeChunks -- IO ()
+  :}
+  ```
+
+  ## Streamly
 
   Please visit [Streamly homepage](https://streamly.composewell.com) for more
   details about streamly.
