@@ -1,12 +1,13 @@
 homepage: https://github.com/shlok/streamly-archive#readme
 changelog-type: markdown
-hash: 5a78b2b26ff26875aa3e8424e49a23f8fe444d75440af4fe16c9896582181c91
+hash: bebf7db36615524dc9783920a83e3e083456497e0289902c42c4fa1557581aef
 test-bench-deps:
-  bytestring: ==0.10.*
+  bytestring: ==0.11.*
   base: '>=4.7 && <5'
   filepath: '>=1.4.2.1 && <1.5'
   streamly-archive: -any
   tar: '>=0.5.1.1 && <0.6'
+  streamly-core: ==0.1.*
   cryptonite: '>=0.26'
   zlib: '>=0.6.2.1 && <0.7'
   tasty-quickcheck: '>=0.10.1.1 && <0.11'
@@ -14,14 +15,19 @@ test-bench-deps:
   temporary: ==1.3.*
   tasty: '>=1.2.3 && <1.5'
   QuickCheck: '>=2.13.2 && <2.15'
-  streamly: ==0.8.*
+  streamly: ==0.9.*
   directory: '>=1.3.6.0 && <1.4'
 maintainer: sd-haskell@quant.is
 synopsis: Stream data from archives using the streamly library.
 changelog: |
+  ## 0.2.0
+
+  * Updated for Streamly 0.9.0.
+  * Added `groupByHeader` convenience function.
+
   ## 0.1.0
 
-  * Updated for streamly 0.8.0.
+  * Updated for Streamly 0.8.0.
 
   ## 0.0.2
 
@@ -31,15 +37,17 @@ changelog: |
 
   * Initial release.
 basic-deps:
-  bytestring: ==0.10.*
+  bytestring: ==0.11.*
   base: '>=4.7 && <5'
-  streamly: ==0.8.*
+  streamly-core: ==0.1.*
+  streamly: ==0.9.*
 all-versions:
 - 0.0.1
 - 0.0.2
 - 0.1.0
+- 0.2.0
 author: Shlok Datye
-latest: 0.1.0
+latest: 0.2.0
 description-type: markdown
 description: |
   # streamly-archive
@@ -59,54 +67,68 @@ description: |
   ## Quick start
 
   ```haskell
-  {-# LANGUAGE ScopedTypeVariables, TypeApplications #-}
+  {-# LANGUAGE ScopedTypeVariables #-}
+  {-# LANGUAGE TypeApplications #-}
 
   module Main where
 
   import Crypto.Hash (hashFinalize, hashInit, hashUpdate)
   import Crypto.Hash.Algorithms (SHA256)
   import Data.ByteString (ByteString)
-  import Data.Either (isRight)
   import Data.Function ((&))
   import Data.Maybe (fromJust, fromMaybe)
   import Data.Void (Void)
-  import Streamly.External.Archive (Header, headerPathName, readArchive)
-  import Streamly.Internal.Data.Fold.Types (Fold (..))
-  import Streamly.Internal.Data.Unfold.Types (Unfold)
-  import qualified Streamly.Prelude as S
+  import qualified Streamly.Data.Fold as F
+  import qualified Streamly.Data.Stream.Prelude as S
+  import Streamly.External.Archive
+    ( Header,
+      groupByHeader,
+      headerPathName,
+      readArchive,
+    )
+  import Streamly.Internal.Data.Fold.Type (Fold (Fold), Step (Partial))
+  import Streamly.Internal.Data.Unfold.Type (Unfold)
 
   main :: IO ()
   main = do
-      -- Obtain an unfold for the archive.
-      -- For each entry in the archive, we will get a Header followed
-      -- by zero or more ByteStrings containing chunks of file data.
-      let unf :: Unfold IO Void (Either Header ByteString)
-              = readArchive "/path/to/archive.tar.gz"
+    -- Obtain an unfold for the archive.
+    -- For each entry in the archive, we will get a Header followed
+    -- by zero or more ByteStrings containing chunks of file data.
+    let unf :: Unfold IO Void (Either Header ByteString) =
+          readArchive "/path/to/archive.tar.gz"
 
-      -- Create a fold for converting each entry (which, as we saw
-      -- above, is a Left followed by zero or more Rights) into a
-      -- path and corresponding SHA-256 hash (Nothing for no data).
-      let entryFold :: Fold IO (Either Header ByteString) (String, Maybe String)
-              = Fold
-                  (\(mpath, mctx) e ->
-                      case e of
-                          Left h -> do
-                              mpath' <- headerPathName h
-                              return (mpath', mctx)
-                          Right bs ->
-                              return (mpath,
-                                  Just . (`hashUpdate` bs) $
-                                      fromMaybe (hashInit @SHA256) mctx))
-                  (return (Nothing, Nothing))
-                  (\(mpath, mctx) ->
-                      return (show $ fromJust mpath,
-                                  show . hashFinalize <$> mctx))
+    -- Create a fold for converting each entry (which, as we saw
+    -- above, is a Left followed by zero or more Rights) into a
+    -- path and corresponding SHA-256 hash (Nothing for no data).
+    let entryFold :: Fold IO (Either Header ByteString) (String, Maybe String) =
+          Fold
+            ( \(mpath, mctx) e ->
+                case e of
+                  Left h -> do
+                    mpath' <- headerPathName h
+                    return $ Partial (mpath', mctx)
+                  Right bs ->
+                    return $
+                      Partial
+                        ( mpath,
+                          Just . (`hashUpdate` bs) $
+                            fromMaybe (hashInit @SHA256) mctx
+                        )
+            )
+            (return $ Partial (Nothing, Nothing))
+            ( \(mpath, mctx) ->
+                return
+                  ( show $ fromJust mpath,
+                    show . hashFinalize <$> mctx
+                  )
+            )
 
-      -- Execute the stream, grouping at the headers (the Lefts) using the
-      -- above fold, and output the paths and SHA-256 hashes along the way.
-      S.unfold unf undefined
-          & S.groupsBy (\e _ -> isRight e) entryFold
-          & S.mapM_ print
+    -- Execute the stream, grouping at the headers (the Lefts) using the
+    -- above fold, and output the paths and SHA-256 hashes along the way.
+    S.unfold unf undefined
+      & groupByHeader entryFold
+      & S.mapM print
+      & S.fold F.drain
   ```
 
   ## Benchmarks
@@ -115,5 +137,5 @@ description: |
 
   The former fulfills the promise of [streamly](https://hackage.haskell.org/package/streamly) and stream fusion. The differences to C are presumably explained by the marshalling of data into the Haskell world and are currently small enough for our purposes.
 
-  <sup>†</sup> [Linode](https://linode.com); Debian 10, Dedicated 32GB: 16 CPU, 640GB Storage, 32GB RAM.
+  <sup>†</sup> April 2023; [Linode](https://linode.com); Debian 11, Dedicated 32GB: 16 CPU, 640GB Storage, 32GB RAM.
 license-name: BSD-3-Clause
