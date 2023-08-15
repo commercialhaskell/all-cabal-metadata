@@ -1,6 +1,6 @@
 homepage: https://github.com/Bodigrim/bitvec
 changelog-type: markdown
-hash: 8991eec6409f181bd6ccb20e24ac759659940170cd00ca530ec7dd5ffa4f30fc
+hash: 7c5639f95c8ce9d5be810152bfcaf701aac3b7d7f08685a869c7eda63dc2cd76
 test-bench-deps:
   bitvec: -any
   base: -any
@@ -17,6 +17,18 @@ test-bench-deps:
 maintainer: Andrew Lelechenko <andrew.lelechenko@gmail.com>
 synopsis: Space-efficient bit vectors
 changelog: |
+  # 1.1.5.0
+
+  * Make `zipBits` unconditionally strict in its second bit
+    vector argument (thanks to @treeowl).
+
+  * Add `simd` flag (enabled by default) to use a C SIMD
+    implementation for `zipBits`, `invertBits`, `countBits`,
+    `bitIndex`, `nthBitIndex`, `selectBits`, `excludeBits`,
+    `reverseBits` (thanks to @konsumlamm).
+
+  * Decomission `libgmp` flag.
+
   # 1.1.4.0
 
   * Include `Data.Bit.Gmp` only if `libgmp` flag is set.
@@ -100,10 +112,10 @@ changelog: |
   * Fix bugs in `MVector` and `Vector` instances of `Bit`.
   * Speed up `MVector` and `Vector` instances of `Bit`.
 basic-deps:
-  bytestring: '>=0.10 && <0.12'
+  bytestring: '>=0.10 && <0.13'
   base: '>=4.11 && <5'
   integer-gmp: -any
-  deepseq: <1.5
+  deepseq: <1.6
   primitive: '>=0.5'
   vector: '>=0.11 && <0.14'
 all-versions:
@@ -117,15 +129,16 @@ all-versions:
 - 1.1.2.0
 - 1.1.3.0
 - 1.1.4.0
+- 1.1.5.0
 author: |-
   Andrew Lelechenko <andrew.lelechenko@gmail.com>,
   James Cook <mokus@deepbondi.net>
-latest: 1.1.4.0
+latest: 1.1.5.0
 description-type: markdown
 description: |
   # bitvec [![Hackage](https://img.shields.io/hackage/v/bitvec.svg)](https://hackage.haskell.org/package/bitvec) [![Stackage LTS](https://www.stackage.org/package/bitvec/badge/lts)](https://www.stackage.org/lts/package/bitvec) [![Stackage Nightly](https://www.stackage.org/package/bitvec/badge/nightly)](https://www.stackage.org/nightly/package/bitvec)
 
-  A newtype over `Bool` with a better `Vector` instance: 8x less memory, up to 1000x faster.
+  A newtype over `Bool` with a better `Vector` instance: 8x less memory, up to 3500x faster.
 
   The [`vector`](https://hackage.haskell.org/package/vector)
   package represents unboxed arrays of `Bool`s
@@ -137,16 +150,21 @@ description: |
   the most significant degradation happens for random writes
   (up to 10% slower).
   On the other hand, for certain bulk bit operations
-  `Vector Bit` is up to 1000x faster than `Vector Bool`.
+  `Vector Bit` is up to 3500x faster than `Vector Bool`.
 
   ## Thread safety
 
-  * `Data.Bit` is faster, but writes and flips are thread-unsafe.
+  * `Data.Bit` is faster, but writes and flips are not thread-safe.
     This is because naive updates are not atomic:
     they read the whole word from memory,
     then modify a bit, then write the whole word back.
+    Concurrently modifying non-intersecting slices of the same underlying array
+    may also lead to unexpected results, since they can share a word in memory.
   * `Data.Bit.ThreadSafe` is slower (usually 10-20%),
     but writes and flips are thread-safe.
+    Additionally, concurrently modifying non-intersecting slices of the same underlying array
+    works as expected. However, operations that affect multiple elements are not
+    guaranteed to be atomic.
 
   ## Quick start
 
@@ -229,7 +247,7 @@ description: |
   One may notice that the order of the inner traversal by `i`
   does not matter and get tempted to run it in several parallel threads.
   In this case it is vital to switch from `Data.Bit` to `Data.Bit.ThreadSafe`,
-  because the former is thread-unsafe with regards to writes.
+  because the former is not thread-safe with regards to writes.
   There is a moderate performance penalty (usually 10-20%)
   for using the thread-safe interface.
 
@@ -245,11 +263,51 @@ description: |
   * As a 64k-long unboxed `Vector Bool`, implementing union as `zipWith (||)`.
   * As a 64k-long unboxed `Vector Bit`, implementing union as `zipBits (.|.)`.
 
-  When the `libgmp` flag is enabled,
+  When the `simd` flag is enabled,
   according to our benchmarks (see `bench` folder),
-  the union of `Vector Bit` evaluates 24x-36x faster
+  the union of `Vector Bit` evaluates magnitudes faster
   than the union of not-too-sparse `IntSet`s
-  and stunningly outperforms `Vector Bool` by 500x-1000x.
+  and stunningly outperforms `Vector Bool`.
+  Here are benchmarks on MacBook M2:
+
+  ```
+  union
+    16384
+      Vector Bit:
+        61.2 ns ± 3.2 ns
+      Vector Bool:
+        96.1 μs ± 4.5 μs, 1570.84x
+      IntSet:
+        2.15 μs ± 211 ns, 35.06x
+    32768
+      Vector Bit:
+        143  ns ± 7.4 ns
+      Vector Bool:
+        225  μs ±  16 μs, 1578.60x
+      IntSet:
+        4.34 μs ± 429 ns, 30.39x
+    65536
+      Vector Bit:
+        249  ns ±  18 ns
+      Vector Bool:
+        483  μs ±  28 μs, 1936.42x
+      IntSet:
+        8.77 μs ± 835 ns, 35.18x
+    131072
+      Vector Bit:
+        322  ns ±  30 ns
+      Vector Bool:
+        988  μs ±  53 μs, 3071.83x
+      IntSet:
+        17.6 μs ± 1.6 μs, 54.79x
+    262144
+      Vector Bit:
+        563  ns ±  27 ns
+      Vector Bool:
+        2.00 ms ± 112 μs, 3555.36x
+      IntSet:
+        36.8 μs ± 3.3 μs, 65.40x
+  ```
 
   ## Binary polynomials
 
@@ -272,15 +330,9 @@ description: |
 
   ## Package flags
 
-  * Flag `libgmp`, disabled by default.
+  * Flag `simd`, enabled by default.
 
-    Link against the [GMP](https://gmplib.org/) library for the ultimate performance of
-    `zipBits`, `invertBits` and `countBits`. GMP is readily available on most machines
-    ([`apt-get install libgmp-dev`](https://packages.ubuntu.com/focal/libgmp-dev) on Ubuntu,
-    [`brew install gmp`](https://formulae.brew.sh/formula/gmp)
-    or [`port install gmp`](https://ports.macports.org/port/gmp/summary) on macOS,
-    [`pacman -S mingw-w64-x86_64-gmp`](https://packages.msys2.org/package/mingw-w64-x86_64-gmp) on MinGW),
-    so users are strongly encouraged to enable it whenever possible.
+    Use a C SIMD implementation for the ultimate performance of `zipBits`, `invertBits` and `countBits`.
 
   ## Similar packages
 
