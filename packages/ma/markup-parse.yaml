@@ -1,22 +1,39 @@
 homepage: https://github.com/tonyday567/markup-parse#readme
 changelog-type: markdown
-hash: e0b649ea322f4aadfdf9677f0fc1cfa8752ea7bfb7fda0ce0814c5ac52131ea9
+hash: 86fe6b110bd2c2f1fe2dbfeb903dd58657b58a85e961452a4e7b39e68a5a30dd
 test-bench-deps:
   bytestring: '>=0.11.3 && <0.13'
   string-interpolate: '>=0.3 && <0.4'
   flatparse: '>=0.3.5 && <0.6'
   base: '>=4.7 && <5'
   tasty-golden: '>=2.3.1.1 && <2.4'
-  text: '>=1.2 && <2.1'
+  text: '>=1.2 && <2.2'
   markup-parse: -any
   tree-diff: '>=0.3 && <0.4'
   perf: '>=0.12 && <0.13'
   html-parse: '>=0.2 && <0.3'
   optparse-applicative: '>=0.17 && <0.19'
-  tasty: '>=1.2 && <1.5'
+  tasty: '>=1.2 && <1.6'
 maintainer: tonyday567@gmail.com
 synopsis: A markup parser.
 changelog: |
+  0.1.1
+  ===
+
+  - fixed escape bug
+  - bumped tasty & text upper bounds
+
+  0.1.0
+  ===
+
+  - Added RenderStyle
+  - rename: Warn <== Result
+  - refactored Markup structure
+  - created OpenTagType
+  - rename: NameTag <== TagName
+  - Element type synonym for Tree Token
+  - suffixed parsers with a 'P'
+
   0.0.0
   ===
 
@@ -30,15 +47,16 @@ basic-deps:
   tasty-golden: '>=2.3.1.1 && <2.4'
   tree-diff: '>=0.3 && <0.4'
   containers: '>=0.6 && <0.7'
-  tasty: '>=1.2 && <1.5'
+  tasty: '>=1.2 && <1.6'
   deepseq: '>=1.4.4 && <1.6'
 all-versions:
 - 0.0.0.1
 - 0.0.0.2
 - 0.1.0.0
 - 0.1.0.1
+- 0.1.1
 author: Tony Day
-latest: 0.1.0.1
+latest: 0.1.1
 description-type: text
 description: |+
   * markup-parse
@@ -46,11 +64,11 @@ description: |+
   [[https://hackage.haskell.org/package/markup-parse][https://img.shields.io/hackage/v/markup-parse.svg]]
   [[https://github.com/tonyday567/markup-parse/actions?query=workflow%3Ahaskell-ci][https://github.com/tonyday567/markup-parse/workflows/haskell-ci/badge.svg]]
 
-  ~markup-parse~ parses and prints a subset of common XML & HTML data.
+  ~markup-parse~ parses and prints a subset of common XML & HTML structured data, from and to strict bytestrings
 
   * Development
 
-  #+begin_src haskell :results output
+  #+begin_src haskell :results output :exports both
   :r
   :set prompt "> "
   :set -Wno-type-defaults
@@ -61,51 +79,55 @@ description: |+
   import Control.Monad
   import MarkupParse
   import MarkupParse.FlatParse
-  import Data.Map.Strict qualified as Map
   import MarkupParse.Patch
   import Data.ByteString qualified as B
   import Data.ByteString.Char8 qualified as C
+  import Data.Map.Strict qualified as Map
   import Data.Function
   import FlatParse.Basic hiding (take)
   import Data.String.Interpolate
   import Data.TreeDiff
   import Control.Monad
-  -- import Perf
   bs <- B.readFile "other/line.svg"
   C.length bs
   #+end_src
 
   #+RESULTS:
+  : Preprocessing library for markup-parse-0.1.1..
+  : GHCi, version 9.6.2: https://www.haskell.org/ghc/  :? for help
+  : [1 of 3] Compiling MarkupParse.FlatParse ( src/MarkupParse/FlatParse.hs, interpreted )
+  : [2 of 3] Compiling MarkupParse      ( src/MarkupParse.hs, interpreted )
+  : [3 of 3] Compiling MarkupParse.Patch ( src/MarkupParse/Patch.hs, interpreted )
   : Ok, three modules loaded.
-  : >
-  : >
+  : g
+  : Ok, three modules loaded.
   : 7554
 
-  * Main Pipeline
+  * Main Pipeline types
 
-  #+begin_src haskell :results output
+  #+begin_src haskell :results output :exports both
   :t tokenize Html
   :t gather Html
-  :t Markup Html
   :t normalize
-  :t tokenize Html >=> gather Html >>> fmap (Markup Html >>> normalize) >=> degather >>> fmap (fmap (detokenize Html) >>> mconcat)
+  :t degather
   :t detokenize Html
+  :t tokenize Html >=> gather Html >=> (normalize >>> pure) >=> degather Html >=> (fmap (detokenize Html) >>> pure)
   #+end_src
 
   #+RESULTS:
-  : tokenize Html :: ByteString -> These [MarkupWarning] [Token]
-  : gather Html :: [Token] -> These [MarkupWarning] [Tree Token]
-  : Markup Html :: [Tree Token] -> Markup
+  : tokenize Html :: ByteString -> Warn [Token]
+  : gather Html :: [Token] -> Warn Markup
   : normalize :: Markup -> Markup
-  : tokenize Html >=> gather Html >>> fmap (Markup Html >>> normalize) >=> degather >>> fmap (fmap (detokenize Html) >>> mconcat)
-  :   :: ByteString -> These [MarkupWarning] ByteString
+  : degather :: Standard -> Markup -> Warn [Token]
   : detokenize Html :: Token -> ByteString
+  : tokenize Html >=> gather Html >=> (normalize >>> pure) >=> degather Html >=> (fmap (detokenize Html) >>> pure)
+  :   :: ByteString -> These [MarkupWarning] [ByteString]
 
   Round trip equality
 
-  #+begin_src haskell :results output
+  #+begin_src haskell :results output :exports both
   m = markup_ Xml bs
-  m == (markup_ Xml $ markdown Compact m)
+  m == (markup_ Xml $ markdown_ Compact Xml m)
   #+end_src
 
   #+RESULTS:
@@ -113,72 +135,73 @@ description: |+
 
   * MarkupParse.Patch
 
-  Obviously doesn't belong here long-term but has been very useful in testing and development.
+  Obviously, patch doesn't belong here long-term but has been very useful in testing and development.
 
-  #+begin_src haskell :results output
-  show $ ansiWlEditExpr <$> patch [1, 2, 3, 5] [0, 1, 2, 4, 6]
+  #+begin_src haskell :results output :exports both
+  showPatch $ patch [1, 2, 3, 5] [0, 1, 2, 4, 6]
   #+end_src
 
   #+RESULTS:
-  : Just [+0, -3, +4, -5, +6]
+  : [+0, -3, +4, -5, +6]
 
   * wiki diff test debug
 
-  #+begin_src haskell :results output
+  #+begin_src haskell :results output :exports both
   bs <- B.readFile "other/Parsing - Wikipedia.html"
   m = markup_ Html bs
-  m == (markup_ Html $ markdown Compact m)
+  m == (markup_ Html $ markdown_ Compact Html m)
   #+end_src
 
   #+RESULTS:
   : True
 
   * Reference
-  ** Html Standards
 
-  [[https://html.spec.whatwg.org/multipage/syntax.html#elements-2:void-elements-2][HTML Standard]]
+  [[https://html.spec.whatwg.org/#toc-syntax][HTML Standard]]
 
-  [[https://developer.mozilla.org/en-US/docs/Glossary/Void_element#self-closing_tags][void elements]]
+  [[https://stackoverflow.com/questions/3558119/are-non-void-self-closing-tags-valid-in-html5][Are (non-void) self-closing tags valid in HTML5? - Stack Overflow]]
 
-  [[https://stackoverflow.com/questions/3558119/are-non-void-self-closing-tags-valid-in-html5][html - Are (non-void) self-closing tags valid in HTML5? - Stack Overflow]]
-
-  [[https://www.w3.org/TR/2017/REC-html52-20171214/syntax.html#tree-construction][HTML 5.2: 8. The HTML syntax]]
+  [[https://www.w3.org/TR/xml/][Extensible Markup Language (XML) 1.0 (Fifth Edition)]]
 
   ** Prior Art
 
-  attoparsec-based
-  https://hackage.haskell.org/package/html-parse
+  [[https://hackage.haskell.org/package/html-parse][html-parse]] is an attoparsec-based parser for HTML. The HTML parsing here has referenced this parsing logic for HTML elements.
 
-  event-based
-  https://hackage.haskell.org/package/xeno
+  [[https://hackage.haskell.org/package/blaze-markup][blaze-markup]] & [[https://hackage.haskell.org/package/lucid][lucid]] are HTML DSLs and printers, but not parsers.
 
-  parsec-based
-  https://hackage.haskell.org/package/XMLParser
+  [[https://hackage.haskell.org/package/xeno][xeno]] is an "event-based" XML parser with a more complicated base markup type.
 
-  https://hackage.haskell.org/package/hexml
+  [[https://hackage.haskell.org/package/XMLParser][XMLParser]] & [[https://hackage.haskell.org/package/hexml][hexml]] are parsec-based parsers.
 
   * Performance
 
-  Most testing has been via app/speed.hs
+  The [[https://hackage.haskell.org/package/perf][perf]] library has been used to measure performance of the library.
 
-  #+begin_src elisp
-  (setq haskell-process-args-cabal-repl '("markup-parse:bench:markup-parse-speed"))
+  `cabal bench` runs the default benchmarking:
+
+  #+begin_src sh :results output :exports both
+  cabal bench
   #+end_src
 
   #+RESULTS:
-  | markup-parse:bench:markup-parse-speed |
+  #+begin_example
+  Running 1 benchmarks...
+  Benchmark markup-parse-speed: RUNNING...
+  label1          label2          old result      new result      change
 
-  ** Benchmarks
-
-  #+begin_src sh :results output
-  cabal run markup-parser-speed
-  #+end_src
-
-  #+RESULTS:
-
-
+  gather          time            9.33e4          7.73e4          improvement
+  html-parse tokenstime            1.21e6          1.17e6
+  html-parse tree time            6.61e4          7.59e4          slightly-degraded
+  markdown        time            3.75e5          3.92e5
+  markup          time            4.72e5          5.20e5          slightly-degraded
+  normalize       time            2.80e5          3.04e5          slightly-degraded
+  tokenize        time            8.59e5          8.67e5
+  Benchmark markup-parse-speed: FINISH
+  #+end_example
 
   ** Profiling
+
+  Profiling is used to aid library development:
 
   #+begin_src sh :results output
   cabal configure --enable-library-profiling --enable-executable-profiling -fprof-auto -fprof --write-ghc-environment-files=always --enable-benchmarks -O2
@@ -194,8 +217,7 @@ description: |+
   executable-profiling: True
   #+end_example
 
-
-  Profiling slowed the main functions significantly:
+  Profiling slow the main functions significantly:
 
   #+begin_example
   ./app/speed -n 1000 --best -c +RTS -s -p -hc -l -RTS
