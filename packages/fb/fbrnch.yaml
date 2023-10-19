@@ -1,11 +1,41 @@
 homepage: https://github.com/juhp/fbrnch
 changelog-type: markdown
-hash: 042a63c98be2d03efacf4253a1361a8dc4d981daba08d39ad35a35d55409b4d7
+hash: c795e1cb9fe60013dd9b6501aa04f6d30437a3652ffd0108da6c0b3f6f90863d
 test-bench-deps: {}
 maintainer: Jens Petersen <petersen@fedoraproject.org>
 synopsis: Fedora packager tool to build package branches
 changelog: |
   # Changelog
+
+  ## 1.3.3 (2023-10-19)
+  - 'bump': add --dry-run
+  - 'copr': track pkg name to output build results url on failure
+  - 'create-review','update-review': prompt to offer scratch build (#43)
+  - 'diff': allow origin as alias for origin/<branch>
+  - 'import': encode url from bz comment if needed (#40)
+  - 'import': prefix bug# with rhbz in commit (#38)
+  - 'install': add --no-build to install existing built rpms
+  - 'parallel': --delay to override default inter-package pause [default 3s]
+  - 'parallel': use pkg name in changelog instead of nvr
+  - 'parallel': print if no more layers
+  - 'parallel': try to make Bodhi update prompt more obvious
+  - 'request-repo': avoid head crash on firstname (#45)
+  - 'request-repo': no longer post request url to avoid duplication
+  - 'scratch': with --exclude-arch respect ExcludeArch: fields
+  - 'unpushed': add --bump
+  - 'unpushed': output improvements for --latest and dead.package/missing
+  - 'update-sources': alias for "update-version --source-only"
+  - 'update-version': only warn about branch if dist-git
+  - 'update-version': rpm prep with --nodeps
+  - 'update-version': take .gpg and .tgz file for lookaside archive!
+  - Krb: loop fkinit until okay
+  - Main: --dry-run options now better described
+  - RpmBuild: prevent srpm creation from being interrupted (eg ctrl-c)
+  - gitFetchSilent: use \r to hide "git fetching..."
+  - kojiBuild: remove "Take info: " prefix before koji task url
+  - kojiWatchTask: do not hardcode koji-tool path
+  - pkgNameVerRel: use fedpkg to determine correct %autorelease (#39)
+  - refPrompt: do not trim input for more precision
 
   ## 1.3.2 (2023-05-30)
   - prompts now support line-editting thanks to simple-prompt-0.2 using haskeline
@@ -767,8 +797,9 @@ all-versions:
 - '1.3'
 - 1.3.1
 - 1.3.2
+- 1.3.3
 author: Jens Petersen <petersen@redhat.com>
-latest: 1.3.2
+latest: 1.3.3
 description-type: markdown
 description: |
   # fbrnch (fedora branch) packager tool
@@ -812,7 +843,7 @@ description: |
 
   One can change the branch of one or more packages:
   ```
-  $ fbrnch switch f38 [package] ...
+  $ fbrnch switch f39 [package] ...
   ```
 
   You can also git pull over packages:
@@ -852,10 +883,10 @@ description: |
   ```
 
   ### Commit, Merging and Building in Koji
-  The update-version command helps with updating a package
-  after editing the spec file to a newer version:
+  The update-sources and update-version commands can help with updating
+  a package after editing the spec file to a newer version:
   ```
-  $ fbrnch update-version
+  $ fbrnch update-sources
   ```
   which will download the new tarball and upload it, etc.
 
@@ -870,9 +901,9 @@ description: |
 
   You can merge branches with:
   ```
-  $ fbrnch merge f37 package
+  $ fbrnch merge f38 package
   ```
-  which will offer to merge f38 (or up to a git hash you choose) into f37.
+  which will offer to merge f39 (or up to a git hash you choose) into f38.
 
   Merging can also be done together with building:
   ```
@@ -928,7 +959,7 @@ description: |
 
   Locally build and install:
   ```
-  $ fbrnch install package1 package2 package3 ...
+  $ fbrnch install package1 package2/ package3 ...
   ```
 
   You can use:
@@ -941,7 +972,7 @@ description: |
   ```
   $ fbrnch rename-rawhide [package]
   ```
-  to rename an old master branch locally to rawhide.
+  to rename an old local master branch to rawhide.
 
   ### Parallel building
   fbrnch can sort packages automatically and build them in parallel
@@ -951,16 +982,17 @@ description: |
   ```
   $ fbrnch parallel --sidetag rawhide pkg-x pkg-y pkg-z pkg-xy pkg-xy-z
   ```
-  builds a list of packages in a sidetag (generating it if needed)
+  builds a list of packages in a sidetag (generating it if no sidetags exist)
   in parallel ordered by build dependencies.
 
-  When building for a branch, merging from newer branch will be offered
+  When building for a branch, merging from the next newer branch will be offered
   unless using `--no-merge`
-  (though you may prefer to run `fbrnch merge <branch> ...` first instead).
+  (then you may prefer to run `fbrnch merge <branch> ...` first instead).
 
   Except for rawhide using a --sidetag or --target is required.
   If you have more than one active sidetag for a branch,
   you can select one using `--target`.
+  They can be listed with `fbrnch sidetags`.
 
   After parallel building you can create a Bodhi update from the sidetag.
 
@@ -973,16 +1005,18 @@ description: |
   ```
   $ fbrnch create-review [my-new-package]
   ```
-  This will create (or update) an srpm, run rpmlint,
-  then upload it to fedorapeople, perform a scratch build,
-  and open a Review Request in Bugzilla (similar to fedora-create-review).
+  This will create an srpm (or update it if the spec file is newer), run rpmlint,
+  optionally perform a scratch build, then upload the spec and srpm to
+  fedorapeople, and open a Review Request in Bugzilla
+  (similar to fedora-create-review).
 
   #### Update a package review
   ```
   $ fbrnch update-review [my-new-package]
   ```
   Similar to create-review: it uploads the updated files to fedorapeople
-  and posts the updated package urls to the open package review.
+  and posts the updated package urls to the open package review
+  with an optional scratch build.
 
   #### List open package reviews
   To list one's open package reviews:
@@ -1030,10 +1064,14 @@ description: |
 
   Here is an "extreme" [example](https://github.com/fedora-haskell/haskell-language-server/blob/main/build.sh) of a script using `fbrnch copr` to do multiple staggered builds.
 
+  ## Help
+  `$ fbrnch --version`
   ```
-  $ fbrnch --version
-  1.3.2
-  $ fbrnch --help
+  1.3.3
+  ```
+
+  `$ fbrnch --help`
+  ```
   Fedora branch building tool
 
   Usage: fbrnch [--version] COMMAND
@@ -1063,6 +1101,7 @@ description: |
     scratch                  Scratch build package in Koji
     scratch-aarch64          Koji aarch64 scratch build of package
     scratch-x86_64           Koji x86_64 scratch build of package
+    update-sources           Download and update newer sources
     update-version           Update package in dist-git to newer version
     sort                     Sort packages in build dependency order
     prep                     Prep sources
@@ -1103,6 +1142,9 @@ description: |
     move-artifacts           Move old rpm artifacts into rpmbuild dirs
   ```
 
+  Use `fbrnch <cmd> --help` to get specific help about each of the above commands
+  and their options.
+
   ## Installation
   fbrnch is packaged in Fedora: `sudo dnf install fbrnch`.
 
@@ -1113,11 +1155,11 @@ description: |
 
   3. Then either:
 
-  a) using stack (probably 2.3 or later): `stack install`
+  a) using stack: `stack install`
 
   or
 
-  b) with cabal-install (probably 2.4 or later) and cabal-rpm:
+  b) with cabal-install and cabal-rpm:
 
   ```
   $ cabal-rpm builddep
@@ -1183,16 +1225,16 @@ description: |
   <https://bugzilla.redhat.com/userprefs.cgi?tab=apikey>.
 
   ## Known issues
-  - parallel builds will push local package commits without asking
   - currently it only checks if already built by NVR not githash
+  - parallel and sort, etc do not take pkgconfig() and other meta() deps into
+    account yet (this should be fixed soon in rpmbuild-order)
+
+  ## To do
   - authentication is not implemented yet natively for Koji, Bodhi, Pagure
     (and source upload)
     - so python clients are used for "writing"
       (specifically koji, bodhi-client, fedpkg),
       but all queries are done directly by Web APIs for speed and control.
-  - https checkouts are currently treated as anonymous git checkouts
-  - parallel and sort, etc do not take pkgconfig() and other meta() deps into
-    account yet (this will be fixed in rpmbuild-order)
 
   ## Motivation, history, talks
   This project started off as a simple tool to build a package across branches
