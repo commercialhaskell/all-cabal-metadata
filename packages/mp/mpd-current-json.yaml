@@ -1,0 +1,731 @@
+homepage: https://codeberg.org/useless-utils/mpd-current-json
+changelog-type: markdown
+hash: a8e96a6321e6c70443ce8c7befa897c5403d7e8f750d207eb7da13c3ed1654e9
+test-bench-deps: {}
+maintainer: g@11xx.org
+synopsis: Print current MPD song and status as JSON
+changelog: |
+  # v1.1.0.2
+  [comment]: # (2023-10-23)
+  - Fixed cabal `build-depends` version bounds for Arch Linux dynamic
+    building.
+
+  # v1.1.0.1
+  [comment]: # (2023-10-17)
+  - Added haddock comments
+  - Addressed `cabal check` warnings;
+  - setup for uploading as a Hackage package.
+
+  # v1.1.0.0
+  [comment]: # (2023-06-11)
+  - Remove `-h` from `--help` and use `-h` for `--host`
+  - Make `--help` option hidden in the help message
+
+  # v1.0.0.0
+  [comment]: # (2023-06-08)
+  Initial working version
+  - Added conditional tags printing, only non-empty values are printed
+  - Accept host, port and password
+  - Nested json objects for `status` and `tags`
+  - Added `elapsed_percent` key shortcut for `elapsed / duration * 100`
+
+  # v0.0.1.0
+  [comment]: # (2023-06-01)
+  - initial connection and parsing values
+  - First version. Released on an unsuspecting world.
+basic-deps:
+  bytestring: '>0.10 && <0.12'
+  base: '>4.15 && <4.17'
+  aeson-pretty: ==0.8.*
+  libmpd: ==0.10.*
+  optparse-applicative: '>0.17 && <0.19'
+  aeson: ==2.1.*
+all-versions:
+- 1.1.0.2
+author: Lucas G
+latest: 1.1.0.2
+description-type: text
+description: |
+  #+TITLE: Print currently playing MPD's song metadata and status as JSON
+  # #+PROPERTY: header-args :comments org
+  #+OPTIONS: toc:1
+
+  * Installation
+  #+begin_example
+  git clone https://codeberg.org/useless-utils/mpd-current-json
+  cd mpd-current-json
+  #+end_example
+  and to install the executable to =./dist=, in the current directory:
+  : cabal install --install-method=copy --overwrite-policy=always --installdir=dist
+  or to install to =${CABAL_DIR}/bin= remove the =--installdir=dist=
+  argument. =CABAL_DIR= defaults to =~/.local/share/cabal=.
+
+  * Usage
+  get values
+  : mpd-current-json | jaq .tags.album
+  : mpd-current-json | jaq .status.elapsed_percent
+
+  provide host and port with
+  : mpd-current-json -h 'localhost' -p 4321
+
+  * Files
+
+  ** Source
+  *** Main.hs
+  :PROPERTIES:
+  :header-args:haskell+: :tangle src/Main.hs
+  :END:
+  **** Pragma language extensions
+  #+begin_src haskell
+  {-# LANGUAGE OverloadedStrings #-}
+  #+end_src
+  **** Module declaration
+  #+begin_src haskell
+  module Main ( main,
+                getStatusItem,
+                getTag,
+                processSong,
+                headMay,
+                valueToStringMay,
+                (.=?) ) where
+  #+end_src
+
+  **** Imports
+  Import for the ~libmpd~ library, added as ~libmpd == 0.10.*~ to
+  [[*mpd-current-json.cabal][mpd-current-json.cabal]].
+  #+begin_src haskell
+  import qualified Network.MPD as MPD
+  import Network.MPD
+      ( Metadata(..), Song, PlaybackState(Stopped, Playing, Paused) )
+  import Data.Maybe ( catMaybes )
+  import Data.Aeson ( object, Key, KeyValue(..), ToJSON )
+  import Data.Aeson.Encode.Pretty ( encodePretty )
+  import qualified Data.ByteString.Lazy.Char8 as C
+  import Text.Printf ( printf )
+  import Options
+      ( optsParserInfo, execParser, Opts(optPass, optHost, optPort) )
+  #+end_src
+
+  **** Main
+  #+begin_src haskell :padline no
+  {- | Where the program connects to MPD and uses the helper functions to
+  extract values, organize them into a list of key/value pairs, make
+  them a 'Data.Aeson.Value' using 'Data.Aeson.object', then encode it to
+  a conventional JSON @ByteString@ with
+  'Data.Aeson.Encode.Pretty.encodePretty' for the pretty-print version.
+  -}
+  main :: IO ()
+  main = do
+  #+end_src
+
+  Parse the command-line options and bind the result to =opts=.
+  #+begin_src haskell :padline no
+    opts <- execParser optsParserInfo
+  #+end_src
+
+  Connect to MPD using either the provided arguments from the
+  command-line or the default values, as defined in [[*=Parser Opts= definition][​=Parser Opts=
+  definition]].
+  #+begin_src haskell
+    cs <- MPD.withMPDEx (optHost opts) (optPort opts) (optPass opts) MPD.currentSong
+    st <- MPD.withMPDEx (optHost opts) (optPort opts) (optPass opts) MPD.status
+  #+end_src
+  where =currentSong= returns a =Maybe (Just (Song {...}))= and =status=
+  returns =Maybe (Status {...})= to be parsed.
+
+  The data record =Song= from the command =currentSong= contains a field
+  label "=sgTags=" that contains all embedded metadata tags in a
+  =fromList [...]=, in this =let= statement store the parser =getTag= function
+  calls to be placed in the JSON object later:
+  #+begin_src haskell
+    let artist                     = getTag Artist                     cs
+        artistSort                 = getTag ArtistSort                 cs
+        album                      = getTag Album                      cs
+        albumSort                  = getTag AlbumSort                  cs
+        albumArtist                = getTag AlbumArtist                cs
+        albumArtistSort            = getTag AlbumArtistSort            cs
+        title                      = getTag Title                      cs
+        track                      = getTag Track                      cs
+        name                       = getTag Name                       cs
+        genre                      = getTag Genre                      cs
+        date                       = getTag Date                       cs
+        originalDate               = getTag OriginalDate               cs
+        composer                   = getTag Composer                   cs
+        performer                  = getTag Performer                  cs
+        conductor                  = getTag Conductor                  cs
+        work                       = getTag Work                       cs
+        grouping                   = getTag Grouping                   cs
+        comment                    = getTag Comment                    cs
+        disc                       = getTag Disc                       cs
+        label                      = getTag Label                      cs
+        musicbrainz_Artistid       = getTag MUSICBRAINZ_ARTISTID       cs
+        musicbrainz_Albumid        = getTag MUSICBRAINZ_ALBUMID        cs
+        musicbrainz_Albumartistid  = getTag MUSICBRAINZ_ALBUMARTISTID  cs
+        musicbrainz_Trackid        = getTag MUSICBRAINZ_TRACKID        cs
+        musicbrainz_Releasetrackid = getTag MUSICBRAINZ_RELEASETRACKID cs
+        musicbrainz_Workid         = getTag MUSICBRAINZ_WORKID         cs
+  #+end_src
+
+  Likewise, =getStatusItem= parses values from =Status {...}= returned by
+  =status=, some may require additional =Maybe= checks to get the desired
+  values.
+  #+begin_src haskell
+    let state :: Maybe String
+        state = case getStatusItem st MPD.stState of
+                  Just ps -> case ps of
+                               Playing -> Just "play"  -- same as mpc
+                               Paused  -> Just "pause"  -- same as mpc
+                               Stopped -> Just "stopped"
+                  Nothing -> Nothing
+
+        time = getStatusItem st MPD.stTime
+
+        elapsed = case time of
+          Just t -> case t of
+                      Just (e, _) -> Just e
+                      _           -> Nothing
+          Nothing -> Nothing
+
+        duration = case time of
+          Just t -> case t of
+                      Just (_, d) -> Just d
+                      _           -> Nothing
+          Nothing -> Nothing
+
+        elapsedPercent :: Maybe Double
+        elapsedPercent = case time of
+          Just t -> case t of
+                      Just t1 -> Just (read $ printf "%.2f" (uncurry (/) t1 * 100))
+                      Nothing -> Just 0
+          Nothing -> Nothing
+
+        repeatSt       = getStatusItem st MPD.stRepeat
+        randomSt       = getStatusItem st MPD.stRandom
+        singleSt       = getStatusItem st MPD.stSingle
+        consumeSt      = getStatusItem st MPD.stConsume
+        pos            = getStatusItem st MPD.stSongPos
+        playlistLength = getStatusItem st MPD.stPlaylistLength
+        bitrate        = getStatusItem st MPD.stBitrate
+        audioFormat    = getStatusItem st MPD.stAudio
+        errorSt        = getStatusItem st MPD.stError
+  #+end_src
+
+  # Create the first JSON object that contains all the extracted =sgTags=
+  # values. To prevent printing fields that contain no value to the final
+  # JSON object (e.g. ="key":null=), the custom operator ~.=?~ is used to
+  # check if the assined =getTag= or =getStatusItem= functions returned
+  # "=Nothing=", if so, also send =Nothing= as the value of the key/value
+  # pair, then, in conjunction with =catMaybes= filter out empty values and
+  # extract only the values from =Just=, returning the raw value.
+
+  The =object . catMaybes= constructs a JSON object by combining a list of
+  key/value pairs. The ~.=?~ operator is used to create each key/value
+  pair. If the value is =Just=, the key/value pair is included in the
+  list; if the value is =Nothing=, it is filtered out using =catMaybes= to
+  prevent generating fields with a value of =null= in the final JSON
+  object. Then, the =object= function converts the list of key/value
+  pairs =[Pair]= into a =Value= data structure that can be 'encoded' using
+  =Data.Aeson='s "=encode=" or =Data.Aeson.Encode.Pretty='s "=encodePretty=".
+  #+begin_src haskell
+    -- sgTags
+    let jTags = object . catMaybes $
+          [ "artist"                     .=? artist
+          , "artist_sort"                .=? artistSort
+          , "album"                      .=? album
+          , "album_sort"                 .=? albumSort
+          , "album_artist"               .=? albumArtist
+          , "album_artist_sort"          .=? albumArtistSort
+          , "title"                      .=? title
+          , "track"                      .=? track
+          , "name"                       .=? name
+          , "genre"                      .=? genre
+          , "date"                       .=? date
+          , "original_date"              .=? originalDate
+          , "composer"                   .=? composer
+          , "performer"                  .=? performer
+          , "conductor"                  .=? conductor
+          , "work"                       .=? work
+          , "grouping"                   .=? grouping
+          , "comment"                    .=? comment
+          , "disc"                       .=? disc
+          , "label"                      .=? label
+          , "musicbrainz_artistid"       .=? musicbrainz_Artistid
+          , "musicbrainz_albumid"        .=? musicbrainz_Albumid
+          , "musicbrainz_albumartistid"  .=? musicbrainz_Albumartistid
+          , "musicbrainz_trackid"        .=? musicbrainz_Trackid
+          , "musicbrainz_releasetrackid" .=? musicbrainz_Releasetrackid
+          , "musicbrainz_workid"         .=? musicbrainz_Workid
+          ]
+
+    -- status
+    let jStatus = object . catMaybes $
+          [ "state"           .=? state
+          , "repeat"          .=? repeatSt
+          , "elapsed"         .=? elapsed
+          , "duration"        .=? duration
+          , "elapsed_percent" .=? elapsedPercent
+          , "random"          .=? randomSt
+          , "single"          .=? singleSt
+          , "consume"         .=? consumeSt
+          , "song_position"   .=? pos
+          , "playlist_length" .=? playlistLength
+          , "bitrate"         .=? bitrate
+          , "audio_format"    .=? audioFormat
+          , "error"           .=? errorSt
+          ]
+  #+end_src
+
+  Having two objects, one for "tags" and other for "status", create a
+  nested JSON with labels before each of them.
+  #+begin_src haskell
+    let jObject = object [ "tags"   .= jTags
+                         , "status" .= jStatus ]
+  #+end_src
+  e.g. so they can be parsed as "=.tags.title=" or
+  "=.status.elapsed_percent=".
+
+  Finally, encode it to real JSON and print it to the
+  terminal. =Data.Aeson='s encoding is returned as a =ByteString= so use the
+  =Data.ByteString...= import that provides an implementation of =putStrLn=
+  that supports =ByteString=​s.
+  #+begin_src haskell
+    C.putStrLn $ encodePretty jObject
+  #+end_src
+
+  ***** Utility Functions
+  # ChatGPT descriptions
+
+  # Return =Just (f st)= where =f= is a field label and =st= is the =(Response
+  # Status)= from =withMPD* status=.
+
+  The =getStatusItem= function takes an =Either MPD.MPDError MPD.Status=
+  value and a field label function =f= as arguments. It returns
+  =Just (f st)= if the input status is =Right st=, where =st= is the
+  =MPD.Status= value. This function helps to extract a specific field
+  from the status data record by providing the corresponding field label function.
+  If the input status is not =Right st=, indicating an error, or the field
+  label function is not applicable, it returns =Nothing=.
+  #+begin_src haskell
+  {- | Extract a field from the returned MPD.Status data record.
+
+  This takes an @Either@ 'Network.MPD.MPDError' 'Network.MPD.Status'
+  value and a field label function @f@ as arguments. It returns @Just
+  (f st)@ if the input status is @Right st@, where @st@ is the
+  'Network.MPD.Status' value. This function helps to extract a
+  specific field from the @MPD.Status@ data record by providing the
+  corresponding field label function.  If the input status "@st@" is
+  not @Right st@, indicating an error, or the field label function is
+  not applicable, it returns @Nothing@.
+  -}
+  getStatusItem :: Either MPD.MPDError MPD.Status -> (MPD.Status -> a) -> Maybe a
+  getStatusItem (Right st) f = Just (f st)
+  getStatusItem _ _ = Nothing
+  #+end_src
+
+  # Check if =Maybe Song= is not empty and send it to =processSong=
+  The =getTag= function takes a metadata type =t= and an =Either= value
+  =c= containing a =Maybe Song=. It checks if the =Either= value is
+  =Left _=, indicating an error, and returns =Nothing=. If the =Either=
+  value is =Right song=, it calls the =processSong= function with the
+  metadata type =t= and the =Just song= value, which extracts the tag
+  value from the song. The =getTag= function helps to retrieve a
+  specific tag value from the song if it exists.
+  #+begin_src haskell
+  {- | @Either@ check for the returned value of 'Network.MPD.currentSong',
+  then call 'processSong' or return @Nothing@.
+  -}
+  getTag :: Metadata -> Either a (Maybe Song) -> Maybe String
+  getTag t c =
+    case c of
+      Left _ -> Nothing
+      Right song -> processSong t song
+  #+end_src
+
+  The =processSong= function takes a metadata type =tag= and a
+  =Maybe Song=. If the =Maybe Song= value is =Nothing=, indicating an
+  empty value, it returns =Nothing=. If the =Maybe Song= value is
+  =Just song=, it retrieves the tag value using the =MPD.sgGetTag=
+  function with the provided metadata type and song. It then applies the
+  =headMay= function to extract the first element from the list of tag
+  values and the =valueToStringMay= function to convert the value to a
+  string within a =Maybe= context. This function helps to process the
+  tag values of a song and convert them to strings if they exist.
+  #+begin_src haskell
+  {- | Use 'Network.MPD.sgGetTag' to extract a @tag@ from a @song@, safely
+  get only the head item of the returned @Maybe@ list, then safely
+  convert it to a string.
+  -}
+  processSong :: Metadata -> Maybe Song -> Maybe String
+  processSong _ Nothing = Nothing
+  processSong tag (Just song) = do
+    let tagVal = MPD.sgGetTag tag song
+    valueToStringMay =<< (headMay =<< tagVal)
+  #+end_src
+
+  The =headMay= function is a utility function that safely gets the head
+  of a list. It takes a list as input and returns =Nothing= if the list is
+  empty or =Just x= where =x= is the first element of the list.
+  #+begin_src haskell
+  {- | Safely get the head of a list. Same as 'Safe.headMay'.
+  -}
+  headMay :: [a] -> Maybe a
+  headMay []    = Nothing
+  headMay (x:_) = Just x
+  #+end_src
+
+  The =valueToStringMay= function is a utility function that converts a
+  =MPD.Value= to a =String= within a =Maybe= context. It takes a
+  =MPD.Value= as input and returns =Just (MPD.toString x)= where =x= is
+  the input value converted to a string.
+  #+begin_src haskell
+  {- | Convert 'Network.MPD.Value' to @String@ within a @Maybe@ context.
+
+  This @Value@ is from 'Network.MPD' and is basically the same as a
+  @String@ but used internally to store metadata values.
+
+  __Example__:
+
+  @
+  processSong :: Metadata -> Maybe Song -> Maybe String
+  processSong _ Nothing = Nothing
+  processSong tag (Just song) = do
+    let tagVal = MPD.sgGetTag tag song
+    valueToStringMay =<< (headMay =<< tagVal)
+  @
+
+  'MPD.sgGetTag' returns a @Maybe [Value]@. 'Network.MPD' also provides
+  'Network.MPD.toString' that can convert, along other types, a
+  'Network.MPD.Value' to a @String@.
+  -}
+  valueToStringMay :: MPD.Value -> Maybe String
+  valueToStringMay x = Just (MPD.toString x)
+  #+end_src
+
+  The ~.=?~ operator is a utility function to define optional fields in
+  the key-value pairs of a JSON object. It takes a =Key= and a =Maybe=
+  value =v= as input. If the =Maybe= value is =Just value=, it returns
+  ~Just (key .= value)~, where =key= is the input key and =value= is the
+  input value. If the =Maybe= value is =Nothing=, it returns =Nothing=.
+  This operator helps to conditionally include or exclude fields in
+  the JSON object based on the presence or absence of values.
+  #+begin_src haskell
+  {- | Check if @Maybe v@ exists and is of type expected by
+  'Data.Aeson.object' as defined in 'Data.Aeson.Value', if it is return
+  both the @key@ and @value@ within the @Maybe@ context tied with
+  'Data.Aeson..='. This gives support to \'optional\' fields using
+  'Data.Maybe.catMaybes' that discard @Nothing@ values and is meant to
+  prevent creating JSON key/value pairs with @null@ values, e.g.:
+
+  @
+  jsonTags = object . catMaybes $
+      [ "artist"  .=? artist
+      , "album"   .=? album
+      , "title"   .=? title
+      ]
+  @
+
+  Where if a value on the right is @Nothing@ that key/value pair will
+  not be included in 'Data.Aeson.object' because of
+  'Data.Maybe.catMaybes'.
+  -}
+  (.=?) :: (KeyValue a, ToJSON v) => Key -> Maybe v -> Maybe a
+  key .=? Just value = Just (key .= value)
+  _   .=? Nothing    = Nothing
+  #+end_src
+
+  *** Options.hs
+  :PROPERTIES:
+  :header-args:haskell+: :tangle src/Options.hs
+  :END:
+  #+begin_src haskell
+  module Options
+    ( Opts(..)
+    , execParser
+    , prefs
+    , showHelpOnEmpty
+    , optsParser
+    , optsParserInfo ) where
+
+  import Options.Applicative
+      ( (<**>),
+        auto,
+        fullDesc,
+        header,
+        help,
+        info,
+        long,
+        metavar,
+        option,
+        strOption,
+        prefs,
+        progDesc,
+        short,
+        showHelpOnEmpty,
+        value,
+        execParser,
+        Parser,
+        ParserInfo,
+        infoOption,
+        hidden )
+
+  import Options.Applicative.Extra ( helperWith )
+
+  import Version ( versionStr, progName )
+  import Data.Kind (Type)
+
+  #+end_src
+
+  **** Data record for holding parsed 'Parser' values
+  #+begin_src haskell
+  data Opts = Opts  -- ^ Custom data record for storing 'Options.Applicative.Parser' values
+    { optPort    :: Integer  -- ^ MPD port to connect.
+    , optHost    :: String   -- ^ MPD host address to connect.
+    , optPass    :: String   -- ^ Plain text password to connect to MPD.
+    , optVersion :: Type -> Type  -- ^ Print program version.
+    }
+  #+end_src
+
+  **** =Parser Opts= definition
+  #+begin_quote
+  A [[https://hackage.haskell.org/package/optparse-applicative-0.18.1.0/docs/Options-Applicative.html#t:Parser][Parser]] a is an option parser returning a value of type a.
+  #+end_quote
+
+  Specify how =Options.Applicative= should parse arguments. Their returned
+  values are stored in the custom defined data record =Opts=.
+  #+begin_src haskell
+  optsParser :: Parser Opts
+  optsParser
+    = Opts
+    <$> portOptParser
+    <*> hostOptParser
+    <*> passOptParser
+    <*> versionOptParse
+
+  portOptParser :: Parser Integer
+  portOptParser
+    = option auto
+    $ long "port"
+    <> short 'p'
+    <> metavar "PORTNUM"
+    <> value 6600
+    <> help "Port number"
+
+  hostOptParser :: Parser String
+  hostOptParser
+    = strOption
+    $ metavar "ADDRESS"
+    <> long "host"
+    <> short 'h'
+    <> value "localhost"
+    <> help "Host address"
+
+  passOptParser :: Parser String
+  passOptParser
+    = option auto
+    $ metavar "PASSWORD"
+    <> long "password"
+    <> short 'P'
+    <> value ""
+    <> help "Password for connecting (will be sent as plain text)"
+
+  versionOptParse :: Parser (a -> a)
+  versionOptParse =
+    infoOption versionStr
+    $ long "version"
+    <> short 'V'
+    <> help "Display the version number"
+  #+end_src
+
+  **** Create ParserInfo
+
+  #+begin_quote
+  A [[https://hackage.haskell.org/package/optparse-applicative-0.18.1.0/docs/Options-Applicative.html#t:ParserInfo][ParserInfo]] describes a command line program, used to generate a help
+  screen.
+  --- [[https://hackage.haskell.org/package/optparse-applicative-0.18.1.0/docs/Options-Applicative.html#g:8][Options.Applicative]]
+  #+end_quote
+
+  - =optsParserInfo=
+
+    Utility function for =Options.Applicative='s "=info=" that create a
+    =ParserInfo= given a [[https://hackage.haskell.org/package/optparse-applicative-0.18.1.0/docs/Options-Applicative.html#t:Parser][​=Parser=​]] and a modifier, where =Parser=​s are defined
+    using a [[*Data record for holding parsed 'Parser' values][​custom data record​]].
+  #+begin_src haskell
+  optsParserInfo :: ParserInfo Opts
+  optsParserInfo = info (optsParser <**> helper')
+    $ fullDesc
+    <> progDesc "Print currently playing song information as JSON"
+    <> header (progName ++ " - " ++ "Current MPD song information as JSON")
+  #+end_src
+
+  **** Custom helper
+  #+begin_quote
+  Like helper, but with a minimal set of modifiers that can be extended
+  as desired.
+    #+begin_src haskell :tangle no
+    opts :: ParserInfo Sample
+    opts = info (sample <**> helperWith (mconcat [
+             long "help",
+             short 'h',
+             help "Show this help text",
+             hidden
+           ])) mempty
+    #+end_src
+
+  --- source of [[https://hackage.haskell.org/package/optparse-applicative-0.18.1.0/docs/Options-Applicative.html#v:helper][Options.Applicative#helper]]
+  #+end_quote
+  Define a helper command that only accepts long =--help=:
+  #+begin_src haskell
+  helper' :: Parser (a -> a)
+  helper' = helperWith
+            $ long "help"
+            -- <> help "Show this help text"
+            <> hidden -- don't show in help messages
+  #+end_src
+
+  *** Version.hs
+  :PROPERTIES:
+  :header-args:haskell+: :tangle src/Version.hs
+  :END:
+  #+begin_src haskell
+  module Version ( versionStr,
+                   progName ) where
+
+  import Data.Version (showVersion)
+
+  import Paths_mpd_current_json (version) -- generated by Cabal
+
+  progName :: [Char]
+  progName = "mpd-current-json"
+
+  versionStr :: [Char]
+  versionStr = progName ++ " version " ++ (showVersion version)
+  #+end_src
+
+
+  *** Setup.hs
+  :PROPERTIES:
+  :header-args:haskell+: :tangle Setup.hs
+  :END:
+  Allow =runhaskell= to use =cabal=
+  #+begin_src haskell
+  import Distribution.Simple
+  main = defaultMain
+  #+end_src
+
+  ** Extra
+
+  *** mpd-current-json.cabal
+  :PROPERTIES:
+  :header-args:haskell-cabal+: :tangle mpd-current-json.cabal :comments none
+  :END:
+  #+begin_src haskell-cabal
+  cabal-version:      3.0
+  name:               mpd-current-json
+  -- The package version.
+  -- See the Haskell package versioning policy (PVP) for standards
+  -- guiding when and how versions should be incremented.
+  -- https://pvp.haskell.org
+  -- PVP summary:     +-+------- breaking API changes
+  --                  | | +----- non-breaking API additions
+  --                  | | | +--- code changes with no API change
+  version:            1.1.0.2
+  synopsis:           Print current MPD song and status as JSON
+
+  -- A longer description of the package.
+  description: Print currently playing MPD's song metadata and status as JSON
+  homepage:           https://codeberg.org/useless-utils/mpd-current-json
+
+  -- A URL where users can report bugs.
+  -- bug-reports:
+  license:            Unlicense
+  license-file:       UNLICENSE
+  author:             Lucas G
+  maintainer:         g@11xx.org
+
+  -- A copyright notice.
+  -- copyright:
+  category:           Network
+  extra-source-files: CHANGELOG.md
+                      README.org
+
+  source-repository head
+      type:      git
+      location:  https://codeberg.org/useless-utils/mpd-current-json
+
+  executable mpd-current-json
+      main-is:          Main.hs
+
+      -- Modules included in this executable, other than Main.
+      other-modules:    Options
+                        Paths_mpd_current_json
+                        Version
+
+      autogen-modules:  Paths_mpd_current_json
+
+      -- LANGUAGE extensions used by modules in this package.
+      -- other-extensions:
+      build-depends:    base >4.15 && <4.17
+                      , libmpd == 0.10.*
+                      , optparse-applicative >0.17 && <0.19
+                      , aeson == 2.1.*
+                      , bytestring >0.10 && <0.12
+                      , aeson-pretty == 0.8.*
+
+      -- Directories containing source files.
+      hs-source-dirs:   src
+      default-language: Haskell2010
+
+      -- [[https://kowainik.github.io/posts/2019-02-06-style-guide#ghc-options][Haskell Style Guide :: Kowainik]]
+      ghc-options:    -Wall
+                      -Wcompat
+                      -Widentities
+                      -Wincomplete-uni-patterns
+                      -Wincomplete-record-updates
+                      -Wredundant-constraints
+                      -Wmissing-export-lists
+                      -Wpartial-fields
+                      -Wmissing-deriving-strategies
+                      -Wunused-packages
+                      -fwrite-ide-info
+                      -hiedir=.hie
+
+  #+end_src
+
+
+  * Changelog
+  #+begin_src markdown :tangle CHANGELOG.md
+  # v1.1.0.2
+  [comment]: # (2023-10-23)
+  - Fixed cabal `build-depends` version bounds for Arch Linux dynamic
+    building.
+
+  # v1.1.0.1
+  [comment]: # (2023-10-17)
+  - Added haddock comments
+  - Addressed `cabal check` warnings;
+  - setup for uploading as a Hackage package.
+
+  # v1.1.0.0
+  [comment]: # (2023-06-11)
+  - Remove `-h` from `--help` and use `-h` for `--host`
+  - Make `--help` option hidden in the help message
+
+  # v1.0.0.0
+  [comment]: # (2023-06-08)
+  Initial working version
+  - Added conditional tags printing, only non-empty values are printed
+  - Accept host, port and password
+  - Nested json objects for `status` and `tags`
+  - Added `elapsed_percent` key shortcut for `elapsed / duration * 100`
+
+  # v0.0.1.0
+  [comment]: # (2023-06-01)
+  - initial connection and parsing values
+  - First version. Released on an unsuspecting world.
+  #+end_src
+
+  * Local file variables                                             :noexport:
+  # Local Variables:
+  # org-src-preserve-indentation: t
+  # End:
+license-name: Unlicense
