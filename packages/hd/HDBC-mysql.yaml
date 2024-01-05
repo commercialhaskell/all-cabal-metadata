@@ -1,12 +1,34 @@
-homepage: http://github.com/ryantm/hdbc-mysql
-changelog-type: text
-hash: 0a10703f7fd1bd19c8061ebd6dd318acbc107d55502936ba21c1ca705ca1d790
-test-bench-deps: {}
-maintainer: Ryan Mulligan <ryan@ryantm.com>
-synopsis: MySQL driver for HDBC
-changelog: ! "2016-11-05 0.7.1.0 release prepared by Ryan Mulligan @ryantm\n\n\t*
-  Debug flag. Add Debug flag to cabal file to ease debugging by\n\ttracing each type
-  of call to the mysql library. By @kakkun61.\n\n2016-08-25 0.7.0.0 release prepared
+all-versions:
+- '0.1'
+- '0.2'
+- '0.3'
+- '0.4'
+- '0.5'
+- '0.6'
+- 0.6.1
+- 0.6.2
+- 0.6.3
+- 0.6.4.0
+- 0.6.4.1
+- 0.6.5.0
+- 0.6.5.1
+- 0.6.6.0
+- 0.6.6.1
+- 0.6.6.2
+- 0.6.6.3
+- 0.6.6.4
+- 0.7.0.0
+- 0.7.1.0
+author: Chris Waterson
+basic-deps:
+  HDBC: '>=2.1.0'
+  base: '>=4.9 && <5'
+  bytestring: '>=0'
+  time: '>=0'
+  utf8-string: '>=0'
+changelog: "2016-11-05 0.7.1.0 release prepared by Ryan Mulligan @ryantm\n\n\t* Debug
+  flag. Add Debug flag to cabal file to ease debugging by\n\ttracing each type of
+  call to the mysql library. By @kakkun61.\n\n2016-08-25 0.7.0.0 release prepared
   by Ryan Mulligan @ryantm\n\n\t* Support and requirement for GHC 8.0.1 added. By
   @ryantm and @wahjava.\n\t* Specify previously required by unspecified dependencies
   on ssl and zlib.\n\n2016-08-25 0.6.6.4 release prepared by Ryan Mulligan @ryantm\n\n\t*
@@ -32,83 +54,123 @@ changelog: ! "2016-11-05 0.7.1.0 release prepared by Ryan Mulligan @ryantm\n\n\t
   Fix binding width for dates: MySQL's length\n\tindicates 19 characters (which is
   the length of the string), but\n\twe need the full size of the MYSQL_TIME struct.
   \ Leak connections\n\tand statements until I can figure out how to keep the ForeignPtr's\n\talive.\n\n"
-basic-deps:
-  bytestring: -any
-  base: ! '>=4.9 && <5'
-  time: -any
-  HDBC: ! '>=2.1.0'
-  utf8-string: -any
-all-versions:
-- '0.1'
-- '0.2'
-- '0.3'
-- '0.4'
-- '0.5'
-- '0.6'
-- 0.6.1
-- 0.6.2
-- 0.6.3
-- 0.6.4.0
-- 0.6.4.1
-- 0.6.5.0
-- 0.6.5.1
-- 0.6.6.0
-- 0.6.6.1
-- 0.6.6.2
-- 0.6.6.3
-- 0.6.6.4
-- 0.7.0.0
-- 0.7.1.0
-author: Chris Waterson
-latest: 0.7.1.0
+changelog-type: text
+description: |
+  #HDBC-mysql
+
+  This is a "native" HDBC driver for MySQL that makes use of
+  libmysqlclient to communicate with a MySQL server.  By way of
+  synopsis:
+
+  ```haskell
+  import Control.Monad
+  import Database.HDBC
+  import Database.HDBC.MySQL
+  main = do conn <- connectMySQL defaultMySQLConnectInfo {
+                         mysqlHost     = "db1.example.com",
+                         mysqlUser     = "scott",
+                         mysqlPassword = "tiger"
+                      }
+
+            rows <- quickQuery' conn "SELECT 1 + 1" []
+            forM_ rows $ \row -> putStrLn $ show row
+  ```
+
+  At the moment, please consider this to be "alpha" software.  As far as
+  I can tell, it works.  There are some limitations that you should be
+  aware of.
+
+  ## Caveats
+
+
+    * This works with MySQL server and client libraries 5.0.75.  I
+      haven't tried with 4.x nor 5.1.  I suspect that using a server
+      version less than 4.1 won't work, due to lack of support for
+      prepared statements.
+
+    * MySQL DATETIME and TIMESTAMP columns have no time zone information,
+      because they just don't.  So, I'm just converting them blindly to
+      SqlEpochTime values, and assuming the times are UTC.  This is all
+      fine if you're actually running your server in UTC, but it will
+      probably be confusing if you're not.  It might be possible to
+      interpret the times using the current connection's default
+      time zone setting, instead.  Is that better?  Or worse?
+
+    * Regardless, the types I convert to are now deprecated, and I need
+      to implement the new types (SqlLocalDate, etc.)
+
+    * Out of the box, MySQL probably uses MyISAM tables to store its
+      data, and MyISAM tables don't support transactions.  Yet, I'm
+      going to blindly respond "yes" if you ask whether the driver
+      itself supports transactions, and assume that you know enough to
+      use InnoDB tables in the database if you want to make use of
+      HDBC's transactional support.  I *suppose* I might be able to
+      discover what the default table type is, and say "no" if it's not
+      a table type that supports transactions, but... meh.
+
+    * I'm not sure that I can tell the difference between a MySQL TEXT
+      and a MySQL BLOB column.  If you ask about the metadata of either,
+      I'll tell you it's a SqlBinaryT.
+
+    * The statement and table metadata could stand to be improved a bit.
+      In particular, it would be nice if "describeTable foo" and
+      "describeResults" on "SELECT * FROM foo" returned the same thing.
+      (They're sorta close, I guess...)
+
+    * Thread-safety could be an issue.  In the driver code, there's
+      definitely a race condition between "prepare" and "disconnect",
+      for example.  I haven't even *looked* at thread-safety issues for
+      the MySQL driver.  I'm not sure if I should worry about it, or if
+      we assume that's going to be dealt with at a higher level.
+
+    * We might crash if someone opens a connection, prepares a
+      statement, explicitly disconnects the connection, and then tries
+      to play with the statement.
+
+    * It probably makes sense to marshall to the SqlByteString type when
+      retrieving BLOB data.
+
+  ## Testing
+
+  There's a little test program that runs a query and spews out the
+  results.  To compile it,
+
+  ```
+  ghc -idist/build -L/opt/local/lib/mysql5/mysql -lmysqlclient --make Test
+  ```
+
+  I'm still trying to get the Makefile right so that it can build the
+  test sources: it's not there yet.  Here's how I've been doing it, for
+  now:
+
+  ```
+  cd testsrc
+  ghc --make -package HUnit -package HDBC -Wall -i../dist/build -i.. -L/opt/local/lib/mysql5/mysql -lmysqlclient -o runtests runtests.hs
+  ```
+
+  One issue is that I want the location of the MySQL library to come
+  from the configuration data, rather than be hard-coded.
+
+  ## Developing hdbc-mysql with nix
+
+  ```
+  # Nix shell
+  nix-shell -p haskell.packages.ghc801.ghc gcc mysql57 pkgconfig zlib openssl haskellPackages.haddock
+
+  # Use Cabal to build
+  cabal clean && cabal build
+
+  # Build test script
+  ghc -idist/build -L/nix/store/vksgj509kdnk3rva0x64qwp21nzrxy9b-mariadb-10.1.16/lib -lmysqlclient --make Test
+
+  # Run test script
+  ./Test
+  ```
 description-type: markdown
-description: ! "#HDBC-mysql\n\nThis is a \"native\" HDBC driver for MySQL that makes
-  use of\nlibmysqlclient to communicate with a MySQL server.  By way of\nsynopsis:\n\n```haskell\nimport
-  Control.Monad\nimport Database.HDBC\nimport Database.HDBC.MySQL\nmain = do conn
-  <- connectMySQL defaultMySQLConnectInfo {\n                       mysqlHost     =
-  \"db1.example.com\",\n                       mysqlUser     = \"scott\",\n                       mysqlPassword
-  = \"tiger\"\n                    }\n\n          rows <- quickQuery' conn \"SELECT
-  1 + 1\" []\n          forM_ rows $ \\row -> putStrLn $ show row\n```\n\nAt the moment,
-  please consider this to be \"alpha\" software.  As far as\nI can tell, it works.
-  \ There are some limitations that you should be\naware of.\n\n## Caveats\n\n\n  *
-  This works with MySQL server and client libraries 5.0.75.  I\n    haven't tried
-  with 4.x nor 5.1.  I suspect that using a server\n    version less than 4.1 won't
-  work, due to lack of support for\n    prepared statements.\n\n  * MySQL DATETIME
-  and TIMESTAMP columns have no time zone information,\n    because they just don't.
-  \ So, I'm just converting them blindly to\n    SqlEpochTime values, and assuming
-  the times are UTC.  This is all\n    fine if you're actually running your server
-  in UTC, but it will\n    probably be confusing if you're not.  It might be possible
-  to\n    interpret the times using the current connection's default\n    time zone
-  setting, instead.  Is that better?  Or worse?\n\n  * Regardless, the types I convert
-  to are now deprecated, and I need\n    to implement the new types (SqlLocalDate,
-  etc.)\n\n  * Out of the box, MySQL probably uses MyISAM tables to store its\n    data,
-  and MyISAM tables don't support transactions.  Yet, I'm\n    going to blindly respond
-  \"yes\" if you ask whether the driver\n    itself supports transactions, and assume
-  that you know enough to\n    use InnoDB tables in the database if you want to make
-  use of\n    HDBC's transactional support.  I *suppose* I might be able to\n    discover
-  what the default table type is, and say \"no\" if it's not\n    a table type that
-  supports transactions, but... meh.\n\n  * I'm not sure that I can tell the difference
-  between a MySQL TEXT\n    and a MySQL BLOB column.  If you ask about the metadata
-  of either,\n    I'll tell you it's a SqlBinaryT.\n\n  * The statement and table
-  metadata could stand to be improved a bit.\n    In particular, it would be nice
-  if \"describeTable foo\" and\n    \"describeResults\" on \"SELECT * FROM foo\" returned
-  the same thing.\n    (They're sorta close, I guess...)\n\n  * Thread-safety could
-  be an issue.  In the driver code, there's\n    definitely a race condition between
-  \"prepare\" and \"disconnect\",\n    for example.  I haven't even *looked* at thread-safety
-  issues for\n    the MySQL driver.  I'm not sure if I should worry about it, or if\n
-  \   we assume that's going to be dealt with at a higher level.\n\n  * We might crash
-  if someone opens a connection, prepares a\n    statement, explicitly disconnects
-  the connection, and then tries\n    to play with the statement.\n\n  * It probably
-  makes sense to marshall to the SqlByteString type when\n    retrieving BLOB data.\n\n##
-  Testing\n\nThere's a little test program that runs a query and spews out the\nresults.
-  \ To compile it,\n\n```\nghc -idist/build -L/opt/local/lib/mysql5/mysql -lmysqlclient
-  --make Test\n```\n\nI'm still trying to get the Makefile right so that it can build
-  the\ntest sources: it's not there yet.  Here's how I've been doing it, for\nnow:\n\n```\ncd
-  testsrc\nghc --make -package HUnit -package HDBC -Wall -i../dist/build -i.. -L/opt/local/lib/mysql5/mysql
-  -lmysqlclient -o runtests runtests.hs\n```\n\nOne issue is that I want the location
-  of the MySQL library to come\nfrom the configuration data, rather than be hard-coded.\n\n##
-  Developing hdbc-mysql with nix\n\n```\n# Nix shell\nnix-shell -p haskell.packages.ghc801.ghc
-  gcc mysql57 pkgconfig zlib openssl haskellPackages.haddock\n\n# Use Cabal to build\ncabal
-  clean && cabal build\n\n# Build test script\nghc -idist/build -L/nix/store/vksgj509kdnk3rva0x64qwp21nzrxy9b-mariadb-10.1.16/lib
-  -lmysqlclient --make Test\n\n# Run test script\n./Test\n```\n"
+hash: 0a10703f7fd1bd19c8061ebd6dd318acbc107d55502936ba21c1ca705ca1d790
+homepage: http://github.com/ryantm/hdbc-mysql
+latest: 0.7.1.0
 license-name: LicenseRef-LGPL
+maintainer: Ryan Mulligan <ryan@ryantm.com>
+synopsis: MySQL driver for HDBC
+test-bench-deps: {}

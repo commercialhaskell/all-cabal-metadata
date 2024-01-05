@@ -1,29 +1,3 @@
-homepage: https://github.com/pxqr/intset
-changelog-type: text
-hash: 24a47ad30f240ec84e3f4de8481c9950c280990258f90cf171aa2e89fcf93ec6
-test-bench-deps:
-  bytestring: -any
-  test-framework: -any
-  base: ==4.*
-  test-framework-quickcheck2: ! '>=0.3'
-  criterion: -any
-  intset: -any
-  containers: ! '>=0.5.2'
-  deepseq: -any
-  QuickCheck: -any
-maintainer: Sam Truzjan <pxqr.sta@gmail.com>
-synopsis: Pure, mergeable, succinct Int sets.
-changelog: ! "2013-12-07  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t* 0.1.1.0: Make Show
-  instance compatible with containers package\n\n2013-10-04  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t*
-  0.1.0.3: FIX: Add changelog to tarball.\n\n2013-10-04  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t*
-  0.1.0.2: Move release notes to changelog file.\n\n2013-08-12  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t*
-  0.1.0.1: Fix build failure on 32 bit arch.\n\n2013-06-08  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t*
-  0.1.0.0: Initial version.\n"
-basic-deps:
-  bytestring: -any
-  base: ==4.*
-  bits-extras: ! '>=0.1.2'
-  deepseq: -any
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
@@ -31,60 +5,154 @@ all-versions:
 - 0.1.0.3
 - 0.1.1.0
 author: Sam Truzjan
-latest: 0.1.1.0
+basic-deps:
+  base: '>=4 && <5'
+  bits-extras: '>=0.1.2'
+  bytestring: '>=0'
+  deepseq: '>=0'
+changelog: "2013-12-07  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t* 0.1.1.0: Make Show
+  instance compatible with containers package\n\n2013-10-04  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t*
+  0.1.0.3: FIX: Add changelog to tarball.\n\n2013-10-04  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t*
+  0.1.0.2: Move release notes to changelog file.\n\n2013-08-12  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t*
+  0.1.0.1: Fix build failure on 32 bit arch.\n\n2013-06-08  Sam Truzjan  <pxqr.sta@gmail.com>\n\n\t*
+  0.1.0.0: Initial version.\n"
+changelog-type: text
+description: |
+  ### Synopsis
+
+  This package provides efficient integer interval sets.
+
+  ### Description
+
+  > Persistent... is it trees?
+
+  Yes, Radix trees. Trees are balanced by prefix bits, so we have fast
+  merge operations, such as union, intersection and difference.  Chris
+  Okasaki and Andrew Gill [shows][int-maps] that Patricia tree based
+  integer maps might be order of magnitude faster than Red-Black tree
+  counterparts on this operations. The same apply to integer sets, we
+  just have keys, but don't have values.
+
+  > That does mean the "dense"?
+
+  That means we keep suffixes in bitmaps and we might pack, say 10,
+  integers which lies close together in one bitmap. This optimization
+  doesn't affect execution times for sparse sets, but makes dense sets
+  much more memory efficient — near 10-50 times less space usage
+  depending on machine word size and the actual density of the
+  set. Basically, this let us be 3-4 times less memory efficient
+  comparing with arrays of tightly packed bits, but see...
+
+  > How suffix compaction is performed?
+
+  There are exist a pretty simple algorithm used in memory allocators
+  called ["buddy memory allocator"][buddy-alloc]. In a nutshell, we have
+  a big block which is splitted by half when we remove from one of the
+  half, and merge then back when we insert. It's somewhat inverse to the
+  ordinary tree approach — in buddy tree we hold more information about
+  elements that it _doesn't_ contain, while in prefix tree we hold more
+  information about elements that it _does_ contain. It's easy to guess
+  that we should do with it — take the two structures then fuse them
+  into one to produce a new structure which perform _better_.
+
+  Indeed, the key idea in the design is right here — we switch forth and
+  back between representations per subtree basis. We intersperse
+  different representations in different tree branches. It's like
+  chameleon:
+
+  * If the some subset is _sparse_, we just keep a radix tree with
+    bitmaps at leafs.
+
+  * If the some subset becomes _full_ we turn it into block. If some
+    buddy block appears, we join the buddy blocks into one. And so forth.
+
+  That is, we just get a structure that dynamically choose the optimal
+  representation depending on _density_ of set. Moreover in best case
+  this lead to huge space savings:
+
+
+  ``` haskell
+  > ppStats (fromList [0..123456])
+  ```
+
+  gives:
+
+  ```
+  Bin count: 6
+  Tip count: 1
+  Fin count: 6
+  Size in bytes: 408
+  Saved space over dense set:  123072
+  Saved space over bytestring: 11879
+  Percent saved over dense set:  99.6695821185617%
+  Percent saved over bytestring: 96.67941727028567%
+  ```
+
+  The `ppStats` is not an exposed function but you can play with it
+  using `cabal-dev ghci`.
+
+  I don't know if it is an old idea, but this works just fine.
+
+  > So when this data structure is good choice?
+
+  In many situation. It might be used as persistent and compact
+  replacement for bool arrays or Data.IntSet with the following advantages:
+
+  * Purity is extremely useful in multithreaded settings —
+    we could keep a set in a mutable transactional variable or an IORef
+    and atomically update/modify the set. So it could be used as
+    replacement for [TArray Int Bool][tarray] as well.
+  * By merging intervals together we achieve compactness. In best case
+    some of main operations will take O(1)time and space, so if you need
+    interval set it's here.
+  * Fast serizalization: if you are need conversion to/from bytestrings.
+    Because of bitmaps it's possible to do this conversion _extremely_ fast.
+
+  > How this implementation relate to containers version?
+
+  Heavely based. Essentially we just add the buddy interval compaction,
+  but it turns out that some operations becomes more complicated and
+  requires much more effort to implement — in order to maintain the all
+  tree invariants we need to take into account more cases. This is the
+  reason why some operations are not implemented yet (e.g. lack of
+  views), but I hope I'll fix it with the time.
+
+  ### Documentation
+
+  For documentation see haddock generated documentation.
+
+  ### Build Status
+
+  [![Build Status][status-img]][status-link]
+
+  ### Maintainer
+
+  This library is written and maintained by Sam T. <pxqr.sta@gmail.com>
+
+  Feel free to report bugs and suggestions via
+  [github issue tracker][issues] or the mail.
+
+  [status-img]:  https://travis-ci.org/pxqr/intset.png
+  [status-link]: https://travis-ci.org/pxqr/intset
+  [issues]:      https://github.com/pxqr/intset/issues/new
+
+  [int-maps]:    http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.37.5452
+  [buddy-alloc]: http://en.wikipedia.org/wiki/Buddy_memory_allocation
+  [tarray]:      http://hackage.haskell.org/packages/archive/stm/2.2.0.1/doc/html/Control-Concurrent-STM-TArray.html
 description-type: markdown
-description: ! "### Synopsis\n\nThis package provides efficient integer interval sets.\n\n###
-  Description\n\n> Persistent... is it trees?\n\nYes, Radix trees. Trees are balanced
-  by prefix bits, so we have fast\nmerge operations, such as union, intersection and
-  difference.  Chris\nOkasaki and Andrew Gill [shows][int-maps] that Patricia tree
-  based\ninteger maps might be order of magnitude faster than Red-Black tree\ncounterparts
-  on this operations. The same apply to integer sets, we\njust have keys, but don't
-  have values.\n\n> That does mean the \"dense\"?\n\nThat means we keep suffixes in
-  bitmaps and we might pack, say 10,\nintegers which lies close together in one bitmap.
-  This optimization\ndoesn't affect execution times for sparse sets, but makes dense
-  sets\nmuch more memory efficient — near 10-50 times less space usage\ndepending
-  on machine word size and the actual density of the\nset. Basically, this let us
-  be 3-4 times less memory efficient\ncomparing with arrays of tightly packed bits,
-  but see...\n\n> How suffix compaction is performed?\n\nThere are exist a pretty
-  simple algorithm used in memory allocators\ncalled [\"buddy memory allocator\"][buddy-alloc].
-  In a nutshell, we have\na big block which is splitted by half when we remove from
-  one of the\nhalf, and merge then back when we insert. It's somewhat inverse to the\nordinary
-  tree approach — in buddy tree we hold more information about\nelements that it _doesn't_
-  contain, while in prefix tree we hold more\ninformation about elements that it _does_
-  contain. It's easy to guess\nthat we should do with it — take the two structures
-  then fuse them\ninto one to produce a new structure which perform _better_.\n\nIndeed,
-  the key idea in the design is right here — we switch forth and\nback between representations
-  per subtree basis. We intersperse\ndifferent representations in different tree branches.
-  It's like\nchameleon:\n\n* If the some subset is _sparse_, we just keep a radix
-  tree with\n  bitmaps at leafs.\n\n* If the some subset becomes _full_ we turn it
-  into block. If some\n  buddy block appears, we join the buddy blocks into one. And
-  so forth.\n\nThat is, we just get a structure that dynamically choose the optimal\nrepresentation
-  depending on _density_ of set. Moreover in best case\nthis lead to huge space savings:\n\n\n```
-  haskell\n> ppStats (fromList [0..123456])\n```\n\ngives:\n\n```\nBin count: 6\nTip
-  count: 1\nFin count: 6\nSize in bytes: 408\nSaved space over dense set:  123072\nSaved
-  space over bytestring: 11879\nPercent saved over dense set:  99.6695821185617%\nPercent
-  saved over bytestring: 96.67941727028567%\n```\n\nThe `ppStats` is not an exposed
-  function but you can play with it\nusing `cabal-dev ghci`.\n\nI don't know if it
-  is an old idea, but this works just fine.\n\n> So when this data structure is good
-  choice?\n\nIn many situation. It might be used as persistent and compact\nreplacement
-  for bool arrays or Data.IntSet with the following advantages:\n\n* Purity is extremely
-  useful in multithreaded settings —\n  we could keep a set in a mutable transactional
-  variable or an IORef\n  and atomically update/modify the set. So it could be used
-  as\n  replacement for [TArray Int Bool][tarray] as well.\n* By merging intervals
-  together we achieve compactness. In best case\n  some of main operations will take
-  O(1)time and space, so if you need\n  interval set it's here.\n* Fast serizalization:
-  if you are need conversion to/from bytestrings.\n  Because of bitmaps it's possible
-  to do this conversion _extremely_ fast.\n\n> How this implementation relate to containers
-  version?\n\nHeavely based. Essentially we just add the buddy interval compaction,\nbut
-  it turns out that some operations becomes more complicated and\nrequires much more
-  effort to implement — in order to maintain the all\ntree invariants we need to take
-  into account more cases. This is the\nreason why some operations are not implemented
-  yet (e.g. lack of\nviews), but I hope I'll fix it with the time.\n\n### Documentation\n\nFor
-  documentation see haddock generated documentation.\n\n### Build Status\n\n[![Build
-  Status][status-img]][status-link]\n\n### Maintainer\n\nThis library is written and
-  maintained by Sam T. <pxqr.sta@gmail.com>\n\nFeel free to report bugs and suggestions
-  via\n[github issue tracker][issues] or the mail.\n\n[status-img]:  https://travis-ci.org/pxqr/intset.png\n[status-link]:
-  https://travis-ci.org/pxqr/intset\n[issues]:      https://github.com/pxqr/intset/issues/new\n\n[int-maps]:
-  \   http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.37.5452\n[buddy-alloc]:
-  http://en.wikipedia.org/wiki/Buddy_memory_allocation\n[tarray]:      http://hackage.haskell.org/packages/archive/stm/2.2.0.1/doc/html/Control-Concurrent-STM-TArray.html\n"
+hash: 24a47ad30f240ec84e3f4de8481c9950c280990258f90cf171aa2e89fcf93ec6
+homepage: https://github.com/pxqr/intset
+latest: 0.1.1.0
 license-name: BSD-3-Clause
+maintainer: Sam Truzjan <pxqr.sta@gmail.com>
+synopsis: Pure, mergeable, succinct Int sets.
+test-bench-deps:
+  QuickCheck: '>=0'
+  base: '>=4 && <5'
+  bytestring: '>=0'
+  containers: '>=0.5.2'
+  criterion: '>=0'
+  deepseq: '>=0'
+  intset: '>=0'
+  test-framework: '>=0'
+  test-framework-quickcheck2: '>=0.3'

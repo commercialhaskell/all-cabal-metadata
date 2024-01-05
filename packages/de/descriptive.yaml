@@ -1,35 +1,3 @@
-homepage: https://github.com/chrisdone/descriptive
-changelog-type: text
-hash: b43911fda52872ab4f332d4b15ed01a5c55f52743f6af6418c5f136e835dd36f
-test-bench-deps:
-  descriptive: -any
-  base: -any
-  hspec: -any
-  text: -any
-  HUnit: -any
-  containers: -any
-  bifunctors: -any
-  mtl: -any
-  transformers: -any
-  aeson: -any
-maintainer: chrisdone@gmail.com
-synopsis: Self-describing consumers/parsers; forms, cmd-line args, JSON, etc.
-changelog: ! "0.9.0:\n\t* Move 'validate' to .JSON as 'parse'.\n\n0.5.0:\n\t* Changed
-  the parser/doc type to use StateT m. So now you can use\n\tmonads as part of your
-  consumers.\n\n0.2.0:\n\t* Change the type of flag.\n\t* Add the switch combinator
-  (used to be “flag”).\n\t* Add the “stop” combinator.\n\n0.1.1:\n\t* Printer fix
-  for options consumer.\n\n0.1.0:\n\t* Change to Result type which supports Continued
-  constructor.\n"
-basic-deps:
-  base: ! '>=4.4 && <5'
-  text: -any
-  containers: ! '>=0.5'
-  bifunctors: -any
-  mtl: -any
-  transformers: -any
-  scientific: ! '>=0.3.2'
-  aeson: ! '>=0.7.0.5'
-  vector: -any
 all-versions:
 - 0.0.0
 - 0.0.1
@@ -54,136 +22,384 @@ all-versions:
 - 0.9.4
 - 0.9.5
 author: Chris Done
-latest: 0.9.5
+basic-deps:
+  aeson: '>=0.7.0.5'
+  base: '>=4.4 && <5'
+  bifunctors: '>=0'
+  containers: '>=0.5'
+  mtl: '>=0'
+  scientific: '>=0.3.2'
+  text: '>=0'
+  transformers: '>=0'
+  vector: '>=0'
+changelog: "0.9.0:\n\t* Move 'validate' to .JSON as 'parse'.\n\n0.5.0:\n\t* Changed
+  the parser/doc type to use StateT m. So now you can use\n\tmonads as part of your
+  consumers.\n\n0.2.0:\n\t* Change the type of flag.\n\t* Add the switch combinator
+  (used to be “flag”).\n\t* Add the “stop” combinator.\n\n0.1.1:\n\t* Printer fix
+  for options consumer.\n\n0.1.0:\n\t* Change to Result type which supports Continued
+  constructor.\n"
+changelog-type: text
+description: |
+  descriptive
+  =====
+
+  Self-describing consumers/parsers
+
+  [Documentation](http://chrisdone.github.io/descriptive/)
+
+  There are a variety of Haskell libraries which are implementable
+  through a common interface: self-describing parsers:
+
+  * A formlet is a self-describing parser.
+  * A regular old text parser can be self-describing.
+  * A command-line options parser is a self-describing parser.
+  * A MUD command set is a self-describing parser.
+  * A JSON API can be a self-describing parser.
+
+  Consumption is done in this data type:
+
+  ``` haskell
+  data Consumer s d m a
+  ```
+
+  ### Making descriptive consumers
+
+  To make a consumer, this combinator is used:
+
+  ``` haskell
+  consumer :: (StateT s m (Description d))
+           -- ^ Produce description based on the state.
+           -> (StateT s m (Result (Description d) a))
+           -- ^ Parse the state and maybe transform it if desired.
+           -> Consumer s d m a
+  ```
+
+  The first argument generates a description based on some state. The
+  state is determined by whatever use-case you have. The second argument
+  parses from the state, which could be a stream of bytes, a list of
+  strings, a Map, a Vector, etc. You may or may not decide to modify the
+  state during generation of the description and during parsing.
+
+  ### Running descriptive consumers
+
+  To use a consumer or describe what it does, these are used:
+
+  ``` haskell
+  consume :: Consumer s d Identity a -- ^ The consumer to run.
+          -> s -- ^ Initial state.
+          -> Result (Description d) a
+
+  describe :: Consumer s d Identity a -- ^ The consumer to run.
+           -> s -- ^ Initial state. Can be \"empty\" if you don't use it for
+                -- generating descriptions.
+           -> Description d -- ^ A description and resultant state.
+  ```
+
+  Alternatively the parser/printer can be run in a monad of your choice:
+
+  ``` haskell
+  runConsumer :: Monad m
+              => Consumer s d m a -- ^ The consumer to run.
+              -> StateT s m (Result (Description d) a)
+
+  runDescription :: Monad m
+                 => Consumer s d m a -- ^ The consumer to run.
+                 -> StateT s m (Description d) -- ^ A description and resultant state.
+  ```
+
+  ### Descriptions
+
+  A description is like this:
+
+  ``` haskell
+  data Description a
+    = Unit !a
+    | Bounded !Integer !Bound !(Description a)
+    | And !(Description a) !(Description a)
+    | Or !(Description a) !(Description a)
+    | Sequence ![Description a]
+    | Wrap a !(Description a)
+    | None
+  ```
+
+  You configure the `a` for your use-case, but the rest is generatable
+  by the library. Afterwards, you can make your own pretty printing
+  function, which may be to generate an HTML form, to generate a
+  commandline `--help` screen, a man page, API docs for your JSON
+  parser, a text parsing grammar, etc. For example:
+
+  ``` haskell
+  describeParser :: Description Text -> Text
+  describeForm :: Description (Html ()) -> Html ()
+  describeArgs :: Description CmdArgs -> Text
+  ```
+
+  ### Wrapping
+
+  One can wrap up a consumer to alter either the description or the
+  parser or both, this can be used for wrapping labels, or adding
+  validation, things of that nature:
+
+  ``` haskell
+  wrap :: (StateT t m (Description d) -> StateT s m (Description d))
+       -- ^ Transform the description.
+       -> (StateT t m (Description d) -> StateT t m (Result (Description d) a) -> StateT s m (Result (Description d) b))
+       -- ^ Transform the parser. Can re-run the parser as many times as desired.
+       -> Consumer t d m a
+       -> Consumer s d m b
+  ```
+
+  There is also a handy function written in terms of `wrap` which will
+  validate a consumer.
+
+  ``` haskell
+  validate :: Monad m
+           => d                           -- ^ Description of what it expects.
+           -> (a -> StateT s m (Maybe b)) -- ^ Attempt to parse the value.
+           -> Consumer s d m a            -- ^ Consumer to add validation to.
+           -> Consumer s d m b            -- ^ A new validating consumer.
+  ```
+
+  See below for some examples of this library.
+
+  ## Parsing characters
+
+  See `Descriptive.Char`.
+
+  ``` haskell
+  λ> describe (many (char 'k') <> string "abc") mempty
+  And (Bounded 0 UnlimitedBound (Unit "k"))
+      (Sequence [Unit "a",Unit "b",Unit "c",None])
+  λ> consume (many (char 'k') <> string "abc") "kkkabc"
+  (Succeeded "kkkabc")
+  λ> consume (many (char 'k') <> string "abc") "kkkab"
+  (Failed (Unit "a character"))
+  λ> consume (many (char 'k') <> string "abc") "kkkabj"
+  (Failed (Unit "c"))
+  ```
+
+  ## Validating forms with named inputs
+
+  See `Descriptive.Form`.
+
+  ``` haskell
+  λ> describe ((,) <$> input "username" <*> input "password") mempty
+  And (Unit (Input "username")) (Unit (Input "password"))
+
+  λ> consume ((,) <$>
+              input "username" <*>
+              input "password")
+             (M.fromList [("username","chrisdone"),("password","god")])
+  Succeeded ("chrisdone","god")
+  ```
+
+  Conditions on two inputs:
+
+  ``` haskell
+  login =
+    validate "confirmed password (entered the same twice)"
+             (\(x,y) ->
+                if x == y
+                   then Just y
+                   else Nothing)
+             ((,) <$>
+              input "password" <*>
+              input "password2") <|>
+    input "token"
+  ```
+
+  ``` haskell
+  λ> consume login (M.fromList [("password2","gob"),("password","gob")])
+  Succeeded "gob"
+  λ> consume login (M.fromList [("password2","gob"),("password","go")])
+  Continued (And (Wrap (Constraint "confirmed password (entered the same twice)")
+                       (And (Unit (Input "password"))
+                            (Unit (Input "password2"))))
+                 (Unit (Input "token")))
+  λ> consume login (M.fromList [("password2","gob"),("password","go"),("token","woot")])
+  Succeeded "woot"
+  ```
+
+  ## Validating forms with auto-generated input indexes
+
+  See `Descriptive.Formlet`.
+
+  ``` haskell
+  λ> describe ((,) <$> indexed <*> indexed)
+              (FormletState mempty 0)
+  And (Unit (Index 0)) (Unit (Index 1))
+  λ> consume ((,) <$> indexed <*> indexed)
+             (FormletState (M.fromList [(0,"chrisdone"),(1,"god")]) 0)
+  Succeeded ("chrisdone","god")
+  λ> consume ((,) <$> indexed <*> indexed)
+             (FormletState (M.fromList [(0,"chrisdone")]) 0)
+  Failed (Unit (Index 1))
+  ```
+
+  ## Parsing command-line options
+
+  See `Descriptive.Options`.
+
+  ``` haskell
+  server =
+    ((,,,) <$>
+     constant "start" "cmd" () <*>
+     anyString "SERVER_NAME" <*>
+     switch "dev" "Enable dev mode?" <*>
+     arg "port" "Port to listen on")
+  ```
+
+  ``` haskell
+  λ> describe server []
+  And (And (And (Unit (Constant "start"))
+                 (Unit (AnyString "SERVER_NAME")))
+            (Unit (Flag "dev" "Enable dev mode?")))
+       (Unit (Arg "port" "Port to listen on"))
+  λ> consume server ["start","any","--port","1234","--dev"]
+  Succeeded ((),"any",True,"1234")
+  λ> consume server ["start","any","--port","1234"]
+  Succeeded ((),"any",False,"1234")
+  λ>
+  ```
+
+  ``` haskell
+  λ> textDescription (describe server [])
+  "start SERVER_NAME [--dev] --port <...>"
+  ```
+
+  ## Self-documenting JSON parser
+
+  See `Descriptive.JSON`.
+
+  ``` haskell
+  -- | Submit a URL to reddit.
+  data Submission =
+    Submission {submissionToken :: !Integer
+               ,submissionTitle :: !Text
+               ,submissionComment :: !Text
+               ,submissionSubreddit :: !Integer}
+    deriving (Show)
+
+  submission :: Monad m => Consumer Value Doc m Submission
+  submission =
+    object "Submission"
+           (Submission
+             <$> key "token" (integer "Submission token; see the API docs")
+             <*> key "title" (string "Submission title")
+             <*> key "comment" (string "Submission comment")
+             <*> key "subreddit" (integer "The ID of the subreddit"))
+
+  sample :: Value
+  sample =
+    toJSON (object
+              ["token" .= 123
+              ,"title" .= "Some title"
+              ,"comment" .= "This is good"
+              ,"subreddit" .= 234214])
+
+  badsample :: Value
+  badsample =
+    toJSON (object
+              ["token" .= 123
+              ,"title" .= "Some title"
+              ,"comment" .= 123
+              ,"subreddit" .= 234214])
+  ```
+
+  ``` haskell
+  λ> describe submission (toJSON ())
+  Wrap (Object "Submission")
+       (And (And (And (Wrap (Key "token")
+                            (Unit (Integer "Submission token; see the API docs")))
+                      (Wrap (Key "title")
+                            (Unit (Text "Submission title"))))
+                 (Wrap (Key "comment")
+                       (Unit (Text "Submission comment"))))
+            (Wrap (Key "subreddit")
+                  (Unit (Integer "The ID of the subreddit"))))
+
+
+  λ> consume submission sample
+  Succeeded (Submission {submissionToken = 123
+                     ,submissionTitle = "Some title"
+                     ,submissionComment = "This is good"
+                     ,submissionSubreddit = 234214})
+  λ> consume submission badsample
+  Failed (Wrap (Object "Submission")
+               (Wrap (Key "comment")
+                     (Unit (Text "Submission comment"))))
+  ```
+
+  The bad sample yields an informative message that:
+
+  * The error is in the Submission object.
+  * The key "comment".
+  * The type of that key should be a String and it should be a
+    Submission comment (or whatever invariants you'd like to mention).
+
+  ## Parsing Attempto Controlled English for MUD commands
+
+  TBA. Will use
+  [this package](http://chrisdone.com/posts/attempto-controlled-english).
+
+  With ACE you can parse into:
+
+  ``` haskell
+  parsed complV "<distrans-verb> a <noun> <prep> a <noun>" ==
+  Succeeded (ComplVDisV (DistransitiveV "<distrans-verb>")
+                    (ComplNP (NPCoordUnmarked (UnmarkedNPCoord anoun Nothing)))
+                    (ComplPP (PP (Preposition "<prep>")
+                                 (NPCoordUnmarked (UnmarkedNPCoord anoun Nothing)))))
+  ```
+
+  Which I can then further parse with `descriptive` to yield
+  descriptions like:
+
+      <verb-phrase> [<noun-phrase> ..]
+
+  Or similar. Which would be handy for a MUD so that a user can write:
+
+  > Put the sword on the table.
+
+  ## Producing questions and consuming the answers in Haskell
+
+  TBA. Will be a generalization of
+  [this type](https://github.com/chrisdone/exercise/blob/master/src/Exercise/Types.hs#L20).
+
+  It is a library which I am working on in parallel which will ask the
+  user questions and then validate the answers. Current output is like
+  this:
+
+  ``` haskell
+  λ> describe (greaterThan 4 (integerExpr (parse id expr exercise)))
+  an integer greater than 4
+  λ> eval (greaterThan 4 (integerExpr (parse id expr exercise))) $(someHaskell "x = 1")
+  Left expected an expression, but got a declaration
+  λ> eval (greaterThan 4 (integerExpr (parse id expr exercise))) $(someHaskell "x")
+  Left expected an integer, but got an expression
+  λ> eval (greaterThan 4 (integerExpr (parse id expr exercise))) $(someHaskell "3")
+  Left expected an integer greater than 4
+  λ> eval (greaterThan 4 (integerExpr (parse id expr exercise))) $(someHaskell "5")
+  Right 5
+  ```
+
+  This is also couples description with validation, but I will probably
+  rewrite it with this `descriptive` library.
 description-type: markdown
-description: ! "descriptive\n=====\n\nSelf-describing consumers/parsers\n\n[Documentation](http://chrisdone.github.io/descriptive/)\n\nThere
-  are a variety of Haskell libraries which are implementable\nthrough a common interface:
-  self-describing parsers:\n\n* A formlet is a self-describing parser.\n* A regular
-  old text parser can be self-describing.\n* A command-line options parser is a self-describing
-  parser.\n* A MUD command set is a self-describing parser.\n* A JSON API can be a
-  self-describing parser.\n\nConsumption is done in this data type:\n\n``` haskell\ndata
-  Consumer s d m a\n```\n\n### Making descriptive consumers\n\nTo make a consumer,
-  this combinator is used:\n\n``` haskell\nconsumer :: (StateT s m (Description d))\n
-  \        -- ^ Produce description based on the state.\n         -> (StateT s m (Result
-  (Description d) a))\n         -- ^ Parse the state and maybe transform it if desired.\n
-  \        -> Consumer s d m a\n```\n\nThe first argument generates a description
-  based on some state. The\nstate is determined by whatever use-case you have. The
-  second argument\nparses from the state, which could be a stream of bytes, a list
-  of\nstrings, a Map, a Vector, etc. You may or may not decide to modify the\nstate
-  during generation of the description and during parsing.\n\n### Running descriptive
-  consumers\n\nTo use a consumer or describe what it does, these are used:\n\n```
-  haskell\nconsume :: Consumer s d Identity a -- ^ The consumer to run.\n        ->
-  s -- ^ Initial state.\n        -> Result (Description d) a\n\ndescribe :: Consumer
-  s d Identity a -- ^ The consumer to run.\n         -> s -- ^ Initial state. Can
-  be \\\"empty\\\" if you don't use it for\n              -- generating descriptions.\n
-  \        -> Description d -- ^ A description and resultant state.\n```\n\nAlternatively
-  the parser/printer can be run in a monad of your choice:\n\n``` haskell\nrunConsumer
-  :: Monad m\n            => Consumer s d m a -- ^ The consumer to run.\n            ->
-  StateT s m (Result (Description d) a)\n\nrunDescription :: Monad m\n               =>
-  Consumer s d m a -- ^ The consumer to run.\n               -> StateT s m (Description
-  d) -- ^ A description and resultant state.\n```\n\n### Descriptions\n\nA description
-  is like this:\n\n``` haskell\ndata Description a\n  = Unit !a\n  | Bounded !Integer
-  !Bound !(Description a)\n  | And !(Description a) !(Description a)\n  | Or !(Description
-  a) !(Description a)\n  | Sequence ![Description a]\n  | Wrap a !(Description a)\n
-  \ | None\n```\n\nYou configure the `a` for your use-case, but the rest is generatable\nby
-  the library. Afterwards, you can make your own pretty printing\nfunction, which
-  may be to generate an HTML form, to generate a\ncommandline `--help` screen, a man
-  page, API docs for your JSON\nparser, a text parsing grammar, etc. For example:\n\n```
-  haskell\ndescribeParser :: Description Text -> Text\ndescribeForm :: Description
-  (Html ()) -> Html ()\ndescribeArgs :: Description CmdArgs -> Text\n```\n\n### Wrapping\n\nOne
-  can wrap up a consumer to alter either the description or the\nparser or both, this
-  can be used for wrapping labels, or adding\nvalidation, things of that nature:\n\n```
-  haskell\nwrap :: (StateT t m (Description d) -> StateT s m (Description d))\n     --
-  ^ Transform the description.\n     -> (StateT t m (Description d) -> StateT t m
-  (Result (Description d) a) -> StateT s m (Result (Description d) b))\n     -- ^
-  Transform the parser. Can re-run the parser as many times as desired.\n     -> Consumer
-  t d m a\n     -> Consumer s d m b\n```\n\nThere is also a handy function written
-  in terms of `wrap` which will\nvalidate a consumer.\n\n``` haskell\nvalidate ::
-  Monad m\n         => d                           -- ^ Description of what it expects.\n
-  \        -> (a -> StateT s m (Maybe b)) -- ^ Attempt to parse the value.\n         ->
-  Consumer s d m a            -- ^ Consumer to add validation to.\n         -> Consumer
-  s d m b            -- ^ A new validating consumer.\n```\n\nSee below for some examples
-  of this library.\n\n## Parsing characters\n\nSee `Descriptive.Char`.\n\n``` haskell\nλ>
-  describe (many (char 'k') <> string \"abc\") mempty\nAnd (Bounded 0 UnlimitedBound
-  (Unit \"k\"))\n    (Sequence [Unit \"a\",Unit \"b\",Unit \"c\",None])\nλ> consume
-  (many (char 'k') <> string \"abc\") \"kkkabc\"\n(Succeeded \"kkkabc\")\nλ> consume
-  (many (char 'k') <> string \"abc\") \"kkkab\"\n(Failed (Unit \"a character\"))\nλ>
-  consume (many (char 'k') <> string \"abc\") \"kkkabj\"\n(Failed (Unit \"c\"))\n```\n\n##
-  Validating forms with named inputs\n\nSee `Descriptive.Form`.\n\n``` haskell\nλ>
-  describe ((,) <$> input \"username\" <*> input \"password\") mempty\nAnd (Unit (Input
-  \"username\")) (Unit (Input \"password\"))\n\nλ> consume ((,) <$>\n            input
-  \"username\" <*>\n            input \"password\")\n           (M.fromList [(\"username\",\"chrisdone\"),(\"password\",\"god\")])\nSucceeded
-  (\"chrisdone\",\"god\")\n```\n\nConditions on two inputs:\n\n``` haskell\nlogin
-  =\n  validate \"confirmed password (entered the same twice)\"\n           (\\(x,y)
-  ->\n              if x == y\n                 then Just y\n                 else
-  Nothing)\n           ((,) <$>\n            input \"password\" <*>\n            input
-  \"password2\") <|>\n  input \"token\"\n```\n\n``` haskell\nλ> consume login (M.fromList
-  [(\"password2\",\"gob\"),(\"password\",\"gob\")])\nSucceeded \"gob\"\nλ> consume
-  login (M.fromList [(\"password2\",\"gob\"),(\"password\",\"go\")])\nContinued (And
-  (Wrap (Constraint \"confirmed password (entered the same twice)\")\n                     (And
-  (Unit (Input \"password\"))\n                          (Unit (Input \"password2\"))))\n
-  \              (Unit (Input \"token\")))\nλ> consume login (M.fromList [(\"password2\",\"gob\"),(\"password\",\"go\"),(\"token\",\"woot\")])\nSucceeded
-  \"woot\"\n```\n\n## Validating forms with auto-generated input indexes\n\nSee `Descriptive.Formlet`.\n\n```
-  haskell\nλ> describe ((,) <$> indexed <*> indexed)\n            (FormletState mempty
-  0)\nAnd (Unit (Index 0)) (Unit (Index 1))\nλ> consume ((,) <$> indexed <*> indexed)\n
-  \          (FormletState (M.fromList [(0,\"chrisdone\"),(1,\"god\")]) 0)\nSucceeded
-  (\"chrisdone\",\"god\")\nλ> consume ((,) <$> indexed <*> indexed)\n           (FormletState
-  (M.fromList [(0,\"chrisdone\")]) 0)\nFailed (Unit (Index 1))\n```\n\n## Parsing
-  command-line options\n\nSee `Descriptive.Options`.\n\n``` haskell\nserver =\n  ((,,,)
-  <$>\n   constant \"start\" \"cmd\" () <*>\n   anyString \"SERVER_NAME\" <*>\n   switch
-  \"dev\" \"Enable dev mode?\" <*>\n   arg \"port\" \"Port to listen on\")\n```\n\n```
-  haskell\nλ> describe server []\nAnd (And (And (Unit (Constant \"start\"))\n               (Unit
-  (AnyString \"SERVER_NAME\")))\n          (Unit (Flag \"dev\" \"Enable dev mode?\")))\n
-  \    (Unit (Arg \"port\" \"Port to listen on\"))\nλ> consume server [\"start\",\"any\",\"--port\",\"1234\",\"--dev\"]\nSucceeded
-  ((),\"any\",True,\"1234\")\nλ> consume server [\"start\",\"any\",\"--port\",\"1234\"]\nSucceeded
-  ((),\"any\",False,\"1234\")\nλ>\n```\n\n``` haskell\nλ> textDescription (describe
-  server [])\n\"start SERVER_NAME [--dev] --port <...>\"\n```\n\n## Self-documenting
-  JSON parser\n\nSee `Descriptive.JSON`.\n\n``` haskell\n-- | Submit a URL to reddit.\ndata
-  Submission =\n  Submission {submissionToken :: !Integer\n             ,submissionTitle
-  :: !Text\n             ,submissionComment :: !Text\n             ,submissionSubreddit
-  :: !Integer}\n  deriving (Show)\n\nsubmission :: Monad m => Consumer Value Doc m
-  Submission\nsubmission =\n  object \"Submission\"\n         (Submission\n           <$>
-  key \"token\" (integer \"Submission token; see the API docs\")\n           <*> key
-  \"title\" (string \"Submission title\")\n           <*> key \"comment\" (string
-  \"Submission comment\")\n           <*> key \"subreddit\" (integer \"The ID of the
-  subreddit\"))\n\nsample :: Value\nsample =\n  toJSON (object\n            [\"token\"
-  .= 123\n            ,\"title\" .= \"Some title\"\n            ,\"comment\" .= \"This
-  is good\"\n            ,\"subreddit\" .= 234214])\n\nbadsample :: Value\nbadsample
-  =\n  toJSON (object\n            [\"token\" .= 123\n            ,\"title\" .= \"Some
-  title\"\n            ,\"comment\" .= 123\n            ,\"subreddit\" .= 234214])\n```\n\n```
-  haskell\nλ> describe submission (toJSON ())\nWrap (Object \"Submission\")\n     (And
-  (And (And (Wrap (Key \"token\")\n                          (Unit (Integer \"Submission
-  token; see the API docs\")))\n                    (Wrap (Key \"title\")\n                          (Unit
-  (Text \"Submission title\"))))\n               (Wrap (Key \"comment\")\n                     (Unit
-  (Text \"Submission comment\"))))\n          (Wrap (Key \"subreddit\")\n                (Unit
-  (Integer \"The ID of the subreddit\"))))\n\n\nλ> consume submission sample\nSucceeded
-  (Submission {submissionToken = 123\n                   ,submissionTitle = \"Some
-  title\"\n                   ,submissionComment = \"This is good\"\n                   ,submissionSubreddit
-  = 234214})\nλ> consume submission badsample\nFailed (Wrap (Object \"Submission\")\n
-  \            (Wrap (Key \"comment\")\n                   (Unit (Text \"Submission
-  comment\"))))\n```\n\nThe bad sample yields an informative message that:\n\n* The
-  error is in the Submission object.\n* The key \"comment\".\n* The type of that key
-  should be a String and it should be a\n  Submission comment (or whatever invariants
-  you'd like to mention).\n\n## Parsing Attempto Controlled English for MUD commands\n\nTBA.
-  Will use\n[this package](http://chrisdone.com/posts/attempto-controlled-english).\n\nWith
-  ACE you can parse into:\n\n``` haskell\nparsed complV \"<distrans-verb> a <noun>
-  <prep> a <noun>\" ==\nSucceeded (ComplVDisV (DistransitiveV \"<distrans-verb>\")\n
-  \                 (ComplNP (NPCoordUnmarked (UnmarkedNPCoord anoun Nothing)))\n
-  \                 (ComplPP (PP (Preposition \"<prep>\")\n                               (NPCoordUnmarked
-  (UnmarkedNPCoord anoun Nothing)))))\n```\n\nWhich I can then further parse with
-  `descriptive` to yield\ndescriptions like:\n\n    <verb-phrase> [<noun-phrase> ..]\n\nOr
-  similar. Which would be handy for a MUD so that a user can write:\n\n> Put the sword
-  on the table.\n\n## Producing questions and consuming the answers in Haskell\n\nTBA.
-  Will be a generalization of\n[this type](https://github.com/chrisdone/exercise/blob/master/src/Exercise/Types.hs#L20).\n\nIt
-  is a library which I am working on in parallel which will ask the\nuser questions
-  and then validate the answers. Current output is like\nthis:\n\n``` haskell\nλ>
-  describe (greaterThan 4 (integerExpr (parse id expr exercise)))\nan integer greater
-  than 4\nλ> eval (greaterThan 4 (integerExpr (parse id expr exercise))) $(someHaskell
-  \"x = 1\")\nLeft expected an expression, but got a declaration\nλ> eval (greaterThan
-  4 (integerExpr (parse id expr exercise))) $(someHaskell \"x\")\nLeft expected an
-  integer, but got an expression\nλ> eval (greaterThan 4 (integerExpr (parse id expr
-  exercise))) $(someHaskell \"3\")\nLeft expected an integer greater than 4\nλ> eval
-  (greaterThan 4 (integerExpr (parse id expr exercise))) $(someHaskell \"5\")\nRight
-  5\n```\n\nThis is also couples description with validation, but I will probably\nrewrite
-  it with this `descriptive` library.\n"
+hash: b43911fda52872ab4f332d4b15ed01a5c55f52743f6af6418c5f136e835dd36f
+homepage: https://github.com/chrisdone/descriptive
+latest: 0.9.5
 license-name: BSD-3-Clause
+maintainer: chrisdone@gmail.com
+synopsis: Self-describing consumers/parsers; forms, cmd-line args, JSON, etc.
+test-bench-deps:
+  HUnit: '>=0'
+  aeson: '>=0'
+  base: '>=0'
+  bifunctors: '>=0'
+  containers: '>=0'
+  descriptive: '>=0'
+  hspec: '>=0'
+  mtl: '>=0'
+  text: '>=0'
+  transformers: '>=0'

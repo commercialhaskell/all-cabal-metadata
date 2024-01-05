@@ -1,165 +1,250 @@
-homepage: https://github.com/clnx/muesli
-changelog-type: markdown
-hash: f61807f182e60f58bbaed87bada69b22f82c7d9db4e976c6df531c97b6d58fbc
-test-bench-deps: {}
-maintainer: Călin Ardelean <calinucs@gmail.com>
-synopsis: A simple document-oriented database
-changelog: ! '### 0.1.1.0
-
-
-  * fixed index update bug: new references were added, but the ones from the
-
-  previous version of the document were not removed
-
-  * added sort order argument to range queries
-
-  * `lookup` returns just `Maybe a`
-
-  * renamed `lookupUnique` to `unique''`
-
-  * renamed `filter` to `filterRange`
-
-  * renamed `rangeK` to `range''`
-
-  * changed argument order in `range`, `range''`, `filterRange` to match SQL
-
-  * added `unique`
-
-  * added `filter`
-
-  * added `filterRange''`, `filter''`
-
-
-  ### 0.1.0.1
-
-
-  * fixed a GC bug: `swapDb` failed to swap
-
-
-  ### 0.1
-
-
-  * initial release
-
-'
-basic-deps:
-  cereal: -any
-  bytestring: -any
-  base: ! '>=4.8 && <5'
-  time: -any
-  filepath: -any
-  containers: -any
-  mtl: -any
-  hashable: -any
-  psqueues: -any
-  directory: -any
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
 - 0.1.1.0
 author: Călin Ardelean
-latest: 0.1.1.0
+basic-deps:
+  base: '>=4.8 && <5'
+  bytestring: '>=0'
+  cereal: '>=0'
+  containers: '>=0'
+  directory: '>=0'
+  filepath: '>=0'
+  hashable: '>=0'
+  mtl: '>=0'
+  psqueues: '>=0'
+  time: '>=0'
+changelog: |
+  ### 0.1.1.0
+
+  * fixed index update bug: new references were added, but the ones from the
+  previous version of the document were not removed
+  * added sort order argument to range queries
+  * `lookup` returns just `Maybe a`
+  * renamed `lookupUnique` to `unique'`
+  * renamed `filter` to `filterRange`
+  * renamed `rangeK` to `range'`
+  * changed argument order in `range`, `range'`, `filterRange` to match SQL
+  * added `unique`
+  * added `filter`
+  * added `filterRange'`, `filter'`
+
+  ### 0.1.0.1
+
+  * fixed a GC bug: `swapDb` failed to swap
+
+  ### 0.1
+
+  * initial release
+changelog-type: markdown
+description: |
+  muesli
+  ======
+
+  A simple [document-oriented database][nosql] engine for Haskell.
+
+  Use cases
+  ---------
+  * backing store for p2p / cloud nodes, mobile apps, etc.
+  * higher capacity replacement for *acid-state* (only indexes are held in memory).
+  * no dependency substitute for *SQLite*.
+  * *ACID*ic replacement for *CouchDB* and the like.
+
+  Features
+  --------
+  * **ACID transactions** implemented on the [MVCC][] model.
+  * **automatic index management** based on tags prepended to fields' types
+  (see example below).
+  * **minimal boilerplate**: instead of *TemplateHaskell* we use
+  [`GHC.Generics`][gen] and [`deriving`][der].
+  * **monadic queries**, with standard primitive operations like:
+  `lookup`, `insert`, `update`, `delete`, `filter`, `range`, and `filterRange`.
+  * range queries afford efficient **cursor-like navigation** (paging) through
+  large datasets. For example this is the equivalent SQL for `filterRange`:
+  ```SQL
+  SELECT TOP page * FROM table
+  WHERE (filterFld = filterVal) AND
+        (sortVal = NULL OR sortFld < sortVal) AND
+        (sortKey = NULL OR ID < sortKey)
+  ORDER BY sortFld, ID DESC
+  ```
+  * **easy to reason about performance**: all primitive queries run in **O(p*log(n))**.
+  * **type safety**: impossible to attempt deserializing a record at a wrong type
+  (or address), and risk getting bogus data with no error thrown.
+  References are tagged with a phantom type and created only by the database.
+  There are also `Num`/`Integral` instances to support more generic apps,
+  but normally those are not needed.
+  * **multiple backends** supported: currently *file*, and soon (:tm:)
+  *in-memory*, *remote*.
+  * **portability**: it should work on all platforms, including mobile.
+  * p2p **replication**: soon (:tm:)
+
+  *Note: Some of these features become misfeatures for certain scenarios which
+  would make either a pure in-memory cache, or a real database more appropriate.*
+
+  *In particular the query language is very basic at the current stage. Sure, you
+  can use the customary `Functor` / `Applicative` / `Monad` interface, but you will
+  have to write all kinds of wrapper queries to make things manageable.*
+
+  *The design principle is to only upgrade the query language in tandem with the indexes.
+  Right now the indexes are not very smart, so the query language will not lie
+  about it with some nice but poorly implemented abstraction.*
+
+  Example use
+  -----------
+  First, mark up your types. You must use the record syntax to name the
+  accessors so they'll be queryable. You can filter on `Reference` fields, sort and
+  range on `Sortable`s, and reverse lookup `Unique`s. The database will extract
+  these keys using the `Indexable` and `Document` instances with the help of
+  `GHC.Generics`, including from deep inside any `Foldable`.
+
+  ```Haskell
+  {-# LANGUAGE DeriveAnyClass #-}
+  {-# LANGUAGE DeriveGeneric  #-}
+
+  import Database.Muesli.Types
+
+  data Person = Person
+    { personName  :: Unique (Sortable String)
+    , personEmail :: String
+    } deriving (Show, Generic, Serialize)
+
+  instance Document Person
+
+  data Content  = Text String | HTML String | XHTML String
+    deriving (Show, Generic, Serialize, Indexable)
+
+  data BlogPost = BlogPost
+    { postURI          :: Unique String
+    , postTitle        :: Sortable String
+    , postAuthor       :: Maybe (Reference Person)
+    , postContributors :: [Reference Person]
+    , postTags         :: [Sortable String]
+    , postContent      :: Content
+    , publishedDate    :: Sortable DateTime
+    } deriving (Show, Generic, Serialize)
+
+  instance Document BlogPost
+  ```
+
+  Then, write some queries (`updateUnique` searches by unique key, and either
+  inserts or updates depending on result):
+
+  ```Haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import Database.Muesli.Query
+
+  updatePerson :: String -> String -> Transaction l m (Reference Person, Person)
+  updatePerson name email = do
+    let name' = Sortable name
+    let p = Person name' email
+    pid <- updateUnique "personName" (Unique name') p
+    return (pid, p)
+
+  postsByContrib :: Reference Person -> Transaction l m [(Reference BlogPost, BlogPost)]
+  postsByContrib pid = filter "postContributors" (Just pid) "postTitle"
+
+  flagContributor :: Reference Person -> Transaction l m ()
+  flagContributor pid = do
+    is <- postsByContributor pid
+    forM_ is $ \(bpid, bp) ->
+      update bpid bp { postTags = postTags bp ++ Sortable "stolen" }
+  ```
+
+  Then you can run these transactions with `runQuery` inside some `MonadIO` context.
+  Note that `Transaction` itself is an instance of `MonadIO`, so you can do
+  arbitrary IO inside.
+  The `l` parameter specifies which storage backend you use.
+  Currently only a portable binary file backend is implemented, used with
+  `Handle FileLogState`.
+
+  ```Haskell
+  import Database.Muesli.Query
+  import Database.Muesli.Handle
+
+  flagIt :: (MonadIO m, LogState l) => Handle l -> String -> String ->
+             m (Either TransactionAbort ())
+  flagIt h name email = runQuery h $ do
+    (pid, _) <- updatePerson name email
+    flagContributor pid
+
+  main :: IO ()
+  main = bracket
+    (putStrLn "opening DB..." >>
+     open (Just "blog.log") (Just "blog.dat") Nothing Nothing)
+    (\(h :: Handle FileLogState) -> putStrLn "closing DB..." >> close h)
+    (\h -> flagIt h "Bender Bending Rodríguez" "bender@ilovebender.com")
+
+  ```
+
+  TODO
+  ----
+  - [ ] expose the inverted index
+  - [x] queries that only return keys (no data file IO)
+  - [ ] blocking version of `runQuery`
+  - [ ] testing it on mobile devices
+  - [ ] in-memory backend compatible with `mmap`; also, a remote backend
+  - [ ] static property names, but no ugly `Proxy :: Proxy "FieldName"` stuff
+  - [ ] support for extensible records ("lax" `Serialize` instance),
+  live up to the "document-oriented" label, but this should be optional
+  - [ ] better migration story
+  - [ ] radix tree / PATRICIA implementation for proper full-text search
+  (currently indexing strings just takes first 4/8 chars and turns them into an int,
+  which is good enough for basic sorting)
+  - [ ] replication
+  - [ ] more advanced & flexible index system supporting complex indexes, joins, etc.
+  - [ ] fancy query language
+  - [ ] optimize reads: faster cache, mainIdx (hashtable maybe?)
+  - [x] waiting for [`OverloadedRecordFields`][orf]
+
+  Implementation
+  --------------
+  * 2 files, one for transactions/indexes, and another for serialized data
+  * same file format for transactions and indexes, loading indexes is
+  the same as replaying transactions
+  * transaction file only contains int keys extracted from tagged fields
+  * processing a record (updating indexes) while loading the log is **O(log n)**
+  * previous 2 points make the initial loading much faster and using significantly
+  less memory then *acid-state*, which serializes entire records, including
+  potentially very large string fields, typical in "document-oriented" scenarios.
+  It was suggested that in such cases you should store this data in external files.
+  But then, if you want to regain the ACID property, and already have some indexes
+  laying around, you are well on your way of creating *muesli*.
+  * data file only contains serialized records and gaps, no metadata
+  * LRU cache holds deserialized objects wrapped in `Data.Dynamic`.
+  On SSDs deserialization is far more costly than file IO,
+  so having our own cache is a better solution than just memory mapping the file.
+  * :recycle: GC creates asynchronously new copies of both files, doing cleanup and
+  compaction, and only locks the world at the end
+  * :lock: all locks are held for at most **O(log n)** time
+  * `Reference`, `Unique` and `Sortable` are `newtype`s that have a set of general
+  instances for `Indexable` and `Document` which are used by a [generic function][gen]
+  * transactions defer updates by collecting IDs and serialized data,
+  which are checked (under lock) for consistency at the end
+
+  Change log
+  ----------
+  Available [here][changes].
+
+  License
+  -------
+  Copyright © 2015 Călin Ardelean
+
+  MIT license. See the [license file][MIT] for details.
+
+  [nosql]: https://en.wikipedia.org/wiki/Document-oriented_database "Document-oriented database - Wikipedia"
+  [MVCC]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control "Multiversion concurrency control - Wikipedia"
+  [gen]: https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/generic-programming.html "Generic Programming - GHC User's Guide"
+  [der]: https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/deriving.html "Extensions to the deriving mechanism - GHC User's Guide"
+  [orf]: https://ghc.haskell.org/trac/ghc/wiki/Records/OverloadedRecordFields "Overloaded Record Fields - GHC Wiki"
+  [changes]: https://github.com/clnx/muesli/blob/master/CHANGELOG.md "Muesli change log"
+  [MIT]: https://github.com/clnx/muesli/blob/master/LICENSE.md "MIT License File"
 description-type: markdown
-description: ! "muesli\n======\n\nA simple [document-oriented database][nosql] engine
-  for Haskell.\n\nUse cases\n---------\n* backing store for p2p / cloud nodes, mobile
-  apps, etc.\n* higher capacity replacement for *acid-state* (only indexes are held
-  in memory).\n* no dependency substitute for *SQLite*.\n* *ACID*ic replacement for
-  *CouchDB* and the like.\n\nFeatures\n--------\n* **ACID transactions** implemented
-  on the [MVCC][] model.\n* **automatic index management** based on tags prepended
-  to fields' types\n(see example below).\n* **minimal boilerplate**: instead of *TemplateHaskell*
-  we use\n[`GHC.Generics`][gen] and [`deriving`][der].\n* **monadic queries**, with
-  standard primitive operations like:\n`lookup`, `insert`, `update`, `delete`, `filter`,
-  `range`, and `filterRange`.\n* range queries afford efficient **cursor-like navigation**
-  (paging) through\nlarge datasets. For example this is the equivalent SQL for `filterRange`:\n```SQL\nSELECT
-  TOP page * FROM table\nWHERE (filterFld = filterVal) AND\n      (sortVal = NULL
-  OR sortFld < sortVal) AND\n      (sortKey = NULL OR ID < sortKey)\nORDER BY sortFld,
-  ID DESC\n```\n* **easy to reason about performance**: all primitive queries run
-  in **O(p*log(n))**.\n* **type safety**: impossible to attempt deserializing a record
-  at a wrong type\n(or address), and risk getting bogus data with no error thrown.\nReferences
-  are tagged with a phantom type and created only by the database.\nThere are also
-  `Num`/`Integral` instances to support more generic apps,\nbut normally those are
-  not needed.\n* **multiple backends** supported: currently *file*, and soon (:tm:)\n*in-memory*,
-  *remote*.\n* **portability**: it should work on all platforms, including mobile.\n*
-  p2p **replication**: soon (:tm:)\n\n*Note: Some of these features become misfeatures
-  for certain scenarios which\nwould make either a pure in-memory cache, or a real
-  database more appropriate.*\n\n*In particular the query language is very basic at
-  the current stage. Sure, you\ncan use the customary `Functor` / `Applicative` /
-  `Monad` interface, but you will\nhave to write all kinds of wrapper queries to make
-  things manageable.*\n\n*The design principle is to only upgrade the query language
-  in tandem with the indexes.\nRight now the indexes are not very smart, so the query
-  language will not lie\nabout it with some nice but poorly implemented abstraction.*\n\nExample
-  use\n-----------\nFirst, mark up your types. You must use the record syntax to name
-  the\naccessors so they'll be queryable. You can filter on `Reference` fields, sort
-  and\nrange on `Sortable`s, and reverse lookup `Unique`s. The database will extract\nthese
-  keys using the `Indexable` and `Document` instances with the help of\n`GHC.Generics`,
-  including from deep inside any `Foldable`.\n\n```Haskell\n{-# LANGUAGE DeriveAnyClass
-  #-}\n{-# LANGUAGE DeriveGeneric  #-}\n\nimport Database.Muesli.Types\n\ndata Person
-  = Person\n  { personName  :: Unique (Sortable String)\n  , personEmail :: String\n
-  \ } deriving (Show, Generic, Serialize)\n\ninstance Document Person\n\ndata Content
-  \ = Text String | HTML String | XHTML String\n  deriving (Show, Generic, Serialize,
-  Indexable)\n\ndata BlogPost = BlogPost\n  { postURI          :: Unique String\n
-  \ , postTitle        :: Sortable String\n  , postAuthor       :: Maybe (Reference
-  Person)\n  , postContributors :: [Reference Person]\n  , postTags         :: [Sortable
-  String]\n  , postContent      :: Content\n  , publishedDate    :: Sortable DateTime\n
-  \ } deriving (Show, Generic, Serialize)\n\ninstance Document BlogPost\n```\n\nThen,
-  write some queries (`updateUnique` searches by unique key, and either\ninserts or
-  updates depending on result):\n\n```Haskell\n{-# LANGUAGE OverloadedStrings #-}\n\nimport
-  Database.Muesli.Query\n\nupdatePerson :: String -> String -> Transaction l m (Reference
-  Person, Person)\nupdatePerson name email = do\n  let name' = Sortable name\n  let
-  p = Person name' email\n  pid <- updateUnique \"personName\" (Unique name') p\n
-  \ return (pid, p)\n\npostsByContrib :: Reference Person -> Transaction l m [(Reference
-  BlogPost, BlogPost)]\npostsByContrib pid = filter \"postContributors\" (Just pid)
-  \"postTitle\"\n\nflagContributor :: Reference Person -> Transaction l m ()\nflagContributor
-  pid = do\n  is <- postsByContributor pid\n  forM_ is $ \\(bpid, bp) ->\n    update
-  bpid bp { postTags = postTags bp ++ Sortable \"stolen\" }\n```\n\nThen you can run
-  these transactions with `runQuery` inside some `MonadIO` context.\nNote that `Transaction`
-  itself is an instance of `MonadIO`, so you can do\narbitrary IO inside.\nThe `l`
-  parameter specifies which storage backend you use.\nCurrently only a portable binary
-  file backend is implemented, used with\n`Handle FileLogState`.\n\n```Haskell\nimport
-  Database.Muesli.Query\nimport Database.Muesli.Handle\n\nflagIt :: (MonadIO m, LogState
-  l) => Handle l -> String -> String ->\n           m (Either TransactionAbort ())\nflagIt
-  h name email = runQuery h $ do\n  (pid, _) <- updatePerson name email\n  flagContributor
-  pid\n\nmain :: IO ()\nmain = bracket\n  (putStrLn \"opening DB...\" >>\n   open
-  (Just \"blog.log\") (Just \"blog.dat\") Nothing Nothing)\n  (\\(h :: Handle FileLogState)
-  -> putStrLn \"closing DB...\" >> close h)\n  (\\h -> flagIt h \"Bender Bending Rodríguez\"
-  \"bender@ilovebender.com\")\n\n```\n\nTODO\n----\n- [ ] expose the inverted index\n-
-  [x] queries that only return keys (no data file IO)\n- [ ] blocking version of `runQuery`\n-
-  [ ] testing it on mobile devices\n- [ ] in-memory backend compatible with `mmap`;
-  also, a remote backend\n- [ ] static property names, but no ugly `Proxy :: Proxy
-  \"FieldName\"` stuff\n- [ ] support for extensible records (\"lax\" `Serialize`
-  instance),\nlive up to the \"document-oriented\" label, but this should be optional\n-
-  [ ] better migration story\n- [ ] radix tree / PATRICIA implementation for proper
-  full-text search\n(currently indexing strings just takes first 4/8 chars and turns
-  them into an int,\nwhich is good enough for basic sorting)\n- [ ] replication\n-
-  [ ] more advanced & flexible index system supporting complex indexes, joins, etc.\n-
-  [ ] fancy query language\n- [ ] optimize reads: faster cache, mainIdx (hashtable
-  maybe?)\n- [x] waiting for [`OverloadedRecordFields`][orf]\n\nImplementation\n--------------\n*
-  2 files, one for transactions/indexes, and another for serialized data\n* same file
-  format for transactions and indexes, loading indexes is\nthe same as replaying transactions\n*
-  transaction file only contains int keys extracted from tagged fields\n* processing
-  a record (updating indexes) while loading the log is **O(log n)**\n* previous 2
-  points make the initial loading much faster and using significantly\nless memory
-  then *acid-state*, which serializes entire records, including\npotentially very
-  large string fields, typical in \"document-oriented\" scenarios.\nIt was suggested
-  that in such cases you should store this data in external files.\nBut then, if you
-  want to regain the ACID property, and already have some indexes\nlaying around,
-  you are well on your way of creating *muesli*.\n* data file only contains serialized
-  records and gaps, no metadata\n* LRU cache holds deserialized objects wrapped in
-  `Data.Dynamic`.\nOn SSDs deserialization is far more costly than file IO,\nso having
-  our own cache is a better solution than just memory mapping the file.\n* :recycle:
-  GC creates asynchronously new copies of both files, doing cleanup and\ncompaction,
-  and only locks the world at the end\n* :lock: all locks are held for at most **O(log
-  n)** time\n* `Reference`, `Unique` and `Sortable` are `newtype`s that have a set
-  of general\ninstances for `Indexable` and `Document` which are used by a [generic
-  function][gen]\n* transactions defer updates by collecting IDs and serialized data,\nwhich
-  are checked (under lock) for consistency at the end\n\nChange log\n----------\nAvailable
-  [here][changes].\n\nLicense\n-------\nCopyright © 2015 Călin Ardelean\n\nMIT license.
-  See the [license file][MIT] for details.\n\n[nosql]: https://en.wikipedia.org/wiki/Document-oriented_database
-  \"Document-oriented database - Wikipedia\"\n[MVCC]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
-  \"Multiversion concurrency control - Wikipedia\"\n[gen]: https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/generic-programming.html
-  \"Generic Programming - GHC User's Guide\"\n[der]: https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/deriving.html
-  \"Extensions to the deriving mechanism - GHC User's Guide\"\n[orf]: https://ghc.haskell.org/trac/ghc/wiki/Records/OverloadedRecordFields
-  \"Overloaded Record Fields - GHC Wiki\"\n[changes]: https://github.com/clnx/muesli/blob/master/CHANGELOG.md
-  \"Muesli change log\"\n[MIT]: https://github.com/clnx/muesli/blob/master/LICENSE.md
-  \"MIT License File\"\n"
+hash: f61807f182e60f58bbaed87bada69b22f82c7d9db4e976c6df531c97b6d58fbc
+homepage: https://github.com/clnx/muesli
+latest: 0.1.1.0
 license-name: MIT
+maintainer: Călin Ardelean <calinucs@gmail.com>
+synopsis: A simple document-oriented database
+test-bench-deps: {}

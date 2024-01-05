@@ -1,38 +1,3 @@
-homepage: ''
-changelog-type: markdown
-hash: d12021e2b3556633b788aaed53b2d4bbf7bd01f22d13507eb6adba30012e3417
-test-bench-deps:
-  gingersnap: -any
-  microspec: -any
-  bytestring: -any
-  base: -any
-  containers: -any
-  snap-core: -any
-  postgresql-simple: -any
-  transformers: -any
-maintainer: TomMurphy
-synopsis: Consistent and safe JSON APIs with snap-core and (by default) postgresql-simple
-changelog: ! '# Revision history for gingersnap
-
-
-  ## 0.1.0.0  -- 2018-10-18
-
-
-  * Initial release
-
-'
-basic-deps:
-  bytestring: -any
-  base: ! '>=4.5 && <5'
-  unordered-containers: -any
-  text: -any
-  resource-pool: -any
-  snap-core: -any
-  postgresql-simple: -any
-  transformers: -any
-  deepseq: -any
-  http-types: -any
-  aeson: -any
 all-versions:
 - 0.1.0.0
 - 0.1.1.0
@@ -53,115 +18,315 @@ all-versions:
 - 0.3.0.1
 - 0.3.1.0
 author: Tinybop Labs, tom-bop
-latest: 0.3.1.0
+basic-deps:
+  aeson: '>=0'
+  base: '>=4.5 && <5'
+  bytestring: '>=0'
+  deepseq: '>=0'
+  http-types: '>=0'
+  postgresql-simple: '>=0'
+  resource-pool: '>=0'
+  snap-core: '>=0'
+  text: '>=0'
+  transformers: '>=0'
+  unordered-containers: '>=0'
+changelog: |
+  # Revision history for gingersnap
+
+  ## 0.1.0.0  -- 2018-10-18
+
+  * Initial release
+changelog-type: markdown
+description: |
+  # Gingersnap
+
+  Gingersnap's not a web framework: that's `snap-core`'s job.
+  More a set of lightweight idioms for building a resource-safe JSON API with
+  (by default) `postgresql-simple`.
+
+  As it's just a set of idioms, it's easy to only use 'em where you need 'em.
+  An app could have only a single endpoint that uses Gingersnap, with the rest
+  using plain `snap` or `snap-core`.
+
+  How do we use it? This README is also a Literate Haskell file so it's a full
+  example you can run with markdown-unlit. Let's get started:
+
+  ## Imports at the top!
+
+  A few imports we'll need for this tutorial:
+
+  ```haskell
+  {-# LANGUAGE DeriveGeneric, OverloadedStrings #-}
+
+  import Control.Monad (when)
+  import Data.Aeson (ToJSON, (.=), FromJSON)
+  import Database.PostgreSQL.Simple
+   -- For our automatic JSON instance:
+  import GHC.Generics (Generic)
+  import Gingersnap.Core
+  import Network.HTTP.Types.Status
+  import Snap.Core
+  -- From the 'snap-server' package:
+  import Snap.Http.Server (quickHttpServe)
+  ```
+
+  ## A first endpoint
+
+  Now that we've got our imports, let's jump into defining an endpoint. We'll
+  define a little bit of setup code later on in the file.
+
+  ```haskell
+  data Character = Character { name :: String, age :: Int }
+   deriving (Show, Generic)
+
+  instance ToJSON Character
+  instance FromJSON Character
+
+  one :: Ctx -> Snap ()
+  one ctx =
+     pureRsp ctx $ rspGood $ Character { name = "Yoda", age = 900 }
+  ```
+
+  You can run the code from this file with
+
+      $ cabal update
+      $ cabal install gingersnap snap-server markdown-unlit
+      $ ghci -pgmL markdown-unlit README.lhs   # The "-pgmL" is just for this README
+
+  And calling "main". In another window, if you call:
+
+      $ curl 'localhost:8000/one'
+
+  You should get back:
+
+      {"result":{"age":900,"name":"Yoda"}}
+
+  A few things to notice:
+    - The endpoint takes as an argument a "Ctx". We'll see the definition of that
+      later.
+    - The endpoint returns our data with "rspGood". More on that in a moment.
+    - The response came wrapped in a "result" JSON object. You can customize that
+      behavior but we'll use the default here.
+
+  So, what's "rspGood"? Well, it has the type
+
+      rspGood :: ToJSON x => x -> Rsp
+
+  The "Rsp" type is one of the core types in Gingersnap. Keep an eye out for it later.
+
+  ## Defining "main"
+
+  Let's now look at how we defined our main function.
+
+  ```haskell
+  main :: IO ()
+  main = do
+     ctx <- makeCtx
+     quickHttpServe $ route [
+          ("one", one ctx)
+        , ("two", two ctx)
+        , ("three", three ctx)
+        , ("four", method POST $ four ctx)
+        ]
+  ```
+
+  Other than "ctx", this isn't Gingersnap-specific at all: just a simple
+  `snap-core` server. "makeCtx" is a function we define ourselves. It creates a
+  value of type "Ctx", which we define ourselves, and which is an instance of
+  "IsCtx".
+
+  ## IsCtx
+
+  The idea of "IsCtx" is that it allows us to thread whatever data we need through
+  to our endpoints. We'll definitely need a database connection (pool), but it's a
+  typeclass, so you can define whatever other fields you'd like to pass to your
+  handlers in the type that's an instance of that class.
+
+  For example, if you're using the 'auto-update' package to efficiently run
+  periodic actions (like getting the current time), you may want to create another
+  set of fields in your "Ctx" type to easily thread auto-update's actions through
+  to your handlers, too.
+
+  So let's define our own! We unimaginitavely call it "Ctx":
+
+  ```haskell
+  data Ctx = Ctx { ctx_db :: Pool Connection }
+
+  instance IsCtx Ctx where
+     ctxConnectionPool = ctx_db
+  ```
+
+  And then define a simple "makeCtx":
+
+  ```haskell
+  makeCtx :: IO Ctx
+  makeCtx = do
+
+     -- Setting up the DB connection pool:
+     let connString = " host=localhost port=5432 dbname=postgres user=postgres "
+     pool <- createPool (connectPostgreSQL connString) close 1 5 20
+
+     pure $ Ctx { ctx_db = pool }
+  ```
+
+  And that's that!
+
+  ## Talking to the database
+
+  Now that we've got (through Ctx) a DB connection pool, let's query the DB:
+
+
+  ```haskell
+  two :: Ctx -> Snap ()
+  two ctx = do
+     inTransaction ctx $ \conn -> do
+        [Only x] <- query_ conn " SELECT 3 + 3 "
+        pure $ rspGood $ Character { name = "Calvin", age = x }
+  ```
+
+      $ curl 'localhost:8000/two'
+      {"result":{"age":6,"name":"Calvin"}}
+
+  Nice! This uses "inTransaction", another core tool in Gingersnap:
+
+      inTransaction :: IsCtx ctx => ctx -> (Connection -> IO Rsp) -> Snap ()
+
+  We've already seen IsCtx and Rsp, so the main thing to notice here is that the
+  action we pass to inTransaction is passed a Connection and is in IO, not in Snap
+  (or MonadSnap). This gives us a few nice things:
+    - If you're in Snap, you can accidentally leak a Connection resource by calling
+      finishWith while in the middle of a transaction or DB action. We don't have this
+      problem.
+    - We can choose at any time whether to commit or rollback. The "Rsp" type carries
+      information about whether to commit or rollback (e.g. "rspGood" will commit,
+      "rspBadRollback" won't). This is in contrast to "withTransaction", that'll
+      only roll back if there's an exception, and in contrast to manually beginning
+      a transaction, which provides no check that we properly commit or rollback
+      (e.g. we could forget to commit/rollback in one case among many in a complicated
+      branching expression)
+
+  If there's an error while running the `(Connection -> IO Rsp)` action:
+    - The transaction will be rolled back
+    - The `Connection` will be returned to the connection pool
+    - A JSON error response will be returned. If you're defining your own `ApiErr`
+      instance, that'll be `apiErr_unexpectedError`
+
+  ## Not everything's rspGood
+
+  What if we don't want to send a successful ok200 message? Or maybe we don't even
+  want to commit our transaction? These might come in handy then:
+
+      rspBadCommit :: ApiErr ae => ae -> Rsp
+      rspBadRollback :: ApiErr ae => ae -> Rsp
+
+  (`rspBad` is an alias for `rspBadRollback`)
+
+  `ApiErr` is a simple typeclass that ensures our error type can be converted to
+  a HTTP status code and JSON value.
+
+  We don't need to (and won't be) exploring the `ApiErr` typeclass here directly
+  , since we've got a good default instance with the `DefaultApiErr` type.
+  It'll make us write a little more (e.g. explicitly stating the status code of
+  our error), but it's quick and easy.
+
+  ```haskell
+  three :: Ctx -> Snap ()
+  three ctx =
+     inTransaction ctx $ \conn -> do
+        [Only n] <- query_ conn " SELECT random () "
+        pure $ if n >= (0.5 :: Double)
+           then rspGood n
+           else rspBad $
+              DefaultApiErr_Custom
+                 internalServerError500
+                 "'n' too small"
+                 [("n" .= n)]
+  ```
+
+      $ curl -v 'localhost:8000/three'
+      [...]
+      < HTTP/1.1 200 OK
+      [...]
+      {"result":0.594665706157684}
+
+      $ curl -v 'localhost:8000/three'
+      [...]
+      < HTTP/1.1 500 Internal Server Error
+      [...]
+      {"errorCode":6,"errorVals":[["n",0.2500847]],"errorMessage":"'n' too small"}
+
+  If you'd like to write your own `ApiErr` instance (which you probably should if
+  you're building something "real":
+    - The definition of "errResult" for "DefaultApiErr" might be a good guide
+      for how to get a consistent JSON result.
+    - You'll want to make that type the "CtxErrType" associated type for IsCtx
+
+  ## Getting JSON
+
+  We've sent a lot of JSON, but let's receive some!
+
+  ```haskell
+  four :: Ctx -> Snap ()
+  four ctx = do
+     o <- reqObject ctx
+     character <- o .! "character"
+     amtToAge <- o .! "amt_to_age"
+
+     when (amtToAge < (0 :: Int)) $
+        errorEarlyCode $
+           DefaultApiErr_Custom unprocessableEntity422 "Can't age backwards!" []
+
+     inTransaction ctx $ \conn -> do
+        [Only newAge] <- query conn " SELECT ? + ? " (age character, amtToAge)
+        pure $ rspGood $ character { age = newAge }
+  ```
+
+  (Note with a custom `ApiErr` instance you won't have to specify the HTTP
+  response like 'unprocessableEntity422' etc.)
+
+      $ curl 'localhost:8000/four' --data '{"character": {"name": "Calvin", "age": 6}, "amt_to_age": 1}'
+
+      {"result":{"age":7,"name":"Calvin"}}
+
+  `(.!)` requires that the value be present and short-circuits with a JSON error
+  if it's not or if it's malformed (i.e. if `fromJSON` would fail)
+
+  `(.!?)` doesn't require the value to be present - it returns a `Maybe` value. If
+  the key is present but the value is malformed, however, it'll return a JSON error.
+
+  A few things to note:
+    - If everything's not okay with the JSON inputs to the function, we never even
+      make it to the DB.
+    - `errorEarlyCode` is like (and uses) Snap's `finishWith`, but we don't have
+      to worry about a resource leak since `inTransaction` is separate
+
+  ## Not everything's JSON
+
+  A JSON API is usually JSON but if you'd like to e.g. send a CSV or a file there
+  are functions like `rspGoodCSV` and (the most general) `rspGoodLBS`.
+
+  If you don't see a function you need it's easy to define your own.
+
+
+  ## Other things to discover
+
+  This tutorial is a work in progress, and these'll be the next concepts to be
+  touched on:
+
+    - returning JSON even when throwing an error
 description-type: markdown
-description: ! "# Gingersnap\n\nGingersnap's not a web framework: that's `snap-core`'s
-  job.\nMore a set of lightweight idioms for building a resource-safe JSON API with\n(by
-  default) `postgresql-simple`.\n\nAs it's just a set of idioms, it's easy to only
-  use 'em where you need 'em.\nAn app could have only a single endpoint that uses
-  Gingersnap, with the rest\nusing plain `snap` or `snap-core`.\n\nHow do we use it?
-  This README is also a Literate Haskell file so it's a full\nexample you can run
-  with markdown-unlit. Let's get started:\n\n## Imports at the top!\n\nA few imports
-  we'll need for this tutorial:\n\n```haskell\n{-# LANGUAGE DeriveGeneric, OverloadedStrings
-  #-}\n\nimport Control.Monad (when)\nimport Data.Aeson (ToJSON, (.=), FromJSON)\nimport
-  Database.PostgreSQL.Simple\n -- For our automatic JSON instance:\nimport GHC.Generics
-  (Generic)\nimport Gingersnap.Core\nimport Network.HTTP.Types.Status\nimport Snap.Core\n--
-  From the 'snap-server' package:\nimport Snap.Http.Server (quickHttpServe)\n```\n\n##
-  A first endpoint\n\nNow that we've got our imports, let's jump into defining an
-  endpoint. We'll\ndefine a little bit of setup code later on in the file.\n\n```haskell\ndata
-  Character = Character { name :: String, age :: Int }\n deriving (Show, Generic)\n\ninstance
-  ToJSON Character\ninstance FromJSON Character\n\none :: Ctx -> Snap ()\none ctx
-  =\n   pureRsp ctx $ rspGood $ Character { name = \"Yoda\", age = 900 }\n```\n\nYou
-  can run the code from this file with\n\n    $ cabal update\n    $ cabal install
-  gingersnap snap-server markdown-unlit\n    $ ghci -pgmL markdown-unlit README.lhs
-  \  # The \"-pgmL\" is just for this README\n\nAnd calling \"main\". In another window,
-  if you call:\n\n    $ curl 'localhost:8000/one'\n\nYou should get back:\n\n    {\"result\":{\"age\":900,\"name\":\"Yoda\"}}\n\nA
-  few things to notice:\n  - The endpoint takes as an argument a \"Ctx\". We'll see
-  the definition of that\n    later.\n  - The endpoint returns our data with \"rspGood\".
-  More on that in a moment.\n  - The response came wrapped in a \"result\" JSON object.
-  You can customize that\n    behavior but we'll use the default here.\n\nSo, what's
-  \"rspGood\"? Well, it has the type\n\n    rspGood :: ToJSON x => x -> Rsp\n\nThe
-  \"Rsp\" type is one of the core types in Gingersnap. Keep an eye out for it later.\n\n##
-  Defining \"main\"\n\nLet's now look at how we defined our main function.\n\n```haskell\nmain
-  :: IO ()\nmain = do\n   ctx <- makeCtx\n   quickHttpServe $ route [\n        (\"one\",
-  one ctx)\n      , (\"two\", two ctx)\n      , (\"three\", three ctx)\n      , (\"four\",
-  method POST $ four ctx)\n      ]\n```\n\nOther than \"ctx\", this isn't Gingersnap-specific
-  at all: just a simple\n`snap-core` server. \"makeCtx\" is a function we define ourselves.
-  It creates a\nvalue of type \"Ctx\", which we define ourselves, and which is an
-  instance of\n\"IsCtx\".\n\n## IsCtx\n\nThe idea of \"IsCtx\" is that it allows us
-  to thread whatever data we need through\nto our endpoints. We'll definitely need
-  a database connection (pool), but it's a\ntypeclass, so you can define whatever
-  other fields you'd like to pass to your\nhandlers in the type that's an instance
-  of that class.\n\nFor example, if you're using the 'auto-update' package to efficiently
-  run\nperiodic actions (like getting the current time), you may want to create another\nset
-  of fields in your \"Ctx\" type to easily thread auto-update's actions through\nto
-  your handlers, too.\n\nSo let's define our own! We unimaginitavely call it \"Ctx\":\n\n```haskell\ndata
-  Ctx = Ctx { ctx_db :: Pool Connection }\n\ninstance IsCtx Ctx where\n   ctxConnectionPool
-  = ctx_db\n```\n\nAnd then define a simple \"makeCtx\":\n\n```haskell\nmakeCtx ::
-  IO Ctx\nmakeCtx = do\n\n   -- Setting up the DB connection pool:\n   let connString
-  = \" host=localhost port=5432 dbname=postgres user=postgres \"\n   pool <- createPool
-  (connectPostgreSQL connString) close 1 5 20\n\n   pure $ Ctx { ctx_db = pool }\n```\n\nAnd
-  that's that!\n\n## Talking to the database\n\nNow that we've got (through Ctx) a
-  DB connection pool, let's query the DB:\n\n\n```haskell\ntwo :: Ctx -> Snap ()\ntwo
-  ctx = do\n   inTransaction ctx $ \\conn -> do\n      [Only x] <- query_ conn \"
-  SELECT 3 + 3 \"\n      pure $ rspGood $ Character { name = \"Calvin\", age = x }\n```\n\n
-  \   $ curl 'localhost:8000/two'\n    {\"result\":{\"age\":6,\"name\":\"Calvin\"}}\n\nNice!
-  This uses \"inTransaction\", another core tool in Gingersnap:\n\n    inTransaction
-  :: IsCtx ctx => ctx -> (Connection -> IO Rsp) -> Snap ()\n\nWe've already seen IsCtx
-  and Rsp, so the main thing to notice here is that the\naction we pass to inTransaction
-  is passed a Connection and is in IO, not in Snap\n(or MonadSnap). This gives us
-  a few nice things:\n  - If you're in Snap, you can accidentally leak a Connection
-  resource by calling\n    finishWith while in the middle of a transaction or DB action.
-  We don't have this\n    problem.\n  - We can choose at any time whether to commit
-  or rollback. The \"Rsp\" type carries\n    information about whether to commit or
-  rollback (e.g. \"rspGood\" will commit,\n    \"rspBadRollback\" won't). This is
-  in contrast to \"withTransaction\", that'll\n    only roll back if there's an exception,
-  and in contrast to manually beginning\n    a transaction, which provides no check
-  that we properly commit or rollback\n    (e.g. we could forget to commit/rollback
-  in one case among many in a complicated\n    branching expression)\n\nIf there's
-  an error while running the `(Connection -> IO Rsp)` action:\n  - The transaction
-  will be rolled back\n  - The `Connection` will be returned to the connection pool\n
-  \ - A JSON error response will be returned. If you're defining your own `ApiErr`\n
-  \   instance, that'll be `apiErr_unexpectedError`\n\n## Not everything's rspGood\n\nWhat
-  if we don't want to send a successful ok200 message? Or maybe we don't even\nwant
-  to commit our transaction? These might come in handy then:\n\n    rspBadCommit ::
-  ApiErr ae => ae -> Rsp\n    rspBadRollback :: ApiErr ae => ae -> Rsp\n\n(`rspBad`
-  is an alias for `rspBadRollback`)\n\n`ApiErr` is a simple typeclass that ensures
-  our error type can be converted to\na HTTP status code and JSON value.\n\nWe don't
-  need to (and won't be) exploring the `ApiErr` typeclass here directly\n, since we've
-  got a good default instance with the `DefaultApiErr` type.\nIt'll make us write
-  a little more (e.g. explicitly stating the status code of\nour error), but it's
-  quick and easy.\n\n```haskell\nthree :: Ctx -> Snap ()\nthree ctx =\n   inTransaction
-  ctx $ \\conn -> do\n      [Only n] <- query_ conn \" SELECT random () \"\n      pure
-  $ if n >= (0.5 :: Double)\n         then rspGood n\n         else rspBad $\n            DefaultApiErr_Custom\n
-  \              internalServerError500\n               \"'n' too small\"\n               [(\"n\"
-  .= n)]\n```\n\n    $ curl -v 'localhost:8000/three'\n    [...]\n    < HTTP/1.1 200
-  OK\n    [...]\n    {\"result\":0.594665706157684}\n\n    $ curl -v 'localhost:8000/three'\n
-  \   [...]\n    < HTTP/1.1 500 Internal Server Error\n    [...]\n    {\"errorCode\":6,\"errorVals\":[[\"n\",0.2500847]],\"errorMessage\":\"'n'
-  too small\"}\n\nIf you'd like to write your own `ApiErr` instance (which you probably
-  should if\nyou're building something \"real\":\n  - The definition of \"errResult\"
-  for \"DefaultApiErr\" might be a good guide\n    for how to get a consistent JSON
-  result.\n  - You'll want to make that type the \"CtxErrType\" associated type for
-  IsCtx\n\n## Getting JSON\n\nWe've sent a lot of JSON, but let's receive some!\n\n```haskell\nfour
-  :: Ctx -> Snap ()\nfour ctx = do\n   o <- reqObject ctx\n   character <- o .! \"character\"\n
-  \  amtToAge <- o .! \"amt_to_age\"\n\n   when (amtToAge < (0 :: Int)) $\n      errorEarlyCode
-  $\n         DefaultApiErr_Custom unprocessableEntity422 \"Can't age backwards!\"
-  []\n\n   inTransaction ctx $ \\conn -> do\n      [Only newAge] <- query conn \"
-  SELECT ? + ? \" (age character, amtToAge)\n      pure $ rspGood $ character { age
-  = newAge }\n```\n\n(Note with a custom `ApiErr` instance you won't have to specify
-  the HTTP\nresponse like 'unprocessableEntity422' etc.)\n\n    $ curl 'localhost:8000/four'
-  --data '{\"character\": {\"name\": \"Calvin\", \"age\": 6}, \"amt_to_age\": 1}'\n\n
-  \   {\"result\":{\"age\":7,\"name\":\"Calvin\"}}\n\n`(.!)` requires that the value
-  be present and short-circuits with a JSON error\nif it's not or if it's malformed
-  (i.e. if `fromJSON` would fail)\n\n`(.!?)` doesn't require the value to be present
-  - it returns a `Maybe` value. If\nthe key is present but the value is malformed,
-  however, it'll return a JSON error.\n\nA few things to note:\n  - If everything's
-  not okay with the JSON inputs to the function, we never even\n    make it to the
-  DB.\n  - `errorEarlyCode` is like (and uses) Snap's `finishWith`, but we don't have\n
-  \   to worry about a resource leak since `inTransaction` is separate\n\n## Not everything's
-  JSON\n\nA JSON API is usually JSON but if you'd like to e.g. send a CSV or a file
-  there\nare functions like `rspGoodCSV` and (the most general) `rspGoodLBS`.\n\nIf
-  you don't see a function you need it's easy to define your own.\n\n\n## Other things
-  to discover\n\nThis tutorial is a work in progress, and these'll be the next concepts
-  to be\ntouched on:\n\n  - returning JSON even when throwing an error\n"
+hash: d12021e2b3556633b788aaed53b2d4bbf7bd01f22d13507eb6adba30012e3417
+homepage: ''
+latest: 0.3.1.0
 license-name: BSD-3-Clause
+maintainer: TomMurphy
+synopsis: Consistent and safe JSON APIs with snap-core and (by default) postgresql-simple
+test-bench-deps:
+  base: '>=0'
+  bytestring: '>=0'
+  containers: '>=0'
+  gingersnap: '>=0'
+  microspec: '>=0'
+  postgresql-simple: '>=0'
+  snap-core: '>=0'
+  transformers: '>=0'

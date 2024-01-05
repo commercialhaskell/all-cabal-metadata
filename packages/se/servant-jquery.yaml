@@ -1,64 +1,3 @@
-homepage: http://haskell-servant.github.io/
-changelog-type: markdown
-hash: 519587d3f37a8b548fcb3cdee157ff1f2ddca7c678ebb818f79a42ada3a6ae66
-test-bench-deps:
-  servant-jquery: -any
-  base: ==4.*
-  hspec: ! '>=2.0'
-  servant: -any
-  lens: -any
-  language-ecmascript: ! '>=0.16'
-  hspec-expectations: -any
-maintainer: alpmestan@gmail.com
-synopsis: Automatically derive (jquery) javascript functions to query servant webservices
-changelog: ! '0.4.3
-
-  -----
-
-  * Content type now set to JSON when a request body is sent (#122)
-
-
-  0.4
-
-  ---
-
-  * `Delete` now is like `Get`, `Post`, `Put`, and `Patch` and returns a response
-  body
-
-  * Extend `HeaderArg` to support more advanced HTTP header handling (https://github.com/haskell-servant/servant-jquery/pull/6)
-
-  * Support content-type aware combinators (but require that endpoints support JSON)
-
-  * Add support for Matrix params (https://github.com/haskell-servant/servant-jquery/pull/11)
-
-  * Add functions that directly generate the Javascript code from the API type without
-  having to manually pattern match on the result.
-
-
-  0.2.2
-
-  -----
-
-
-  * Fix an issue where toplevel Raw endpoints would generate a JS function with no
-  name (https://github.com/haskell-servant/servant-jquery/issues/2)
-
-  * Replace dots by _ in paths (https://github.com/haskell-servant/servant-jquery/issues/1)
-
-'
-basic-deps:
-  warp: -any
-  servant-jquery: ==0.4.*
-  stm: -any
-  base: ! '>=4.5 && <5'
-  text: -any
-  filepath: -any
-  servant-server: ==0.4.*
-  servant: ==0.4.*
-  lens: ! '>=4'
-  charset: -any
-  transformers: -any
-  aeson: -any
 all-versions:
 - '0.2'
 - 0.2.1
@@ -77,38 +16,145 @@ all-versions:
 - 0.4.4.6
 - 0.4.4.7
 author: Alp Mestanogullari
-latest: 0.4.4.7
+basic-deps:
+  aeson: '>=0'
+  base: '>=4.5 && <5'
+  charset: '>=0'
+  filepath: '>=0'
+  lens: '>=4'
+  servant: '>=0.4 && <0.5'
+  servant-jquery: '>=0.4 && <0.5'
+  servant-server: '>=0.4 && <0.5'
+  stm: '>=0'
+  text: '>=0'
+  transformers: '>=0'
+  warp: '>=0'
+changelog: |
+  0.4.3
+  -----
+  * Content type now set to JSON when a request body is sent (#122)
+
+  0.4
+  ---
+  * `Delete` now is like `Get`, `Post`, `Put`, and `Patch` and returns a response body
+  * Extend `HeaderArg` to support more advanced HTTP header handling (https://github.com/haskell-servant/servant-jquery/pull/6)
+  * Support content-type aware combinators (but require that endpoints support JSON)
+  * Add support for Matrix params (https://github.com/haskell-servant/servant-jquery/pull/11)
+  * Add functions that directly generate the Javascript code from the API type without having to manually pattern match on the result.
+
+  0.2.2
+  -----
+
+  * Fix an issue where toplevel Raw endpoints would generate a JS function with no name (https://github.com/haskell-servant/servant-jquery/issues/2)
+  * Replace dots by _ in paths (https://github.com/haskell-servant/servant-jquery/issues/1)
+changelog-type: markdown
+description: |
+  # servant-jquery
+
+  ![servant](https://raw.githubusercontent.com/haskell-servant/servant/master/servant.png)
+
+  This library lets you derive automatically (JQuery based) Javascript functions that let you query each endpoint of a *servant* webservice.
+
+  ## Example
+
+  Read more about the following example [here](https://github.com/haskell-servant/servant/tree/master/servant-jquery/tree/master/examples#examples).
+
+  ``` haskell
+  {-# LANGUAGE DataKinds #-}
+  {-# LANGUAGE TypeOperators #-}
+  {-# LANGUAGE DeriveGeneric #-}
+  {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
+  import Control.Concurrent.STM
+  import Control.Monad.IO.Class
+  import Data.Aeson
+  import Data.Proxy
+  import GHC.Generics
+  import Network.Wai.Handler.Warp (run)
+  import Servant
+  import Servant.JQuery
+  import System.FilePath
+
+  -- * A simple Counter data type
+  newtype Counter = Counter { value :: Int }
+    deriving (Generic, Show, Num)
+
+  instance ToJSON Counter
+
+  -- * Shared counter operations
+
+  -- Creating a counter that starts from 0
+  newCounter :: IO (TVar Counter)
+  newCounter = newTVarIO 0
+
+  -- Increasing the counter by 1
+  counterPlusOne :: MonadIO m => TVar Counter -> m Counter
+  counterPlusOne counter = liftIO . atomically $ do
+    oldValue <- readTVar counter
+    let newValue = oldValue + 1
+    writeTVar counter newValue
+    return newValue
+
+  currentValue :: MonadIO m => TVar Counter -> m Counter
+  currentValue counter = liftIO $ readTVarIO counter
+
+  -- * Our API type
+  type TestApi = "counter" :> Post Counter -- endpoint for increasing the counter
+            :<|> "counter" :> Get  Counter -- endpoint to get the current value
+            :<|> Raw                       -- used for serving static files
+
+  testApi :: Proxy TestApi
+  testApi = Proxy
+
+  -- * Server-side handler
+
+  -- where our static files reside
+  www :: FilePath
+  www = "examples/www"
+
+  -- defining handlers
+  server :: TVar Counter -> Server TestApi
+  server counter = counterPlusOne counter     -- (+1) on the TVar
+              :<|> currentValue counter       -- read the TVar
+              :<|> serveDirectory www         -- serve static files
+
+  runServer :: TVar Counter -- ^ shared variable for the counter
+            -> Int          -- ^ port the server should listen on
+            -> IO ()
+  runServer var port = run port (serve testApi $ server var)
+
+  -- * Generating the JQuery code
+
+  incCounterJS :<|> currentValueJS :<|> _ = jquery testApi
+
+  writeJS :: FilePath -> [AjaxReq] -> IO ()
+  writeJS fp functions = writeFile fp $
+    concatMap generateJS functions
+
+  main :: IO ()
+  main = do
+    -- write the JS code to www/api.js at startup
+    writeJS (www </> "api.js")
+            [ incCounterJS, currentValueJS ]
+
+    -- setup a shared counter
+    cnt <- newCounter
+
+    -- listen to requests on port 8080
+    runServer cnt 8080
+  ```
 description-type: markdown
-description: ! "# servant-jquery\n\n![servant](https://raw.githubusercontent.com/haskell-servant/servant/master/servant.png)\n\nThis
-  library lets you derive automatically (JQuery based) Javascript functions that let
-  you query each endpoint of a *servant* webservice.\n\n## Example\n\nRead more about
-  the following example [here](https://github.com/haskell-servant/servant/tree/master/servant-jquery/tree/master/examples#examples).\n\n```
-  haskell\n{-# LANGUAGE DataKinds #-}\n{-# LANGUAGE TypeOperators #-}\n{-# LANGUAGE
-  DeriveGeneric #-}\n{-# LANGUAGE GeneralizedNewtypeDeriving #-}\n\nimport Control.Concurrent.STM\nimport
-  Control.Monad.IO.Class\nimport Data.Aeson\nimport Data.Proxy\nimport GHC.Generics\nimport
-  Network.Wai.Handler.Warp (run)\nimport Servant\nimport Servant.JQuery\nimport System.FilePath\n\n--
-  * A simple Counter data type\nnewtype Counter = Counter { value :: Int }\n  deriving
-  (Generic, Show, Num)\n\ninstance ToJSON Counter\n\n-- * Shared counter operations\n\n--
-  Creating a counter that starts from 0\nnewCounter :: IO (TVar Counter)\nnewCounter
-  = newTVarIO 0\n\n-- Increasing the counter by 1\ncounterPlusOne :: MonadIO m =>
-  TVar Counter -> m Counter\ncounterPlusOne counter = liftIO . atomically $ do\n  oldValue
-  <- readTVar counter\n  let newValue = oldValue + 1\n  writeTVar counter newValue\n
-  \ return newValue\n\ncurrentValue :: MonadIO m => TVar Counter -> m Counter\ncurrentValue
-  counter = liftIO $ readTVarIO counter\n\n-- * Our API type\ntype TestApi = \"counter\"
-  :> Post Counter -- endpoint for increasing the counter\n          :<|> \"counter\"
-  :> Get  Counter -- endpoint to get the current value\n          :<|> Raw                       --
-  used for serving static files\n\ntestApi :: Proxy TestApi\ntestApi = Proxy\n\n--
-  * Server-side handler\n\n-- where our static files reside\nwww :: FilePath\nwww
-  = \"examples/www\"\n\n-- defining handlers\nserver :: TVar Counter -> Server TestApi\nserver
-  counter = counterPlusOne counter     -- (+1) on the TVar\n            :<|> currentValue
-  counter       -- read the TVar\n            :<|> serveDirectory www         -- serve
-  static files\n\nrunServer :: TVar Counter -- ^ shared variable for the counter\n
-  \         -> Int          -- ^ port the server should listen on\n          -> IO
-  ()\nrunServer var port = run port (serve testApi $ server var)\n\n-- * Generating
-  the JQuery code\n\nincCounterJS :<|> currentValueJS :<|> _ = jquery testApi\n\nwriteJS
-  :: FilePath -> [AjaxReq] -> IO ()\nwriteJS fp functions = writeFile fp $\n  concatMap
-  generateJS functions\n\nmain :: IO ()\nmain = do\n  -- write the JS code to www/api.js
-  at startup\n  writeJS (www </> \"api.js\")\n          [ incCounterJS, currentValueJS
-  ]\n\n  -- setup a shared counter\n  cnt <- newCounter\n\n  -- listen to requests
-  on port 8080\n  runServer cnt 8080\n```\n"
+hash: 519587d3f37a8b548fcb3cdee157ff1f2ddca7c678ebb818f79a42ada3a6ae66
+homepage: http://haskell-servant.github.io/
+latest: 0.4.4.7
 license-name: BSD-3-Clause
+maintainer: alpmestan@gmail.com
+synopsis: Automatically derive (jquery) javascript functions to query servant webservices
+test-bench-deps:
+  base: '>=4 && <5'
+  hspec: '>=2.0'
+  hspec-expectations: '>=0'
+  language-ecmascript: '>=0.16'
+  lens: '>=0'
+  servant: '>=0'
+  servant-jquery: '>=0'

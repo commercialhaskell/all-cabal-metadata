@@ -1,74 +1,168 @@
-homepage: http://github.com/RafaelBocquet/haskell-mgeneric/
-changelog-type: ''
-hash: 6be56a4e96ec46a5478b306cdcbaafeec6aa8dc7d8a1bfee214252007e25bd3a
-test-bench-deps: {}
-maintainer: Rafaël Bocquet <rafaelbocquet+github@gmail.com>
-synopsis: Generics with multiple parameters
-changelog: ''
-basic-deps:
-  base: ! '>=4.5 && <5'
-  containers: -any
-  lens: -any
-  mtl: -any
-  template-haskell: -any
 all-versions:
 - 0.0.0.0
 - 0.0.0.1
 - 0.0.0.2
 author: Rafaël Bocquet
-latest: 0.0.0.2
+basic-deps:
+  base: '>=4.5 && <5'
+  containers: '>=0'
+  lens: '>=0'
+  mtl: '>=0'
+  template-haskell: '>=0'
+changelog: ''
+changelog-type: ''
+description: |
+  # MGeneric : Generics with Multiple parameters
+
+  https://hackage.haskell.org/package/mgeneric
+
+
+  This package provides an implementation of generics with multiple parameters in Haskell, as described in http://dreixel.net/research/pdf/gpmp_colour.pdf.
+
+  A MGeneric instance can be derived for most datatypes with ```deriveMGeneric ''Type```
+
+  It also provides the type classes MFunctor, MFoldable and MTraversable, generalisations of Functor, Foldable and Traversable to kinds other than (* -> *), and the type class MZipWith.
+
+  # Examples
+
+  ## [MFunctor](src/Data/MFunctor.hs)
+
+
+  ```haskell
+  kind Variance = CoV | ContraV
+  -- f is the functor
+  -- (fs :: [*]) are the mapping functions
+  -- (vs :: [Variance]) are the variances of f
+  mmap :: MFunctor f fs vs => HList fs -> f :$: Domains fs vs -> f :$: Codomains fs vs
+  ```
+
+
+  ```haskell
+  data Test a b = Test [a -> b]
+  deriveMGeneric ''Test
+  instance Unapply (Test a b) Test '[a, b]
+  instance MFunctor Test '[a' -> a, b -> b'] '[ContraV, CoV]
+
+  test :: Test Int String -> Int -> [String]
+  test (Test a) i = fmap ($ i) a
+
+  a :: Test Int String
+  a = Test [show, const "A"]
+
+  b :: Test Int String
+  b = mmap (HCons (+ 1) (HCons ("TEST " ++) HNil)) a
+  ```
+
+
+  ```haskell
+  ghci> test b 41
+  ["TEST 42", "TEST A"]
+  ```
+
+  ## [MFoldable](src/Data/MFoldable.hs)
+
+  ```haskell
+  -- MonoidMap as m ~ Map (\a -> (a -> m)) as
+  mfoldMap :: (Monoid m, MFoldable f as) => HList (MonoidMap as m) -> f :$: as -> m
+  ```
+
+  ```haskell
+  data Test a b c = Test ([a, [b]], c) deriving (Show)
+  deriveMGeneric ''Test
+  instance Unapply (Test a b c) Test '[a, b, c]
+  instance MFoldable Test '[a, b, c]
+
+
+  a :: Test Int String Char
+  a = Test ([(0, [""]), (1, ["a", "b"]), (3, ["foo", "bar"])], 'e')
+  ```
+
+  ```haskell
+  ghci> mfoldMap (const mempty `HCons` (Sum . length) `HCons` (Sum . ord) `HCons` HNil) a
+  Sum 109
+  ```
+
+  ## [MTraversable](src/Data/MTraversable.hs)
+
+  ```haskell
+  -- AppMap fs t ~ Map (\(a -> b) -> (a -> t b)) as
+  mtraverse :: (MTraversable f fs t) => HList (AppMap fs t) -> f :$: Domains fs -> t (f :$: Codomains fs)
+  -- SequenceMap as t ~ Map (\(a -> b) -> (t a -> t b)) as
+  msequence :: (MTraversable f (SequenceMap as t) t) => f :$: Map as t -> t (f :$: as)
+  ```
+
+
+  ```haskell
+  data Test a b c = Test ([(a, [b])], c) deriving (Show)
+  deriveMGeneric ''Test
+  instance Unapply (Test a b c) Test '[a, b, c]
+  instance MTraversable Test '[a -> a', b -> b', c -> c']
+
+
+  a :: Test Int String Char
+  a = Test ([(0, [""]), (1, ["a", "b"]), (3, ["foo", "bar"])], 'e')
+  ```
+
+
+  ```haskell
+  ghci> evalState ?? "A"
+         $ mtraverse ((\i -> do { s' <- get; put (show i); return (length s') })
+              `HCons` (\s -> do { s' <- get; put s; return s' })
+              `HCons` pure `HCons` HNil) a
+  Test ([(1,["0"]),(0,["1","a"]),(1,["3","foo"])],'e')
+  ```
+
+  ## [MZipWith](src/Data/MZip.hs)
+
+  ```mzipWith``` zips n structures together if they have the same shape, or fails (with `Nothing`) if the shapes do not match.
+
+
+  ```haskell
+  -- ZipWithType NZ     f fs ~ Maybe (f :$: fs)
+  -- ZipWithType (NS n) f fs ~ f :$: Domains fs -> ZipWithType n f (Codomains fs)
+  mzipWith :: MZipWith n f fs => HList fs -> ZipWithType n f fs
+  -- mzipWith n :: HList (a1 -> a2 -> ... -> an, ...) -> f a1 b1 ... -> f a2 b2 ... -> ... -> Maybe (f an bn ...)
+  ```
+
+  ```haskell
+  data Test a b c = Test ([(a, [b])], c) deriving (Show)
+  deriveMGeneric ''Test
+  instance Unapply (Test a b c) Test '[a, b, c]
+  instance ( MZipWithG n Test (Rep (Test :$: LCodoms n '[f, g, h])) '[f, g, h]
+           , GMZipWith n (Rep (Test :$: LCodoms n '[f, g, h])) '[f, g, h]
+           ) => MZipWith n Test '[f, g, h]
+
+
+  a :: Test Int String Char
+  a = Test ([(0, [""]), (1, ["a", "b"]), (3, ["foo", "bar"])], 'e')
+
+  b :: Test Int String Char
+  b = Test ([(1,["0"]),(0,["1","a"]),(1,["3","foo"])],'h')
+
+  c :: Maybe (Test Int String Int)
+  c = mzipWith ((\a b -> Just (a + b)) `HCons` (\a b -> Just (a ++ b)) `HCons` (\a b -> Just 0) `HCons` HNil) a b
+  ```
+
+  ```haskell
+  ghci> c
+  Just (Test ([(1,["0"]),(1,["a1","ba"]),(4,["foo3","barfoo"])],0))
+  ```
+
+  ## TODO
+
+  * Add more generic type classes
+  * Add inline annotations
+  * Add documentation
+  * Handle FK in ZipWith ?
+  * Reduce the need for Proxy types
+  * Find more suitable names for type level functions
+  * Handle all cases in deriveMGeneric, and provide more relevant error messages
+  * Drop the dependency on lens
 description-type: markdown
-description: ! "# MGeneric : Generics with Multiple parameters\n\nhttps://hackage.haskell.org/package/mgeneric\n\n\nThis
-  package provides an implementation of generics with multiple parameters in Haskell,
-  as described in http://dreixel.net/research/pdf/gpmp_colour.pdf.\n\nA MGeneric instance
-  can be derived for most datatypes with ```deriveMGeneric ''Type```\n\nIt also provides
-  the type classes MFunctor, MFoldable and MTraversable, generalisations of Functor,
-  Foldable and Traversable to kinds other than (* -> *), and the type class MZipWith.\n\n#
-  Examples\n\n## [MFunctor](src/Data/MFunctor.hs)\n\n\n```haskell\nkind Variance =
-  CoV | ContraV\n-- f is the functor\n-- (fs :: [*]) are the mapping functions\n--
-  (vs :: [Variance]) are the variances of f\nmmap :: MFunctor f fs vs => HList fs
-  -> f :$: Domains fs vs -> f :$: Codomains fs vs\n```\n\n\n```haskell\ndata Test
-  a b = Test [a -> b]\nderiveMGeneric ''Test\ninstance Unapply (Test a b) Test '[a,
-  b]\ninstance MFunctor Test '[a' -> a, b -> b'] '[ContraV, CoV]\n\ntest :: Test Int
-  String -> Int -> [String]\ntest (Test a) i = fmap ($ i) a\n\na :: Test Int String\na
-  = Test [show, const \"A\"]\n\nb :: Test Int String\nb = mmap (HCons (+ 1) (HCons
-  (\"TEST \" ++) HNil)) a\n```\n\n\n```haskell\nghci> test b 41\n[\"TEST 42\", \"TEST
-  A\"]\n```\n\n## [MFoldable](src/Data/MFoldable.hs)\n\n```haskell\n-- MonoidMap as
-  m ~ Map (\\a -> (a -> m)) as\nmfoldMap :: (Monoid m, MFoldable f as) => HList (MonoidMap
-  as m) -> f :$: as -> m\n```\n\n```haskell\ndata Test a b c = Test ([a, [b]], c)
-  deriving (Show)\nderiveMGeneric ''Test\ninstance Unapply (Test a b c) Test '[a,
-  b, c]\ninstance MFoldable Test '[a, b, c]\n\n\na :: Test Int String Char\na = Test
-  ([(0, [\"\"]), (1, [\"a\", \"b\"]), (3, [\"foo\", \"bar\"])], 'e')\n```\n\n```haskell\nghci>
-  mfoldMap (const mempty `HCons` (Sum . length) `HCons` (Sum . ord) `HCons` HNil)
-  a\nSum 109\n```\n\n## [MTraversable](src/Data/MTraversable.hs)\n\n```haskell\n--
-  AppMap fs t ~ Map (\\(a -> b) -> (a -> t b)) as\nmtraverse :: (MTraversable f fs
-  t) => HList (AppMap fs t) -> f :$: Domains fs -> t (f :$: Codomains fs)\n-- SequenceMap
-  as t ~ Map (\\(a -> b) -> (t a -> t b)) as\nmsequence :: (MTraversable f (SequenceMap
-  as t) t) => f :$: Map as t -> t (f :$: as)\n```\n\n\n```haskell\ndata Test a b c
-  = Test ([(a, [b])], c) deriving (Show)\nderiveMGeneric ''Test\ninstance Unapply
-  (Test a b c) Test '[a, b, c]\ninstance MTraversable Test '[a -> a', b -> b', c ->
-  c']\n\n\na :: Test Int String Char\na = Test ([(0, [\"\"]), (1, [\"a\", \"b\"]),
-  (3, [\"foo\", \"bar\"])], 'e')\n```\n\n\n```haskell\nghci> evalState ?? \"A\"\n
-  \      $ mtraverse ((\\i -> do { s' <- get; put (show i); return (length s') })\n
-  \           `HCons` (\\s -> do { s' <- get; put s; return s' })\n            `HCons`
-  pure `HCons` HNil) a\nTest ([(1,[\"0\"]),(0,[\"1\",\"a\"]),(1,[\"3\",\"foo\"])],'e')\n```\n\n##
-  [MZipWith](src/Data/MZip.hs)\n\n```mzipWith``` zips n structures together if they
-  have the same shape, or fails (with `Nothing`) if the shapes do not match.\n\n\n```haskell\n--
-  ZipWithType NZ     f fs ~ Maybe (f :$: fs)\n-- ZipWithType (NS n) f fs ~ f :$: Domains
-  fs -> ZipWithType n f (Codomains fs)\nmzipWith :: MZipWith n f fs => HList fs ->
-  ZipWithType n f fs\n-- mzipWith n :: HList (a1 -> a2 -> ... -> an, ...) -> f a1
-  b1 ... -> f a2 b2 ... -> ... -> Maybe (f an bn ...)\n```\n\n```haskell\ndata Test
-  a b c = Test ([(a, [b])], c) deriving (Show)\nderiveMGeneric ''Test\ninstance Unapply
-  (Test a b c) Test '[a, b, c]\ninstance ( MZipWithG n Test (Rep (Test :$: LCodoms
-  n '[f, g, h])) '[f, g, h]\n         , GMZipWith n (Rep (Test :$: LCodoms n '[f,
-  g, h])) '[f, g, h]\n         ) => MZipWith n Test '[f, g, h]\n\n\na :: Test Int
-  String Char\na = Test ([(0, [\"\"]), (1, [\"a\", \"b\"]), (3, [\"foo\", \"bar\"])],
-  'e')\n\nb :: Test Int String Char\nb = Test ([(1,[\"0\"]),(0,[\"1\",\"a\"]),(1,[\"3\",\"foo\"])],'h')\n\nc
-  :: Maybe (Test Int String Int)\nc = mzipWith ((\\a b -> Just (a + b)) `HCons` (\\a
-  b -> Just (a ++ b)) `HCons` (\\a b -> Just 0) `HCons` HNil) a b\n```\n\n```haskell\nghci>
-  c\nJust (Test ([(1,[\"0\"]),(1,[\"a1\",\"ba\"]),(4,[\"foo3\",\"barfoo\"])],0))\n```\n\n##
-  TODO\n\n* Add more generic type classes\n* Add inline annotations\n* Add documentation\n*
-  Handle FK in ZipWith ?\n* Reduce the need for Proxy types\n* Find more suitable
-  names for type level functions\n* Handle all cases in deriveMGeneric, and provide
-  more relevant error messages\n* Drop the dependency on lens\n"
+hash: 6be56a4e96ec46a5478b306cdcbaafeec6aa8dc7d8a1bfee214252007e25bd3a
+homepage: http://github.com/RafaelBocquet/haskell-mgeneric/
+latest: 0.0.0.2
 license-name: MIT
+maintainer: Rafaël Bocquet <rafaelbocquet+github@gmail.com>
+synopsis: Generics with multiple parameters
+test-bench-deps: {}

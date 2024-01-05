@@ -1,109 +1,71 @@
-homepage: https://github.com/georgefst/streamly-fsnotify
-changelog-type: markdown
-hash: e453befb5c15bacaac0a66b4fffe7c55ef964438b141f81cee5775b1bf96fe2c
-test-bench-deps: {}
-maintainer: George Thomas
-synopsis: Folder watching as a Streamly stream.
-changelog: |
-  # Revision history for streamly-fsnotify
-
-  ## 1.1.1.0 -- 2020-05-27
-
-  * Export additional `EventPredicate`s.
-
-  ## 1.1.0.0 -- 2020-05-27
-
-  * Use abstract newtype for `StopWatching`.
-  * Remove typed filepaths. Power-to-weight ratio was too low.
-
-  ## 1.0.1.0 -- 2020-05-27
-
-  * George Thomas takes over as maintainer. Metadata changes.
-
-  ## 1.0.0.1 -- 2019-12-09
-
-  * Widen bounds on ``time`` to support Windows build.
-
-  ## 1.0.0.0 -- 2019-12-06
-
-  * First version. Released on an unsuspecting world.
-basic-deps:
-  base: '>=4.9 && <5'
-  time: ^>=1.6 || ^>=1.7 || ^>=1.8 || ^>=1.9 || ^>=1.10 || ^>=1.11 || ^>=1.12
-  text: ^>=1.2.3.0 || ^>=2.0
-  filepath: ^>=1.4.2.1
-  semirings: ^>=0.5.2 || ^>=0.6
-  fsnotify: ^>=0.3.0.1
-  streamly: ^>=0.7.0 || ^>=0.8 || ^>=0.9
 all-versions:
 - 1.0.0.0
 - 1.0.0.1
 - 1.0.1.0
 - 1.1.0.0
 - 1.1.1.0
+- 1.1.1.1
+- 1.1.1.2
+- '2.0'
+- '2.1'
+- 2.1.0.1
 author: Koz Ross, George Thomas
-latest: 1.1.1.0
-description-type: markdown
+basic-deps:
+  base: '>=4.9 && <5'
+  exceptions: ^>=0.10
+  filepath: ^>=1.4.2.1
+  fsnotify: ^>=0.4
+  semirings: ^>=0.5.2 || ^>=0.6
+  streamly: ^>=0.9 || ^>=0.10
+  streamly-core: ^>=0.2
+  text: ^>=1.2.3.0 || ^>=2.0 || ^>=2.1
+  time: ^>=1.6 || ^>=1.7 || ^>=1.8 || ^>=1.9 || ^>=1.10 || ^>=1.11 || ^>=1.12
+changelog: |
+  # Revision history for streamly-fsnotify
+
+  ## 2.1 -- 2023-12-29
+
+  - Remove file predicates as they're actually pointless. They do perhaps make sense in the context of `fsnotify` itself due to its approach to concurrency and action handling. But for this library, ignoring events via a predicate isn't really any different to just choosing not to do anything when it comes to matching on the received events. I had implicitly assumed when taking over this library that the predicates were smarter than that, telling upstream systems like `inotify` to totally ignore certain events. But that wouldn't have been possible with the old API, and would need support from `fsnotify` anyway, which may not be possible due to platform inconsistencies.
+
+  ## 2.0 -- 2023-12-29
+
+  With Streamly also making major breaking changes, this seemed like the time for a radical overhaul (we needed to move to the new stream type _at some point_, and that would break everything anyway). Essentially, having taken over this package nearly four years ago, and used it extensively, I've decided that it was unnecessarily complex. The line count is now _much_ shorter, but the interesting stuff is still here. In particular:
+
+  - The predicate algebra, while somewhat neat, didn't really seem to belong in a file-watching library.
+  - Trying to fully abstract over `fsnotify` was annoying in practice, both as a maintainer and a user. We now use `fsnotify`'s `Event` type directly. This makes interoperability a lot easier. And it means we won't need to make any major changes here for future changes in `fsnotify`, like converting to `OsPath`.
+
+  We do some new clever stuff as well, like stopping the file watcher automatically at the end of the stream.
+
+  It is possible that we've gone too far. If there's anything you really miss from version 1, please mention it on the issue tracker!
+
+  ## 1.1.1.0 -- 2020-05-27
+
+  - Export additional `EventPredicate`s.
+
+  ## 1.1.0.0 -- 2020-05-27
+
+  - Use abstract newtype for `StopWatching`.
+  - Remove typed filepaths. Power-to-weight ratio was too low.
+
+  ## 1.0.1.0 -- 2020-05-27
+
+  - George Thomas takes over as maintainer. Metadata changes.
+
+  ## 1.0.0.1 -- 2019-12-09
+
+  - Widen bounds on `time` to support Windows build.
+
+  ## 1.0.0.0 -- 2019-12-06
+
+  - First version. Released on an unsuspecting world.
+changelog-type: markdown
 description: |
-  ## What's the deal with this library?
-
-  [``streamly``][1] is an undoubtedly awesome library - [fast][2], flexible, and
-  well-documented. File system watching is a natural fit for a streaming library,
-  and this is exactly what ``streamly-fsnotify`` provides you.
-
-  As an example, here is a program which watches ``/home/koz/c-project/`` and any
-  of its subdirectories for added or modified C source files (which we take to be
-  anything with a ``.c`` extension). This program then writes that the event
-  occurred, to what file, and when, forever.
-
-  ```haskell
-
-  {-# LANGUAGE LambdaCase #-}
-
-  import System.FilePath ((</>))
-  import Streamly.FSNotify (EventPredicate, hasExtension, isDirectory, invert, isDeletion, conj, watchTree)
-  import qualified Streamly.Prelude as SP
-
-  -- conj -> both must be true
-  -- invert -> true when the argument would be false and vice versa
-  isCSourceFile :: EventPredicate
-  isCSourceFile = hasExtension "c" `conj` invert isDirectory
-
-  notDeletion :: EventPredicate
-  notDeletion = invert isDeletion
-
-  srcPath :: FilePath
-  srcPath = "home" </> "koz" </> "c-project"
-
-  -- first value given by watchTree stops the watcher
-  -- we don't use it here, but if you want to, just call it
-  main :: IO ()
-  main = do
-      (_, stream) <- watchTree srcPath $ isCSourceFile `conj` notDeletion
-      SP.drain . SP.mapM go $ stream
-    where
-      go = \case
-          Added p t _ -> putStrLn $ "Created: " ++ show p ++ " at " ++ show t
-          Modified p t _ -> putStrLn $ "Modified: " ++ show p ++ " at " ++ show t
-          _ -> pure ()
-  ```
-
-  ## That seems pretty cool! What kind of features can I expect?
-
-  * Cross-platform - should work anywhere both ``streamly`` and ``fsnotify`` do.
-  * Efficient (event-driven, so won't shred your CPU or load your RAM).
-  * Able to do one-level and recursive watching.
-  * Compositional and principled treatment of event filtering predicates.
-  * Extensive set of filtering predicates, so you don't have to see events you
-    don't care about!
-
-  ## Sounds good? Can I use it?
-
-  We've test-built this library for GHCs 8.6.5 through 8.10.1 on GNU/Linux. In
-  theory, ``streamly-fsnotify`` should work everywhere both ``streamly`` and
-  ``fsnotify`` will, which includes other OSes (such as Windows). However, we
-  haven't tried it ourselves - let us know if you do!
-
-  [1]: http://hackage.haskell.org/package/streamly
-  [2]: https://github.com/composewell/streaming-benchmarks
+  This library provides a higher-level, stream-based API for [`fsnotify`](https://hackage.haskell.org/package/fsnotify). It should work anywhere both `streamly` and `fsnotify` do. Note that there's no need for your project to register a dependency on `fsnotify` directly, but you will need to depend on `streamly` in order to get anything done.
+description-type: markdown
+hash: 73b5efc3b5c75e273c54afacb97cdcbfc9b7e31d8c2f35e5971f38a43e431bf9
+homepage: https://github.com/georgefst/streamly-fsnotify
+latest: 2.1.0.1
 license-name: BSD-3-Clause
+maintainer: George Thomas
+synopsis: Folder watching as a Streamly stream.
+test-bench-deps: {}

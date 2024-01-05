@@ -1,98 +1,188 @@
-homepage: https://github.com/lpeterse/haskell-ssh#readme
-changelog-type: markdown
-hash: edcb0366d7d9b890e0e1a1d424ad7213315d5cdce889516fb8f27ec9a1a8ae4c
-test-bench-deps:
-  cereal: -any
-  bytestring: -any
-  stm: -any
-  base: ! '>=4.7 && <5'
-  async: -any
-  data-default: -any
-  memory: -any
-  containers: -any
-  cryptonite: -any
-  tasty-quickcheck: -any
-  tasty-hunit: -any
-  hssh: -any
-  tasty: -any
-maintainer: info@lars-petersen.net
-synopsis: SSH protocol implementation
-changelog: ! "0.1.0.0 Lars Petersen <info@lars-petersen.net> 2018-10-31\n\n * Initial
-  release."
-basic-deps:
-  cereal: -any
-  bytestring: -any
-  stm: -any
-  base: ! '>=4.7 && <5'
-  socket: ! '>=0.8.2.0'
-  async: -any
-  data-default: -any
-  memory: -any
-  containers: -any
-  cryptonite: -any
-  hssh: -any
 all-versions:
 - 0.1.0.0
 author: Lars Petersen
-latest: 0.1.0.0
+basic-deps:
+  async: '>=0'
+  base: '>=4.7 && <5'
+  bytestring: '>=0'
+  cereal: '>=0'
+  containers: '>=0'
+  cryptonite: '>=0'
+  data-default: '>=0'
+  hssh: '>=0'
+  memory: '>=0'
+  socket: '>=0.8.2.0'
+  stm: '>=0'
+changelog: |-
+  0.1.0.0 Lars Petersen <info@lars-petersen.net> 2018-10-31
+
+   * Initial release.
+changelog-type: markdown
+description: |-
+  # hssh
+
+  ## Introduction
+
+  This library is a pure-Haskell implementation of the SSH2 protocol.
+
+  ## Features
+
+  By now, only the server part has been implemented. It can be used
+  to embed SSH servers into Haskell applications.
+
+  Transport layer:
+
+  - `ssh-ed25519` host keys.
+  - Key exchange using the `curve25519-sha256@libssh.org` algorithm.
+  - Encryption using the  `chacha20-poly1305@openssh.com` algorithm.
+  - Rekeying fully supported and compatible with OpenSSH.
+
+  Authentication layer:
+
+  - User authentication with `ssh-ed25519` public keys.
+
+  Connection layer:
+
+  - Connection multiplexing.
+  - Serving session requests (shell and exec) with user-supplied handlers.
+  - Serving direct-tcpip requests with user-supplied handlers.
+
+  Misc:
+
+  - SSH private key file import (not encrypted yet).
+
+  ## Dependencies
+
+  - async
+  - base
+  - bytestring
+  - cereal
+  - containers
+  - cryptonite
+  - memory
+  - stm
+  - data-default
+
+  ## Example server application
+
+  ```hs
+  {-# LANGUAGE FlexibleContexts  #-}
+  {-# LANGUAGE FlexibleInstances #-}
+  {-# LANGUAGE OverloadedStrings #-}
+  module Main where
+
+  import           Control.Concurrent             ( forkFinally
+                                                  )
+  import           Control.Exception              ( bracket
+                                                  , bracketOnError
+                                                  , handle
+                                                  , throwIO
+                                                  )
+  import           Control.Monad                  ( forever
+                                                  , void
+                                                  )
+  import qualified Data.ByteArray                as BA
+  import qualified Data.ByteString               as BS
+  import           Data.Default
+  import           System.Exit
+
+  import qualified System.Socket                  as S
+  import qualified System.Socket.Family.Inet6     as S
+  import qualified System.Socket.Protocol.Default as S
+  import qualified System.Socket.Type.Stream      as S
+  import qualified System.Socket.Unsafe           as S
+
+  import           Network.SSH
+  import qualified Network.SSH.Server            as Server
+
+  main :: IO ()
+  main = do
+      file                <- BS.readFile "./resources/id_ed25519"
+      (privateKey, _) : _ <- decodePrivateKeyFile BS.empty file :: IO [(KeyPair, BA.Bytes)]
+      bracket open close (accept config privateKey)
+    where
+      config = def
+          { Server.transportConfig          = def
+          , Server.userAuthConfig           = def
+              { Server.onAuthRequest        = \username _ _ -> pure (Just username)
+              }
+          , Server.connectionConfig         = def
+              { Server.onSessionRequest     = handleSessionRequest
+              , Server.onDirectTcpIpRequest = handleDirectTcpIpRequest
+              }
+          }
+      open  = S.socket :: IO (S.Socket S.Inet6 S.Stream S.Default)
+      close = S.close
+      accept config agent s = do
+          S.setSocketOption s (S.ReuseAddress True)
+          S.setSocketOption s (S.V6Only False)
+          S.bind s (S.SocketAddressInet6 S.inet6Any 22 0 0)
+          S.listen s 5
+          forever $ bracketOnError (S.accept s) (S.close . fst) $ \(stream, peer) -> do
+              putStrLn $ "Connection from " ++ show peer
+              void $ forkFinally
+                  (Server.serve config agent stream >>= print)
+                  (const $ S.close stream)
+
+  handleDirectTcpIpRequest :: identity -> Server.DirectTcpIpRequest -> IO (Maybe Server.DirectTcpIpHandler)
+  handleDirectTcpIpRequest idnt req = pure $ Just $ Server.DirectTcpIpHandler $ \stream-> do
+      bs <- receive stream 4096
+      sendAll stream "HTTP/1.1 200 OK\n"
+      sendAll stream "Content-Type: text/plain\n\n"
+      sendAll stream $! BS.pack $ fmap (fromIntegral . fromEnum) $ show req
+      sendAll stream "\n\n"
+      sendAll stream bs
+      print bs
+
+  handleSessionRequest :: identity -> Server.SessionRequest -> IO (Maybe Server.SessionHandler)
+  handleSessionRequest idnt req = pure $ Just $ Server.SessionHandler $ \_ _ _ _ stdout _ -> do
+      sendAll stdout "Hello world!\n"
+      pure ExitSuccess
+
+  -------------------------------------------------------------------------------
+  -- Instances for use with the socket library
+  -------------------------------------------------------------------------------
+
+  instance DuplexStream (S.Socket f S.Stream p) where
+
+  instance OutputStream  (S.Socket f S.Stream p) where
+      send stream bytes =
+          handle f $ S.send stream bytes S.msgNoSignal
+          where
+              f e
+                  | e == S.ePipe = pure 0
+                  | otherwise    = throwIO e
+      sendUnsafe stream (BA.MemView ptr n) = fromIntegral <$>
+          handle f (S.unsafeSend stream ptr (fromIntegral n) S.msgNoSignal)
+          where
+              f e
+                  | e == S.ePipe = pure 0
+                  | otherwise    = throwIO e
+
+  instance InputStream  (S.Socket f S.Stream p) where
+      peek stream len = S.receive stream len (S.msgNoSignal <> S.msgPeek)
+      receive stream len = S.receive stream len S.msgNoSignal
+      receiveUnsafe stream (BA.MemView ptr n) = fromIntegral <$>
+          S.unsafeReceive stream ptr (fromIntegral n) S.msgNoSignal
+  ```
 description-type: markdown
-description: ! "# hssh\n\n## Introduction\n\nThis library is a pure-Haskell implementation
-  of the SSH2 protocol.\n\n## Features\n\nBy now, only the server part has been implemented.
-  It can be used\nto embed SSH servers into Haskell applications.\n\nTransport layer:\n\n-
-  `ssh-ed25519` host keys.\n- Key exchange using the `curve25519-sha256@libssh.org`
-  algorithm.\n- Encryption using the  `chacha20-poly1305@openssh.com` algorithm.\n-
-  Rekeying fully supported and compatible with OpenSSH.\n\nAuthentication layer:\n\n-
-  User authentication with `ssh-ed25519` public keys.\n\nConnection layer:\n\n- Connection
-  multiplexing.\n- Serving session requests (shell and exec) with user-supplied handlers.\n-
-  Serving direct-tcpip requests with user-supplied handlers.\n\nMisc:\n\n- SSH private
-  key file import (not encrypted yet).\n\n## Dependencies\n\n- async\n- base\n- bytestring\n-
-  cereal\n- containers\n- cryptonite\n- memory\n- stm\n- data-default\n\n## Example
-  server application\n\n```hs\n{-# LANGUAGE FlexibleContexts  #-}\n{-# LANGUAGE FlexibleInstances
-  #-}\n{-# LANGUAGE OverloadedStrings #-}\nmodule Main where\n\nimport           Control.Concurrent
-  \            ( forkFinally\n                                                )\nimport
-  \          Control.Exception              ( bracket\n                                                ,
-  bracketOnError\n                                                , handle\n                                                ,
-  throwIO\n                                                )\nimport           Control.Monad
-  \                 ( forever\n                                                , void\n
-  \                                               )\nimport qualified Data.ByteArray
-  \               as BA\nimport qualified Data.ByteString               as BS\nimport
-  \          Data.Default\nimport           System.Exit\n\nimport qualified System.Socket
-  \                 as S\nimport qualified System.Socket.Family.Inet6     as S\nimport
-  qualified System.Socket.Protocol.Default as S\nimport qualified System.Socket.Type.Stream
-  \     as S\nimport qualified System.Socket.Unsafe           as S\n\nimport           Network.SSH\nimport
-  qualified Network.SSH.Server            as Server\n\nmain :: IO ()\nmain = do\n
-  \   file                <- BS.readFile \"./resources/id_ed25519\"\n    (privateKey,
-  _) : _ <- decodePrivateKeyFile BS.empty file :: IO [(KeyPair, BA.Bytes)]\n    bracket
-  open close (accept config privateKey)\n  where\n    config = def\n        { Server.transportConfig
-  \         = def\n        , Server.userAuthConfig           = def\n            {
-  Server.onAuthRequest        = \\username _ _ -> pure (Just username)\n            }\n
-  \       , Server.connectionConfig         = def\n            { Server.onSessionRequest
-  \    = handleSessionRequest\n            , Server.onDirectTcpIpRequest = handleDirectTcpIpRequest\n
-  \           }\n        }\n    open  = S.socket :: IO (S.Socket S.Inet6 S.Stream
-  S.Default)\n    close = S.close\n    accept config agent s = do\n        S.setSocketOption
-  s (S.ReuseAddress True)\n        S.setSocketOption s (S.V6Only False)\n        S.bind
-  s (S.SocketAddressInet6 S.inet6Any 22 0 0)\n        S.listen s 5\n        forever
-  $ bracketOnError (S.accept s) (S.close . fst) $ \\(stream, peer) -> do\n            putStrLn
-  $ \"Connection from \" ++ show peer\n            void $ forkFinally\n                (Server.serve
-  config agent stream >>= print)\n                (const $ S.close stream)\n\nhandleDirectTcpIpRequest
-  :: identity -> Server.DirectTcpIpRequest -> IO (Maybe Server.DirectTcpIpHandler)\nhandleDirectTcpIpRequest
-  idnt req = pure $ Just $ Server.DirectTcpIpHandler $ \\stream-> do\n    bs <- receive
-  stream 4096\n    sendAll stream \"HTTP/1.1 200 OK\\n\"\n    sendAll stream \"Content-Type:
-  text/plain\\n\\n\"\n    sendAll stream $! BS.pack $ fmap (fromIntegral . fromEnum)
-  $ show req\n    sendAll stream \"\\n\\n\"\n    sendAll stream bs\n    print bs\n\nhandleSessionRequest
-  :: identity -> Server.SessionRequest -> IO (Maybe Server.SessionHandler)\nhandleSessionRequest
-  idnt req = pure $ Just $ Server.SessionHandler $ \\_ _ _ _ stdout _ -> do\n    sendAll
-  stdout \"Hello world!\\n\"\n    pure ExitSuccess\n\n-------------------------------------------------------------------------------\n--
-  Instances for use with the socket library\n-------------------------------------------------------------------------------\n\ninstance
-  DuplexStream (S.Socket f S.Stream p) where\n\ninstance OutputStream  (S.Socket f
-  S.Stream p) where\n    send stream bytes =\n        handle f $ S.send stream bytes
-  S.msgNoSignal\n        where\n            f e\n                | e == S.ePipe =
-  pure 0\n                | otherwise    = throwIO e\n    sendUnsafe stream (BA.MemView
-  ptr n) = fromIntegral <$>\n        handle f (S.unsafeSend stream ptr (fromIntegral
-  n) S.msgNoSignal)\n        where\n            f e\n                | e == S.ePipe
-  = pure 0\n                | otherwise    = throwIO e\n\ninstance InputStream  (S.Socket
-  f S.Stream p) where\n    peek stream len = S.receive stream len (S.msgNoSignal <>
-  S.msgPeek)\n    receive stream len = S.receive stream len S.msgNoSignal\n    receiveUnsafe
-  stream (BA.MemView ptr n) = fromIntegral <$>\n        S.unsafeReceive stream ptr
-  (fromIntegral n) S.msgNoSignal\n```"
+hash: edcb0366d7d9b890e0e1a1d424ad7213315d5cdce889516fb8f27ec9a1a8ae4c
+homepage: https://github.com/lpeterse/haskell-ssh#readme
+latest: 0.1.0.0
 license-name: MIT
+maintainer: info@lars-petersen.net
+synopsis: SSH protocol implementation
+test-bench-deps:
+  async: '>=0'
+  base: '>=4.7 && <5'
+  bytestring: '>=0'
+  cereal: '>=0'
+  containers: '>=0'
+  cryptonite: '>=0'
+  data-default: '>=0'
+  hssh: '>=0'
+  memory: '>=0'
+  stm: '>=0'
+  tasty: '>=0'
+  tasty-hunit: '>=0'
+  tasty-quickcheck: '>=0'

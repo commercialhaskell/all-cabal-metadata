@@ -1,198 +1,356 @@
-homepage: ''
-changelog-type: ''
-hash: ff354a1e043f891ed1b7dab1522153ce6874706d24b1170191d8fd83a86a096a
-test-bench-deps: {}
-maintainer: Nicolas Pouillard <nicolas.pouillard@gmail.com>
-synopsis: A library providing safe lazy IO features.
-changelog: ''
-basic-deps:
-  extensible-exceptions: -any
-  base: ! '>=3.0'
-  strict-io: ! '>=0.1'
-  parallel: -any
 all-versions:
 - '0.1'
 author: Nicolas Pouillard
-latest: '0.1'
+basic-deps:
+  base: '>=3.0'
+  extensible-exceptions: '>=0'
+  parallel: '>=0'
+  strict-io: '>=0.1'
+changelog: ''
+changelog-type: ''
+description: |
+  Hi folks,
+
+  We have good news (nevertheless we hope) for all the lazy guys standing there.
+  Since their birth, lazy IOs have been a great way to modularly leverage all the
+  good things we have with *pure*, *lazy*, *Haskell* functions to the real world
+  of files.
+
+  We are happy to present the safe-lazy-io package [1] that does exactly this
+  and is going to be explained and motivated in the rest of this post.
+
+  === The context ===
+
+  Although these times were hard with the Lazy/IO technique, some people continue
+  to defend them arguing that all discovered problems about it was not that harmful
+  and that taking care was sufficient. Indeed some issues have been discovered about
+  Lazy/IOs, some have been fixed in the underlying machinery, some have just been
+  hidden and some others are still around.
+
+  == An alternative ==
+
+  An alternative design has been proposed --and is still evolving--, it is called
+  "Iteratee" [2] and has been designed by Oleg Kiselyov. This new design has tons
+  of advantages over standard imperative IOs, and shares some of the goals of
+  Lazy/IOs. Iteratee provides a way to do incremental processing in a
+  high-level style. Indeed both processed data (via enumerators) and processing
+  code (called iteratee) can be modularly composed. The handling of file-system
+  resources is precise and safe. Catching errors can be done precisely and can
+  be interleaved with the processing. In spite of all this, there is an important
+  drawback: a lot of code has to be re-written and thought in another way.
+  Processing becomes explicitly chunked which is not always needed and, even
+  worse, exceptions handling also becomes very explicit. While this makes sense
+  in a wide range of applications it makes things less natural than the general
+  case of pure functions. We think that Iteratee have too be studied more, and
+  we recommend them when you have incrementally react to IO errors.
+
+  == Issues of Standard Lazy/IO ==
+
+  We think that we can save Lazy/IO cheaply, but before explaining the way we
+  solve such and such issue, let's first expose Lazy/IO and its issues.
+
+  One of the main Lazy/IO functions is 'readFile': it takes a file path opens it
+  and returns the list of characters until the end of the file is reached. The
+  characteristic of 'readFile' is that only the opening is done strictly, while
+  the reading is performed lazily as much as the output list is processed.
+
+  Cousins of 'readFile' are 'hGetContents' that takes a file handle and 'getContents'
+  that reads on the standard input.
+
+  This technique enables to process a file as if the file was completely stored
+  in memory. Because it is read lazily one knows that only the required part of
+  the file will be read. Even better, if the input is consumed to produce a
+  small output or the output is emitted incrementally, then the processing can
+  be done in constant memory space.
+
+  Examples:
+  -- Prints the number of words read on stdin
+  > countWords = print . length . words =<< getContents
+  -- Prints the length of the longest line
+  > maxLineLen = print . maximum . map length . lines =<< getContents
+  -- Prints in lower case the text read on stdin
+  > lowerText = interact (map toLower)
+  -- Alternatively
+  > lowerText = putStr . map toLower =<< getContents
+
+  All these examples are pretty idiomatic Haskell code and make a simple
+  use of Lazy/IOs. Each of them runs in constant memory space even
+  if they are declared as if the whole contents were available at once.
+
+  By using stream fusion or 'ByteString''s one can get even faster code while
+  keeping the code almost the same. Here we will stay with the default list
+  of 'Char''s data type. However one goal of our approach is to be trivially
+  adaptable to those data types.
+
+  Using our library will be rougly a matter of namespace switch plus a running
+  function:
+
+  > lowerText = LI.run' (SIO.putStr . map toLower <$> LI.getContents)
+
+  However we will introducing this library as one goes along.
+
+  Here is another example where the Lazy/IO are still easy to use but no longer
+  scales well. This program counts the lines of all the files given in arguments:
+
+  > countLines = print . length . lines . concat =<< mapM readFile =<< getArgs
+
+  Here the problem is the limitation of simultaneous opened files. Indeed,
+  all the files are opened at the beginning therefore reaching the limit easily.
+
+  It's time to recall when the files are closed. With standard Lazy/IOs the
+  handle is closed when you reach the end of the file, and so when you've
+  explored the whole list returned by 'readFile'.
+
+  Note also that if you manually open the file and get a handle, then you can
+  manually close the file, however if by misfortune you close the file and
+  then still consume the lazy list you will get a truncated list, observing
+  how much of the file has been read. This last point is due to the fact
+  that 'readFile' considers the reading error as the end of the file.
+
+  In particular one can fix this program, by simply counting the number of lines
+  of each file separately and then compute the sum to get the final result.
+
+  > countLines = print . sum =<< mapM (fmap (length . lines) . readFile) =<< getArgs
+
+  However once again this program exhausts the handle resources. Trying
+  to close the files will not save us either, one just risks getting truncated
+  files. Indeed the list of intermediate results is produced eagerly but each
+  intermediate result is lazy and then each file is opened but not immediately
+  closed since the computation is delayed.
+  Hopefully adding a bit of strictness cures the problem:
+
+  > countLines = print . sum =<< mapM ((return' . length . lines =<<) . readFile) =<< getArgs
+  >   where return' x = x `seq` return x
+
+  Until there, we have disclosed three problems:
+    * while reading is lazy, opening is strict, which leads to a less
+      natural processing of multiple files
+    * the closing of files is hard to predict
+    * the errors during reading are silently discarded
+
+  The last one is a bit trickier and has recently been exposed by Oleg Kiselyov [3].
+  The problem appears when one gets twice the contents of the same stream---or some kind
+  of inter-dependent streams. Because reading is implicitly driven by the consumer, the interleaving
+  of reading may then depend on the reduction strategy employed. This is the case even
+  if the consumer is a pure function.
+
+  Basically in this example one can observe different values when using one of these functions:
+  > f1 x y = x `seq` y `seq` x - y
+  > f2 x y = y `seq` x `seq` x - y
+
+  In this example one reads stdin twice and relies on the error handling to end one stream while
+  keeping the other opened. Moreover there are other ways to achieve this like the
+  use of unix fifo files, or using 'getChanContents' from the "Control.Concurrent.Chan"
+  module.
+
+  === Our solution ===
+
+  Here we will present another design, based on a very simple idea. Our goal is
+  to provide IO processing in a style very similar to standard Lazy/IO with the
+  following differences:
+    - preservation of the determinism;
+    - a simple control exceptions;
+    - and a precise management of resources.
+
+  Our solution is made of three key ingredients: a bit of strictness, some predefined
+  schemas to interleave inputs, some scopes and abstract types to delimit lazy input
+  operations from strict IO operations.
+
+  == Dealing with a single input ==
+
+  Let's present the first ingredient alone through a first example:
+
+  > mapHandleContents :: NFData sa => Handle -> (String -> sa) -> IO sa
+  > mapHandleContents h f = do
+  >   s <- hGetContents h
+  >   return' (f s) `finally` hClose h
+
+  > return' :: (Monad m, NFData sa) => sa -> m sa
+  > return' x = rnf x `seq` return x
+
+  It implements some combination of 'fmap' and 'hGetContents'.
+  Actually some of our examples fit nicely in that model:
+
+  > countWords = print =<< mapHandleContents stdin (length . words)
+  > maxLineLen = print =<< mapHandleContents stdin (maximum . map length . lines)
+  > lowerText = putStr =<< mapHandleContents stdin (map toLower)
+
+  However while the two first examples work well in this setting, the third one
+  tries to allocate the whole result in memory before printing it.
+
+  Here the ingredient that is used is strictness: the purpose in forcing the
+  result is to be sure that all the needed input is read, before the file is
+  closed.
+
+  So here we rely on 'NFData' instances to really perform deep forcing---this
+  kind of assumption is a bit like 'Typeable' instances.
+  In particular functions must not be an instance of 'NFData': indeed, we have
+  no way to force lazy values that are stored in the closure of a function.
+
+  The same remark applies to the 'IO' monad for at least three reasons:
+  'IO' if often represented by functions; lazy 'IORef''s could be used
+  to hide one input for later use; exceptions with a lazy contents could
+  also be used to make a lazy value escape.
+
+  Let's now add some more strictness into the meal: the 'SIO' monad!
+
+  == The 'SIO' monad ==
+
+  The 'SIO' monad is a thin layer over the 'IO' monad, populated only by
+  strict 'IO' operations. In particular these operations are strict
+  in the output, which means that once the output is produced then we know
+  that the given arguments cannot be further evaluated/forced.
+  Here is an example of strict IO using the 'SIO' monad:
+
+  > import qualified System.IO.Strict as SIO
+  > import System.IO.Strict (SIO)
+  > countWords = SIO.run (SIO.print . length . words =<< SIO.getContents)
+
+  Of course this function does not scale well since it reads the whole
+  contents in memory before processing it.
+
+  For now the strict-io [4] package contains wrappers for functions
+  in "System.IO", and strict 'IORef''s.
+
+  One can now introduce a function in lines of 'mapHandleContents':
+
+  > withHandleContents :: NFData sa => Handle -> (String -> SIO sa) -> IO sa
+  > withHandleContents h f = do
+  >   s <- hGetContents h
+  >   SIO.run (f s) `finally` hClose h
+
+  One can then rewrite 'lowerText' as follow:
+
+  > lowerText = withHandleContents stdin (SIO.putStr . map toLower)
+
+  Until there one can deal quite nicely with single input, many outputs
+  processing. Currently the only requirement is to delimit a scope where
+  the resource will be used to return a strict value.
+
+  Dealing with multiple inputs will lead us to our final design of lazy
+  inputs.
+
+  == Introducing 'LI', Lazy Inputs ==
+
+  We first introduce a type for these lazy inputs namely 'LI'.
+  This type is abstract and we will progressively introduce functions
+  to build, combine and run them.
+
+  The 'LI' type is a pointed functor, but not necessarily a monad nor
+  an applicative functor.
+
+  Therefore one exports the 'pure' function as 'pureLI'. Building primitives
+  allow to read files or handles:
+
+  > LI.pureLI :: a -> LI a
+  > LI.hGetContents :: Handle -> LI String
+  > LI.getContents :: LI String
+  > LI.readFile :: FilePath -> LI String
+  > LI.getChanContents :: Chan a -> LI [a]
+
+  Being a functor is important: it allows to wholly transform the underlying
+  input lazily using standard functions about lists for instance:
+
+  > length <$> LI.readFile "foo"
+  > words <$> LI.readFile "foo"
+
+  Extracting a final value of a lazy input ('LI' type) is a matter of using:
+
+  > LI.run :: (NFData sa) => LI sa -> IO sa
+  Or
+  > LI.run' :: (NFData sa) => LI (SIO a) -> IO sa
+
+  One can therefore re-write our examples using lazy inputs:
+
+  > -- embedded printing
+  > countWords = LI.run' (SIO.print . length . words <$> LI.getContents)
+  > -- external printing
+  > maxLineLen = print =<< LI.run (maximum . map length . lines <$> LI.getContents)
+  > lowerText  = LI.run' (SIO.putStr . map toLower <$> LI.getContents)
+
+  == Combining inputs ==
+
+  Finally we come to managing multiple inputs. To get both laziness and
+  precise resource management we will provide dedicated combinators.
+  The first one is as simple as appending.
+
+  > LI.append :: NFData sa => LI [sa] -> LI [sa] -> LI [sa]
+
+  This one produces a single stream out that sequences the two given streams.
+  It also sequences the usage of resources: the first resource is closed and
+  then the second one is opened.
+
+  Note that this combinator is still quite general since one can process each
+  input beforehand:
+
+  > -- one can drop parts of the inputs
+  > (take 100 <$> i1) `LI.append` (drop 100 <$> i2)
+  > -- one can tag each input to know where they come from
+  > Left <$> i1 `LI.append` Right <$> i2
+
+  The second one is 'LI.zipWith' which opens the two resources and joins the items
+  into a single stream. Again, since 'LI' is a functor one can join not only
+  characters but also words, lines, chunks... A problem with zipping is that it
+  stops on the shorter input (loosing a part of the other), hopefully one can
+  prolongate them:
+
+  > zipMaybesWith :: (NFData sa, NFData sb) -> (Maybe sa -> Maybe sb -> c) -> LI [sa] -> LI [sb] -> LI [c]
+  > zipMaybesWith f xs ys =
+  >     map (uncurry f) . takeWhile someJust <$> zip (prolongate <$> xs) (prolongate <$> ys)
+  >   where someJust (Nothing, Nothing) = False
+  >         someJust          _         = True
+  >         prolongate :: [a] -> [Maybe a]
+  >         prolongate zs = map Just zs ++ repeat Nothing
+
+  The last one is 'LI.interleave':
+
+  > LI.interleave ::  (NFData sa) -> LI [sa] -> LI [sa] -> LI [sa]
+
+  This function is currently left biased, moreover each resource is closed as soon
+  as we reach its end. However since the inputs are mixed up together one generally
+  prefers a tagged version trivially build upon this one:
+
+  > interleaveEither :: (NFData sa, NFData sb) => LI [sa] -> LI [sb] -> LI [Either sa sb]
+  > interleaveEither a b = interleave (map Left <$> a) (map Right <$> b)
+
+  Here are some final programs that scale well with the number of files.
+
+  > -- number of words in the given files
+  > main = print =<< LI.run . fmap (length . words) . LI.concat . map LI.readFile =<< getArgs
+
+  > -- almost the same thing but counts words independently in each file
+  > main =   print
+  >      =<< LI.run . fmap sum . LI.sequence . map (fmap (length . words) . LI.readFile)
+  >      =<< getArgs
+
+  > -- prints to stdout swap-cased concatenation of all input files
+  > main = LI.run' . (fmap (SIO.putStr . fmap swapCase) . LI.concat . map LI.readFile) =<< getArgs
+  >   where swapCase c | isUpper c = toLower c
+  >                    | otherwise = toUpper c
+
+  > -- sums character code points of inputs
+  > main = print =<< LI.run . fmap (sum . map (toInteger . ord)) . LI.concat . map LI.readFile =<< getArgs
+
+  Our solution is from now widely available as an Hackage package named "safe-lazy-io" [4].
+
+  We hope you will freely enjoy using Lazy/IO again!
+
+  As usual, criticisms, comments, and help are expected!
+
+  Finally, I would like to thank Benoit Montagu and Francois Pottier for helping
+  me out to polish this work!
+
+  Nicolas Pouillard
+
+  [1]: http://hackage.haskell.org/cgi-bin/hackage-scripts/package/safe-lazy-io
+  [2]: http://okmij.org/ftp/Streams.html
+  [3]: http://www.haskell.org/pipermail/haskell/2009-March/021064.html
+  [4]: http://hackage.haskell.org/cgi-bin/hackage-scripts/package/strict-io
 description-type: text
-description: ! "Hi folks,\n\nWe have good news (nevertheless we hope) for all the
-  lazy guys standing there.\nSince their birth, lazy IOs have been a great way to
-  modularly leverage all the\ngood things we have with *pure*, *lazy*, *Haskell* functions
-  to the real world\nof files.\n\nWe are happy to present the safe-lazy-io package
-  [1] that does exactly this\nand is going to be explained and motivated in the rest
-  of this post.\n\n=== The context ===\n\nAlthough these times were hard with the
-  Lazy/IO technique, some people continue\nto defend them arguing that all discovered
-  problems about it was not that harmful\nand that taking care was sufficient. Indeed
-  some issues have been discovered about\nLazy/IOs, some have been fixed in the underlying
-  machinery, some have just been\nhidden and some others are still around.\n\n== An
-  alternative ==\n\nAn alternative design has been proposed --and is still evolving--,
-  it is called\n\"Iteratee\" [2] and has been designed by Oleg Kiselyov. This new
-  design has tons\nof advantages over standard imperative IOs, and shares some of
-  the goals of\nLazy/IOs. Iteratee provides a way to do incremental processing in
-  a\nhigh-level style. Indeed both processed data (via enumerators) and processing\ncode
-  (called iteratee) can be modularly composed. The handling of file-system\nresources
-  is precise and safe. Catching errors can be done precisely and can\nbe interleaved
-  with the processing. In spite of all this, there is an important\ndrawback: a lot
-  of code has to be re-written and thought in another way.\nProcessing becomes explicitly
-  chunked which is not always needed and, even\nworse, exceptions handling also becomes
-  very explicit. While this makes sense\nin a wide range of applications it makes
-  things less natural than the general\ncase of pure functions. We think that Iteratee
-  have too be studied more, and\nwe recommend them when you have incrementally react
-  to IO errors.\n\n== Issues of Standard Lazy/IO ==\n\nWe think that we can save Lazy/IO
-  cheaply, but before explaining the way we\nsolve such and such issue, let's first
-  expose Lazy/IO and its issues.\n\nOne of the main Lazy/IO functions is 'readFile':
-  it takes a file path opens it\nand returns the list of characters until the end
-  of the file is reached. The\ncharacteristic of 'readFile' is that only the opening
-  is done strictly, while\nthe reading is performed lazily as much as the output list
-  is processed.\n\nCousins of 'readFile' are 'hGetContents' that takes a file handle
-  and 'getContents'\nthat reads on the standard input.\n\nThis technique enables to
-  process a file as if the file was completely stored\nin memory. Because it is read
-  lazily one knows that only the required part of\nthe file will be read. Even better,
-  if the input is consumed to produce a\nsmall output or the output is emitted incrementally,
-  then the processing can\nbe done in constant memory space.\n\nExamples:\n-- Prints
-  the number of words read on stdin\n> countWords = print . length . words =<< getContents\n--
-  Prints the length of the longest line\n> maxLineLen = print . maximum . map length
-  . lines =<< getContents\n-- Prints in lower case the text read on stdin\n> lowerText
-  = interact (map toLower)\n-- Alternatively\n> lowerText = putStr . map toLower =<<
-  getContents\n\nAll these examples are pretty idiomatic Haskell code and make a simple\nuse
-  of Lazy/IOs. Each of them runs in constant memory space even\nif they are declared
-  as if the whole contents were available at once.\n\nBy using stream fusion or 'ByteString''s
-  one can get even faster code while\nkeeping the code almost the same. Here we will
-  stay with the default list\nof 'Char''s data type. However one goal of our approach
-  is to be trivially\nadaptable to those data types.\n\nUsing our library will be
-  rougly a matter of namespace switch plus a running\nfunction:\n\n> lowerText = LI.run'
-  (SIO.putStr . map toLower <$> LI.getContents)\n\nHowever we will introducing this
-  library as one goes along.\n\nHere is another example where the Lazy/IO are still
-  easy to use but no longer\nscales well. This program counts the lines of all the
-  files given in arguments:\n\n> countLines = print . length . lines . concat =<<
-  mapM readFile =<< getArgs\n\nHere the problem is the limitation of simultaneous
-  opened files. Indeed,\nall the files are opened at the beginning therefore reaching
-  the limit easily.\n\nIt's time to recall when the files are closed. With standard
-  Lazy/IOs the\nhandle is closed when you reach the end of the file, and so when you've\nexplored
-  the whole list returned by 'readFile'.\n\nNote also that if you manually open the
-  file and get a handle, then you can\nmanually close the file, however if by misfortune
-  you close the file and\nthen still consume the lazy list you will get a truncated
-  list, observing\nhow much of the file has been read. This last point is due to the
-  fact\nthat 'readFile' considers the reading error as the end of the file.\n\nIn
-  particular one can fix this program, by simply counting the number of lines\nof
-  each file separately and then compute the sum to get the final result.\n\n> countLines
-  = print . sum =<< mapM (fmap (length . lines) . readFile) =<< getArgs\n\nHowever
-  once again this program exhausts the handle resources. Trying\nto close the files
-  will not save us either, one just risks getting truncated\nfiles. Indeed the list
-  of intermediate results is produced eagerly but each\nintermediate result is lazy
-  and then each file is opened but not immediately\nclosed since the computation is
-  delayed.\nHopefully adding a bit of strictness cures the problem:\n\n> countLines
-  = print . sum =<< mapM ((return' . length . lines =<<) . readFile) =<< getArgs\n>
-  \  where return' x = x `seq` return x\n\nUntil there, we have disclosed three problems:\n
-  \ * while reading is lazy, opening is strict, which leads to a less\n    natural
-  processing of multiple files\n  * the closing of files is hard to predict\n  * the
-  errors during reading are silently discarded\n\nThe last one is a bit trickier and
-  has recently been exposed by Oleg Kiselyov [3].\nThe problem appears when one gets
-  twice the contents of the same stream---or some kind\nof inter-dependent streams.
-  Because reading is implicitly driven by the consumer, the interleaving\nof reading
-  may then depend on the reduction strategy employed. This is the case even\nif the
-  consumer is a pure function.\n\nBasically in this example one can observe different
-  values when using one of these functions:\n> f1 x y = x `seq` y `seq` x - y\n> f2
-  x y = y `seq` x `seq` x - y\n\nIn this example one reads stdin twice and relies
-  on the error handling to end one stream while\nkeeping the other opened. Moreover
-  there are other ways to achieve this like the\nuse of unix fifo files, or using
-  'getChanContents' from the \"Control.Concurrent.Chan\"\nmodule.\n\n=== Our solution
-  ===\n\nHere we will present another design, based on a very simple idea. Our goal
-  is\nto provide IO processing in a style very similar to standard Lazy/IO with the\nfollowing
-  differences:\n  - preservation of the determinism;\n  - a simple control exceptions;\n
-  \ - and a precise management of resources.\n\nOur solution is made of three key
-  ingredients: a bit of strictness, some predefined\nschemas to interleave inputs,
-  some scopes and abstract types to delimit lazy input\noperations from strict IO
-  operations.\n\n== Dealing with a single input ==\n\nLet's present the first ingredient
-  alone through a first example:\n\n> mapHandleContents :: NFData sa => Handle ->
-  (String -> sa) -> IO sa\n> mapHandleContents h f = do\n>   s <- hGetContents h\n>
-  \  return' (f s) `finally` hClose h\n\n> return' :: (Monad m, NFData sa) => sa ->
-  m sa\n> return' x = rnf x `seq` return x\n\nIt implements some combination of 'fmap'
-  and 'hGetContents'.\nActually some of our examples fit nicely in that model:\n\n>
-  countWords = print =<< mapHandleContents stdin (length . words)\n> maxLineLen =
-  print =<< mapHandleContents stdin (maximum . map length . lines)\n> lowerText =
-  putStr =<< mapHandleContents stdin (map toLower)\n\nHowever while the two first
-  examples work well in this setting, the third one\ntries to allocate the whole result
-  in memory before printing it.\n\nHere the ingredient that is used is strictness:
-  the purpose in forcing the\nresult is to be sure that all the needed input is read,
-  before the file is\nclosed.\n\nSo here we rely on 'NFData' instances to really perform
-  deep forcing---this\nkind of assumption is a bit like 'Typeable' instances.\nIn
-  particular functions must not be an instance of 'NFData': indeed, we have\nno way
-  to force lazy values that are stored in the closure of a function.\n\nThe same remark
-  applies to the 'IO' monad for at least three reasons:\n'IO' if often represented
-  by functions; lazy 'IORef''s could be used\nto hide one input for later use; exceptions
-  with a lazy contents could\nalso be used to make a lazy value escape.\n\nLet's now
-  add some more strictness into the meal: the 'SIO' monad!\n\n== The 'SIO' monad ==\n\nThe
-  'SIO' monad is a thin layer over the 'IO' monad, populated only by\nstrict 'IO'
-  operations. In particular these operations are strict\nin the output, which means
-  that once the output is produced then we know\nthat the given arguments cannot be
-  further evaluated/forced.\nHere is an example of strict IO using the 'SIO' monad:\n\n>
-  import qualified System.IO.Strict as SIO\n> import System.IO.Strict (SIO)\n> countWords
-  = SIO.run (SIO.print . length . words =<< SIO.getContents)\n\nOf course this function
-  does not scale well since it reads the whole\ncontents in memory before processing
-  it.\n\nFor now the strict-io [4] package contains wrappers for functions\nin \"System.IO\",
-  and strict 'IORef''s.\n\nOne can now introduce a function in lines of 'mapHandleContents':\n\n>
-  withHandleContents :: NFData sa => Handle -> (String -> SIO sa) -> IO sa\n> withHandleContents
-  h f = do\n>   s <- hGetContents h\n>   SIO.run (f s) `finally` hClose h\n\nOne can
-  then rewrite 'lowerText' as follow:\n\n> lowerText = withHandleContents stdin (SIO.putStr
-  . map toLower)\n\nUntil there one can deal quite nicely with single input, many
-  outputs\nprocessing. Currently the only requirement is to delimit a scope where\nthe
-  resource will be used to return a strict value.\n\nDealing with multiple inputs
-  will lead us to our final design of lazy\ninputs.\n\n== Introducing 'LI', Lazy Inputs
-  ==\n\nWe first introduce a type for these lazy inputs namely 'LI'.\nThis type is
-  abstract and we will progressively introduce functions\nto build, combine and run
-  them.\n\nThe 'LI' type is a pointed functor, but not necessarily a monad nor\nan
-  applicative functor.\n\nTherefore one exports the 'pure' function as 'pureLI'. Building
-  primitives\nallow to read files or handles:\n\n> LI.pureLI :: a -> LI a\n> LI.hGetContents
-  :: Handle -> LI String\n> LI.getContents :: LI String\n> LI.readFile :: FilePath
-  -> LI String\n> LI.getChanContents :: Chan a -> LI [a]\n\nBeing a functor is important:
-  it allows to wholly transform the underlying\ninput lazily using standard functions
-  about lists for instance:\n\n> length <$> LI.readFile \"foo\"\n> words <$> LI.readFile
-  \"foo\"\n\nExtracting a final value of a lazy input ('LI' type) is a matter of using:\n\n>
-  LI.run :: (NFData sa) => LI sa -> IO sa\nOr\n> LI.run' :: (NFData sa) => LI (SIO
-  a) -> IO sa\n\nOne can therefore re-write our examples using lazy inputs:\n\n> --
-  embedded printing\n> countWords = LI.run' (SIO.print . length . words <$> LI.getContents)\n>
-  -- external printing\n> maxLineLen = print =<< LI.run (maximum . map length . lines
-  <$> LI.getContents)\n> lowerText  = LI.run' (SIO.putStr . map toLower <$> LI.getContents)\n\n==
-  Combining inputs ==\n\nFinally we come to managing multiple inputs. To get both
-  laziness and\nprecise resource management we will provide dedicated combinators.\nThe
-  first one is as simple as appending.\n\n> LI.append :: NFData sa => LI [sa] -> LI
-  [sa] -> LI [sa]\n\nThis one produces a single stream out that sequences the two
-  given streams.\nIt also sequences the usage of resources: the first resource is
-  closed and\nthen the second one is opened.\n\nNote that this combinator is still
-  quite general since one can process each\ninput beforehand:\n\n> -- one can drop
-  parts of the inputs\n> (take 100 <$> i1) `LI.append` (drop 100 <$> i2)\n> -- one
-  can tag each input to know where they come from\n> Left <$> i1 `LI.append` Right
-  <$> i2\n\nThe second one is 'LI.zipWith' which opens the two resources and joins
-  the items\ninto a single stream. Again, since 'LI' is a functor one can join not
-  only\ncharacters but also words, lines, chunks... A problem with zipping is that
-  it\nstops on the shorter input (loosing a part of the other), hopefully one can\nprolongate
-  them:\n\n> zipMaybesWith :: (NFData sa, NFData sb) -> (Maybe sa -> Maybe sb -> c)
-  -> LI [sa] -> LI [sb] -> LI [c]\n> zipMaybesWith f xs ys =\n>     map (uncurry f)
-  . takeWhile someJust <$> zip (prolongate <$> xs) (prolongate <$> ys)\n>   where
-  someJust (Nothing, Nothing) = False\n>         someJust          _         = True\n>
-  \        prolongate :: [a] -> [Maybe a]\n>         prolongate zs = map Just zs ++
-  repeat Nothing\n\nThe last one is 'LI.interleave':\n\n> LI.interleave ::  (NFData
-  sa) -> LI [sa] -> LI [sa] -> LI [sa]\n\nThis function is currently left biased,
-  moreover each resource is closed as soon\nas we reach its end. However since the
-  inputs are mixed up together one generally\nprefers a tagged version trivially build
-  upon this one:\n\n> interleaveEither :: (NFData sa, NFData sb) => LI [sa] -> LI
-  [sb] -> LI [Either sa sb]\n> interleaveEither a b = interleave (map Left <$> a)
-  (map Right <$> b)\n\nHere are some final programs that scale well with the number
-  of files.\n\n> -- number of words in the given files\n> main = print =<< LI.run
-  . fmap (length . words) . LI.concat . map LI.readFile =<< getArgs\n\n> -- almost
-  the same thing but counts words independently in each file\n> main =   print\n>
-  \     =<< LI.run . fmap sum . LI.sequence . map (fmap (length . words) . LI.readFile)\n>
-  \     =<< getArgs\n\n> -- prints to stdout swap-cased concatenation of all input
-  files\n> main = LI.run' . (fmap (SIO.putStr . fmap swapCase) . LI.concat . map LI.readFile)
-  =<< getArgs\n>   where swapCase c | isUpper c = toLower c\n>                    |
-  otherwise = toUpper c\n\n> -- sums character code points of inputs\n> main = print
-  =<< LI.run . fmap (sum . map (toInteger . ord)) . LI.concat . map LI.readFile =<<
-  getArgs\n\nOur solution is from now widely available as an Hackage package named
-  \"safe-lazy-io\" [4].\n\nWe hope you will freely enjoy using Lazy/IO again!\n\nAs
-  usual, criticisms, comments, and help are expected!\n\nFinally, I would like to
-  thank Benoit Montagu and Francois Pottier for helping\nme out to polish this work!\n\nNicolas
-  Pouillard\n\n[1]: http://hackage.haskell.org/cgi-bin/hackage-scripts/package/safe-lazy-io\n[2]:
-  http://okmij.org/ftp/Streams.html\n[3]: http://www.haskell.org/pipermail/haskell/2009-March/021064.html\n[4]:
-  http://hackage.haskell.org/cgi-bin/hackage-scripts/package/strict-io\n"
+hash: ff354a1e043f891ed1b7dab1522153ce6874706d24b1170191d8fd83a86a096a
+homepage: ''
+latest: '0.1'
 license-name: BSD-3-Clause
+maintainer: Nicolas Pouillard <nicolas.pouillard@gmail.com>
+synopsis: A library providing safe lazy IO features.
+test-bench-deps: {}

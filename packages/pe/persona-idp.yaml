@@ -1,105 +1,233 @@
-homepage: https://github.com/frasertweedale/hs-persona-idp
-changelog-type: ''
-hash: 98c7494f4c97e42fedcb09ccd2def2de9e82c7df4bd4e748638fedb3e6cdd29d
-test-bench-deps: {}
-maintainer: frase@frase.id.au
-synopsis: Persona (BrowserID) Identity Provider
-changelog: ''
-basic-deps:
-  shakespeare: ! '>=2.0'
-  bytestring: ! '>=0.10'
-  wai: ! '>=3.0'
-  unix: ! '>=2.7'
-  base: ! '>=4.6 && <5'
-  time: ! '>=1.4'
-  blaze-markup: ! '>=0.6'
-  text: ! '>=1.1'
-  pem: ! '>=0.2'
-  filepath: ! '>=1.3'
-  asn1-types: ! '>=0.2'
-  jose: ! '>=0.3.38'
-  x509: ! '>=1.4'
-  lens: ! '>=4.3'
-  persona: ! '>=0.1'
-  crypto-random: -any
-  transformers: ! '>=0.3'
-  optparse-applicative: ! '>=0.11'
-  scotty: ! '>=0.8'
-  http-types: ! '>=0.8'
-  aeson: ! '>=0.7'
-  hamlet: ! '>=1.2'
-  directory: ! '>=1.2'
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
 - 0.1.0.2
 author: Fraser Tweedale
-latest: 0.1.0.2
+basic-deps:
+  aeson: '>=0.7'
+  asn1-types: '>=0.2'
+  base: '>=4.6 && <5'
+  blaze-markup: '>=0.6'
+  bytestring: '>=0.10'
+  crypto-random: '>=0'
+  directory: '>=1.2'
+  filepath: '>=1.3'
+  hamlet: '>=1.2'
+  http-types: '>=0.8'
+  jose: '>=0.3.38'
+  lens: '>=4.3'
+  optparse-applicative: '>=0.11'
+  pem: '>=0.2'
+  persona: '>=0.1'
+  scotty: '>=0.8'
+  shakespeare: '>=2.0'
+  text: '>=1.1'
+  time: '>=1.4'
+  transformers: '>=0.3'
+  unix: '>=2.7'
+  wai: '>=3.0'
+  x509: '>=1.4'
+changelog: ''
+changelog-type: ''
+description: |
+  persona-idp is a simple `Mozilla Persona`_ (formerly BrowserID)
+  identity provider (IdP).
+
+  .. _Mozilla Persona: https://www.mozilla.org/persona
+
+
+  Installation
+  ============
+
+  Installation is via ``cabal``, the Haskell package tool::
+
+      cabal install persona-idp
+
+  Help packaging persona-idp for specific operating systems would be
+  very much appreciated.
+
+
+  Initialisation
+  ==============
+
+  To initialise the IdP, run::
+
+      persona init --app-path <path> --hostname <host>
+
+  The ``--app-path`` argument species the path under the domain at
+  which the IdP will be mounted.  If it is at the root, use `/`.
+
+  The ``--hostname`` argument is the fully qualified domain name of
+  the *authority*, which will either be the users' email domain, or
+  the host that is delegated to when using a *delegated support
+  document*.
+
+  The ``init`` command generates the authority keypair and support
+  documents.  Files are stored in ``~/.persona-idp``.  There is
+  currently no mechanism for overriding the config directory - patches
+  welcome!
+
+
+  Starting the server
+  ===================
+
+  To run the IdP, execute::
+
+      persona serve
+
+  The IdP listens on port 3000 by default (use ``-p <port>`` to listen
+  on a different port) and is designed to be run behind a reverse
+  proxy providing TLS termination and user authentication.
+
+
+  Web server configuration
+  ========================
+
+  TLS is required.  Acquiring a server certificate and enabling TLS is
+  beyond the scope of this README.
+
+  persona-idp requires the webserver to authenticate users.  Several
+  mechanisms are supported:
+
+  * Any authentication mechanism where the user's email address can be
+    provided to the IdP via the ``REMOTE_USER`` HTTP header.  For
+    security reasons, this header MUST NOT be passed from the original
+    request to the IdP.
+
+  * X.509 client certificate authentication can be used.  The
+    ``REMOTE_USER`` header MUST NOT be set, and the PEM-encoded client
+    certificate is provided in the ``SSL_CLIENT_CERT`` header.  The
+    email address is first looked for in the Subject Alternative Name
+    extension, then the Subject DN.
+
+  Support for other authentication methods could be added.  Please
+  contact the author to discuss.
+
+  Nginx
+  -----
+
+  The following example explains how to configure Nginx to use client
+  certificate authentication.  The IdP is assumed to be running on the
+  same host as Nginx and listening on port 3000.
+
+  Nginx does not support the ``ssl_verify_client`` directive in
+  location context, so the server as a whole must request (but not
+  require) a client certificate.  If a valid certificate is provided,
+  details are passed to the IdP via the ``proxy_set_header``
+  directive.
+
+  ::
+
+      server {
+          listen 443 ssl;
+          server_name persona.example.com;
+          ssl_certificate /path/to/chainedcert.pem;
+          ssl_certificate_key /path/to/key;
+
+          ssl_client_certificate /path/to/ca.pem;
+          ssl_verify_client optional;
+          proxy_set_header REMOTE_USER "";
+          proxy_set_header SSL_CLIENT_CERT $ssl_client_cert;
+
+          location / {
+              proxy_pass http://localhost:3000;
+          }
+      }
+
+  If the IdP is not mounted at the root, two location blocks are
+  required.  The mount point is the ``--app-path`` argument
+  used for ``persona init``::
+
+      server {
+          ...  # as above
+
+          location /the/mountpoint {
+              proxy_pass http://localhost:3000;
+          }
+
+          location /.well-known/browserid {
+              proxy_pass http://localhost:3000/support;
+          }
+      }
+
+
+  Finally, any hosts delegating to the authority can also be
+  configured to read the delegated support document from the IdP::
+
+      server {
+          listen 443 ssl;
+          servername example.com;
+
+          ...
+
+          location /.well-known/browserid {
+              proxy_pass http://localhost:3000/delegated-support;
+          }
+      }
+
+
+  Apache
+  ------
+
+  The Apache configuration is similar to the Nginx configuration, but
+  note that Apache supports ``SSLVerifyClient`` in location context so
+  so the server could be configured to *require* a valid client
+  certificate for the ``/provisioning`` location whilst not requesting
+  a certificate for other locations.  Such a configuration requires
+  TLS renegotiation and is untested - but if you try it I would like
+  to know your results.
+
+  A complete example configuration for Apache would be a valued
+  contribution to this README.
+
+
+  Testing the IdP
+  ===============
+
+  #. Ensure that the browser will be able to authenticate the user
+     when the provisioning workflow begins (e.g. install client
+     certificate if using certificate authentication).
+
+  #. Visit https://login.persona.org/ and click *Sign In*.
+
+  #. Enter your email address and click *next*.
+
+  #. If prompted, select a certificate or complete the required
+     authentication.  The login process should now complete without
+     further interaction.
+
+
+  License
+  =======
+
+  persona-idp is free software: you can redistribute it and/or modify
+  it under the terms of the `GNU Affero General Public License`__ as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  __ http://www.gnu.org/licenses/agpl.html
+
+
+  Contributing
+  ============
+
+  The persona-idp source code is available from
+  https://github.com/frasertweedale/hs-persona-idp.
+
+  Bug reports, patches, feature requests, code review and
+  documentation are welcome.
+
+  To submit a patch, please use ``git send-email`` or create a GitHub
+  pull request.  Write a `well formed commit message`_.  If your patch
+  is nontrivial, update the copyright notice at the top of each added
+  or changed file.
+
+  .. _well formed commit message: http://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html
 description-type: text
-description: ! "persona-idp is a simple `Mozilla Persona`_ (formerly BrowserID)\nidentity
-  provider (IdP).\n\n.. _Mozilla Persona: https://www.mozilla.org/persona\n\n\nInstallation\n============\n\nInstallation
-  is via ``cabal``, the Haskell package tool::\n\n    cabal install persona-idp\n\nHelp
-  packaging persona-idp for specific operating systems would be\nvery much appreciated.\n\n\nInitialisation\n==============\n\nTo
-  initialise the IdP, run::\n\n    persona init --app-path <path> --hostname <host>\n\nThe
-  ``--app-path`` argument species the path under the domain at\nwhich the IdP will
-  be mounted.  If it is at the root, use `/`.\n\nThe ``--hostname`` argument is the
-  fully qualified domain name of\nthe *authority*, which will either be the users'
-  email domain, or\nthe host that is delegated to when using a *delegated support\ndocument*.\n\nThe
-  ``init`` command generates the authority keypair and support\ndocuments.  Files
-  are stored in ``~/.persona-idp``.  There is\ncurrently no mechanism for overriding
-  the config directory - patches\nwelcome!\n\n\nStarting the server\n===================\n\nTo
-  run the IdP, execute::\n\n    persona serve\n\nThe IdP listens on port 3000 by default
-  (use ``-p <port>`` to listen\non a different port) and is designed to be run behind
-  a reverse\nproxy providing TLS termination and user authentication.\n\n\nWeb server
-  configuration\n========================\n\nTLS is required.  Acquiring a server
-  certificate and enabling TLS is\nbeyond the scope of this README.\n\npersona-idp
-  requires the webserver to authenticate users.  Several\nmechanisms are supported:\n\n*
-  Any authentication mechanism where the user's email address can be\n  provided to
-  the IdP via the ``REMOTE_USER`` HTTP header.  For\n  security reasons, this header
-  MUST NOT be passed from the original\n  request to the IdP.\n\n* X.509 client certificate
-  authentication can be used.  The\n  ``REMOTE_USER`` header MUST NOT be set, and
-  the PEM-encoded client\n  certificate is provided in the ``SSL_CLIENT_CERT`` header.
-  \ The\n  email address is first looked for in the Subject Alternative Name\n  extension,
-  then the Subject DN.\n\nSupport for other authentication methods could be added.
-  \ Please\ncontact the author to discuss.\n\nNginx\n-----\n\nThe following example
-  explains how to configure Nginx to use client\ncertificate authentication.  The
-  IdP is assumed to be running on the\nsame host as Nginx and listening on port 3000.\n\nNginx
-  does not support the ``ssl_verify_client`` directive in\nlocation context, so the
-  server as a whole must request (but not\nrequire) a client certificate.  If a valid
-  certificate is provided,\ndetails are passed to the IdP via the ``proxy_set_header``\ndirective.\n\n::\n\n
-  \   server {\n        listen 443 ssl;\n        server_name persona.example.com;\n
-  \       ssl_certificate /path/to/chainedcert.pem;\n        ssl_certificate_key /path/to/key;\n\n
-  \       ssl_client_certificate /path/to/ca.pem;\n        ssl_verify_client optional;\n
-  \       proxy_set_header REMOTE_USER \"\";\n        proxy_set_header SSL_CLIENT_CERT
-  $ssl_client_cert;\n\n        location / {\n            proxy_pass http://localhost:3000;\n
-  \       }\n    }\n\nIf the IdP is not mounted at the root, two location blocks are\nrequired.
-  \ The mount point is the ``--app-path`` argument\nused for ``persona init``::\n\n
-  \   server {\n        ...  # as above\n\n        location /the/mountpoint {\n            proxy_pass
-  http://localhost:3000;\n        }\n\n        location /.well-known/browserid {\n
-  \           proxy_pass http://localhost:3000/support;\n        }\n    }\n\n\nFinally,
-  any hosts delegating to the authority can also be\nconfigured to read the delegated
-  support document from the IdP::\n\n    server {\n        listen 443 ssl;\n        servername
-  example.com;\n\n        ...\n\n        location /.well-known/browserid {\n            proxy_pass
-  http://localhost:3000/delegated-support;\n        }\n    }\n\n\nApache\n------\n\nThe
-  Apache configuration is similar to the Nginx configuration, but\nnote that Apache
-  supports ``SSLVerifyClient`` in location context so\nso the server could be configured
-  to *require* a valid client\ncertificate for the ``/provisioning`` location whilst
-  not requesting\na certificate for other locations.  Such a configuration requires\nTLS
-  renegotiation and is untested - but if you try it I would like\nto know your results.\n\nA
-  complete example configuration for Apache would be a valued\ncontribution to this
-  README.\n\n\nTesting the IdP\n===============\n\n#. Ensure that the browser will
-  be able to authenticate the user\n   when the provisioning workflow begins (e.g.
-  install client\n   certificate if using certificate authentication).\n\n#. Visit
-  https://login.persona.org/ and click *Sign In*.\n\n#. Enter your email address and
-  click *next*.\n\n#. If prompted, select a certificate or complete the required\n
-  \  authentication.  The login process should now complete without\n   further interaction.\n\n\nLicense\n=======\n\npersona-idp
-  is free software: you can redistribute it and/or modify\nit under the terms of the
-  `GNU Affero General Public License`__ as published by\nthe Free Software Foundation,
-  either version 3 of the License, or\n(at your option) any later version.\n\n__ http://www.gnu.org/licenses/agpl.html\n\n\nContributing\n============\n\nThe
-  persona-idp source code is available from\nhttps://github.com/frasertweedale/hs-persona-idp.\n\nBug
-  reports, patches, feature requests, code review and\ndocumentation are welcome.\n\nTo
-  submit a patch, please use ``git send-email`` or create a GitHub\npull request.
-  \ Write a `well formed commit message`_.  If your patch\nis nontrivial, update the
-  copyright notice at the top of each added\nor changed file.\n\n.. _well formed commit
-  message: http://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html\n"
+hash: 98c7494f4c97e42fedcb09ccd2def2de9e82c7df4bd4e748638fedb3e6cdd29d
+homepage: https://github.com/frasertweedale/hs-persona-idp
+latest: 0.1.0.2
 license-name: AGPL-3.0-only
+maintainer: frase@frase.id.au
+synopsis: Persona (BrowserID) Identity Provider
+test-bench-deps: {}

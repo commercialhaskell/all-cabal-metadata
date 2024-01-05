@@ -1,25 +1,3 @@
-homepage: https://github.com/tonyday567/box#readme
-changelog-type: ''
-hash: 7c43e4d780a3c24bb269f76daf3d2446190e78d6b6afe3fd5707af9294db597c
-test-bench-deps: {}
-maintainer: tonyday567@gmail.com
-synopsis: A profunctor effect system.
-changelog: ''
-basic-deps:
-  semigroupoids: '>=5.3 && <6.1'
-  exceptions: '>=0.10 && <0.11'
-  bytestring: '>=0.11.3 && <0.13'
-  stm: '>=2.5.1 && <2.6'
-  base: '>=4.7 && <5'
-  time: '>=1.9 && <1.13'
-  text: '>=1.2 && <2.2'
-  kan-extensions: '>=5.2 && <5.3'
-  async: '>=2.2 && <2.3'
-  dlist: '>=1.0 && <1.1'
-  containers: '>=0.6 && <0.8'
-  contravariant: '>=1.5 && <1.6'
-  mtl: '>=2.2.2 && <2.4'
-  profunctors: '>=5.6.2 && <5.7'
 all-versions:
 - 0.0.1.1
 - 0.0.1.2
@@ -41,9 +19,401 @@ all-versions:
 - 0.9.1
 - 0.9.2.0
 - 0.9.2.1
+- 0.9.3.0
+- 0.9.3.1
 author: Tony Day
-latest: 0.9.2.1
-description-type: haddock
-description: 'This might be a profunctor effect system, but unlike all the others.
-  See the project readme.org for usage and discussion: https://github.com/tonyday567/box#readme.org'
+basic-deps:
+  async: '>=2.2 && <2.3'
+  base: '>=4.7 && <5'
+  bytestring: '>=0.11.3 && <0.13'
+  containers: '>=0.6 && <0.8'
+  contravariant: '>=1.5 && <1.6'
+  dlist: '>=1.0 && <1.1'
+  exceptions: '>=0.10 && <0.11'
+  kan-extensions: '>=5.2 && <5.3'
+  mtl: '>=2.2.2 && <2.4'
+  profunctors: '>=5.6.2 && <5.7'
+  semigroupoids: '>=5.3 && <6.1'
+  stm: '>=2.5.1 && <2.6'
+  text: '>=1.2 && <2.2'
+  time: '>=1.10 && <1.13'
+changelog: |+
+  0.9.3
+  ===
+  * stdBox, toLineBox, fromLineBox added to Box.IO
+
+  * concurrentlyLeft & concurrentlyRight exposed in Box.Queue
+
+changelog-type: markdown
+description: |
+  #+TITLE: box
+
+  [[https://hackage.haskell.org/package/box][file:https://img.shields.io/hackage/v/box.svg]] [[https://github.com/tonyday567/box/actions?query=workflow%3Ahaskell-ci][file:https://github.com/tonyday567/box/workflows/haskell-ci/badge.svg]]
+
+  A profunctor effect system.
+
+  #+begin_quote
+  What is all this stuff around me; this stream of experiences that I seem to be having all the time? Throughout history there have been people who say it is all illusion. ~ S Blackmore
+  #+end_quote
+
+  * Usage
+
+  #+begin_src haskell
+  :set -XOverloadedStrings
+  import Box
+  import Prelude
+  import Data.Function
+  import Data.Bool
+  #+end_src
+
+  Standard IO echoing:
+
+  #+begin_src haskell
+  echoC = Committer (\s -> putStrLn ("echo: " <> s) >> pure True)
+  echoE = Emitter (getLine & fmap (\x -> bool (Just x) Nothing (x =="quit")))
+  glue echoC echoE
+  #+end_src
+
+  #+begin_src
+  hello
+  echo: hello
+  echo
+  echo: echo
+  quit
+  #+end_src
+
+  Committing to a list:
+
+   #+begin_src haskell
+  > toListM echoE
+  hello
+  echo
+  quit
+  ["hello","echo"]
+   #+end_src
+
+  Emitting from a list:
+
+  #+begin_src haskell :results output
+  > glue echoC <$|> witherE (\x -> bool (pure (Just x)) (pure Nothing) (x=="quit")) <$> (qList ["hello", "echo", "quit"])
+  echo: hello
+  echo: echo
+  #+end_src
+
+  * Library Design
+
+  *** Resource Coinduction
+
+  Haskell has an affinity with [[https://www.reddit.com/r/haskell/comments/j3kbge/comment/g7foelq/?utm_source=share&utm_medium=web2x&context=3][coinductive functions]]; functions should expose destructors and allow for infinite data.
+
+  The key text, [[https://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf][Why Functional Programming Matters]], details how producers and consumers can be separated by exploiting laziness, creating a speration of concern not available in other technologies. Utilising laziness, we can peel off (destruct) the next element of a list to be consumed without disturbing the pipeline of computations that is still to occur, for the cost of a thunk.
+
+  So how do you apply this to resources and their effects? One answer is that you destruct a (potentially long-lived) resource simply by using it. For example, reading and writing lines to standard IO:
+
+   #+begin_src haskell :results output :exports both
+  :t getLine
+  :t putStrLn
+  #+end_src
+
+  #+RESULTS:
+  : getLine :: IO String
+  : putStrLn :: String -> IO ()
+
+  These are the destructors that need to be transparently exposed if effects are to be good citizens in Haskell.
+
+  *** What is a Box?
+
+  A Box is simply the product of a consumer destructor and a producer destructor.
+
+  #+begin_src haskell
+  data Box m c e = Box
+    { committer :: Committer m c,
+      emitter :: Emitter m e
+    }
+  #+end_src
+
+  *** Committer
+
+  The library denotes a consumer by wrapping a consumption destructor and calling it a Committer. Like much of base, there is failure hidden in the getLine example type. A better approach, for a consumer, is to signal whether consumption actually occurred.
+
+   #+begin_src haskell
+  newtype Committer m a = Committer
+    { commit :: a -> m Bool
+    }
+   #+end_src
+
+  You give a Committer an 'a', and the destructor tells you whether the consumption of the 'a' was successful or not. A standard output committer is then:
+
+  #+begin_src haskell
+  stdC :: Committer IO String
+  stdC = Committer (\s -> putStrLn s >> pure True)
+  #+end_src
+
+  #+RESULTS:
+  : <interactive>:19:1-4: warning: [GHC-63397] [-Wname-shadowing]
+  :     This binding for ‘stdC’ shadows the existing binding
+  :       defined at <interactive>:16:1
+
+  A Committer is a contravariant functor, so contramap can be used to modify this:
+
+  #+begin_src haskell
+  import Data.Text as Text
+  import Data.Functor.Contravariant
+
+  echoC :: Committer IO Text
+  echoC = contramap (Text.unpack . ("echo: "<>)) stdC
+  #+end_src
+
+  *** Emitter
+
+  The library denotes a producer by wrapping a production destructor and calling it an Emitter.
+
+  #+begin_src haskell
+  newtype Emitter m a = Emitter
+    { emit :: m (Maybe a)
+    }
+  #+end_src
+
+  An emitter returns an 'a' on demand or not.
+
+  #+begin_src haskell :results output
+  stdE :: Emitter IO String
+  stdE = Emitter (Just <$> getLine)
+  #+end_src
+
+  #+RESULTS:
+
+  As a functor instance, an Emitter can be modified with fmap. Several library functions, such as witherE and filterE can also be used to stop emits or add effects.
+
+  #+begin_src haskell :results output
+  echoE :: Emitter IO Text
+  echoE =
+    witherE (\x -> bool (pure (Just x)) (putStrLn "quitting" *> pure Nothing) (x == "quit"))
+      (fmap Text.pack stdE)
+  #+end_src
+
+  #+RESULTS:
+  : <interactive>:52:1-5: warning: [GHC-63397] [-Wname-shadowing]
+  :     This binding for ‘echoE’ shadows the existing binding
+  :       defined at <interactive>:49:1
+
+  *** Box duality
+
+  A Box represents a duality in two ways:
+
+  - As the consumer and producer sides of a resource. The complete interface to standard IO, for example, could be:
+
+  #+begin_src haskell :results output
+  stdIO :: Box IO String String
+  stdIO = Box (Committer (\s -> putStrLn s >> pure True)) (Emitter (Just <$> getLine))
+  #+end_src
+
+  - As two ends of a computation.
+
+  #+begin_quote
+  This is how we can use a profunctor to glue together two categories ~ Milewski
+  [[https://bartoszmilewski.com/2019/03/27/promonads-arrows-and-einstein-notation-for-profunctors/][Promonads, Arrows, and Einstein Notation for Profunctors]]
+  #+end_quote
+
+  ~glue~ is the primitive with which we connect a Committer and Emitter.
+
+  #+begin_src haskell
+  > glue echoC echoE
+  hello
+  echo: hello
+  echo
+  echo: echo
+  quit
+  quitting
+  #+end_src
+
+  Effectively the same computation, for a Box, is:
+
+   #+begin_src haskell :results output
+  fuse (pure . pure) stdIO
+   #+end_src
+
+  *** Continuation
+
+  As with many operators in the library, ~qList~ is actually a continuation:
+
+  #+begin_src haskell :export both
+  :t qList
+  #+end_src
+
+  #+RESULTS:
+  : qList
+  :   :: Control.Monad.Conc.Class.MonadConc m => [a] -> CoEmitter m a
+
+  #+begin_src haskell
+  type CoEmitter m a = Codensity m (Emitter m a)
+  #+end_src
+
+  Effectively being a newtype wrapper around:
+
+  #+begin_src haskell
+  forall x. (Emitter m a -> m x) -> m x
+  #+end_src
+
+  A good background on call-back style programming in Haskell is in the [[https://hackage.haskell.org/package/managed-1.0.10/docs/Control-Monad-Managed.html][managed]] library, which is a specialised version of Codensity.
+
+  Codensity has an Applicative instance, and lends itself to applicative-style coding. To send a (queued) list to stdout, for example, you could say:
+
+  #+begin_src haskell :export both
+  :t glue <$> pure toStdout <*> qList ["a", "b", "c"]
+  #+end_src
+
+  #+RESULTS:
+  : glue <$> pure toStdout <*> qList ["a", "b", "c"]
+  :   :: Codensity IO (IO ())
+
+  and then escape the continuation with:
+
+  #+begin_src haskell :export both
+  runCodensity (glue <$> pure toStdout <*> (qList ["a", "b", "c"])) id
+  #+end_src
+
+  #+RESULTS:
+  : a
+  : b
+  : c
+
+  This closes the continuation. The following code is equivalent:
+
+  #+begin_src haskell :export both
+  close $ glue <$> pure toStdout <*> qList ["a", "b", "c"]
+  #+end_src
+
+  #+RESULTS:
+  : a
+  : b
+  : c
+
+  #+begin_src haskell
+  close $ glue toStdout <$> qList ["a", "b", "c"]
+  #+end_src
+
+  #+RESULTS:
+  : a
+  : b
+  : c
+
+  Given the ubiquity of this method, the library supplies two applicative style operators that combine application and closure.
+
+  - =(<$|>)= fmap and close over a Codensity:
+
+  #+begin_src haskell
+  glue toStdout <$|> qList ["a", "b", "c"]
+  #+end_src
+
+  #+RESULTS:
+  : a
+  : b
+  : c
+
+  - =(<*|>)= Apply and close over Codensity
+
+  #+begin_src haskell
+  glue <$> pure toStdout <*|> qList ["a", "b", "c"]
+  #+end_src
+
+  #+RESULTS:
+  : a
+  : b
+  : c
+
+  * Explicit Continuation
+
+  Yield-style streaming libraries are [[https://rubenpieters.github.io/assets/papers/JFP20-pipes.pdf][coroutines]], sum types that embed and mix continuation logic in with other stuff like effect decontruction. =box= sticks to a corner case of a product type representing a consumer and producer. The major drawback of eschewing coroutines is that continuations become explicit and difficult to hide. One example; taking the first n elements of an Emitter:
+
+  #+begin_src haskell
+  :t takeE
+  takeE :: Monad m => Int -> Emitter m a -> Emitter (StateT Int m) a
+  #+end_src
+
+  A disappointing type. The state monad can not be hidden, the running count has to sit somewhere, and so different glueing functions are needed:
+
+  #+begin_src haskell :results output
+  -- | Connect a Stateful emitter to a (non-stateful) committer of the same type, supplying initial state.
+  --
+  -- >>> glueES 0 (showStdout) <$|> (takeE 2 <$> qList [1..3])
+  -- 1
+  -- 2
+  glueES :: (Monad m) => s -> Committer m a -> Emitter (StateT s m) a -> m ()
+  glueES s c e = flip evalStateT s $ glue (foist lift c) e
+  #+end_src
+
+  * Future directions
+
+  The design and concepts contained within the box library is a hodge-podge, but an interesting mess, being at quite a busy confluence of recent developments.
+
+  ** Optics
+
+  A Box is an adapter in the [[http://www.cs.ox.ac.uk/people/jeremy.gibbons/publications/poptics.pdf][language of optics]] and the relationship between a resource's committer and emitter could be modelled by other optics.
+
+  ** Categorical Profunctor
+
+  The deprecation of Box.Functor awaits the development of [[https://github.com/haskell/core-libraries-committee/issues/91#issuecomment-1325337471][categorical functors]]. Similarly to Filterable the type of a Box could be something like =FunctorOf Op(Kleisli Maybe) (Kleisli Maybe) (->)=. Or it could be something like the SISO type in [[https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4496714][Programming with Monoidal Profunctors and Semiarrows]].
+
+  ** Wider Types
+
+  Alternatively, the types could be widened:
+
+  #+begin_src haskell
+  newtype Committer f a = Committer { commit :: a -> f () }
+
+  instance Contravariant (Committer f) where
+    contramap f (Committer a) = Committer (a . f)
+
+  newtype Emitter f a = Emitter { emit :: f a }
+
+  instance (Functor f) => Functor (Emitter f) where
+    fmap f (Emitter a) = Emitter (fmap f a)
+
+  data Box f g b a =
+    Box { committer :: Committer g b, emitter :: Emitter f a }
+
+  instance (Functor f) => Functor (Box f g b) where
+    fmap f (Box c e) = Box c (fmap f e)
+
+  instance (Functor f, Contravariant g) => Profunctor (Box f g) where
+    dimap f g (Box c e) = Box (contramap f c) (fmap g e)
+  #+end_src
+
+  .. with the existing computations recovered with:
+
+  #+begin_src haskell
+  type CommitterB m a = Committer (MaybeT m) a
+  type EmitterB m a = Emitter (MaybeT m) a
+  type BoxB m b a = Box (MaybeT m) (MaybeT m) b a
+  #+end_src
+
+  ** Introduce a [[https://golem.ph.utexas.edu/category/2013/08/the_nucleus_of_a_profunctor_so.html][nucleus]]
+
+  Alternative to both of these, the Monad constraint could be rethought. There are the ends of the computational pipeline, but there is also the gluing/fusion/middle bit.
+
+  #+begin_src haskell
+  connect :: (f a -> b) -> Committer g b -> Emitter f a -> g ()
+  connect w c e = emit e & w & commit c
+
+  glue :: Box f g (f a) a -> g ()
+  glue (Box c e) = connect id c e
+
+  nucleate ::
+    Functor f =>
+    (f a -> f b) ->
+    Committer g b ->
+    Emitter f a ->
+    f (g ())
+  nucleate n c e = emit e & n & fmap (commit c)
+  #+end_src
+
+  This has the nice property that the closure is not hidden (as is usually the case for a Monad constraint) so that, for instance, fusion along longer chains becomes possible.
+description-type: text
+hash: 5b1f13b621340f35e55f2ef707a45733d5edab1ba90ac4faea75a3cccbe22d8a
+homepage: https://github.com/tonyday567/box#readme
+latest: 0.9.3.1
 license-name: BSD-3-Clause
+maintainer: tonyday567@gmail.com
+synopsis: A profunctor effect system.
+test-bench-deps: {}

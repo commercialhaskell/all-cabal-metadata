@@ -1,83 +1,181 @@
-homepage: ''
-changelog-type: markdown
-hash: 35297bec3e2c8483b8e291ff62e5cb5d2aa01e24a7563812648f213e1b1eace2
-test-bench-deps: {}
-maintainer: winterland1989@gmail.com
-synopsis: A simple and fast logging monad
-changelog: ! '0.1.1.0
-
-  -------
-
-
-  Update haddock, fix build on GHC-7.6/7.8.
-
-'
-basic-deps:
-  exceptions: ! '>=0.6 && <0.11'
-  bytestring: -any
-  base: ! '>=4.6 && <5'
-  text: -any
-  monad-control: ! '>=0.3 && <1.1'
-  text-show: -any
-  lifted-base: -any
-  fast-logger: ! '>=2.4.5 && <2.5'
-  transformers: ! '>=0.2'
-  aeson: ! '>=0.4 && <1.5'
-  template-haskell: -any
 all-versions:
 - 0.1.1.0
 author: winterland1989
-latest: 0.1.1.0
+basic-deps:
+  aeson: '>=0.4 && <1.5'
+  base: '>=4.6 && <5'
+  bytestring: '>=0'
+  exceptions: '>=0.6 && <0.11'
+  fast-logger: '>=2.4.5 && <2.5'
+  lifted-base: '>=0'
+  monad-control: '>=0.3 && <1.1'
+  template-haskell: '>=0'
+  text: '>=0'
+  text-show: '>=0'
+  transformers: '>=0.2'
+changelog: |
+  0.1.1.0
+  -------
+
+  Update haddock, fix build on GHC-7.6/7.8.
+changelog-type: markdown
+description: |
+  A fast & simple logging monad
+  =============================
+
+  [![Hackage](https://img.shields.io/hackage/v/monad-log.svg?style=flat-square)](http://hackage.haskell.org/package/monad-log)
+  [![Travis-CI](https://travis-ci.org/winterland1989/monad-log.svg?style=flat-square)](https://travis-ci.org/winterland1989/monad-log)
+
+  This package provide a mtl style `MonadLog` class and a concrete monad transformer `LogT`, the main difference between this package and monad-logger are:
+
+  + Base monad has to be an instance of `MonadIO`.
+
+  + Parametrized logging environment for extensibility.
+
+  + Basic logging environment type(`Label`,`Loc`,`NameSpace`,`ThreadId`) are included, and you can easily make your own.
+
+  + JSON logging built-in.
+
+  + default to fast-logger backend, with good stdout and file support.
+
+  If you are an application author, you can use `LogT` transformer, a specialized reader monad to inject `Logger env`.
+
+  If you are a library author, you should:
+
+  + make your monad stack an instance of 'MonadLog', usually you can do this by embedding `Logger env` into your monad's reader part.
+
+  + provide a default formatter, and API to run with customized formatter.
+
+  Example
+  -------
+
+  + A simple labelled logger:
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module Main where
+
+  import Control.Monad.Log
+  import Control.Monad.Log.Label
+
+  -- Following log will be output to stdout:
+  -- [INFO] [25-Apr-2016 12:51:56] [main] This is simple log 1
+  -- [INFO] [25-Apr-2016 12:51:56] [foo] This is simple log 2
+
+  main :: IO ()
+  main = do
+      logger <- makeDefaultLogger
+          simpleTimeFormat'
+          (LogStdout 4096)
+          levelDebug
+          (Label "main")
+
+      runLogTSafe logger $ do
+          info "This is simple log 1"
+
+          withLabel (Label "foo") $ do
+              info "This is simple log 2"
+
+  ```
+
+  + Logging with ThreadId:
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module Main where
+
+  import Control.Monad.Log
+  import Control.Monad.IO.Class
+  import Control.Monad
+  import Control.Concurrent
+  import Control.Monad.Log.LogThreadId
+
+  -- Following log will be output to stdout:
+  -- [INFO] [25-Apr-2016 15:06:10] [ThreadId 671] This is simple log 1
+  -- [INFO] [25-Apr-2016 15:06:10] [ThreadId 674] This is simple log 2
+  -- [INFO] [25-Apr-2016 15:06:10] [ThreadId 675] This is simple log 2
+  -- [INFO] [25-Apr-2016 15:06:10] [ThreadId 676] This is simple log 2
+  -- [INFO] [25-Apr-2016 15:06:10] [ThreadId 677] This is simple log 2
+  -- [INFO] [25-Apr-2016 15:06:10] [ThreadId 678] This is simple log 2
+  -- [INFO] [25-Apr-2016 15:06:10] [ThreadId 679] This is simple log 2
+  ...
+
+  main :: IO ()
+  main = do
+      tid <- myLogThreadId
+      logger <- makeDefaultLogger
+          simpleTimeFormat'
+          (LogStdout 4096)
+          levelDebug
+          tid
+
+      runLogTSafe logger $ do
+          info "This is simple log 1"
+
+      replicateM_ 100 $
+          forkIO . runLogT' logger . withMyLogThreadId $ do
+              info "This is simple log 2"
+  ```
+
+  + Customized logging environment:
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+  {-# LANGUAGE TemplateHaskell #-}
+  {-# LANGUAGE FlexibleContexts #-}
+
+  module Main where
+
+  import Control.Monad.Log
+  import Control.Monad.Log.LogLoc
+  import Control.Monad.Log.NameSpace
+  import Data.Aeson.TH
+  import Data.Text (Text)
+
+  -- Following JSON log will be output to stdout:
+  -- {"level":"INFO","time":"25-Apr-2016 13:54:32"
+  -- ,"env":{"loc":{"filename":"Test.hs","module":"Test","package":"monad_GM54RwU2jZ84vGJIhnMYMH","line":33},"ns":["root"]}
+  -- ,"msg":"This is simple log 1"}
+  -- {"level":"INFO","time":"25-Apr-2016 13:54:32"
+  -- ,"env":{"loc":{"filename":"Test.hs","module":"Test","package":"monad_GM54RwU2jZ84vGJIhnMYMH","line":33},"ns":["foo","root"]}
+  -- ,"msg":"This is simple log 2"}
+
+  -- | Define your logging environment type.
+  -- To use 'defaultFomatter', provide a 'TextShow' instance
+  -- To use 'defaultJSONFomatter', provide a 'ToJSON' instance
+
+  data MyEnv = MyEnv {
+          loc :: LogLoc  -- This is shared by every log within one 'MonadLog'.
+      ,   ns  :: NameSpace
+      } deriving (Show, Eq)
+
+  $(deriveJSON defaultOptions ''MyEnv)
+
+  subMyNS :: (MonadLog MyEnv m) => Text -> m a -> m a
+  subMyNS sub = localEnv $ \env -> env { ns = pushNameSpace sub (ns env) }
+
+  main :: IO ()
+  main = do
+      logger <- makeDefaultJSONLogger
+          simpleTimeFormat'
+          (LogStdout 4096)
+          levelDebug
+          (MyEnv $myLogLoc (NameSpace ["root"]))
+
+      runLogTSafe logger $ do
+          info "This is simple log 1"
+
+          subMyNS "foo" $ do
+              info "This is simple log 2"
+
+  ```
 description-type: markdown
-description: ! "A fast & simple logging monad\n=============================\n\n[![Hackage](https://img.shields.io/hackage/v/monad-log.svg?style=flat-square)](http://hackage.haskell.org/package/monad-log)\n[![Travis-CI](https://travis-ci.org/winterland1989/monad-log.svg?style=flat-square)](https://travis-ci.org/winterland1989/monad-log)\n\nThis
-  package provide a mtl style `MonadLog` class and a concrete monad transformer `LogT`,
-  the main difference between this package and monad-logger are:\n\n+ Base monad has
-  to be an instance of `MonadIO`.\n\n+ Parametrized logging environment for extensibility.\n\n+
-  Basic logging environment type(`Label`,`Loc`,`NameSpace`,`ThreadId`) are included,
-  and you can easily make your own.\n\n+ JSON logging built-in.\n\n+ default to fast-logger
-  backend, with good stdout and file support.\n\nIf you are an application author,
-  you can use `LogT` transformer, a specialized reader monad to inject `Logger env`.\n\nIf
-  you are a library author, you should:\n\n+ make your monad stack an instance of
-  'MonadLog', usually you can do this by embedding `Logger env` into your monad's
-  reader part.\n\n+ provide a default formatter, and API to run with customized formatter.\n\nExample\n-------\n\n+
-  A simple labelled logger:\n\n```haskell\n{-# LANGUAGE OverloadedStrings #-}\n\nmodule
-  Main where\n\nimport Control.Monad.Log\nimport Control.Monad.Log.Label\n\n-- Following
-  log will be output to stdout:\n-- [INFO] [25-Apr-2016 12:51:56] [main] This is simple
-  log 1\n-- [INFO] [25-Apr-2016 12:51:56] [foo] This is simple log 2\n\nmain :: IO
-  ()\nmain = do\n    logger <- makeDefaultLogger\n        simpleTimeFormat'\n        (LogStdout
-  4096)\n        levelDebug\n        (Label \"main\")\n\n    runLogTSafe logger $
-  do\n        info \"This is simple log 1\"\n\n        withLabel (Label \"foo\") $
-  do\n            info \"This is simple log 2\"\n\n```\n\n+ Logging with ThreadId:\n\n```haskell\n{-#
-  LANGUAGE OverloadedStrings #-}\n\nmodule Main where\n\nimport Control.Monad.Log\nimport
-  Control.Monad.IO.Class\nimport Control.Monad\nimport Control.Concurrent\nimport
-  Control.Monad.Log.LogThreadId\n\n-- Following log will be output to stdout:\n--
-  [INFO] [25-Apr-2016 15:06:10] [ThreadId 671] This is simple log 1\n-- [INFO] [25-Apr-2016
-  15:06:10] [ThreadId 674] This is simple log 2\n-- [INFO] [25-Apr-2016 15:06:10]
-  [ThreadId 675] This is simple log 2\n-- [INFO] [25-Apr-2016 15:06:10] [ThreadId
-  676] This is simple log 2\n-- [INFO] [25-Apr-2016 15:06:10] [ThreadId 677] This
-  is simple log 2\n-- [INFO] [25-Apr-2016 15:06:10] [ThreadId 678] This is simple
-  log 2\n-- [INFO] [25-Apr-2016 15:06:10] [ThreadId 679] This is simple log 2\n...\n\nmain
-  :: IO ()\nmain = do\n    tid <- myLogThreadId\n    logger <- makeDefaultLogger\n
-  \       simpleTimeFormat'\n        (LogStdout 4096)\n        levelDebug\n        tid\n\n
-  \   runLogTSafe logger $ do\n        info \"This is simple log 1\"\n\n    replicateM_
-  100 $\n        forkIO . runLogT' logger . withMyLogThreadId $ do\n            info
-  \"This is simple log 2\"\n```\n\n+ Customized logging environment:\n\n```haskell\n{-#
-  LANGUAGE OverloadedStrings #-}\n{-# LANGUAGE TemplateHaskell #-}\n{-# LANGUAGE FlexibleContexts
-  #-}\n\nmodule Main where\n\nimport Control.Monad.Log\nimport Control.Monad.Log.LogLoc\nimport
-  Control.Monad.Log.NameSpace\nimport Data.Aeson.TH\nimport Data.Text (Text)\n\n--
-  Following JSON log will be output to stdout:\n-- {\"level\":\"INFO\",\"time\":\"25-Apr-2016
-  13:54:32\"\n-- ,\"env\":{\"loc\":{\"filename\":\"Test.hs\",\"module\":\"Test\",\"package\":\"monad_GM54RwU2jZ84vGJIhnMYMH\",\"line\":33},\"ns\":[\"root\"]}\n--
-  ,\"msg\":\"This is simple log 1\"}\n-- {\"level\":\"INFO\",\"time\":\"25-Apr-2016
-  13:54:32\"\n-- ,\"env\":{\"loc\":{\"filename\":\"Test.hs\",\"module\":\"Test\",\"package\":\"monad_GM54RwU2jZ84vGJIhnMYMH\",\"line\":33},\"ns\":[\"foo\",\"root\"]}\n--
-  ,\"msg\":\"This is simple log 2\"}\n\n-- | Define your logging environment type.\n--
-  To use 'defaultFomatter', provide a 'TextShow' instance\n-- To use 'defaultJSONFomatter',
-  provide a 'ToJSON' instance\n\ndata MyEnv = MyEnv {\n        loc :: LogLoc  -- This
-  is shared by every log within one 'MonadLog'.\n    ,   ns  :: NameSpace\n    } deriving
-  (Show, Eq)\n\n$(deriveJSON defaultOptions ''MyEnv)\n\nsubMyNS :: (MonadLog MyEnv
-  m) => Text -> m a -> m a\nsubMyNS sub = localEnv $ \\env -> env { ns = pushNameSpace
-  sub (ns env) }\n\nmain :: IO ()\nmain = do\n    logger <- makeDefaultJSONLogger\n
-  \       simpleTimeFormat'\n        (LogStdout 4096)\n        levelDebug\n        (MyEnv
-  $myLogLoc (NameSpace [\"root\"]))\n\n    runLogTSafe logger $ do\n        info \"This
-  is simple log 1\"\n\n        subMyNS \"foo\" $ do\n            info \"This is simple
-  log 2\"\n\n```\n"
+hash: 35297bec3e2c8483b8e291ff62e5cb5d2aa01e24a7563812648f213e1b1eace2
+homepage: ''
+latest: 0.1.1.0
 license-name: MIT
+maintainer: winterland1989@gmail.com
+synopsis: A simple and fast logging monad
+test-bench-deps: {}

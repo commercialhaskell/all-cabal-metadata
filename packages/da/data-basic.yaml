@@ -1,78 +1,3 @@
-homepage: https://gitlab.com/haskell-hr/basic
-changelog-type: markdown
-hash: fe528299add38c08cb78c6ea412547990f20fc76a1d4e2107935d03442e53cb4
-test-bench-deps:
-  base: -any
-  time: -any
-  string-conv: -any
-  lens: -any
-  data-basic: -any
-  postgresql-simple: -any
-  aeson: -any
-maintainer: nikola@henezi.com, luka.horvat9@gmail.com
-synopsis: A database library with a focus on ease of use, type safety and useful error
-  messages
-changelog: ! '# 0.3.0.0
-
-  * rawQuery functionality
-
-  * exported boolean operations
-
-  * logging support through simple-logging
-
-  * support for quoted SQL identifiers
-
-  * IsNull and IsNotNull
-
-  * synonyms for gettable and settable fields
-
-  * true and false boolean literals
-
-  * proper Eq and Ord instances for entities
-
-  * bytea support
-
-  * numeric and date type support
-
-  * like and ilike
-
-  * Show instance for entities serializes to JSON
-
-  * toFreshEntity for converting from a database entity
-
-  * proper grouping for boolean operations in generated SQL
-
-  * support for composite types and PostgreSQL arrays
-
-  * GHC 8.2.2 support
-
-
-  # 0.2.0.1
-
-  * Simple documentation fixes
-
-'
-basic-deps:
-  bytestring: -any
-  simple-effects: ! '>=0.10.0.0'
-  lens-aeson: -any
-  cases: -any
-  base: ! '>=4.7 && <5'
-  time: -any
-  hssqlppp: -any
-  text: -any
-  overload: -any
-  containers: -any
-  string-conv: -any
-  lens: -any
-  binary: -any
-  postgresql-simple: -any
-  mtl: -any
-  simple-logging: -any
-  attoparsec: -any
-  scientific: -any
-  aeson: -any
-  template-haskell: ! '>=2.12.0.0'
 all-versions:
 - 0.2.0.0
 - 0.2.0.1
@@ -81,151 +6,352 @@ all-versions:
 - 0.2.0.4
 - 0.3.0.0
 author: Nikola Henezi, Luka Horvat
-latest: 0.3.0.0
+basic-deps:
+  aeson: '>=0'
+  attoparsec: '>=0'
+  base: '>=4.7 && <5'
+  binary: '>=0'
+  bytestring: '>=0'
+  cases: '>=0'
+  containers: '>=0'
+  hssqlppp: '>=0'
+  lens: '>=0'
+  lens-aeson: '>=0'
+  mtl: '>=0'
+  overload: '>=0'
+  postgresql-simple: '>=0'
+  scientific: '>=0'
+  simple-effects: '>=0.10.0.0'
+  simple-logging: '>=0'
+  string-conv: '>=0'
+  template-haskell: '>=2.12.0.0'
+  text: '>=0'
+  time: '>=0'
+changelog: |
+  # 0.3.0.0
+  * rawQuery functionality
+  * exported boolean operations
+  * logging support through simple-logging
+  * support for quoted SQL identifiers
+  * IsNull and IsNotNull
+  * synonyms for gettable and settable fields
+  * true and false boolean literals
+  * proper Eq and Ord instances for entities
+  * bytea support
+  * numeric and date type support
+  * like and ilike
+  * Show instance for entities serializes to JSON
+  * toFreshEntity for converting from a database entity
+  * proper grouping for boolean operations in generated SQL
+  * support for composite types and PostgreSQL arrays
+  * GHC 8.2.2 support
+
+  # 0.2.0.1
+  * Simple documentation fixes
+changelog-type: markdown
+description: |
+  This is a guide on how to get started with basic. Each commit to this repository represents a
+  single step of the guide.
+  We'll cover the motivation and the general description of the library and how to use it,
+  which consists of declaring your schema, generating the model and manipulating the data.
+
+  ### About
+  Basic is a database library with 4 main objectives, roughly prioritized from first to last.
+
+  #### Ease of use for the most common use cases
+  While SQL allows for a large number of ways to manipulate your data, people use a small subset of them in the majority of cases.
+
+  We aim to make these cases as painless as possible. It should never feel like you need to jump through
+  hoops to get a list of entities that satisfy a simple condition.
+
+  #### Type safety
+  The type level constraints should reflect your data constraints as best as possible. The library should never allow you to execute a query that doesn't make sense. Expressivity must never come before safety.
+
+  #### Flexibility
+  While we provide an escape hatch for writing raw queries to ensure you're never "stuck", the cases where it's needed should be few and far in between. If there's a way to provide an elegant and safe solution for a specific query, the library should allow it.
+
+  #### Ability to debug
+  If you mess up and/or something goes wrong we want to make it as easy as possible to fix it. Legible runtime errors are a must. Also, while Haskell libraries (especially the very "type safe" ones) are notorious for hard to understand compiler errors, we use custom type errors to try and cover some of the standard sources of mistakes. We try to provide useful descriptions of what went wrong and tips on how to fix it.
+
+  ### Getting started
+  Prerequisites that are not covered by the tutorial:
+  * A PostgreSQL installation
+  * A database with a desired role configuration
+  * A new stack project (simple template) with a dependency on basic that builds
+
+  As a database-first library, your model will come from an SQL schema. If you have an existing database, you can use tools like pg_dump to get the schema out. If you're developing a new database, you will declare your tables and relations in an SQL file and then use it to initialize the database and generate the basic model.
+
+  Start off by creating a `./model/schema.sql` file. We'll be creating a rudimentary blog so we'll need an author and a post table.
+
+  ```SQL
+  CREATE TABLE author (
+      id int not null primary key,
+      name text not null,
+      registration_date timestamp not null
+  );
+
+  CREATE TABLE post (
+      id int not null,
+      name text not null,
+      content text not null,
+      creation_date timestamp not null,
+      author int not null references author(id)
+  );
+
+  ```
+
+  Load the schema into the database you created before. For example like this `psql -U postgres -d basic_guide -f model/schema.sql`
+
+  Now it's time to generate the model. Create a new module in your `src` directory. Call it `Model`.
+
+  ```haskell
+  {-# LANGUAGE TemplateHaskell, DataKinds, FlexibleInstances, TypeFamilies, MultiParamTypeClasses #-}
+  {-# LANGUAGE DeriveGeneric, FlexibleContexts #-}
+  module Model where
+
+  import Data.Basic
+
+  mkFromFile "./model/schema.sql"
+  ```
+
+  Add it to your cabal file.
+
+  This will generate all the declarations that you'll need to use the library. You will import this module from every module that requires access to the DB. To see the generated declarations, you can open the repl with `stack repl` and type `:browse Model`.
+
+  ### Manipulating data
+  In your main module, import the `Model` and `Data.Basic` so we can start playing with data.
+  Let's start by inserting some data. All basic functions work in any monad with a `MonadEffect Basic` instance. Practically, this means it integrates well with a mtl-style codebase.
+
+  ```haskell
+  sandbox :: MonadEffect Basic m => m ()
+  sandbox = return ()
+  ```
+
+  For each table in your schema (say, author), basic will generate a new value called `newAuthor`. This represents a fresh table entry with no data. The underlying value is a record with one field for each column.
+
+  Before going futher, add dependencies to the `time`, `mtl`, `postgresql-simple` and `lens` libraries.
+
+  Basic uses the lens approach extensively and setting the fields is no exception. Here's how you do it
+
+  ```haskell
+  {-# LANGUAGE FlexibleContexts, OverloadedStrings #-}
+  module Main where
+
+  import Prelude hiding (id)
+  import Model
+  import Data.Basic (MonadEffect, Basic)
+  import Data.Time (getCurrentTime, getCurrentTimeZone, getCurrentTime, utcToLocalTime)
+  import Control.Monad.IO.Class (MonadIO(..))
+  import Data.Function ((&))
+  import Control.Lens ((.~))
+
+  sandbox :: (MonadEffect Basic m, MonadIO m) => m ()
+  sandbox = do
+      zone <- liftIO getCurrentTimeZone
+      now <- liftIO getCurrentTime
+      newAuthor
+          & id .~ 0
+          & name .~ "John"
+          & registrationDate .~ utcToLocalTime zone now
+          & print
+          & liftIO
+
+  main :: IO ()
+  main = putStrLn "hello world"
+  ```
+
+  Let's unpack this a bit. We first do a bit of `time` boilerplate to get the current `LocalTime`. Then we use the lens syntax to set fields. If you haven't seen it before, the pattern is `record & field .~ value`. This returns a new record so we can continue chaining. The `&` operator is actually the flipped version of `$` so we use it also to print the final value and lift that IO operation into our monad.
+
+  Now, there's no instance `MonadEffect Basic IO` because the regular old `IO` monad doesn't know anything about your database. To handle that constraint we use the `handleBasicPsql` function. It takes a database connection which we can get using the `connectPostgreSQL` function provided by `postgresql-simple`. So what we do is `handleBasicPsql conn sandbox` and it will provide the database functionality that `sandbox` needs, take care of that constraint leaving only the `MonadIO` of which the `IO` monad is an instance. Here's the final version of our `Main` module.
+
+  ```haskell
+  {-# LANGUAGE FlexibleContexts, OverloadedStrings #-}
+  module Main where
+
+  import Prelude hiding (id)
+  import Model
+  import Data.Basic (MonadEffect, Basic, handleBasicPsql)
+  import Data.Time (getCurrentTime, getCurrentTimeZone, getCurrentTime, utcToLocalTime)
+  import Control.Monad.IO.Class (MonadIO(..))
+  import Data.Function ((&))
+  import Control.Lens ((.~))
+  import Database.PostgreSQL.Simple
+
+  sandbox :: (MonadEffect Basic m, MonadIO m) => m ()
+  sandbox = do
+      zone <- liftIO getCurrentTimeZone
+      now <- liftIO getCurrentTime
+      newAuthor
+          & id .~ 0
+          & name .~ "John"
+          & registrationDate .~ utcToLocalTime zone now
+          & print
+          & liftIO
+
+  main :: IO ()
+  main = do
+      conn <- connectPostgreSQL "host=localhost port=5432 user=postgres dbname=basic_guide password=admin"
+      handleBasicPsql conn sandbox
+  ```
+  > make sure to modify the connection string
+
+  And guess what, we can actually run the thing now! Compile the project and run it, you should see something like:
+  ```haskell
+  Entity {_getEntity = Author {_author_id = 0, _author_name = "John", _author_registration_date = 2017-06-09 23:11:16.0531469}}
+  ```
+
+  You might complain that we didn't actually do anything with the database, and you're right, so let's actually insert this author in. How?
+
+  ```haskell
+      newAuthor
+          & id .~ 0
+          & name .~ "John"
+          & registrationDate .~ utcToLocalTime zone now
+          & insert
+          & void
+  ```
+  > add `insert` to the import list of `Data.Basic` and `import Control.Monad (void)`
+
+  Doesn't get much simpler than that.
+
+  Here's something cool. What if we forgot to set one of the required fields? Turns out, in basic, a partially filled in entity is a legitimate value. You can use the lens syntax to look at it's fields, you can even serialize it to JSON and back. The cool part is that you can't mess up by accessing an undefined field. Basic enforces this at the type level. Go ahead and try removing the `& name .~ "John"` line. When you try to compile it you should see something like
+
+  ```
+  * Can't insert entity because the required field "name" is not set
+  ```
+
+  ### Querying data
+  Let's start by inserting a bunch of rows so we have something to work with.
+
+  ```haskell
+  sandbox :: (MonadEffect Basic m, MonadIO m) => m ()
+  sandbox = do
+      zone <- liftIO getCurrentTimeZone
+      now <- liftIO getCurrentTime
+      let localNow = utcToLocalTime zone now
+      newAuthor
+          & id .~ 0
+          & name .~ "John"
+          & registrationDate .~ localNow
+          & insert
+          & void
+
+      newAuthor
+          & id .~ 1
+          & name .~ "Mark"
+          & registrationDate .~ localNow
+          & insert
+          & void
+
+      newAuthor
+          & id .~ 2
+          & name .~ "Steve"
+          & registrationDate .~ localNow
+          & insert
+          & void
+
+      newPost
+          & id .~ 0
+          & author .~ 0
+          & creationDate .~ localNow
+          & content .~ "ABC"
+          & name .~ "ABC"
+          & insert
+          & void
+
+      newPost
+          & id .~ 1
+          & author .~ 1
+          & creationDate .~ localNow
+          & content .~ "DEF"
+          & name .~ "DEF"
+          & insert
+          & void
+
+      newPost
+          & id .~ 2
+          & author .~ 2
+          & creationDate .~ localNow
+          & content .~ "GHI"
+          & name .~ "GHI"
+          & insert
+          & void
+  ```
+
+  While, to ensure type safety, the types of basic functions are a bit hard to parse, you can follow a simplified mental model. What you do is pretend that every table is just a list of entries. To manipulate the data you use the analog of standard list functions (mapping, filtering, folding...)
+
+  Let's get a list of all posts.
+
+  ```haskell
+  posts <- allPosts -- Pretend `allPosts` has the type `[Post]`
+  ```
+
+  How about all posts with an id less than 2?
+
+  ```haskell
+  posts <- dfilter (\p -> (p ^. id) <. (2 :: Int)) allPosts
+  ```
+  > `^.` is from lens, `dfilter` and `<.` are from `Data.Basic`
+
+  What about sorting them by name? And maybe getting only the first one.
+
+  ```haskell
+  posts <- dtake 1 $ dsortOn (^. name) $ dfilter (\p -> (p ^. id) <. (2 :: Int)) allPosts
+  ```
+
+  Some operations you can't do on lists, like deleting their content. Doing it in basic is easy. Filter the rows you want to delete and call `ddelete` on the whole thing.
+
+  ```haskell
+  void $ ddelete $ dfilter (\p -> p ^. id ==. (1 :: Int)) allPosts
+  ```
+
+  You can also update the values using the lens syntax like this
+
+  ```haskell
+  void $ dupdate (\p -> p & id .~ (2 :: Int)) $ dfilter (\p -> p ^. id ==. (1 :: Int)) allPosts
+  ```
+
+  Want to find the highest id of all posts?
+
+  ```haskell
+  liftIO . print =<< dfoldMap (\p -> Max (p ^. id)) allPosts
+  ```
+
+  Things get more interesting with joins and groups. To join two tables you use the `djoin` function at the start and then pretend your working with a list of all possible pairs. For grouping, you use the `dgroupOn` function to choose which field(s) to group on. Pretend the signature is something like `dgroupOn :: (a -> b) -> [a] -> [(b, [a])]`. You can then either map over that and fold the inner list (`dmap` and `dfoldMap`) or use the `dfoldMapInner` convenience functions with the pretend type signature `dfoldMapInner :: Monoid m => (a -> m) -> [(b, [a])] -> [(b, m)]`.
+
+  ```haskell
+  res <-
+      dfoldMapInner (\(p, a) -> Max (p ^. id)) $
+      dgroupOn (\(p, a) -> a ^. id) $
+      dfilter (\(p, a) -> p ^. author ==. a ^. id) $
+      djoin allPosts allAuthors
+  ```
+
+  Join all posts and authors, then filter the list so you're left with pairs (post, author of the post). Then group them by the author and, for each author, get it's highest post id.
+
+  Entities also know if they're fresh or they came from the database. This let's you conveniently update single rows like this
+
+  ```haskell
+  [a] <- dfilter (\a -> a ^. id ==. (0 :: Int)) allAuthors
+  a & name .~ "New name"
+    & save
+    & void
+  ```
+
+  What it does is it looks for the database entry with the same primary key and updates all the other fields. This works if the table actually _has_ a primary key.
 description-type: markdown
-description: ! "This is a guide on how to get started with basic. Each commit to this
-  repository represents a\nsingle step of the guide.\nWe'll cover the motivation and
-  the general description of the library and how to use it,\nwhich consists of declaring
-  your schema, generating the model and manipulating the data.\n\n### About\nBasic
-  is a database library with 4 main objectives, roughly prioritized from first to
-  last.\n\n#### Ease of use for the most common use cases\nWhile SQL allows for a
-  large number of ways to manipulate your data, people use a small subset of them
-  in the majority of cases.\n\nWe aim to make these cases as painless as possible.
-  It should never feel like you need to jump through\nhoops to get a list of entities
-  that satisfy a simple condition.\n\n#### Type safety\nThe type level constraints
-  should reflect your data constraints as best as possible. The library should never
-  allow you to execute a query that doesn't make sense. Expressivity must never come
-  before safety.\n\n#### Flexibility\nWhile we provide an escape hatch for writing
-  raw queries to ensure you're never \"stuck\", the cases where it's needed should
-  be few and far in between. If there's a way to provide an elegant and safe solution
-  for a specific query, the library should allow it.\n\n#### Ability to debug\nIf
-  you mess up and/or something goes wrong we want to make it as easy as possible to
-  fix it. Legible runtime errors are a must. Also, while Haskell libraries (especially
-  the very \"type safe\" ones) are notorious for hard to understand compiler errors,
-  we use custom type errors to try and cover some of the standard sources of mistakes.
-  We try to provide useful descriptions of what went wrong and tips on how to fix
-  it.\n\n### Getting started\nPrerequisites that are not covered by the tutorial:\n*
-  A PostgreSQL installation\n* A database with a desired role configuration\n* A new
-  stack project (simple template) with a dependency on basic that builds\n\nAs a database-first
-  library, your model will come from an SQL schema. If you have an existing database,
-  you can use tools like pg_dump to get the schema out. If you're developing a new
-  database, you will declare your tables and relations in an SQL file and then use
-  it to initialize the database and generate the basic model.\n\nStart off by creating
-  a `./model/schema.sql` file. We'll be creating a rudimentary blog so we'll need
-  an author and a post table.\n\n```SQL\nCREATE TABLE author (\n    id int not null
-  primary key,\n    name text not null,\n    registration_date timestamp not null\n);\n\nCREATE
-  TABLE post (\n    id int not null,\n    name text not null,\n    content text not
-  null,\n    creation_date timestamp not null,\n    author int not null references
-  author(id)\n);\n\n```\n\nLoad the schema into the database you created before. For
-  example like this `psql -U postgres -d basic_guide -f model/schema.sql`\n\nNow it's
-  time to generate the model. Create a new module in your `src` directory. Call it
-  `Model`.\n\n```haskell\n{-# LANGUAGE TemplateHaskell, DataKinds, FlexibleInstances,
-  TypeFamilies, MultiParamTypeClasses #-}\n{-# LANGUAGE DeriveGeneric, FlexibleContexts
-  #-}\nmodule Model where\n\nimport Data.Basic\n\nmkFromFile \"./model/schema.sql\"\n```\n\nAdd
-  it to your cabal file.\n\nThis will generate all the declarations that you'll need
-  to use the library. You will import this module from every module that requires
-  access to the DB. To see the generated declarations, you can open the repl with
-  `stack repl` and type `:browse Model`.\n\n### Manipulating data\nIn your main module,
-  import the `Model` and `Data.Basic` so we can start playing with data.\nLet's start
-  by inserting some data. All basic functions work in any monad with a `MonadEffect
-  Basic` instance. Practically, this means it integrates well with a mtl-style codebase.\n\n```haskell\nsandbox
-  :: MonadEffect Basic m => m ()\nsandbox = return ()\n```\n\nFor each table in your
-  schema (say, author), basic will generate a new value called `newAuthor`. This represents
-  a fresh table entry with no data. The underlying value is a record with one field
-  for each column.\n\nBefore going futher, add dependencies to the `time`, `mtl`,
-  `postgresql-simple` and `lens` libraries.\n\nBasic uses the lens approach extensively
-  and setting the fields is no exception. Here's how you do it\n\n```haskell\n{-#
-  LANGUAGE FlexibleContexts, OverloadedStrings #-}\nmodule Main where\n\nimport Prelude
-  hiding (id)\nimport Model\nimport Data.Basic (MonadEffect, Basic)\nimport Data.Time
-  (getCurrentTime, getCurrentTimeZone, getCurrentTime, utcToLocalTime)\nimport Control.Monad.IO.Class
-  (MonadIO(..))\nimport Data.Function ((&))\nimport Control.Lens ((.~))\n\nsandbox
-  :: (MonadEffect Basic m, MonadIO m) => m ()\nsandbox = do\n    zone <- liftIO getCurrentTimeZone\n
-  \   now <- liftIO getCurrentTime\n    newAuthor\n        & id .~ 0\n        & name
-  .~ \"John\"\n        & registrationDate .~ utcToLocalTime zone now\n        & print\n
-  \       & liftIO\n\nmain :: IO ()\nmain = putStrLn \"hello world\"\n```\n\nLet's
-  unpack this a bit. We first do a bit of `time` boilerplate to get the current `LocalTime`.
-  Then we use the lens syntax to set fields. If you haven't seen it before, the pattern
-  is `record & field .~ value`. This returns a new record so we can continue chaining.
-  The `&` operator is actually the flipped version of `$` so we use it also to print
-  the final value and lift that IO operation into our monad.\n\nNow, there's no instance
-  `MonadEffect Basic IO` because the regular old `IO` monad doesn't know anything
-  about your database. To handle that constraint we use the `handleBasicPsql` function.
-  It takes a database connection which we can get using the `connectPostgreSQL` function
-  provided by `postgresql-simple`. So what we do is `handleBasicPsql conn sandbox`
-  and it will provide the database functionality that `sandbox` needs, take care of
-  that constraint leaving only the `MonadIO` of which the `IO` monad is an instance.
-  Here's the final version of our `Main` module.\n\n```haskell\n{-# LANGUAGE FlexibleContexts,
-  OverloadedStrings #-}\nmodule Main where\n\nimport Prelude hiding (id)\nimport Model\nimport
-  Data.Basic (MonadEffect, Basic, handleBasicPsql)\nimport Data.Time (getCurrentTime,
-  getCurrentTimeZone, getCurrentTime, utcToLocalTime)\nimport Control.Monad.IO.Class
-  (MonadIO(..))\nimport Data.Function ((&))\nimport Control.Lens ((.~))\nimport Database.PostgreSQL.Simple\n\nsandbox
-  :: (MonadEffect Basic m, MonadIO m) => m ()\nsandbox = do\n    zone <- liftIO getCurrentTimeZone\n
-  \   now <- liftIO getCurrentTime\n    newAuthor\n        & id .~ 0\n        & name
-  .~ \"John\"\n        & registrationDate .~ utcToLocalTime zone now\n        & print\n
-  \       & liftIO\n\nmain :: IO ()\nmain = do\n    conn <- connectPostgreSQL \"host=localhost
-  port=5432 user=postgres dbname=basic_guide password=admin\"\n    handleBasicPsql
-  conn sandbox\n```\n> make sure to modify the connection string\n\nAnd guess what,
-  we can actually run the thing now! Compile the project and run it, you should see
-  something like:\n```haskell\nEntity {_getEntity = Author {_author_id = 0, _author_name
-  = \"John\", _author_registration_date = 2017-06-09 23:11:16.0531469}}\n```\n\nYou
-  might complain that we didn't actually do anything with the database, and you're
-  right, so let's actually insert this author in. How?\n\n```haskell\n    newAuthor\n
-  \       & id .~ 0\n        & name .~ \"John\"\n        & registrationDate .~ utcToLocalTime
-  zone now\n        & insert\n        & void\n```\n> add `insert` to the import list
-  of `Data.Basic` and `import Control.Monad (void)`\n\nDoesn't get much simpler than
-  that.\n\nHere's something cool. What if we forgot to set one of the required fields?
-  Turns out, in basic, a partially filled in entity is a legitimate value. You can
-  use the lens syntax to look at it's fields, you can even serialize it to JSON and
-  back. The cool part is that you can't mess up by accessing an undefined field. Basic
-  enforces this at the type level. Go ahead and try removing the `& name .~ \"John\"`
-  line. When you try to compile it you should see something like\n\n```\n* Can't insert
-  entity because the required field \"name\" is not set\n```\n\n### Querying data\nLet's
-  start by inserting a bunch of rows so we have something to work with.\n\n```haskell\nsandbox
-  :: (MonadEffect Basic m, MonadIO m) => m ()\nsandbox = do\n    zone <- liftIO getCurrentTimeZone\n
-  \   now <- liftIO getCurrentTime\n    let localNow = utcToLocalTime zone now\n    newAuthor\n
-  \       & id .~ 0\n        & name .~ \"John\"\n        & registrationDate .~ localNow\n
-  \       & insert\n        & void\n\n    newAuthor\n        & id .~ 1\n        &
-  name .~ \"Mark\"\n        & registrationDate .~ localNow\n        & insert\n        &
-  void\n\n    newAuthor\n        & id .~ 2\n        & name .~ \"Steve\"\n        &
-  registrationDate .~ localNow\n        & insert\n        & void\n\n    newPost\n
-  \       & id .~ 0\n        & author .~ 0\n        & creationDate .~ localNow\n        &
-  content .~ \"ABC\"\n        & name .~ \"ABC\"\n        & insert\n        & void\n\n
-  \   newPost\n        & id .~ 1\n        & author .~ 1\n        & creationDate .~
-  localNow\n        & content .~ \"DEF\"\n        & name .~ \"DEF\"\n        & insert\n
-  \       & void\n\n    newPost\n        & id .~ 2\n        & author .~ 2\n        &
-  creationDate .~ localNow\n        & content .~ \"GHI\"\n        & name .~ \"GHI\"\n
-  \       & insert\n        & void\n```\n\nWhile, to ensure type safety, the types
-  of basic functions are a bit hard to parse, you can follow a simplified mental model.
-  What you do is pretend that every table is just a list of entries. To manipulate
-  the data you use the analog of standard list functions (mapping, filtering, folding...)\n\nLet's
-  get a list of all posts.\n\n```haskell\nposts <- allPosts -- Pretend `allPosts`
-  has the type `[Post]`\n```\n\nHow about all posts with an id less than 2?\n\n```haskell\nposts
-  <- dfilter (\\p -> (p ^. id) <. (2 :: Int)) allPosts\n```\n> `^.` is from lens,
-  `dfilter` and `<.` are from `Data.Basic`\n\nWhat about sorting them by name? And
-  maybe getting only the first one.\n\n```haskell\nposts <- dtake 1 $ dsortOn (^.
-  name) $ dfilter (\\p -> (p ^. id) <. (2 :: Int)) allPosts\n```\n\nSome operations
-  you can't do on lists, like deleting their content. Doing it in basic is easy. Filter
-  the rows you want to delete and call `ddelete` on the whole thing.\n\n```haskell\nvoid
-  $ ddelete $ dfilter (\\p -> p ^. id ==. (1 :: Int)) allPosts\n```\n\nYou can also
-  update the values using the lens syntax like this\n\n```haskell\nvoid $ dupdate
-  (\\p -> p & id .~ (2 :: Int)) $ dfilter (\\p -> p ^. id ==. (1 :: Int)) allPosts\n```\n\nWant
-  to find the highest id of all posts?\n\n```haskell\nliftIO . print =<< dfoldMap
-  (\\p -> Max (p ^. id)) allPosts\n```\n\nThings get more interesting with joins and
-  groups. To join two tables you use the `djoin` function at the start and then pretend
-  your working with a list of all possible pairs. For grouping, you use the `dgroupOn`
-  function to choose which field(s) to group on. Pretend the signature is something
-  like `dgroupOn :: (a -> b) -> [a] -> [(b, [a])]`. You can then either map over that
-  and fold the inner list (`dmap` and `dfoldMap`) or use the `dfoldMapInner` convenience
-  functions with the pretend type signature `dfoldMapInner :: Monoid m => (a -> m)
-  -> [(b, [a])] -> [(b, m)]`.\n\n```haskell\nres <-\n    dfoldMapInner (\\(p, a) ->
-  Max (p ^. id)) $\n    dgroupOn (\\(p, a) -> a ^. id) $\n    dfilter (\\(p, a) ->
-  p ^. author ==. a ^. id) $\n    djoin allPosts allAuthors\n```\n\nJoin all posts
-  and authors, then filter the list so you're left with pairs (post, author of the
-  post). Then group them by the author and, for each author, get it's highest post
-  id.\n\nEntities also know if they're fresh or they came from the database. This
-  let's you conveniently update single rows like this\n\n```haskell\n[a] <- dfilter
-  (\\a -> a ^. id ==. (0 :: Int)) allAuthors\na & name .~ \"New name\"\n  & save\n
-  \ & void\n```\n\nWhat it does is it looks for the database entry with the same primary
-  key and updates all the other fields. This works if the table actually _has_ a primary
-  key.\n"
+hash: fe528299add38c08cb78c6ea412547990f20fc76a1d4e2107935d03442e53cb4
+homepage: https://gitlab.com/haskell-hr/basic
+latest: 0.3.0.0
 license-name: MIT
+maintainer: nikola@henezi.com, luka.horvat9@gmail.com
+synopsis: A database library with a focus on ease of use, type safety and useful error
+  messages
+test-bench-deps:
+  aeson: '>=0'
+  base: '>=0'
+  data-basic: '>=0'
+  lens: '>=0'
+  postgresql-simple: '>=0'
+  string-conv: '>=0'
+  time: '>=0'
