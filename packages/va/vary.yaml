@@ -1,0 +1,208 @@
+all-versions:
+- 0.1.0.0
+author: Marten Wijnja (Qqwy)
+basic-deps:
+  base: '>=4.7 && <5'
+  deepseq: '>=1.4.0 && <1.5'
+changelog: |
+  # Changelog for `vary`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## Unreleased
+
+  ## 0.1.0.0 - YYYY-MM-DD
+changelog-type: markdown
+description: "# Vary: friendly and fast Variant types for Haskell\n[![Hackage](http://img.shields.io/hackage/v/vary.svg)](https://hackage.haskell.org/package/vary)\n[![HackageDocumentation](https://img.shields.io/badge/documentation-available-blue)](https://hackage.haskell.org/package/vary/docs/Vary.html)\n[![test](https://github.com/Qqwy/haskell-vary/actions/workflows/test.yaml/badge.svg?branch=main)](https://github.com/Qqwy/haskell-vary/actions/workflows/test.yaml)\n\n\n[API
+  Documentation](https://hackage.haskell.org/package/vary/docs/Vary.html)\n\n\nJust
+  like tuples are a version of a user-defined product type (only without the field
+  names), a Variant is a version of a user-defined sum type (but without the field
+  names).\n\nVariant types are the generalization of `Either`. Especially in the situation
+  where you want to handle multiple errors, Variant types are a great abstraction
+  to use.\n\nVariant types are sometimes called '_polymorphic_ variants' for disambiguation.
+  They are also commonly known as (open) unions, coproducts or extensible sums.\n\n##
+  General Usage\n\n### Setup\n\nThe modules in this library are intended to be used
+  qualified:\n\n```haskell ignore\nimport Vary (Vary, (:|))\nimport qualified Vary\n\nimport
+  Vary.VEither (VEither(VLeft, VRight))\nimport qualified Vary.VEither as VEither\n```\n\nThe
+  library is intended to be used with the following extensions active:\n\n```haskell
+  top:0\n{-# LANGUAGE GHC2021 #-} -- Of these, Vary uses: TypeApplications, TypeOperators,
+  FlexibleContexts\n{-# LANGUAGE DataKinds #-}\n```\n\n### Simple usage\n\nYou can
+  construct `Vary` using `Vary.from`:\n\n```haskell\nint_or_string :: Bool -> Vary
+  '[Int, String]\nint_or_string bool = \n    if bool then \n        Vary.from @Int
+  42\n    else\n        Vary.from @String \"hello world\"\n\n-- You can also use the
+  more general type,\n-- which allows you to use a function to insert elements into
+  any variant\n-- that happens to contain the given type(s), \n-- regardless of order
+  or what other types are in its list:\nint_or_string2 :: (Int :| l, String :| l)
+  => Bool -> Vary l\nint_or_string2 bool = \n    if bool then \n        Vary.from
+  @Int 69\n    else\n        Vary.from @String \"I like cheese\"\n\n```\n\nYou can
+  check whether a particular variant is inside and attempt to extract it using `Vary.into`:\n\n```haskell\nmaybe_an_int
+  :: Bool -> Maybe Int\nmaybe_an_int bool = Vary.into @Int (int_or_string bool)\n```\n\nAnd
+  you can match the various possibilities using `Vary.on`, together with `Vary.exhaustiveCase`
+  if you've handled all cases:\n\n```haskell\nstringify vary = \n    vary & \n        (
+  Vary.on @String (\\string -> \"Found a string: \" <> show string)\n        $ Vary.on
+  @Int (\\int -> \"Found an int: \" <> show int)\n        $ Vary.exhaustiveCase\n
+  \       )\n```\n\nIt is generally recommended to keep the type generic at the place
+  you construct a `Vary` (using `Vary.from`), and make the type concrete at the place
+  you use it (for instance when using `Vary.on` or `Vary.into`).\n\nThis way, the
+  construction functions can be used in any context, regardless of what other possibilities
+  the caller might want to handle. (See also the 'motivation' example below).\n\nIn
+  some cases you already have a concrete `Vary` type, and you want to pass it to or
+  return it from a function expecting another shape (different order of elements,
+  having less or more elements). In those cases, `Vary.morph` will help you out :-).\n\n###
+  VEither\n\nYou have now seen `Vary`. There is the closely related type `VEither`.
+  Its runtime representation is the same. The difference between `Vary (a : errs)`
+  and `VEither errs a` is that while `Vary` considers all types in its list of possibilities
+  to be equal, `VEither` considers the `a` to be a 'success' (`VRight`), whereas any
+  of the types in `errs` are considered 'errors' (`VLeft`).\n\nThis means that `VEither`
+  can implement `Functor`, `Applicative`, `Monad`, `Foldable`, `Traversable`, `Generic`
+  and a few other fun typeclasses, making it really easy to use for error handling.\n\n##
+  Motivation: Why is 'Vary' useful?\n\n Say we are writing an image thumbnailing service.\n\n
+  * Given an image URL\n * We attempt to download it.\n     * This can fail, because
+  the URL is incorrect;\n     * Or the URL /is/ correct but the server could not be
+  reached (in which case we want to re-try later);\n     * Or the server /could/ be
+  reached, but downloading took longer than a set time limit.\n\n * We pass it to
+  a thumbnailing program.\n     * This can fail, because the downloaded file might
+  turn out actually not to be a valid image file (PNG or JPG);\n     * Or even if
+  the downloaded file /is/ an image, it might have a much too high resolution to attempt
+  to read;\n\n\n The first instinct might be to write dedicated sum types for these
+  errors like so:\n\n```haskell\ndata Image = Image\n  deriving (Eq, Show)\n\ndata
+  DownloaderError1\n    = IncorrectUrl1\n    | ServerUnreachable1\n    | DownloadingTimedOut1
+  \n  deriving (Eq, Ord, Show)\n\ndata ThumbnailError1\n    = NotAnImage1\n    | TooBigImage1\n
+  \ deriving (Eq, Ord, Show)\n\ndownload1 :: String -> Either DownloaderError1 Image\ndownload1
+  url = \n    -- Pretend we're doing hard work here\n    Right Image\n\nthumbnail1
+  :: Image -> Either ThumbnailError1 Image\nthumbnail1 image = \n    -- Pretend we're
+  huffing and puffing\n    Right Image\n```\n\nBut if we try to plainly combine these
+  two functions, we get a compiler error:\n\n```haskell\nthumbnailService1 url = do\n
+  \   image <- download1 url\n    thumb <- thumbnail1 image\n    pure thumb\n```\n\n```\nerror:\n
+  \   • Couldn't match type ‘ThumbnailError’ with ‘DownloaderError’\n      Expected:
+  Either DownloaderError Image\n        Actual: Either ThumbnailError Image\n```\n\n\nWe
+  could \\'solve\\' this problem by adding yet another manual error type:\n\n```haskell\ndata
+  ThumbnailServiceError1\n    = DownloaderError1 DownloaderError1\n    | ThumbnailError1
+  ThumbnailError1\n      deriving (Eq, Ord, Show)\n\nthumbnailService2 :: String ->
+  Either ThumbnailServiceError1 Image\nthumbnailService2 url = do\n    image <- first
+  DownloaderError1 $ download1 url\n    thumb <- first ThumbnailError1 $ thumbnail1
+  image\n    pure thumb\n```\n\n\nThis 'works', although already we can see that we're
+  doing a lot of manual ceremony to pass the errors around.\n\nAnd wait! We wanted
+  to re-try in the case of a `ServerUnreachable` error!\n\n```haskell\nwaitAndRetry
+  = undefined :: Word -> (() -> a)  -> a\n\nthumbnailServiceRetry2 :: String -> Either
+  ThumbnailServiceError1 Image\nthumbnailServiceRetry2 url = \n  case download1 url
+  of\n    Left ServerUnreachable1 -> waitAndRetry 10 (\\_ -> thumbnailServiceRetry2
+  url) \n    Left other -> Left (DownloaderError1 other)\n    Right image -> do\n
+  \     thumb <- first ThumbnailError1 $ thumbnail1 image\n      pure thumb\n```\n\nWe
+  now see:\n\n- Even inside `thumbnailService` there now is quite a bit of ceremony
+  \n  w.r.t. wrapping,unwrapping and mapping between error types.\n- Callers will
+  be asked to pattern match on the @ServerUnreachable@ error case,\n  even though
+  that case will already be handled inside the `thumbnailService` function itself!\n-
+  Imagine what happens when using this small function in a bigger system with many
+  more errors!\n  Do you keep defining more and more wrapper types for various combinations
+  of errors?\n\n#### There is a better way!\n\nWith the `Vary` and related `Vary.VEither.VEither`
+  types, you can mix and match individual errors (or other types) at the places they
+  are used.\n\n```haskell top:2\nimport Vary (Vary, (:|))\nimport qualified Vary\nimport
+  Vary.VEither (VEither(..))\nimport qualified Vary.VEither as VEither\n```\n```haskell\ndata
+  IncorrectUrl2 = IncorrectUrl2 deriving (Eq, Ord, Show)\ndata ServerUnreachable2
+  = ServerUnreachable2 deriving (Eq, Ord, Show)\ndata DownloadingTimedOut2 = DownloadingTimedOut2
+  deriving (Eq, Ord, Show)\n\ndata NotAnImage2 = NotAnImage2 deriving (Eq, Ord, Show)\ndata
+  TooBigImage2 = TooBigImage2 deriving (Eq, Ord, Show)\n\ndownload :: (ServerUnreachable2
+  :| err, IncorrectUrl2 :| err) => String -> VEither err Image\ndownload url = \n
+  \   -- Pretend a lot of network communication happens here\n    VRight Image\n\nthumbnail
+  :: (NotAnImage2 :| err, TooBigImage2 :| err) => Image -> VEither err Image\nthumbnail
+  image = \n    -- Pretend this is super hard\n    VRight Image\n```\n\nHere is the
+  version without the retry:\n\n```haskell\nthumbnailService :: String -> VEither
+  [ServerUnreachable2, IncorrectUrl2, NotAnImage2, TooBigImage2] Image\nthumbnailService
+  url = do\n  image <- download url\n  thumb <- thumbnail image\n  pure thumb\n```\n\nAnd
+  here is all that needed to change to have a retry:\n\n```haskell\nthumbnailServiceRetry
+  :: String -> VEither [IncorrectUrl2, NotAnImage2, TooBigImage2] Image\nthumbnailServiceRetry
+  url = do\n  image <- download url \n           & VEither.onLeft (\\ServerUnreachable2
+  -> waitAndRetry 10 (\\_ -> thumbnailServiceRetry url)) id\n  thumb <- thumbnail
+  image\n  pure thumb\n```\n\n- No more wrapper type definitions!\n- Handing an error
+  makes it disappear from the output type!\n\n## Why anoher Variant library?\n\nI
+  am aware of the following Haskell libraries offering support for Variant types already:\n\n-
+  [vinyl](https://hackage.haskell.org/package/vinyl)\n- [extensible](https://hackage.haskell.org/package/extensible)\n-
+  [freer](https://hackage.haskell.org/package/freer)\n- [fastsum](https://hackage.haskell.org/package/fastsum)\n-
+  [union](https://hackage.haskell.org/package/union)\n- [open-union](https://hackage.haskell.org/package/open-union)\n-
+  [world-peace](https://hackage.haskell.org/package/world-peace)\n- [haskus-utils-variant](https://hackage.haskell.org/package/haskus-utils-variant)\n\nVary
+  improves upon them in the following ways:\n\n- Function names in these libraries
+  are long and repetitive, and often seem to be very different from names used elsewhere
+  in `base` or the community.\n  - `Vary` is intended to be used `qualified`, making
+  the function names short and snappy, and allowing re-use of names like `map`, `from`,
+  `on` and `into`.\n- Many libraries define their variant type using a [Higher Kinded
+  Data](https://reasonablypolymorphic.com/blog/higher-kinded-data/) pattern. This
+  is really flexible, but not easy on the eyes.\n  - `Vary`'s type is readable, which
+  is what you want for the common case of using them for error handling.\n  - It also
+  means less manual type signatures are needed :-).\n- Many libraries (exceptions:
+  `fastsum`, `haskus`) define their variant as a GADT-style linked-list-like datatype.
+  The advantage is that you need no `unsafeCoerce` anywhere. The disadvantage is that
+  this has a huge runtime overhead.\n  - `Vary` uses a single (unwrapped, strict)
+  Word for the tag. GHC is able to optimize this representation very well!\n  - Conversion
+  between different variant shapes are also constant-time, as only this tag number
+  needs to change.\n- With the exception of `world-peace` and `haskus`, documentation
+  of the libraries is very sparse.\n  - All of the functions in `Vary` are documented
+  and almost all of them have examples. ([Doctested](https://github.com/martijnbastiaan/doctest-parallel#readme)
+  by the way!)\n- The libraries try to make their variant be 'everything it can possibly
+  be' and provide not only functions to work with variants by type, but also by index,
+  popping, pushing, concatenating, handling all cases using a tuple of functions,
+  etc. This makes it hard for a newcomer to understand what to use when.\n  - `Vary`
+  intentionally only exposes functions to work _by type_.\n  - There is _one_ way
+  to do case analysis of a `Vary`, namely using `Vary.on`. Only one thing to remember!\n
+  \ - Many shape-modification functions were combined inside `Vary.morph`, so you
+  only ever need that one!\n  - Only the most widely-useful functions are provided
+  in `Vary` itself. There are some extra functions in `Vary.Utils` which are intentionally
+  left out of the main module to make it more digestible for new users. \n- Libraries
+  are already many years old (with no newer updates), and so they are not using any
+  of the newer GHC extensions or inference improvements.\n  - `Vary` makes great use
+  of the `GHC2021` group of extensions, TypeFamilies and the `TypeError` construct
+  to make most type errors disappear and for the few that remain it should be easy
+  to understand how to fix them.\n\n## Acknowledgements\n\nThis library stands on
+  the shoulders of giants.\n\nIn big part it was inspired by the great Variant abstraction
+  [which exists in PureScript](https://pursuit.purescript.org/packages/purescript-variant/8.0.0)
+  (and related [VEither](https://pursuit.purescript.org/packages/purescript-veither/1.0.5)).\n\nWhere
+  PureScript has a leg up over Haskell is in its support of row types. To make the
+  types nice to use in Haskell even lacking row typing support was a puzzle in which
+  the [Effectful](https://github.com/haskell-effectful/effectful) library gave great
+  inspiration (and some type-level trickery was copied essentially verbatim from there.)\n\nFinally,
+  a huge shoutout to the pre-existing Variant libraries in Haskell. Especially to
+  [haskus-utils-variant](https://hackage.haskell.org/package/haskus-utils-variant)
+  and [world-peace](https://hackage.haskell.org/package/world-peace) and the resources
+  found in [this blog post](https://functor.tokyo/blog/2019-07-11-announcing-world-peace)
+  by world-peace's author.\n\n## Is it any good?\n\nYes ;-)\n\n<!-- \nThe following
+  is executed by the README test runner,\nbut we don't want it to be visible to human
+  readers:\n\n```haskell top:1\n{-# OPTIONS_GHC -fdefer-type-errors #-} -- We want
+  to show some incorrect examples!\nmodule Main where\n\nimport Test.Hspec (hspec,
+  describe, it, shouldBe)\nimport Test.ShouldNotTypecheck (shouldNotTypecheck)\nimport
+  Data.Bifunctor (first)\nimport Data.Function ((&))\n\n```\n\n```haskell\nmain ::
+  IO ()\nmain = hspec $ do\n  describe \"simple examples\" $ do\n    it \"string_or_int\"
+  $ do\n      int_or_string True `shouldBe` (Vary.from @Int 42)\n      int_or_string
+  False `shouldBe` (Vary.from @String \"hello world\")\n    it \"maybe_an_int\" $
+  do\n      maybe_an_int True `shouldBe` (Just 42)\n      maybe_an_int False `shouldBe`
+  Nothing\n    it \"stringify\" $ do\n      stringify (int_or_string2 True) `shouldBe`
+  \"Found an int: 69\"\n      stringify (int_or_string2 False) `shouldBe` \"Found
+  a string: \\\"I like cheese\\\"\"\n\n\n  describe \"motivating example\" $ do\n
+  \   describe \"bad v1\" $ do\n      it \"should not typecheck\" $\n        shouldNotTypecheck
+  (thumbnailService1)\n    describe \"bad v2\" $ do\n      it \"should work (but be
+  verbose)\" $\n        thumbnailService2 \"http://example.com\" `shouldBe` (Right
+  Image)\n    describe \"bad v2 (wth retry)\" $ do\n      it \"should work (but be
+  super verbose)\" $\n        thumbnailServiceRetry2 \"http://example.com\" `shouldBe`
+  (Right Image)\n    describe \"nice\" $ do\n      it \"should work nicely\" $\n        thumbnailService
+  \"http://example.com\" `shouldBe` (VRight Image)\n    describe \"nice (with retry)\"
+  $ do\n      it \"should work nicely\" $\n        thumbnailServiceRetry \"http://example.com\"
+  `shouldBe` (VRight Image)\n```\n-->\n"
+description-type: markdown
+hash: 19ffc16d93eba00c020bdae8c6fcb89f328c52f95abce806e9a132c93e93c260
+homepage: https://github.com/qqwy/haskell-vary#readme
+latest: 0.1.0.0
+license-name: MIT
+maintainer: qqwy@gmx.com
+synopsis: 'Vary: Friendly and fast polymorphic variants (open unions/coproducts/extensible
+  sums)'
+test-bench-deps:
+  base: '>=4.7 && <5'
+  deepseq: '>=1.4.0 && <1.5'
+  doctest-parallel: '>=0'
+  hspec: '>=0'
+  markdown-unlit: '>=0'
+  should-not-typecheck: '>=0'
+  vary: '>=0'
