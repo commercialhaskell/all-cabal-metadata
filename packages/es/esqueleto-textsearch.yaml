@@ -1,6 +1,7 @@
 all-versions:
 - 1.0.0.3
 - 1.1.0
+- 1.1.1
 author: Alberto Valverde González
 basic-deps:
   base: '>=4.9 && <5'
@@ -9,21 +10,58 @@ basic-deps:
   persistent: '>=2.8.2 && <2.15'
   persistent-postgresql: '>=2.10 && <2.15'
   text: '>=1.2 && <2.2'
-changelog: "# Change log for esqueleto text search \n\n## Version 1.1.0\n\n+ Removed
-  weird patch numbering\n+ added a saner api for doing actual search.\n+ improve documentation.\n+
-  bump text\n+ drop data default dependency.\n\n\n## Version 1.0.0.3 \n\ninitial version,
-  uploaded from:\nhttps://github.com/creichert/esqueleto-textsearch\n"
+changelog: "# Change log for esqueleto text search \n\n## Version 1.1.1\n+ add tutorial
+  in the readme\n\n## Version 1.1.0\n\n+ Removed weird patch numbering\n+ added a
+  saner api for doing actual search.\n+ improve documentation.\n+ bump text\n+ drop
+  data default dependency.\n\n\n## Version 1.0.0.3 \n\ninitial version, uploaded from:\nhttps://github.com/creichert/esqueleto-textsearch\n"
 changelog-type: markdown
-description: "# esqueleto-fts\nHaskell bindings for postgres full text search in esqueleto.\nfor
-  a good explenation see https://rachbelaid.com/postgres-full-text-search-is-good-enough/\n\nyou
+description: "# esqueleto-textsearch\nHaskell bindings for postgres full text search
+  in esqueleto.\nfor a good explenation see https://rachbelaid.com/postgres-full-text-search-is-good-enough/\n\nyou
   can turn postgres into a database that is similar\nin performance for search as
-  elastic search, without having \nto deal with elastic search.\n"
+  elastic search, without having \nto deal with elastic search.\n\n## Tutorial\n\n1.
+  decide which fields you want to search for,\n   this can be from several tables\n2.
+  setup a materialized view with the fields, for example:\n```sql\nCREATE MATERIALIZED
+  VIEW public.companies_search_index AS\n SELECT c.id,\n    c.name,\n    c.type,\n
+  \   c.trade,\n    countries.name AS domicile,\n    p.name AS parent,\n    c.is_archived,\n
+  \   COALESCE(string_agg((cd.name)::text, ', '::text), ''::text) AS domains,\n    (((((setweight(to_tsvector((c.name)::text),
+  'A'::\"char\") || setweight(to_tsvector((COALESCE(c.type, ''::character varying))::text),
+  'D'::\"char\")) || setweight(to_tsvector((c.trade)::text), 'D'::\"char\")) || setweight(to_tsvector((COALESCE(countries.name,
+  ''::character varying))::text), 'C'::\"char\")) || setweight(to_tsvector((COALESCE(p.name,
+  ''::character varying))::text), 'B'::\"char\")) || setweight(to_tsvector(COALESCE(string_agg((cd.name)::text,
+  ' '::text), ''::text)), 'A'::\"char\")) AS document\n   FROM (((public.companies
+  c\n     LEFT JOIN public.countries ON ((countries.id = c.domicile)))\n     LEFT
+  JOIN public.companies p ON ((p.id = c.parent)))\n     LEFT JOIN public.company_domains
+  cd ON ((cd.company_id = c.id)))\n  GROUP BY c.id, p.parent, c.name, c.type, c.trade,
+  countries.name, p.name\n  WITH NO DATA;\n```\nthe [blogpost](https://rachbelaid.com/postgres-full-text-search-is-good-enough/)
+  describes better what goes on here.\n\n3. Create an associated persistent model
+  to convince esqueleto this is a table\n\n```haskell\nmkPersistWith sqlSettings $(discoverEntities)
+  [persistLowerCase|\nCompanySearchIndex sql=companies_search_index\n  Id           CompanyId
+  -- in this case a 1 to 1 relation with the real company table\n  -- these fields
+  are mostly for debugging the document\n  name         Text\n  type         Text
+  Maybe\n  trade        Text\n  domicile     Text Maybe\n  parent       Text Maybe\n
+  \ domains      Text\n  -- we query based on the documeent, this is the important
+  bit.\n  document     TsVector\n  isArchived   Bool\n  deriving     Show\n|]\n\ninstance
+  ToBaseId CompanySearchIndex where\n  type BaseEnt CompanySearchIndex = Company\n
+  \ toBaseIdWitness = CompanySearchIndexKey\n```\n4. make sure to periodically refresh
+  this view, or setup database triggers to do that for you.\n```sql\nCREATE FUNCTION
+  public.refresh_companies_search_index() RETURNS trigger\n    LANGUAGE plpgsql\n
+  \   AS $$\nbegin\n    refresh materialized view companies_search_index;\n    return
+  null;\nend $$;\n\nCREATE TRIGGER refresh_companies_search_index AFTER INSERT OR
+  DELETE OR UPDATE OR TRUNCATE ON public.companies FOR EACH STATEMENT EXECUTE FUNCTION
+  public.refresh_companies_search_index();\n```\n5. use this library to search, for
+  example:\n```haskell\nimport Database.Esqueleto.TextSearch.Language(SearchTerm,
+  prefixAndQuery, ((@@.)), ts_rank)\nimport Database.Esqueleto.TextSearch.Types(defaultWeights)\n\nsearchCompany
+  :: SqlExpr (Entity CompanySearchIndex) -> SearchTerm -> SqlQuery ()\nsearchCompany
+  company term = do\n  let query = prefixAndQuery term\n      norm = val []\n  where_
+  $ (company ^. CompanySearchIndexDocument) @@. query\n  orderBy [desc (ts_rank (val
+  defaultWeights)\n                 (company ^. CompanySearchIndexDocument)\n                 query
+  norm)]\n```\n"
 description-type: markdown
-hash: 52b7ff070379a2c0d1cedb3bffc029651505877e8994724a0ede244a6ff3c606
-homepage: https://github.com/jappeace/esqueleto-textsearch
-latest: 1.1.0
+hash: 9d286c85721ea42ca898e5ebfcec58e680e39df43544de0ed2b453f216adfdbb
+homepage: https://github.com/SupercedeTech/esqueleto-textsearch-ii
+latest: 1.1.1
 license-name: MIT
-maintainer: jappie, hi@jappie.me
+maintainer: info@supercede.com
 synopsis: PostgreSQL full text search for Esqueleto
 test-bench-deps:
   HUnit: '>=0'
