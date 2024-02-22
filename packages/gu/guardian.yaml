@@ -1,14 +1,16 @@
 all-versions:
 - 0.4.0.0
+- 0.5.0.0
 author: DeepFlow, Inc.
 basic-deps:
   Cabal: '>=0'
   Cabal-syntax: '>=0'
   aeson: '>=0'
   algebraic-graphs: '>=0'
-  array: '>=0'
   base: '>=4.7 && <5'
-  cabal-install: '>=3.8'
+  bytestring-trie: '>=0'
+  cabal-install: '>=0'
+  case-insensitive: '>=0'
   containers: '>=0'
   dlist: '>=0'
   generic-lens: '>=0'
@@ -17,17 +19,19 @@ basic-deps:
   hashable: '>=0'
   indexed-traversable: '>=0'
   indexed-traversable-instances: '>=0'
-  microlens: '>=0'
+  language-dot: '>=0'
   optparse-applicative: '>=0'
+  parsec: '>=0'
   path: '>=0'
   path-io: '>=0'
+  regex-applicative-text: '>=0'
   rio: '>=0'
-  selective: '>=0'
   semigroups: '>=0'
   stack: '>=2.9'
   template-haskell: '>=0'
   text: '>=0'
   transformers: '>=0'
+  typed-process: '>=0'
   unordered-containers: '>=0'
   validation-selective: '>=0'
   vector: '>=0'
@@ -35,59 +39,79 @@ basic-deps:
 changelog: |
   # Changelog for guardian
 
+
+  ## 0.5.0.0
+
+  - Now guaridan can talk with external program to get a dependency graph!
+    + Currently, it supports Dot language as the only input format.
+    + This enables you to use guardian to maintain:
+      - non-Haskell projects
+      - the dependency between arbitrary entities not limited to packages, e.g. modules.
+    + See [`./dependency-domains-graphmod.yaml`](./dependency-domains-graphmod.yaml) for the example usage in conjunction with `graphmod` to maintain _module_ dependecy boundaries.
+  - Implements `wildcards` section: if `wildcards: true` is specified, you can use wildcard `*` in your domain entity definition.
+    + You cannot use wildcards in exceptional rule targets; this is intentional.
+  - Supports conditional builds: when you build guardian manually, you can disable unnecessary adapters.
+    Just turn off `cabal` and/or `stack` flags to disable corresponding adapters.
+  - Rework on GitHub Actions.
+  - Bumps up Cabal and Stack version. This should address the error when CABAL_DIR is not set to `~/.cabal`.
+
   ## 0.4.0.0
 
   - This is the first official OSS release! :tada:
 changelog-type: markdown
-description: "# guardian - The border guardian for your package dependencies\n\n-
-  [Introduction - How to keep your Haskell monorepo sane](#introduction---how-to-keep-your-haskell-monorepo-sane)\n
+description: "# guardian - The border guardian for your package dependencies\n\n[![Build
+  & Test](https://github.com/deepflowinc/guardian/actions/workflows/haskell.yml/badge.svg)](https://github.com/deepflowinc/guardian/actions/workflows/haskell.yml)\n![Hackage](https://img.shields.io/hackage/v/guardian)\n\nGuardian
+  enforces dependency boundary constraints and keeps your project dependencies sane.\nMainly
+  designed to apply to the package dependencies internal of a large Haskell monorepo,
+  but it can also be used with monorepos in other/multi languages or at the level
+  of modules.\n\n- [Introduction - How to keep your monorepo sane](#introduction---how-to-keep-your-monorepo-sane)\n
   \ + [Dependency Inversion Principle](#dependency-inversion-principle)\n  + [The
   emergence of Guardian - package dependency domain isolation in practice](#the-emergence-of-guardian---package-dependency-domain-isolation-in-practice)\n
   \ + [Summary](#summary)\n- [Installation](#installation)\n- [Usage](#usage)\n  +
   [Actual validation logic](#actual-validation-logic)\n  + [Syntax of `dependency-domains.yaml`](#syntax-of-dependency-domainsyaml)\n
   \   - [Domain Definition](#domain-definition)\n    - [Component Section](#component-section)\n
   \   - [Cabal specific settings](#cabal-specific-settings)\n    - [Stack specific
-  settings](#stack-specific-settings)\n    - [Example Configuration](#example-configuration)\n-
+  settings](#stack-specific-settings)\n    - [Custom adapter settings](#custom-adapter-settings)\n
+  \     + [Current limitation](#current-limitation)\n    - [Example Configuration](#example-configuration)\n-
   [GitHub Actions](#github-actions)\n- [Contribution](#contribution)\n- [Copyright](#copyright)\n\n##
-  Introduction - How to keep your Haskell monorepo sane\n\nMaintaining a large monorepo
-  consisting of dozens of Haskell packages is not easy.\nSometimes, just making sure
-  all packages compile on CI is not enough - to accelerate the development cycle,
-  it is crucial to ensure that changes to the codebase trigger only necessary rebuilds
-  as far as possible.\n\nBut enforcing this requirement by hand is not easy.\nTo make
-  things work, a kind of people known as programmers - especially Haskellers, you
-  know - are inherently lazy.\nThey are so lazy to grep through the project, shouting
-  out \"look, there is what we want!\", and adding extra dependency - finally they
-  make everything depend on each other and constitute the gigantic net of dependencies
-  that takes a quarter day even if only a small portion of the code was changed.\n\nIndeed,
-  this was exactly the situation we developers at DeepFlow faced in 2021.\nOur main
-  product is a high-performance numeric solver[^1], consisting of ~70 Haskell packages,
-  which sums up to ~150k lines of code.\nIt includes:\n\n- abstraction of numeric
-  computation backend,\n- its concrete implemenatations,\n- abstraction of plugins
-  to extend solvers,\n- its concrete implementations,\n- abstraction of equation system,\n-
-  its concrete implementations,\n- abstraction of communication strategies,\n- its
-  concrete implementations (e.g. MPI, standalone),\n- abstract solver logic, and\n-
-  concrete solver implementations putting these all together.\n\nWhat we had in 2021
-  was the chaotic melting pot of these players.\nIf one changes a single line of a
-  backend, it forces seemingly unrelated plugins to be recompiled.\nIf one removes
-  a single redundant instance, then it miraculously triggers the rebuild in some concrete
-  implementation of some specialised solver.\nIn any case, it took at most six hours
-  and ~100 GiB to complete, as we make heavy use of type-level hackery and rely on
-  the aggressive optimisation mechanism of GHC[^2].\n\nThis situation is far from
-  optimal, sacrifices developer experience, and severely slows down the iteration
-  speed.\nOur product seems dying slowly but surely.\n\n[^1]: For those who are curious,
-  please read our [old slide][old slide] - it is an old presentation, so some details
-  are outdated, but the overall situation is not so different.\n[^2]: The situation,
-  however, gets better as newer GHC releases came out and we refactor the code structure.\nNowadays,
-  it takes at most two and a half hours and only ~20GiB.\nThe detail of such change
-  is out of the scope of this article.\n\n### Dependency Inversion Principle\n\nIn
-  the middle of 2021, we decided to fight against this situation to save our project.\nOur
-  rule of thumb here was _Dependency Inversion Principle_ from the realm of OOP.\nThat
-  says:\n\n> 1. High-level modules should not import anything from low-level modules.
-  Both should depend on abstractions\n> 2. Abstractions should not depend on details.
-  Details (concrete implementations) should depend on abstractions.\n>\n> (_excerpt
-  from [Wikipedia][dip]; renumbering is due to the author_)\n\nThis is called dependency
-  _inversion_ because it seems inverse to the traditional usage of inheritance in
-  OOP.\nWe decided to apply this principle to package dependencies.\n\nWe divided
+  Introduction - How to keep your monorepo sane\n\nMaintaining a large monorepo consisting
+  of dozens of packages is not easy.\nSometimes, just making sure all packages compile
+  on CI is not enough - to accelerate the development cycle, it is crucial to ensure
+  that changes to the codebase trigger only necessary rebuilds as far as possible.\n\nBut
+  enforcing this requirement by hand is not easy.\nTo make things work, a kind of
+  people known as programmers - especially Haskellers, you know - are inherently lazy.\nThey
+  are so lazy to grep through the project, shouting out \"look, there is what we want!\",
+  and adding extra dependency - finally they make everything depend on each other
+  and constitute the gigantic net of dependencies that takes a quarter day even if
+  only a small portion of the code was changed.\n\nIndeed, this was exactly the situation
+  we developers at DeepFlow faced in 2021.\nOur main product is a high-performance
+  numeric solver[^1], consisting of ~70 Haskell packages, which sums up to ~150k lines
+  of code.\nIt includes:\n\n- abstraction of numeric computation backend,\n- its concrete
+  implemenatations,\n- abstraction of plugins to extend solvers,\n- its concrete implementations,\n-
+  abstraction of equation system,\n- its concrete implementations,\n- abstraction
+  of communication strategies,\n- its concrete implementations (e.g. MPI, standalone),\n-
+  abstract solver logic, and\n- concrete solver implementations putting these all
+  together.\n\nWhat we had in 2021 was the chaotic melting pot of these players.\nIf
+  one changes a single line of a backend, it forces seemingly unrelated plugins to
+  be recompiled.\nIf one removes a single redundant instance, then it miraculously
+  triggers the rebuild in some concrete implementation of some specialised solver.\nIn
+  any case, it took at most six hours and ~100 GiB to complete, as we make heavy use
+  of type-level hackery and rely on the aggressive optimisation mechanism of GHC[^2].\n\nThis
+  situation is far from optimal, sacrifices developer experience, and severely slows
+  down the iteration speed.\nOur product seems dying slowly but surely.\n\n[^1]: For
+  those who are curious, please read our [old slide][old slide] - it is an old presentation,
+  so some details are outdated, but the overall situation is not so different.\n[^2]:
+  The situation, however, gets better as newer GHC releases came out and we refactor
+  the code structure.\nNowadays, it takes at most two and a half hours and only ~20GiB.\nThe
+  detail of such change is out of the scope of this article.\n\n### Dependency Inversion
+  Principle\n\nIn the middle of 2021, we decided to fight against this situation to
+  save our project.\nOur rule of thumb here was _Dependency Inversion Principle_ from
+  the realm of OOP.\nThat says:\n\n> 1. High-level modules should not import anything
+  from low-level modules. Both should depend on abstractions\n> 2. Abstractions should
+  not depend on details. Details (concrete implementations) should depend on abstractions.\n>\n>
+  (_excerpt from [Wikipedia][dip]; renumbering is due to the author_)\n\nThis is called
+  dependency _inversion_ because it seems inverse to the traditional usage of inheritance
+  in OOP.\nWe decided to apply this principle to package dependencies.\n\nWe divided
   the packages into several groups, called _dependency domains_.\nWe drew the term
   and intuition from the [blog post by GitHub about partitioning databases into domains][gh-db-doms].\n\nOur
   packages are divided into the following groups[^3]:\n\n- `infra`: providing common
@@ -204,30 +228,36 @@ description: "# guardian - The border guardian for your package dependencies\n\n
   PATH] [DIR]\n```\n\nSubcommand `auto`, `stack`, `cabal` specifies the _adapter_,
   i.e. build-system, to compute dependency.\n\n- `stack`: uses Stack (>= 2.9) as an
   adapter.\n- `cabal`: uses cabal-install (>= 3.8) as an adapter.\n- `auto`: determines
-  adapter based on the directory contents and guardian configuration.\n  + If exactly
-  one of `cabal.project` or `stack.yaml` is found, use the corresponding build system
-  as an adapter.\n  + If exactly one of the custom config sections (say, `cabal:`
-  or `stack:`) is found in the config file, use the corresponding build system.\n\nNote
-  that `guardian` links directly to `stack` and `cabal-install`, so you don't need
-  those binaries.\nMake sure the project configuration is compatible with the above
-  version constraint.\n\nOptional argument `DIR` specifies the project root directory
-  to check. If omitted, the current working directory is used.\n\nThe option `--config`
-  (or `-c` for short) specifies the path of the guardian configuration file relative
-  to the project root.\nIf omitted, `dependency-domains.yaml` is used.\n\n### Actual
-  validation logic\n\nWhen invoked, guardian will check in these steps:\n\n1. Defines
-  a dependency graph based on the package dependencies.\n2. Checks if the graph forms
-  DAG.\n3. Checks if the dependency domain constraints are satisfied first ignoring
-  exception rules.\n4. If violating dependency is detected, exempt it if it is covered
-  by any exception rule.\n     + If any exception rule can be used, warn of its use;
-  otherwise, report it as an error.\n5. Report results, warning about used and redundant
-  exception rules.\n\n### Syntax of `dependency-domains.yaml`\n\nGuardian configuration
-  file consists of the following top-level sections:\n\n| Section   | Description
-  |\n| --------- | ----------- |\n| `domains` | **Required**. Definition of Dependency
-  Domains (see [Domain Definition](#domain-definition)) |\n| `components` | _Optional_.
-  Configuration whether track test/benchmark dependencies as well (see [Component
-  Section](#component-section)) |\n| `cabal` | _Optional_. Cabal-specific configurations.
-  (see [Cabal specific settings](#cabal-specific-settings)) |\n| `stack` | _Optional_.
-  Stack-specific configurations. (see [stack specific settings](#stack-specific-settings))
+  adapter based on the directory contents and guardian configuration. Currently, it
+  chooses an adapter from `stack` or `cabal`.\n  + If exactly one of `cabal.project`
+  or `stack.yaml` is found, use the corresponding build system as an adapter.\n  +
+  If exactly one of the custom config sections (say, `cabal:` or `stack:`) is found
+  in the config file, use the corresponding build system.\n- `custom`: uses the user-specified
+  external process as an adapter.\n  With this adapter, you can check dependency between
+  arbitrary entities in any language.\n  See the [Custom adapter settings](#custom-adapter-settings)
+  section for more detail.\n\nNote that `guardian` links directly to `stack` and `cabal-install`,
+  so you don't need those binaries.\nMake sure the project configuration is compatible
+  with the above version constraint.\n\nOptional argument `DIR` specifies the project
+  root directory to check. If omitted, the current working directory is used.\n\nThe
+  option `--config` (or `-c` for short) specifies the path of the guardian configuration
+  file relative to the project root.\nIf omitted, `dependency-domains.yaml` is used.\n\n###
+  Actual validation logic\n\nWhen invoked, guardian will check in these steps:\n\n1.
+  Defines a dependency graph based on the package dependencies.\n2. Checks if the
+  graph forms DAG.\n3. Checks if the dependency domain constraints are satisfied first
+  ignoring exception rules.\n4. If violating dependency is detected, exempt it if
+  it is covered by any exception rule.\n     + If any exception rule can be used,
+  warn of its use; otherwise, report it as an error.\n5. Report results, warning about
+  used and redundant exception rules.\n\n### Syntax of `dependency-domains.yaml`\n\nGuardian
+  configuration file consists of the following top-level sections:\n\n| Section   |
+  Description |\n| --------- | ----------- |\n| `domains` | **Required**. Definition
+  of Dependency Domains (see [Domain Definition](#domain-definition)) |\n| `wildcards`
+  | _Optional_. If `true`, package name can contain wildcards `*`, which matches arbitrary
+  string (when enabled and you need the literal character `*`, use `\\*`). Note that
+  even if this option is set, you CANNOT use `*` in exception rule targets. (Default:
+  `false`) |\n| `components` | _Optional_. Configuration whether track test/benchmark
+  dependencies as well (see [Component Section](#component-section)) |\n| `cabal`
+  | _Optional_. Cabal-specific configurations. (see [Cabal specific settings](#cabal-specific-settings))
+  |\n| `stack` | _Optional_. Stack-specific configurations. (see [stack specific settings](#stack-specific-settings))
   |\n\nThe ordering of sections is irrelevant.\n\nSee [Example Configuration](#example-configuration)
   for a complete example.\n\n#### Domain Definition\n\nDependency domains, their members,
   and constraints are specified in the `domains` section.\n\nThe `domains` section
@@ -263,7 +293,7 @@ description: "# guardian - The border guardian for your package dependencies\n\n
   the following optional fields:\n\n| Field | Type | Description |\n| ----- | ----
   | ----------- |\n| `tests` | `Bool` | _Optional_. If `true`, tracks tests (default:
   `true`). |\n| `benchmarks` | `Bool` | _Optional_. If `true`, tracks benchmarks (default:
-  `true`). |\n\n\nThe `component` section itself can be omitted - in such cases, all
+  `true`). |\n\nThe `component` section itself can be omitted - in such cases, all
   the tests and benchmarks will be tracked for dependency.\n\n#### Cabal specific
   settings\n\nConfigurations specified to `cabal-install` backend can be specified
   in `cabal` top-level section.\n\nIt has the following fields:\n\n| Field | Type
@@ -280,7 +310,42 @@ description: "# guardian - The border guardian for your package dependencies\n\n
   empty list of options to be passed to the `stack` command.\nIt can be used, for
   example, to specify the custom `stack.yaml` file as follows:\n\n```yaml\nstack:\n
   \ options: \n  - \"--stack-yaml=stack-test.yaml\"\n```\n\nIf the `stack` section
-  is omitted, the `options` will be treated as empty.\n\n#### Example Configuration\n\n```yaml\ncomponents:
+  is omitted, the `options` will be treated as empty.\n\n#### Custom adapter settings\n\nThis
+  is the most general adapter: it reads a dependency graph from STDOUT of an external
+  process.\nThis adapter allows you to enforce dependency boundary constraints for
+  _any entity in any language_, provided that there is an external program that emits
+  dependency graph (currently in [Dot][dot-lang] language).\n\n[dot-lang]: https://graphviz.org/doc/info/lang.html\n\nFor
+  example:\n\n- You can write custom shell script to emit a package dependency graph
+  for the build system you use.\n  For example, Bazel provides [the `query --output
+  graph` command][bazel query].\n- You can use [`graphmod`][graphmod] to enforce Haskell
+  *module* dependency domain constraints.\n  See [`./dependency-domains-graphmod.yaml`](./dependency-domains-graphmod.yaml)
+  for such an example.\n\n[graphmod]: https://hackage.haskell.org/package/graphmod\n[bazel
+  query]: https://bazel.build/query/guide\n\nThe custom adapter sets the following
+  environmental variables when invoking external process:\n\n| Variable | Description
+  |\n| -------- | ----------- |\n| `GUARDIAN_ROOT_DIR` | The path to the project root
+  to check dependencies |\n| `GUARDIAN_INCLUDE_TESTS` | Set to `1` if `components.tests`
+  is enabeld; otherwise unset. |\n| `GUARDIAN_INCLUDE_BENCHMARKS` | Set to `1` if
+  `components.benchmarks` is enabled; otherwise unset. |\n\nGuardian will parse the
+  standard output of the process as a [Dot][dot-lang] program and regard it as a dependency
+  graph.\n\nYou can configure the custom adapter in the `custom` top-level section
+  in the configuration file.\nIt has the following fields:\n\n| Field | Type | Description
+  |\n| ----- | ---- | ----------- |\n| `program` | `Path` | _Exactly one of `program`
+  or `shell` must be specified_. Specifies the path to the external program to use
+  as an adapter. Beside the environmental variables mentioned above, it passes the
+  project root as the first argument. The path must be point to an executable file
+  and has the right permission. See also `command`. |\n| `shell` | `String` | _Exactly
+  one of `program` or `shell` must be specified_. You can specify shell script instead
+  of the path to the program. See also `program`. |\n| `ignore_loop` | `Bool` | _Optional_.
+  If `true`, gurdian ignores self-loops in the dependency graph. (default: `false`)
+  |\n\nAn example setting with the `shell` field:\n\n```yaml\ncustom:\n  shell: |\n
+  \   stack dot --no-external --no-include-base 2>/dev/null\n```\n\nAn example with
+  the `program` field:\n\n```yaml\ncustom:\n  program: \"./decode-cabal-plan.sh\"\n
+  \ ignore_loop: true\n```\n\nwith `decode-cabal-plan.sh:`\n\n```sh\n#!/bin/bash\ncabal-plan
+  --hide-builtin --hide-global dot 2>/dev/null \\\n  | sed -r 's/:(test|benchmark|exe):[^\\\"]+//g;
+  s/-[0-9]+(\\.[0-9]+)*//g'\n```\n\nAn example calling `graphmod`:\n\n```yaml\ncustom:\n
+  \ shell: graphmod --no-cluster 2>/dev/null # --no-cluster is needed to avoid subgraphs\n```\n\n#####
+  Current limitation\n\n- Only [Dot][dot-lang] format is supported.\n- Custom adapter
+  silently ignores subgraphs in a dot file.\n\n#### Example Configuration\n\n```yaml\ncomponents:
   # Specifies whether track test/benchmark dependencies as well:\n  tests: true\n
   \ benchmarks: false\n\ndomains:\n  domain-A:\n    depends_on:\n    - common\n    #
   Domain CANNOT depend on a separate package directly!\n    # - package: B3 # Error!\n
@@ -297,7 +362,7 @@ description: "# guardian - The border guardian for your package dependencies\n\n
   Cabal backend and `with-compiler` is specified explicitly,\n  the corresponding
   version of GHC must be in the PATH.\n\nExample workflow:\n\n```yaml\n  check-dependecy-boundary:\n
   \   name: Checks Dependency Constraint\n    runs-on: ubuntu-20.04\n    continue-on-error:
-  true\n    steps:\n      - uses: actions/checkout@v3\n      - uses: haskell/actions/setup@v2\n
+  true\n    steps:\n      - uses: actions/checkout@v3\n      - uses: haskell-actions/setup@v2\n
   \       with:\n          ghc-version: 9.0.2  # Install needed version of ghc\n      -
   uses: deepflowinc/guardian/action@v0.4.0.0\n        name: Check with guardian\n
   \       with:\n          backend: cabal    # auto, cabal, or stack; auto if omitted\n
@@ -309,9 +374,9 @@ description: "# guardian - The border guardian for your package dependencies\n\n
   a similar one.\n\nSee [CONTRIBUTING.md][CONTRIBUTING] for more details.\n\n[CONTRIBUTING]:
   ./CONTRIBUTING.md\n\n## Copyright\n\n(c) 2021-2023, DeepFlow Inc.\n"
 description-type: markdown
-hash: a23ed988b78dc4cef12282d710710d05e2e70c6fe32c5448a1b3e6137afade4f
+hash: 34dfc1bfa14350e996c24ac580175ae7000ae1fa8c1a496b157a9e724c720252
 homepage: https://github.com/deepflowinc/guardian#readme
-latest: 0.4.0.0
+latest: 0.5.0.0
 license-name: BSD-3-Clause
 maintainer: DeepFlow, Inc.
 synopsis: The border guardian for your package dependencies
@@ -325,6 +390,7 @@ test-bench-deps:
   path-io: '>=0'
   rio: '>=0'
   tasty: '>=0'
+  tasty-expected-failure: '>=0'
   tasty-hunit: '>=0'
   text: '>=0'
   unordered-containers: '>=0'
