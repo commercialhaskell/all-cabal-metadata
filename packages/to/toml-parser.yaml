@@ -12,6 +12,7 @@ all-versions:
 - 1.3.1.2
 - 1.3.1.3
 - 1.3.2.0
+- 2.0.0.0
 author: Eric Mertens
 basic-deps:
   array: ^>=0.5
@@ -24,6 +25,21 @@ basic-deps:
   transformers: ^>=0.5 || ^>=0.6
 changelog: |
   # Revision history for toml-parser
+
+  ## 2.0.0.0
+
+  * Pervasive annotations on the values added to allow for detailed
+    positional error reporting throughout parsing and validation.
+  * Replace uses of String with Text in the Value type and throughout
+    the API
+  * Reorganized almost all of the modules to minimize imports that upstream
+    packages will actually need.
+
+  ## 1.3.3.0
+
+  * Added `IsString Value` instance.
+  * Addded helpers for `runMatcher` for ignoring and failing on warning
+    `runMatcherIgnoreWarn` and `runMatcherFatalWarn`
 
   ## 1.3.2.0
 
@@ -128,22 +144,23 @@ description: |
 
       TOML:::important --> ApplicationTypes:::important : decode
       ApplicationTypes --> TOML : encode
-      TOML --> [Token]: Toml.Lexer
-      [Token] --> [Expr]: Toml.Parser
-      [Expr] --> Table : Toml.Semantics
-      Table --> ApplicationTypes : Toml.FromValue
-      ApplicationTypes --> Table : Toml.ToValue
-      Table --> TOML : Toml.Pretty
-
+      TOML --> [Token]: Lexer
+      [Token] --> [Expr]: Parser
+      [Expr] --> Table : Semantics
+      Table --> ApplicationTypes : FromValue
+      ApplicationTypes --> Table : ToValue
+      Table --> TOML : Pretty
   ```
 
-  The highest-level interface to this package is to define `FromValue` and `ToTable`
-  instances for your application-specific datatypes. These can be used with `encode`
-  and `decode` to convert to and from TOML.
+  Most users will only need to import **Toml** or **Toml.Schema**. Other top-level
+  modules are for low-level hacking on the TOML format itself. All modules below
+  these top-level modules are exposed to provide direct access to library implementation
+  details.
 
-  For low-level access to the TOML format, the lexer, parser, and validator are available
-  for direct use. The diagram above shows how the different modules enable you to
-  advance through the increasingly high-level TOML representations.
+  - **Toml** - Basic encoding and decoding TOML
+  - **Toml.Schema** - TOML schemas for application types
+  - **Toml.Semantics** - Low-level semantic operations on TOML syntax
+  - **Toml.Syntax** - Low-level parsing of text into TOML raw syntax
 
   ## Examples
 
@@ -151,16 +168,16 @@ description: |
   to ensure that its code typechecks and stays in sync with the rest of the package.
 
   ```haskell
+  {-# Language OverloadedStrings #-}
+  import Data.Text (Text)
   import GHC.Generics (Generic)
   import QuoteStr (quoteStr)
   import Test.Hspec (Spec, hspec, it, shouldBe)
-  import Toml (parse, decode, encode, Value(..))
-  import Toml.FromValue (Result(Success), FromValue(fromValue), parseTableFromValue, reqKey)
-  import Toml.Generic (GenericTomlTable(..))
-  import Toml.ToValue (ToValue(toValue), ToTable(toTable), defaultTableToValue, table, (.=))
+  import Toml
+  import Toml.Schema
 
   main :: IO ()
-  main = hspec (parses >> decodes >> encodes)
+  main = hspec (parses >> decodes >> encodes >> warns >> errors)
   ```
 
   ### Using the raw parser
@@ -168,7 +185,7 @@ description: |
   Consider this sample TOML text from the TOML specification.
 
   ```haskell
-  fruitStr :: String
+  fruitStr :: Text
   fruitStr = [quoteStr|
   ```
 
@@ -198,35 +215,35 @@ description: |
   |]
   ```
 
-  Parsing using this package generates the following value
+  Parsing using this package generates the following unstructured value
 
   ```haskell
   parses :: Spec
   parses = it "parses" $
-      parse fruitStr
+      forgetTableAnns <$> parse fruitStr
       `shouldBe`
       Right (table [
-          ("fruits", Array [
+          ("fruits", List [
               Table (table [
-                  ("name", String "apple"),
+                  ("name", Text "apple"),
                   ("physical", Table (table [
-                      ("color", String "red"),
-                      ("shape", String "round")])),
-                  ("varieties", Array [
-                      Table (table [("name", String "red delicious")]),
-                      Table (table [("name", String "granny smith")])])]),
+                      ("color", Text "red"),
+                      ("shape", Text "round")])),
+                  ("varieties", List [
+                      Table (table [("name", Text "red delicious")]),
+                      Table (table [("name", Text "granny smith")])])]),
               Table (table [
-                  ("name", String "banana"),
-                  ("varieties", Array [
-                      Table (table [("name", String "plantain")])])])])])
+                  ("name", Text "banana"),
+                  ("varieties", List [
+                      Table (table [("name", Text "plantain")])])])])])
   ```
 
-  ### Using decoding classes
+  ### Defining a schema
 
-  Here's an example of defining datatypes and deserializers for the TOML above.
-  The `FromValue` typeclass is used to encode each datatype into a TOML value.
-  Instances can be derived for simple record types. More complex examples can
-  be manually derived.
+  We can define a schema for our TOML format in the form of instances of
+  `FromValue`, `ToValue`, and `ToTable` in order to read TOML directly
+  into structured data form. This example manually derives some of the
+  instances as a demonstration.
 
   ```haskell
   newtype Fruits = Fruits { fruits :: [Fruit] }
@@ -238,16 +255,19 @@ description: |
       deriving (ToTable, ToValue, FromValue) via GenericTomlTable Fruit
 
   data Physical = Physical { color :: String, shape :: String }
-      deriving (Eq, Show)
+      deriving (Eq, Show, Generic)
+      deriving (ToTable, ToValue, FromValue) via GenericTomlTable Physical
 
   newtype Variety = Variety String
       deriving (Eq, Show)
 
-  instance FromValue Physical where
-      fromValue = parseTableFromValue (Physical <$> reqKey "color" <*> reqKey "shape")
-
   instance FromValue Variety where
       fromValue = parseTableFromValue (Variety <$> reqKey "name")
+  instance ToValue Variety where
+      toValue = defaultTableToValue
+  instance ToTable Variety where
+      toTable (Variety x) = table ["name" .= x]
+
   ```
 
   We can run this example on the original value to deserialize it into domain-specific datatypes.
@@ -263,23 +283,6 @@ description: |
               (Just (Physical "red" "round"))
               [Variety "red delicious", Variety "granny smith"],
           Fruit "banana" Nothing [Variety "plantain"]])
-  ```
-
-  ### Using encoding classes
-
-  The `ToValue` class is for all datatypes that can be encoded into TOML.
-  The more specialized `ToTable` class is for datatypes that encode into
-  tables and are thus eligible to be top-level types (all TOML documents
-  are tables at the top-level).
-
-  Generics can be used to derive `ToTable` for simple record types.
-  Manually defined instances are available for the more complex cases.
-
-  ```haskell
-  instance ToValue Physical where toValue = defaultTableToValue
-  instance ToTable Physical where toTable x = table ["color" .= color x, "shape" .= shape x]
-  instance ToValue Variety  where toValue = defaultTableToValue
-  instance ToTable Variety  where toTable (Variety x) = table ["name" .= x]
 
   encodes :: Spec
   encodes = it "encodes" $
@@ -302,6 +305,35 @@ description: |
           name = "granny smith"|]
   ```
 
+  ### Useful errors and warnings
+
+  This package takes care to preserve source information as much as possible
+  in order to provide useful feedback to users. These examples show a couple
+  of the message that can be generated when things don't go perfectly.
+
+  ```haskell
+  warns :: Spec
+  warns = it "warns" $
+      decode [quoteStr|
+          name = "simulated"
+          typo = 10|]
+      `shouldBe`
+      Success
+          ["2:1: unexpected key: typo in <top-level>"] -- warnings
+          (Variety "simulated")
+
+  errors :: Spec
+  errors = it "errors" $
+      decode [quoteStr|
+          # Physical characteristics table
+          color = "blue"
+          shape = []|]
+      `shouldBe`
+      (Failure
+          ["3:9: expected string but got array in shape"]
+          :: Result String Physical)
+  ```
+
   ## More Examples
 
   A demonstration of using this package at a more realistic scale
@@ -312,9 +344,9 @@ description: |
   See the low-level operations used to build a TOML syntax highlighter
   in [TomlHighlighter](test-drivers/highlighter/Main.hs).
 description-type: markdown
-hash: 50adac7c438c0217e5968646618d5316c3c74f9c14e036976999f9b90a612306
+hash: 3c0cc47aa740a8a9d6f01c444cc57d09e1f74f5242479e00947770bf3da6d29e
 homepage: ''
-latest: 1.3.2.0
+latest: 2.0.0.0
 license-name: ISC
 maintainer: emertens@gmail.com
 synopsis: TOML 1.0.0 parser
@@ -323,5 +355,6 @@ test-bench-deps:
   containers: '>=0'
   hspec: '>=2.10 && <2.12'
   template-haskell: '>=2.16 && <2.22'
+  text: '>=0'
   time: '>=0'
   toml-parser: '>=0'
