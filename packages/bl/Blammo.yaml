@@ -12,6 +12,7 @@ all-versions:
 - 1.1.1.2
 - 1.1.2.0
 - 1.1.2.1
+- 1.1.2.2
 author: ''
 basic-deps:
   aeson: '>=1.5.2.0'
@@ -36,7 +37,16 @@ basic-deps:
   vector: '>=0.12.0.2'
   wai: '>=3.2.1.2'
 changelog: |
-  ## [_Unreleased_](https://github.com/freckle/blammo/compare/v1.1.2.1...main)
+  ## [_Unreleased_](https://github.com/freckle/blammo/compare/v1.1.2.2...main)
+
+  ## [v1.1.2.2](https://github.com/freckle/blammo/compare/v1.1.2.1...v1.1.2.2)
+
+  - Don't automatically colorize if `TERM=dumb` is found in ENV
+  - Respect [`NO_COLOR`](http://no-color.org/)
+  - Automatically adjust log concurrency based on `LOG_FORMAT`:
+
+    Disable concurrency for `tty` (making that the new default) and enable it for
+    `json`. Setting `LOG_CONCURRENCY` will still be respected.
 
   ## [v1.1.2.1](https://github.com/freckle/blammo/compare/v1.1.2.0...v1.1.2.1)
 
@@ -102,7 +112,6 @@ changelog-type: markdown
 description: |
   # Blammo
 
-
   [![Hackage](https://img.shields.io/hackage/v/Blammo.svg?style=flat)](https://hackage.haskell.org/package/Blammo)
   [![Stackage Nightly](http://stackage.org/package/Blammo/badge/nightly)](http://stackage.org/nightly/package/Blammo)
   [![Stackage LTS](http://stackage.org/package/Blammo/badge/lts)](http://stackage.org/lts/package/Blammo)
@@ -130,6 +139,7 @@ description: |
   {-# LANGUAGE DeriveAnyClass #-}
   {-# LANGUAGE DeriveGeneric #-}
   {-# LANGUAGE DerivingStrategies #-}
+  {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
   module Main (module Main) where
 
@@ -139,6 +149,9 @@ description: |
   import Data.Text (Text)
   import GHC.Generics (Generic)
   import Text.Markdown.Unlit ()
+  import Control.Monad.IO.Class (MonadIO (liftIO))
+  import Control.Monad.Logger (Loc, LogStr, ToLogStr (toLogStr))
+  import Control.Monad.Reader (asks, MonadReader, ReaderT (runReaderT))
   ```
   -->
 
@@ -225,14 +238,16 @@ description: |
   ## Out of Order Messages
 
   Blammo is built on [fast-logger], which offers concurrent logging through
-  multiple buffers. By default, it uses {number-of-processors} buffers. This
-  concurrent logging is fast, but may deliver messages out of order. You want this
-  on production: your aggregator should be inspecting the message's time-stamp to
-  re-order as necessary on the other side. However, this can be problematic in a
-  CLI, where there is both little need for such high performance and a lower
-  tolerance for the confusion of out of order messages.
+  multiple buffers. This concurrent logging is fast, but may deliver messages out
+  of order. You want this on production: your aggregator should be inspecting the
+  message's time-stamp to re-order as necessary on the other side. However, this
+  can be problematic in a CLI, where there is both little need for such high
+  performance and a lower tolerance for the confusion of out of order messages.
 
-  For such cases, you can set `LOG_CONCURRENCY=1` to use a single buffer.
+  For this reason, the default behavior is to _not_ use concurrent logging, but
+  setting the format to `json` will automatically enable it (with
+  {number-of-cores} as the value). To handle this explicitly, set
+  `LOG_CONCURRENCY`.
 
   [fast-logger]: https://hackage.haskell.org/package/fast-logger
 
@@ -240,6 +255,7 @@ description: |
 
   | Setting     | Setter                      | Environment variable and format           |
   | ---         | ---                         | ---                                       |
+  | Format      | `setLogSettingsFormat`      | `LOG_FORMAT=tty\|json`                    |
   | Level(s)    | `setLogSettingsLevels`      | `LOG_LEVEL=<level>[,<source:level>,...]`  |
   | Destination | `setLogSettingsDestination` | `LOG_DESTINATION=stdout\|stderr\|@<path>` |
   | Color       | `setLogSettingsColor `      | `LOG_COLOR=auto\|always\|never`           |
@@ -289,6 +305,64 @@ description: |
   ```hs
   runAppT :: App -> ReaderT App (LoggingT IO) a -> IO a
   runAppT app f = runLoggerLoggingT app $ runReaderT f app
+  ```
+
+  ## Use without `LoggingT`
+
+  If your app monad is not a transformer stack containing `LoggingT` (ex: the
+  [ReaderT pattern](https://www.fpcomplete.com/blog/readert-design-pattern/)), you
+  can implement a custom instance of `MonadLogger`:
+
+  ```haskell
+  data AppEnv = AppEnv
+    { appLogFunc :: Loc -> LogSource -> LogLevel -> LogStr -> IO ()
+    -- ...
+    }
+
+  newtype App a = App
+    { unApp :: ReaderT AppEnv IO a }
+    deriving newtype
+      ( Functor
+      , Applicative
+      , Monad
+      , MonadIO
+      , MonadReader AppEnv
+      )
+
+  instance MonadLogger App where
+    monadLoggerLog loc logSource logLevel msg = do
+      logFunc <- asks appLogFunc
+      liftIO $ logFunc loc logSource logLevel (toLogStr msg)
+
+  runApp :: AppEnv -> App a -> IO a
+  runApp env action =
+    runReaderT (unApp action) env
+  ```
+
+  In your app you can use code written against the `MonadLogger` interface, like
+  the actions defined earlier:
+
+  ```haskell
+  app :: App ()
+  app = do
+    action1
+    action2
+  ```
+
+  To retrieve the log function from Blammo, use `askLoggerIO` (from
+  `MonadLoggerIO`) with `runSimpleLoggingT` (or `runLoggerLoggingT` if you need
+  more customization options), when you initialize the app:
+
+  ```haskell
+  main2 :: IO ()
+  main2 = do
+    logFunc <- runSimpleLoggingT askLoggerIO
+    let appEnv =
+          AppEnv
+            { appLogFunc = logFunc
+            -- ...
+            }
+    runApp appEnv app
   ```
 
   ## Integration with RIO
@@ -411,19 +485,21 @@ description: |
 
   [LICENSE](./LICENSE) | [CHANGELOG](./CHANGELOG.md)
 description-type: markdown
-hash: d27e58bedabb513e4beb4ae36b1938c4b43e16878da34db841a3a1c3f6dc6e8a
+hash: 2c1a84671d8eb79df586a7896b3dfd874f2760e88d20029f5b7e5654d0ec0dea
 homepage: https://github.com/freckle/blammo#readme
-latest: 1.1.2.1
+latest: 1.1.2.2
 license-name: MIT
 maintainer: Freckle Education
 synopsis: Batteries-included Structured Logging library
 test-bench-deps:
   Blammo: '>=0'
-  aeson: '>=0'
+  aeson: '>=1.5.2.0'
   base: '>=4.11.1.0 && <5'
-  bytestring: '>=0'
-  hspec: '>=0'
-  markdown-unlit: '>=0'
-  mtl: '>=0'
-  text: '>=0'
-  time: '>=0'
+  bytestring: '>=0.10.8.2'
+  envparse: '>=0.5.0'
+  hspec: '>=2.7.9'
+  markdown-unlit: '>=0.5.0'
+  monad-logger: '>=0.3.30'
+  mtl: '>=2.2.2'
+  text: '>=1.2.3.1'
+  time: '>=1.8.0.2'
