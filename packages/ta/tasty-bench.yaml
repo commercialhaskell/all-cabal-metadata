@@ -10,14 +10,32 @@ all-versions:
 - 0.3.3
 - 0.3.4
 - 0.3.5
+- '0.4'
 author: Andrew Lelechenko
 basic-deps:
   base: '>=4.3 && <5'
   containers: '>=0.4 && <0.8'
   deepseq: '>=1.1 && <1.6'
   ghc-prim: <0.12
-  tasty: '>=1.2.3 && <1.6'
+  tasty: '>=1.4 && <1.6'
+  time: '>=1.2 && <1.13'
 changelog: |
+  # 0.4
+
+  * Switch `nf`, `nfIO` and `nfAppIO` to evaluate outputs to a normal form
+    with `rnf` instead of `force`. It means that parts of the output, which have
+    already been forced, can be garbage collected early, without waiting for
+    the entire output to be allocated at the same time. This decreases
+    benchmarking overhead in many scenarios and brings the behaviour in line
+    with `criterion`. See [#39](https://github.com/Bodigrim/tasty-bench/issues/39)
+    for discussion.
+  * Drop support of `tasty < 1.4`.
+  * Make `IO` benchmarks immune to `-fspec-constr-count` limit.
+  * Decomission `debug` build flag.
+  * Decomission warning when `--timeout` is absent.
+  * Add `instance {Eq,Ord,Num,Fractional} {RelStDev,FailIfSlower,FailIfFaster}`.
+  * Add `instance {Eq,Ord} {CsvPath,SvgPath,BaselinePath}`.
+
   # 0.3.5
 
   * Support `tasty-1.5`.
@@ -134,7 +152,7 @@ description: |
   `tasty-bench` is a native Haskell library and works everywhere, where GHC
   does, including WASM. We support a full range of architectures (`i386`, `amd64`, `armhf`,
   `arm64`, `ppc64le`, `s390x`) and operating systems (Linux, Windows, macOS,
-  FreeBSD, OpenBSD, NetBSD), plus any GHC from 7.0 to 9.6.
+  FreeBSD, OpenBSD, NetBSD), plus any GHC from 7.0 to 9.10.
 
   ## How is it possible?
 
@@ -319,8 +337,26 @@ description: |
   All 3 tests passed (7.25s)
   ```
 
-  This data is reported as per `RTSStats` fields: `allocated_bytes`, `copied_bytes`
-  and `max_mem_in_use_bytes`.
+  This data is reported as per [`GHC.Stats.RTSStats`](https://hackage.haskell.org/package/base/docs/GHC-Stats.html#t:RTSStats) fields:
+
+  * `allocated_bytes`
+
+    Total size of data ever allocated since the start
+    of the benchmark iteration. Even if data was immediately
+    garbage collected and freed, it still counts.
+
+  * `copied_bytes`
+
+    Total size of data ever copied by GC (because it was alive and kicking)
+    since the start of the benchmark iteration. Note that zero bytes often mean
+    that the benchmark was too short to trigger GC at all.
+
+  * `max_mem_in_use_bytes`
+
+    Peak size of live data since the very start of the process.
+    This is a global metric, it cumulatively grows and does not say much
+    about individual benchmarks, but rather characterizes heap
+    environment in which they are executed.
 
   ## Combining tests and benchmarks
 
@@ -402,7 +438,7 @@ description: |
     ```
     All
       fibo 20:       OK (1.46s)
-        Response {respEstimate = Estimate {estMean = Measurement {measTime = 87496728, measAllocs = 0, measCopied = 0}, estStdev = 694487}, respIfSlower = FailIfSlower Infinity, respIfFaster = FailIfFaster Infinity}
+        WithLoHi (Estimate {estMean = Measurement {measTime = 41529118775, measAllocs = 0, measCopied = 0, measMaxMem = 0}, estStdev = 1595055320}) (-Infinity) Infinity
     ```
 
   * If benchmarks fail with an error message
@@ -421,6 +457,10 @@ description: |
     You can use `env` to read test data from `IO`, but not to read benchmark names
     or affect their hierarchy in other way. This is a fundamental restriction of `tasty`
     to list and filter benchmarks without launching missiles.
+
+    Strict pattern-matching on resource is also prohibited. For instance,
+    if it is a tuple, the second argument of `env` should use a lazy pattern match
+    `\~(a, b) -> ...`
 
   * If benchmarks fail with `Test dependencies form a loop`
     or `Test dependencies have cycles`, this is likely
@@ -576,7 +616,7 @@ description: |
   If you wish to compare two CSV reports non-interactively, here is a handy `awk` incantation:
 
   ```sh
-  awk 'BEGIN{FS=",";OFS=",";print "Name,Old,New,Ratio"}FNR==1{trueNF=NF;next}NF<trueNF{print "Benchmark names should not contain newlines";exit 1}FNR==NR{oldTime=$(NF-trueNF+2);NF-=trueNF-1;a[$0]=oldTime;next}{newTime=$(NF-trueNF+2);NF-=trueNF-1;print $0,a[$0],newTime,newTime/a[$0];gs+=log(newTime/a[$0]);gc++}END{if(gc>0)print "Geometric mean,,",exp(gs/gc)}' old.csv new.csv
+  awk 'BEGIN{FS=",";OFS=",";print "Name,Old,New,Ratio"}FNR==1{trueNF=NF;next}NF<trueNF{print "Benchmark names should not contain newlines";exit 1}FNR==NR{oldTime=$(NF-trueNF+2);NF-=trueNF-1;a[$0]=oldTime;next}{newTime=$(NF-trueNF+2);NF-=trueNF-1;if(a[$0]){print $0,a[$0],newTime,newTime/a[$0];gs+=log(newTime/a[$0]);gc++}}END{if(gc>0)print "Geometric mean,,",exp(gs/gc)}' old.csv new.csv
   ```
 
   A larger shell snippet to compare two `git` commits can be found in `compare_benches.sh`.
@@ -655,10 +695,6 @@ description: |
     It will provide you with functions to build `Benchmarkable` and run them manually
     via `measureCpuTime`. This mode of operation can be also configured
     by disabling Cabal flag `tasty`.
-
-  * If results are amiss or oscillate wildly and adjusting `--timeout` and `--stdev`
-    does not help, you may be interested to investigate individual timings of
-    successive runs by enabling Cabal flag `debug`. This will pipe raw data into `stderr`.
 
   ## Command-line options
 
@@ -749,9 +785,9 @@ description: |
   benchmarks = bgroup "All" []
   ```
 description-type: markdown
-hash: 81c916c29b8685b0a2d3d6ac6ebd07bd2e62ad7a06d7e98e4ca1a02486175cdd
+hash: 97a96e7f779a2e5bb69692e776a5a1bb98423fa1fc7ef561248de99a1214201f
 homepage: https://github.com/Bodigrim/tasty-bench
-latest: 0.3.5
+latest: '0.4'
 license-name: MIT
 maintainer: Andrew Lelechenko <andrew.lelechenko@gmail.com>
 synopsis: Featherlight benchmark framework
