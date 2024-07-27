@@ -20,6 +20,7 @@ all-versions:
 - 1.0.1
 - '1.1'
 - 1.1.1
+- '1.2'
 author: Jens Petersen <petersen@redhat.com>
 basic-deps:
   Glob: '>=0'
@@ -34,6 +35,7 @@ basic-deps:
   koji: '>=0.0.2'
   pretty-simple: '>=0'
   rpm-nvr: '>=0.1.2'
+  safe: '>=0'
   simple-cmd: '>=0.2.2'
   simple-cmd-args: '>=0.1.8'
   simple-prompt: '>=0.2'
@@ -43,6 +45,22 @@ basic-deps:
   xdg-userdirs: '>=0'
 changelog: |
   # Version history of koji-tool
+
+  ## 1.2 (2024-07-27)
+  - allow --unlimited results: useful for open tasks/builds
+  - builds: also show owner
+  - find: also support noarch
+  - find: move --debug to debug arg
+  - improve detailed output handling with Maybe Details for tasks and builds
+  - improvements to log url logic
+  - install: include noarch in getArchs to include noarch rpms
+  - lookupArch first checks the label field then arch field
+  - progress: use safe maximumMay of sizes
+  - tasks: add --children and --parent of taskid
+  - tasks: add --install option
+  - tasks: also show create time and owner
+  - tasks: in addition to buildlog size also print timestamp
+  - tasks: ignore subtask limit for Package, ParentOf, ChildrenOf
 
   ## 1.1.1 (2023-10-20)
   - 'builds': reformat short build result to align better
@@ -258,423 +276,198 @@ changelog: |
     --all/--ask/--base-only/--exclude-devel --dry-run
   - only supports Fedora Koji
 changelog-type: markdown
-description: |
-  # koji-tool
-
-  A CLI UI to the [Koji](https://koji.fedoraproject.org/koji/) buildsystem
-  with commands to query builds and tasks, install rpms,
-  and check buildlog sizes.
-
-  [Koji](https://pagure.io/koji/) is the RPM package buildsystem used by
-  Fedora Linux, CentOS Stream, RHEL, and some other projects.
-
-  By default Fedora Koji is used.
-
-  A few illustrative examples:
-
-  `koji-tool tasks --mine --latest --state fail --tail`:
-  shows details of your last buildArch failure and the tail of the build.log
-  (equivalently you can use `koji-tool find my last fail`).
-
-  `koji-tool install systemd`: will try to install or update to the newest rpm packages from koji.
-
-  `koji-tool builds -L -s complete firefox`:
-  shows the last successful build with a url and other details.
-
-  ## Commands
-  `$ koji-tool --version`
-  ```
-  1.1.1
-  ```
-
-  `$ koji-tool --help`
-  ```
-  Query and track Koji tasks, and install rpms from Koji.
-
-  Usage: koji-tool [--version] COMMAND
-
-    see https://github.com/juhp/koji-tool#readme
-
-  Available options:
-    -h,--help                Show this help text
-    --version                Show version
-
-  Available commands:
-    builds                   Query Koji builds (by default lists the most recent
-                             builds)
-    tasks                    Query Koji tasks (by default lists the most recent
-                             buildArch tasks)
-    latest                   Query latest Koji build for tag
-    install                  Install rpm packages directly from a Koji build task
-    progress                 Track running Koji tasks by buildlog size
-    buildlog-sizes           Show buildlog sizes for nvr patterns
-    find                     Simple quick common queries using words like: [my,
-                             last, fail, complete, current, build, detail,
-                             install, tail, notail, hwinfo, x86_64, PACKAGE,
-                             USER\'s, LIMIT]
-  ```
-
-  ## koji-tool builds
-
-  Query Koji for builds.
-
-  Somewhat like `koji list-builds --quiet ...`,
-  but it shows duration, and kojiweb urls.
-  It uses `date` to parse a specified date string
-  and can use an NVR glob pattern to select builds.
-
-  Note results are ordered by build_id (not time) for speed.
-
-  ### Usage
-
-  By default lists up to 10 Fedora Koji builds.
-
-  `$ koji-tool builds --help`
-  ```
-  Usage: koji-tool builds [-H|--hub HUB] [(-u|--user USER) | (-M|--mine)]
-                          [(-L|--latest) | (-l|--limit INT)] [-s|--state STATE]
-                          [(-B|--before TIMESTAMP) | (-F|--from TIMESTAMP)]
-                          [-T|--type TYPE] [(-d|--details) | (-t|--tasks)]
-                          [-i|--install INSTALLOPTS] [-D|--debug]
-                          [(-b|--build NVR/BUILDID) | (-p|--pattern NVRPAT) |
-                            PACKAGE]
-
-    Query Koji builds (by default lists the most recent builds)
-
-  Available options:
-    -H,--hub HUB             KojiHub shortname or url (HUB = fedora, stream,
-                             rpmfusion, or URL) [default: fedora]
-    -u,--user USER           Koji user
-    -M,--mine                Your tasks (krb fasid)
-    -L,--latest              Latest build
-    -l,--limit INT           Maximum number of builds to show [default: 10]
-    -s,--state STATE         Filter builds by state
-                             (building,complete,deleted,fail(ed),cancel(ed)
-    -B,--before TIMESTAMP    Builds completed before timedate [default: now]
-    -F,--from TIMESTAMP      Builds completed after timedate
-    -T,--type TYPE           Select builds by type: all,image,maven,module,rpm,win
-    -d,--details             Show more build details
-    -t,--tasks               Show details and tasks
-    -i,--install INSTALLOPTS Install the package with 'install' options
-    -D,--debug               Pretty-print raw XML result
-    -b,--build NVR/BUILDID   Show build
-    -p,--pattern NVRPAT      Builds matching glob pattern
-    -h,--help                Show this help text
-  ```
-
-  Examples:
-
-  ```shellsession
-  $ koji-tool builds -M -s fail
-  ```
-  lists your recent builds that failed.
-
-  List latest build of a package:
-  ```shellsession
-  $ koji-tool builds --pattern redhat-rpm-config*.fc37 --latest
-
-  redhat-rpm-config-218-1.fc37 BuildComplete
-  https://koji.fedoraproject.org/koji/buildinfo?buildID=1963037
-  https://koji.fedoraproject.org/koji/taskinfo?taskID=86677797
-  Start: Thu May  5 19:02:33 +08 2022
-  End:   Thu May  5 19:04:26 +08 2022
-  duration: 0h 1m 53s
-  ```
-
-  ## koji-tool tasks
-
-  Query Koji for tasks.
-
-  Somewhat like `koji list-tasks --quiet --all ...`,
-  but it shows duration, kojiweb urls and build.log size,
-  and it uses `date` to parse a specified date string
-  and can filter task results by package or nvr prefix.
-
-  Note results are ordered by task id (not time) for speed.
-
-  ### Usage
-
-  By default it lists 10 most recent Fedora Koji buildArch tasks.
-
-  `$ koji-tool tasks --help`
-  ```
-  Usage: koji-tool tasks [-H|--hub HUB] [(-u|--user USER) | (-M|--mine)]
-                         [(-L|--latest) | (-l|--limit INT)] [-s|--state STATE]
-                         [-a|--arch ARCH]
-                         [(-B|--before TIMESTAMP) | (-F|--from TIMESTAMP)]
-                         [-m|--method METHOD] [-D|--debug]
-                         [(-P|--only-package PKG) | (-N|--only-nvr PREFIX)]
-                         [-d|--details] [-T|--tail] [--hw-info] [-g|--grep STRING]
-                         [(-b|--build BUILD) | (-p|--pattern NVRPAT) |
-                           PACKAGE|TASKID]
-
-    Query Koji tasks (by default lists the most recent buildArch tasks)
-
-  Available options:
-    -H,--hub HUB             KojiHub shortname or url (HUB = fedora, stream,
-                             rpmfusion, or URL) [default: fedora]
-    -u,--user USER           Koji user
-    -M,--mine                Your tasks (krb fasid)
-    -L,--latest              Latest build or task
-    -l,--limit INT           Maximum number of tasks to show [default: 10]
-    -s,--state STATE         Filter tasks by state
-                             (open,close(d),cancel(ed),fail(ed),assigned,free)
-    -a,--arch ARCH           Task arch
-    -B,--before TIMESTAMP    Tasks completed before timedate [default: now]
-    -F,--from TIMESTAMP      Tasks completed after timedate
-    -m,--method METHOD       Select tasks by method (default 'buildArch'):
-                             all,appliance,build,buildArch,buildContainer,buildMaven,buildNotification,buildSRPMFromSCM,chainbuild,chainmaven,createAppliance,createContainer,createImage,createLiveCD,createLiveMedia,createdistrepo,createrepo,dependantTask,distRepo,image,indirectionimage,livecd,livemedia,maven,newRepo,rebuildSRPM,runroot,tagBuild,tagNotification,vmExec,waitrepo,winbuild,wrapperRPM
-    -D,--debug               Pretty-print raw XML result
-    -P,--only-package PKG    Filter task results to specified package
-    -N,--only-nvr PREFIX     Filter task results by NVR prefix
-    -d,--details             Show more details of builds
-    -T,--tail                Fetch the tail of build.log
-    --hw-info                Fetch hw_info.log
-    -g,--grep STRING         Filter matching log lines
-    -b,--build BUILD         List child tasks of build
-    -p,--pattern NVRPAT      Build tasks of matching pattern
-    -h,--help                Show this help text
-  ```
-
-  Examples:
-
-  ```shellsession
-  $ koji-tool tasks -M -a aarch64 -s fail
-  ```
-  lists your recent arm64 tasks that failed.
-
-  Show latest newRepo task:
-  ```shellsession
-  $ koji-tool tasks --method newrepo --latest
-
-  eln-build newRepo TaskClosed
-  https://koji.fedoraproject.org/koji/taskinfo?taskID=86821565
-  Start: Mon May  9 11:53:53 +08 2022
-  End:   Mon May  9 11:57:13 +08 2022
-  duration: 0h 3m 20s
-  ```
-
-  List latest package build's tasks:
-  ```shellsession
-  $ koji-tool tasks --latest redhat-rpm-config
-
-  redhat-rpm-config-218-1.eln118.noarch TaskClosed
-  https://koji.fedoraproject.org/koji/taskinfo?taskID=86685316 (parent: 86685296)
-  Start: Fri May  6 00:11:10 +08 2022
-  End:   Fri May  6 00:13:07 +08 2022
-  duration: 0h 1m 57s
-  https://kojipkgs.fedoraproject.org/work/tasks/5316/86685316/build.log (13kB)
-  ```
-
-  It is also possible to install packages from a task using
-  `--install "SUBPKG OPTIONS"`.
-  See the install command documentation below for more details.
-
-  Use `--tail` to show the tail of the build.log: it falls back to root.log
-  automatically if the build.log is considered too small.
-  Use `--hw-info` to display hw_info.log instead.
-  Also using the `--grep` option one can filter the log output for lines matching
-  the given string (accepts leading `^` and trailing `$`).
-
-  ## koji-tool install
-
-  Download and install rpms from a Koji build or task.
-
-  By default it only downloads binaries of already-installed subpackages,
-  but there are options to list and select or exclude specific subpackages.
-
-  Note this command is intended for development and testing purposes
-  and should not be necessary/used normally on production systems,
-  but it can be very helpful for quickly testing an specific package build or
-  update locally.
-
-  ### Usage
-
-  ```shellsession
-  $ koji-tool install podman
-  ```
-  will download the latest build for your Fedora version,
-  and try to install it.
-  Use `--disttag` suffix to select a different Fedora version.
-
-  ```shellsession
-  $ koji-tool install TASKID --except "*-devel"
-  ```
-  will install all the non-devel subpackages from the task.
-
-  A more complex example:
-  ```shellsession
-  $ koji-tool install google-noto-fonts --prefix google-noto --package 'sans-*-vf-fonts' --exclude 'sans-*-ui-vf-fonts'
-  ```
-  installs all the Google Noto Sans variable fonts excluding UI faces.
-
-  One can use `--hub` to specify a different Koji hub build service.
-
-  #### Selecting subpackages
-
-  By default only installed subpackages are downloaded and updated,
-  but the following options change the behavior:
-
-  `--package`: select subpackages by name or glob pattern
-
-  `--except`: select subpackages not matching name or glob pattern
-
-  `--exclude`: exclude subpackages by name or glob pattern (overrides --package and --except)
-
-  `--include`: include subpackages by name or glob pattern (overrides --exclude)
-
-  `--all`: install all subpackages
-
-  `--ask`: ask about each subpackage
-
-  `--prefix`: override the subpackage prefix
-
-  Subpackage selection has only been tested so far for a single build/task.
-
-  ### Help
-  `$ koji-tool install --help`
-  ```
-  Usage: koji-tool install [-n|--dry-run] [-D|--debug] [-y|--yes] [-H|--hub HUB]
-                           [-P|--packages-url URL] [-l|--list] [-L|--latest]
-                           [-t|--check-remote-time]
-                           [--rpm | --rpm-ostree | --dnf5 | --dnf3]
-                           [-a|--arch ARCH]
-                           [(-N|--no-reinstall) | (-S|--skip-existing)]
-                           [-b|--prefix SUBPKGPREFIX]
-                           [--all | --ask | [-p|--package SUBPKG]
-                             [-e|--except SUBPKG] [-x|--exclude SUBPKG]
-                             [-i|--include SUBPKG]] [-d|--disttag DISTTAG]
-                           [(-R|--nvr) | (-V|--nv)] PKG|NVR|TASKID...
-
-    Install rpm packages directly from a Koji build task
-
-  Available options:
-    -n,--dry-run             Don't actually download anything
-    -D,--debug               More detailed output
-    -y,--yes                 Assume yes to questions
-    -H,--hub HUB             KojiHub shortname or url (HUB = fedora, stream,
-                             rpmfusion, or URL) [default: fedora]
-    -P,--packages-url URL    KojiFiles packages url [default: Fedora]
-    -l,--list                List builds
-    -L,--latest              Latest build
-    -t,--check-remote-time   Check remote rpm timestamps
-    --rpm                    Use rpm instead of dnf
-    --rpm-ostree             Use rpm-ostree instead of dnf
-    --dnf5                   Use dnf5 to install
-    --dnf3                   Use dnf-3 to install [default dnf unless ostree]
-    -a,--arch ARCH           Task arch
-    -N,--no-reinstall        Do not reinstall existing NVRs
-    -S,--skip-existing       Ignore already installed subpackages (implies
-                             --no-reinstall)
-    -b,--prefix SUBPKGPREFIX Prefix to use for subpackages [default: base package]
-    --all                    all subpackages [default if not installed]
-    --ask                    ask for each subpackage
-    -p,--package SUBPKG      select subpackage (glob) matches
-    -e,--except SUBPKG       select subpackages not matching (glob)
-    -x,--exclude SUBPKG      deselect subpackage (glob): overrides -p and -e
-    -i,--include SUBPKG      additional subpackage (glob) to install: overrides -x
-    -d,--disttag DISTTAG     Select a disttag different to system
-    -R,--nvr                 Give an N-V-R instead of package name
-    -V,--nv                  Give an N-V instead of package name
-    -h,--help                Show this help text
-  ```
-
-  ## koji-tool find
-  This provides shortcuts to a few select common searches
-
-  ### Usage
-  `koji-tool find my builds` shows your 10 most recent koji builds (equivalent to `koji-tool builds --mine`)
-
-  `koji-tool find my last fail` shows your most recent task failure including the tail of the build.log (equivalent to `koji-tool tasks -MLT -s fail`).
-
-  `koji-tool find last complete build` shows the latest completed koji build (equivalent to `koji-tool builds -L -s complete`).
-
-  ### Help
-  ```shellsession
-  $ koji-tool find
-  koji-tool: find handles these words:
-
-  my mine
-  last latest
-  fail failure failed
-  complete completed completion close closed finish finished
-  current building open
-  build builds
-  detail details detailed
-  install
-  tail
-  notail
-  hwinfo
-  x86_64 aarch64 ppc64le s390x i686 armv7hl
-  PACKAGE
-  USER\'s
-  LIMIT
-
-  ```
-
-  ## koji-tool progress
-  Shows the progress of active koji builds tasks
-  by checking the size of their build.log files.
-
-  This is useful for monitoring the build progress of large packages that take
-  a long time to complete for which some arch's may take considerably longer.
-
-  By default it shows progress of the user's open build tasks.
-
-  ### Usage
-
-  ```shellsession
-  $ koji-tool progress
-  :
-  $ koji-tool progress 93808251  # ← Koji taskid
-  21:39:41 webkitgtk-2.38.2-1.eln123 (93808251) 9h 32m
-  aarch64  87,669kB (16:50:31)  3h 55m TaskClosed
-  i386     88,120kB (16:33:14)  4h 21m TaskClosed
-  noarch        3kB (12:11:19)  3m 28s TaskClosed SRPM
-  ppc64le  85,853kB (21:25:42)
-  s390x    87,692kB (21:20:43)  9h 11m TaskClosed
-  x86_64   89,914kB (19:57:47)  7h 48m TaskClosed
-
-  21:47:57 webkitgtk-2.38.2-1.eln123 (93808251) 89914kB, 9h 40m
-  ppc64le  88,117kB (21:47:21) [  1,742 B/s] (1299s)
-
-  :
-  ```
-
-  The `buildlog-sizes` command is similar but runs once over nvr patterns.
-
-  ## Installation
-  koji-tool is packaged in Fedora
-
-  ## Building from git/source
-  Either use `cabal-install` or `stack`.
-  Either way you need a ghc compiler installed, of course.
-
-  ### Build from source with cabal
-
-  With cabal, you can save a lot of time by first running `cabal-rpm builddep`
-  to install distro deps, and then:
-
-  ```
-  $ cabal install
-  ```
-
-  ### Build from source with stack
-
-  ```
-  $ stack init --resolver lts
-  $ stack install
-  ```
-
-  ## Contributing
-  koji-tool is distributed under a BSD license.
-
-  Bug reports, suggestions and contributions are welcomed:
-  please open an issue at: https://github.com/juhp/koji-tool/
+description: "# koji-tool\n\nA CLI UI to the [Koji](https://koji.fedoraproject.org/koji/)
+  buildsystem\nwith commands to query builds and tasks, install rpms,\nand check buildlog
+  sizes.\n\n[Koji](https://pagure.io/koji/) is the RPM package buildsystem used by\nFedora
+  Linux, CentOS Stream, RHEL, and some other projects.\n\nBy default Fedora Koji is
+  used.\n\nA few illustrative examples:\n\n`koji-tool tasks --mine --latest --state
+  fail --tail`:\nshows details of your last buildArch failure and the tail of the
+  build.log\n(equivalently you can use `koji-tool find my last fail`).\n\n`koji-tool
+  install systemd`: will try to install or update to the newest rpm packages from
+  koji.\n\n`koji-tool builds -L -s complete firefox`:\nshows the last successful build
+  with a url and other details.\n\n## Commands\n`$ koji-tool --version`\n\n```\n1.2\n```\n\n`$
+  koji-tool --help`\n\n```\nQuery and track Koji tasks, and install rpms from Koji.\n\nUsage:
+  koji-tool [--version] COMMAND\n\n  see https://github.com/juhp/koji-tool#readme\n\nAvailable
+  options:\n  -h,--help                Show this help text\n  --version                Show
+  version\n\nAvailable commands:\n  builds                   Query Koji builds (by
+  default lists the most recent\n                           builds)\n  tasks                    Query
+  Koji tasks (by default lists the most recent\n                           buildArch
+  tasks)\n  latest                   Query latest Koji build for tag\n  install                  Install
+  rpm packages directly from a Koji build task\n  progress                 Track running
+  Koji tasks by buildlog size\n  buildlog-sizes           Show buildlog sizes for
+  nvr patterns\n  find                     Simple quick common queries using words
+  like: [my,\n                           last, fail, complete, current, build, detail,\n
+  \                          install, tail, notail, hwinfo, x86_64, debug,\n                           PACKAGE,
+  USER\\'s, LIMIT]\n```\n\n## koji-tool builds\n\nThe `builds` command queries Koji
+  for builds.\n\nSomewhat like `koji list-builds --quiet ...`,\nbut it shows duration,
+  and kojiweb urls.\n\nNote results are ordered by build_id (not time) for speed.\n\n###
+  Usage\n\nBy default it lists up to 10 Fedora Koji builds -\nthis can be changed
+  with the `--limit` or `--unlimited` options.\n\nOne can select builds also by time/date
+  options,\nwhich are parsed by the system `date` utility.\n\nOne can also use an
+  NVR glob pattern to select builds.\n\n\n`$ koji-tool builds --help`\n\n```\nUsage:
+  koji-tool builds [-H|--hub HUB] [(-u|--user USER) | (-M|--mine)] \n                        [(-L|--latest)
+  | (-U|--unlimited) | (-l|--limit INT)] \n                        [-s|--state STATE]
+  \n                        [(-B|--before TIMESTAMP) | (-F|--from TIMESTAMP)] \n                        [-T|--type
+  TYPE] [(-d|--details) | (-t|--tasks)] \n                        [-i|--install INSTALLOPTS]
+  [-D|--debug] \n                        [(-b|--build NVR/BUILDID) | (-p|--pattern
+  NVRPAT) | \n                          PACKAGE]\n\n  Query Koji builds (by default
+  lists the most recent builds)\n\nAvailable options:\n  -H,--hub HUB             KojiHub
+  shortname or url (HUB = fedora, stream,\n                           rpmfusion, or
+  URL) [default: fedora]\n  -u,--user USER           Koji user\n  -M,--mine                Your
+  tasks (krb fasid)\n  -L,--latest              Latest build\n  -U,--unlimited           No
+  limit on number of results\n  -l,--limit INT           Maximum number of builds
+  to show [default: 20]\n  -s,--state STATE         Filter builds by state\n                           (building,complete,deleted,fail(ed),cancel(ed)\n
+  \ -B,--before TIMESTAMP    Builds completed before timedate [default: now]\n  -F,--from
+  TIMESTAMP      Builds completed after timedate\n  -T,--type TYPE           Select
+  builds by type: all,image,maven,module,rpm,win\n  -d,--details             Show
+  more build details\n  -t,--tasks               Show details and tasks\n  -i,--install
+  INSTALLOPTS Install the package with 'install' options\n  -D,--debug               Pretty-print
+  raw XML result\n  -b,--build NVR/BUILDID   Show build\n  -p,--pattern NVRPAT      Builds
+  matching glob pattern\n  -h,--help                Show this help text\n```\n\nExamples:\n\n```shellsession\n$
+  koji-tool builds -M -s fail\n```\nlists your recent builds that failed.\n\nList
+  latest build of a package:\n\n`$ koji-tool builds --pattern redhat-rpm-config*.fc40
+  --latest`\n\n```\nredhat-rpm-config-288-1.fc40 BuildComplete (fweimer)\nhttps://koji.fedoraproject.org/koji/buildinfo?buildID=2460713\nhttps://koji.fedoraproject.org/koji/taskinfo?taskID=118524958\nstart:
+  \     Tue Jun  4 03:07:58 +08 2024\ncompletion: Tue Jun  4 03:12:51 +08 2024\nduration:
+  4 min 53 sec\nhttps://kojipkgs.fedoraproject.org/packages/redhat-rpm-config/288/1.fc40\n```\n\n##
+  koji-tool tasks\n\nThe `tasks` command queries Koji for tasks.\n\nSomewhat like
+  `koji list-tasks --quiet --all ...`,\nbut it shows duration, kojiweb urls and optionally
+  build.log size.\n\nNote results are ordered by task id (not time) for speed.\n\n###
+  Usage\n\nBy default it lists 10 most recent Fedora Koji buildArch tasks,\nthis can
+  be changed with the `--limit` or `--unlimited` options.\n\nTasks can be searched
+  by package, task id (including parent and children),\nby build or NVR pattern, also
+  by state, method, and user.\n\nResults can be restricted by date options,\nwhich
+  are parsed by the `date` utility.\nThe received results can be filtered too locally
+  by package or nvr prefix.\n\nMultiple results are listed concisely each on one line
+  by default.\nA single task result is displayed in detail over multiple lines.\nThese
+  levels of detail can be controlled with\nthe `--details` and `--concise` options.\n\n`$
+  koji-tool tasks --help`\n\n```\nUsage: koji-tool tasks [-H|--hub HUB] [(-u|--user
+  USER) | (-M|--mine)] \n                       [(-L|--latest) | (-U|--unlimited)
+  | (-l|--limit INT)] \n                       [-s|--state STATE] [-a|--arch ARCH]
+  \n                       [(-B|--before TIMESTAMP) | (-F|--from TIMESTAMP)] \n                       [-m|--method
+  METHOD] [-D|--debug] \n                       [(-P|--only-package PKG) | (-N|--only-nvr
+  PREFIX)] \n                       [(-d|--details) | (-c|--concise)] [-T|--tail]
+  [--hw-info]\n                       [-g|--grep STRING] [-i|--install INSTALLOPTS]
+  \n                       [(-b|--build BUILD) | (-p|--pattern NVRPAT) | \n                         --children
+  TASKID | --parent TASKID | PACKAGE|TASKID]\n\n  Query Koji tasks (by default lists
+  the most recent buildArch tasks)\n\nAvailable options:\n  -H,--hub HUB             KojiHub
+  shortname or url (HUB = fedora, stream,\n                           rpmfusion, or
+  URL) [default: fedora]\n  -u,--user USER           Koji user\n  -M,--mine                Your
+  tasks (krb fasid)\n  -L,--latest              Latest build or task\n  -U,--unlimited
+  \          No limit on number of results\n  -l,--limit INT           Maximum number
+  of tasks to show [default: 20]\n  -s,--state STATE         Filter tasks by state\n
+  \                          (open,close(d),cancel(ed),fail(ed),assigned,free)\n  -a,--arch
+  ARCH           Task arch\n  -B,--before TIMESTAMP    Tasks completed before timedate
+  [default: now]\n  -F,--from TIMESTAMP      Tasks completed after timedate\n  -m,--method
+  METHOD       Select tasks by method (default 'buildArch'):\n                           all,appliance,build,buildArch,buildContainer,buildMaven,buildNotification,buildSRPMFromSCM,chainbuild,chainmaven,createAppliance,createContainer,createImage,createLiveCD,createLiveMedia,createdistrepo,createrepo,dependantTask,distRepo,image,indirectionimage,livecd,livemedia,maven,newRepo,rebuildSRPM,runroot,tagBuild,tagNotification,vmExec,waitrepo,winbuild,wrapperRPM\n
+  \ -D,--debug               Pretty-print raw XML result\n  -P,--only-package PKG
+  \   Filter task results to specified package\n  -N,--only-nvr PREFIX     Filter
+  task results by NVR prefix\n  -d,--details             Show more task details\n
+  \ -c,--concise             Compact task output\n  -T,--tail                Fetch
+  the tail of build.log\n  --hw-info                Fetch hw_info.log\n  -g,--grep
+  STRING         Filter matching log lines\n  -i,--install INSTALLOPTS Install the
+  package with 'install' options\n  -b,--build BUILD         List child tasks of build\n
+  \ -p,--pattern NVRPAT      Build tasks of matching pattern\n  --children TASKID
+  \       Children tasks of parent\n  --parent TASKID          Parent of task\n  -h,--help
+  \               Show this help text\n```\n\nExamples:\n\n```shellsession\n$ koji-tool
+  tasks -M -a aarch64 -s fail\n```\nlists your recent arm64 tasks that failed.\n\nShow
+  latest newRepo task:\n\n`$ koji-tool tasks --method newrepo --latest`\n\n```\neln-build-side-93068
+  newRepo TaskClosed (kojira)\nhttps://koji.fedoraproject.org/koji/taskinfo?taskID=121120828\ncreate:
+  \    Sat Jul 27 18:59:06 +08 2024\nstart:      Sat Jul 27 19:00:03 +08 2024\ncompletion:
+  Sat Jul 27 19:03:12 +08 2024\ndelay: 57 sec\nduration: 3 min 9 sec\n```\n\nList
+  latest package build's tasks:\n\n`$ koji-tool tasks --latest redhat-rpm-config`\n\n```\nredhat-rpm-config-293-1.eln140.noarch
+  TaskClosed (distrobuildsync-eln/jenkins-continuous-infra.apps.ci.centos.org)\nhttps://koji.fedoraproject.org/koji/taskinfo?taskID=119218471
+  (parent: 119209735)\ncreate:     Tue Jun 18 14:40:53 +08 2024\nstart:      Tue Jun
+  18 19:13:53 +08 2024\ncompletion: Tue Jun 18 19:15:12 +08 2024\ndelay: 4 hours 33
+  min\nduration: 1 min 19 sec\nhttps://kojipkgs.fedoraproject.org/packages/redhat-rpm-config/293/1.eln140/data/logs/noarch/build.log
+  (17kB)\n```\n\nIt is also possible to install packages from a task using\n`--install
+  \"SUBPKG OPTIONS\"`.\nSee the install command documentation below for more details.\n\nUse
+  `--tail` to show the tail of the build.log: it falls back to root.log\nautomatically
+  if the build.log is considered too small.\nUse `--hw-info` to display hw_info.log
+  instead.\nAlso using the `--grep` option one can filter the log output for lines
+  matching\nthe given string (accepts leading `^` and trailing `$`).\n\n## koji-tool
+  install\n\nUse the `install` command to download and install rpms\nfrom a Koji build
+  or task.\n\nBy default it only downloads binaries of already-installed subpackages,\nbut
+  there are options to list and select or exclude specific subpackages.\n\nNote this
+  command is intended for development and testing purposes\nand should not be necessary/used
+  normally on production systems,\nbut it can be very helpful for quickly testing
+  a specific package build or\nupdate locally.\n\n### Usage\n\n```shellsession\n$
+  koji-tool install podman\n```\nwill download the latest build for your Fedora version,\nand
+  try to install it.\nUse `--disttag` suffix to select a different OS version.\n\n```shellsession\n$
+  koji-tool install TASKID --except \"*-devel\"\n```\nwill install all the non-devel
+  subpackages from the task.\n\nA more complex example:\n```shellsession\n$ koji-tool
+  install google-noto-fonts --prefix google-noto --package 'sans-*-vf-fonts' --exclude
+  'sans-*-ui-vf-fonts'\n```\ninstalls all the Google Noto Sans variable fonts excluding
+  UI faces.\n\nOne can use `--hub` to specify a different Koji hub build service.\n\n####
+  Selecting subpackages\n\nBy default only installed subpackages are downloaded and
+  updated,\nbut the following options change the behavior:\n\n`--package`: select
+  subpackages by name or glob pattern\n\n`--except`: select subpackages not matching
+  name or glob pattern\n\n`--exclude`: exclude subpackages by name or glob pattern
+  (overrides --package and --except)\n\n`--include`: include subpackages by name or
+  glob pattern (overrides --exclude)\n\n`--all`: install all subpackages\n\n`--ask`:
+  ask about each subpackage\n\n`--prefix`: override the subpackage prefix\n\n(Subpackage
+  selection has only really been tested so far\nfor a single build/task.)\n\n### Help\n`$
+  koji-tool install --help`\n\n```\nUsage: koji-tool install [-n|--dry-run] [-D|--debug]
+  [-y|--yes] [-H|--hub HUB] \n                         [-P|--packages-url URL] [-l|--list]
+  [-L|--latest] \n                         [-t|--check-remote-time] \n                         [--rpm
+  | --rpm-ostree | --dnf5 | --dnf3] \n                         [-a|--arch ARCH] \n
+  \                        [(-N|--no-reinstall) | (-S|--skip-existing)] \n                         [-b|--prefix
+  SUBPKGPREFIX] \n                         [--all | --ask | [-p|--package SUBPKG]
+  \n                           [-e|--except SUBPKG] [-x|--exclude SUBPKG] \n                           [-i|--include
+  SUBPKG]] [-d|--disttag DISTTAG] \n                         [(-R|--nvr) | (-V|--nv)]
+  PKG|NVR|TASKID...\n\n  Install rpm packages directly from a Koji build task\n\nAvailable
+  options:\n  -n,--dry-run             Don't actually download anything\n  -D,--debug
+  \              More detailed output\n  -y,--yes                 Assume yes to questions\n
+  \ -H,--hub HUB             KojiHub shortname or url (HUB = fedora, stream,\n                           rpmfusion,
+  or URL) [default: fedora]\n  -P,--packages-url URL    KojiFiles packages url [default:
+  Fedora]\n  -l,--list                List builds\n  -L,--latest              Latest
+  build\n  -t,--check-remote-time   Check remote rpm timestamps\n  --rpm                    Use
+  rpm instead of dnf\n  --rpm-ostree             Use rpm-ostree instead of dnf\n  --dnf5
+  \                  Use dnf5 to install\n  --dnf3                   Use dnf-3 to
+  install [default dnf unless ostree]\n  -a,--arch ARCH           Task arch\n  -N,--no-reinstall
+  \       Do not reinstall existing NVRs\n  -S,--skip-existing       Ignore already
+  installed subpackages (implies\n                           --no-reinstall)\n  -b,--prefix
+  SUBPKGPREFIX Prefix to use for subpackages [default: base package]\n  --all                    all
+  subpackages [default if not installed]\n  --ask                    ask for each
+  subpackage\n  -p,--package SUBPKG      select subpackage (glob) matches\n  -e,--except
+  SUBPKG       select subpackages not matching (glob)\n  -x,--exclude SUBPKG      deselect
+  subpackage (glob): overrides -p and -e\n  -i,--include SUBPKG      additional subpackage
+  (glob) to install: overrides -x\n  -d,--disttag DISTTAG     Select a disttag different
+  to system\n  -R,--nvr                 Give an N-V-R instead of package name\n  -V,--nv
+  \                 Give an N-V instead of package name\n  -h,--help                Show
+  this help text\n```\n\n## koji-tool find\nThis provides shortcuts to a few select
+  common searches\n\n### Usage\n`koji-tool find my builds` shows your 10 most recent
+  koji builds (equivalent to `koji-tool builds --mine`)\n\n`koji-tool find my last
+  fail` shows your most recent task failure including the tail of the build.log (equivalent
+  to `koji-tool tasks -MLT -s fail`).\n\n`koji-tool find last complete build` shows
+  the latest completed koji build (equivalent to `koji-tool builds -L -s complete`).\n\n###
+  Help\n`$ koji-tool find --help`\n\n```\nUsage: koji-tool find [-H|--hub HUB] [PHRASE]\n\n
+  \ Simple quick common queries using words like: [my, last, fail, complete,\n  current,
+  build, detail, install, tail, notail, hwinfo, x86_64, debug, PACKAGE,\n  USER\\'s,
+  LIMIT]\n\nAvailable options:\n  -H,--hub HUB             KojiHub shortname or url
+  (HUB = fedora, stream,\n                           rpmfusion, or URL) [default:
+  fedora]\n  -h,--help                Show this help text\n```\n\n## koji-tool progress\nShows
+  the progress of active koji builds tasks\nby checking the size of their build.log
+  files.\n\nThis is useful for monitoring the build progress of large packages that
+  take\na long time to complete for which some arch's may take considerably longer.\n\nBy
+  default it shows progress of the user's open build tasks.\n\n### Usage\n\n```shellsession\n$
+  koji-tool progress\n:\n:\n$ koji-tool progress 93808251\n21:39:41 webkitgtk-2.38.2-1.eln123
+  (93808251) 9h 32m\naarch64  87,669kB (16:50:31)  3h 55m TaskClosed\ni386     88,120kB
+  (16:33:14)  4h 21m TaskClosed\nnoarch        3kB (12:11:19)  3m 28s TaskClosed SRPM\nppc64le
+  \ 85,853kB (21:25:42)\ns390x    87,692kB (21:20:43)  9h 11m TaskClosed\nx86_64   89,914kB
+  (19:57:47)  7h 48m TaskClosed\n\n21:47:57 webkitgtk-2.38.2-1.eln123 (93808251) 89914kB,
+  9h 40m\nppc64le  88,117kB (21:47:21) [  1,742 B/s] (1299s)\n\n:\n```\n\nThe `buildlog-sizes`
+  command is similar but runs once over nvr patterns.\n\n## Installation\nkoji-tool
+  is packaged in Fedora\n\n## Building from git/source\nEither use `cabal-install`
+  or `stack`.\nEither way you need a ghc compiler installed, of course.\n\n### Build
+  from source with cabal\n\nWith cabal, you can save a lot of time by first running
+  `cabal-rpm builddep`\nto install distro deps, and then:\n\n```\n$ cabal install\n```\n\n###
+  Build from source with stack\n\n```\n$ stack init --resolver lts\n$ stack install\n```\n\n##
+  Contributing\nkoji-tool is distributed under a BSD license.\n\nBug reports, suggestions
+  and contributions are welcomed:\nplease open an issue at: https://github.com/juhp/koji-tool/\n"
 description-type: markdown
-hash: a77c474bd22095bd330f0d3f8dbcaa3447410b3eae030ed38960a6441de65bb0
+hash: 4c385586800c4756c9a1bb11de07d92527b096799b159e90df3ae531855e6ce3
 homepage: https://github.com/juhp/koji-tool
-latest: 1.1.1
+latest: '1.2'
 license-name: BSD-3-Clause
 maintainer: Jens Petersen <petersen@redhat.com>
 synopsis: Koji CLI tool for querying tasks and installing builds
