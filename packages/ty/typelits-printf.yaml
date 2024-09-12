@@ -2,14 +2,39 @@ all-versions:
 - 0.1.0.0
 - 0.1.1.0
 - 0.2.0.0
+- 0.3.0.0
 author: Justin Le
 basic-deps:
-  base: '>=4.13 && <5'
-  symbols: '>=0.3 && <0.4'
+  base: '>=4.16 && <5'
   text: '>=0'
 changelog: |
   Changelog
   =========
+
+  Version 0.3.0.0
+  ---------------
+
+  *September 11, 2024*
+
+  <https://github.com/mstksg/typelits-printf/releases/tag/v0.3.0.0>
+
+  *   Use `-XRequiredTypeArguments` in GHC 9.10. You can directly pass
+      the `Symbol` without needing `@`:
+
+      ```
+      >>> putStrLn $ printf "You have %.2f dollars, %s" 3.62 "Luigi"
+      You have 3.62 dollars, Luigi
+      ```
+
+      If you are on GHC 9.8 or lower, this is exported identically to
+      `Text.Printf.printf`, which kind of looks identical, syntactically, if you
+      use a string literal.
+
+      If you still want the type-safe printf in GHC 9.8 or lower, use `printf'`
+      for now.
+  *   Move to directly using `UnconsSymbol` and type-level `Char` literals from
+      GHC, available only GHC 9.2+. This means we can support unicode in strings,
+      and could be faster potentially.
 
   Version 0.2.0.0
   ---------------
@@ -49,28 +74,39 @@ description: |
   [symbols]: https://hackage.haskell.org/package/symbols-0.3.0.0/docs/Data-Symbol-Examples-Printf.html
 
   ```haskell
-  ghci> putStrLn $ printf @"You have %.2f dollars, %s" 3.62 "Luigi"
+  ghci> putStrLn $ printf "You have %.2f dollars, %s" 3.62 "Luigi"
   You have 3.62 dollars, Luigi
   ```
 
   An extensible and type-safe printf from parsing GHC TypeLits Symbol literals,
-  matching the semantics of *[Text.Printf][]* in *base*.  The difference is that
-  your `printf`s will always fail to compile if given arguments of the wrong type
-  (or too many or too little arguments).  It also allows you to use types to help
+  matching the semantics of *[Text.Printf][]* in *base* (it actually uses the
+  same formatting function under the hood).  The difference is that your
+  `printf`s will always fail to compile if given arguments of the wrong type (or
+  too many or too little arguments).  It also allows you to use types to help
   your development, by telling you the type of arguments it expects and how many
   when queried with `:t` or with typed holes.
 
   [Text.Printf]: https://hackage.haskell.org/package/base/docs/Text-Printf.html
 
-  ```haskell
-  ghci> putStrLn $ printf @"You have %.2f dollars, %s" 3.62 "Luigi"
-  You have 3.62 dollars, Luigi
-  ```
+  As of GHC 9.10 and later (and version 0.3.0.0 of this library), it uses
+  `-XRequiredTypeArguments` to allow you to pass in the printf spec literal
+  directly as if it were a normal String literal.
+
+  > [!NOTE]
+  > The `printf` function here is only type-safe in GHC 9.10 and higher. If you are
+  > before GHC 9.10, you should use `printf'` instead and `-XTypeApplications`
+  > syntax:
+  >
+  > ```
+  > printf' @"You have %.2f dollars, %s" 3.62 "Luigi"
+  > ```
+  >
+  > Note the `@` before the string literal.
 
   Looking at its type:
 
   ```haskell
-  ghci> :t printf @"You have %.2f dollars, %s"
+  ghci> :t printf "You have %.2f dollars, %s"
   (FormatType "f" arg1, FormatType "s" arg2)
     => arg1 -> arg2 -> String
   ```
@@ -83,10 +119,10 @@ description: |
   We can see this in action by progressively applying arguments:
 
   ```haskell
-  ghci> :t printf @"You have %.2f dollars, %s" 3.62
+  ghci> :t printf "You have %.2f dollars, %s" 3.62
   FormatType "s" arg1 => arg1 -> String
 
-  ghci> :t printf @"You have %.2f dollars, %s" 3.62 "Luigi"
+  ghci> :t printf "You have %.2f dollars, %s" 3.62 "Luigi"
   String
   ```
 
@@ -94,20 +130,20 @@ description: |
   arguments) are pretty clear:
 
   ```haskell
-  ghci> putStrLn $ printf @"You have %.2f dollars, %s"
+  ghci> putStrLn $ printf "You have %.2f dollars, %s"
   -- ERROR: Call to printf missing argument fulfilling "%.2f"
   -- Either provide an argument or rewrite the format string to not expect
   -- one.
 
-  ghci> putStrLn $ printf @"You have %.2f dollars, %s" 3.62
+  ghci> putStrLn $ printf "You have %.2f dollars, %s" 3.62
   -- ERROR: Call to printf missing argument fulfilling "%s"
   -- Either provide an argument or rewrite the format string to not expect
   -- one.
 
-  ghci> putStrLn $ printf @"You have %.2f dollars, %s" 3.62 "Luigi"
+  ghci> putStrLn $ printf "You have %.2f dollars, %s" 3.62 "Luigi"
   You have 3.62 dollars, Luigi
 
-  ghci> putStrLn $ printf @"You have %.2f dollars, %s" 3.62 "Luigi" 72
+  ghci> putStrLn $ printf "You have %.2f dollars, %s" 3.62 "Luigi" 72
   -- ERROR: An extra argument of type Integer was given to a call to printf
   -- Either remove the argument, or rewrite the format string to include the
   -- appropriate hole.
@@ -118,11 +154,11 @@ description: |
 
   ## Caveats
 
-  For medium-length or long strings, the parsing can be fairly slow and cause
-  slow compile times.  This might be due to the underlying mechanism that the
-  *[symbols][]* package exploits...or just GHC performance issues in general.
-
-  [symbols]: https://hackage.haskell.org/package/symbols
+  You will most likely need to add `-freduction-depth=0` for most strings longer
+  than 30 characters-ish or so. Be aware that there is a compile-time cost per
+  string, so if you notice your compile times getting long, try investigating
+  this. It is written to be fully compatible with the `Text.Printf` module from
+  *base*.
 
   Moving to typechecker plugin based parsing *does* improve performance ...
   however, I'm not sure how to get around requiring every module using `printf`
@@ -137,10 +173,6 @@ description: |
   all differ in a few key ways.  Some, like *[th-printf][]* and
   *[safe-printf][]*, offer Template Haskell-based ways to generate your printf
   functions.  This package is intended as a "template-haskell free" alternative.
-  However, it is notable that with a Template-Haskell based approach, we can
-  solve the "pick two" situation above: *[th-printf][]*'s printf fulfills all
-  three requirements in the table above, with the only potential drawback being
-  Template Haskell usage.
 
   Some others, like *[safe-printf][]*, *[formatting][]*, *[printf-safe][]*,
   *[xformat][]*, and *[category-printf][]*, require manually constructing your
@@ -169,15 +201,17 @@ description: |
 
   ## Todo
 
-  *   Make faster
   *   Tests
   *   Support for localization/dynamic strings.  Should be possible, but we'd
       have to re-implement a subset of singletons.
 description-type: markdown
-hash: b1d8489fb3a970124fe012e5d041132c3d789fd83fe3fc5ed4805d47a8f22bde
+hash: 47f3d044056546f5c027db53deb6412dbf455c9dcfb8cbb0637a83692906fc6e
 homepage: https://github.com/mstksg/typelits-printf#readme
-latest: 0.2.0.0
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: justin@jle.im
 synopsis: Type-safe printf from parsing GHC TypeLits Symbol
-test-bench-deps: {}
+test-bench-deps:
+  base: '>=4.9 && <5'
+  hspec: '>=0'
+  typelits-printf: '>=0'
