@@ -3,13 +3,23 @@ all-versions:
 - 0.0.2
 - 0.1.0
 - 0.2.0
+- 0.3.0
 author: Shlok Datye
 basic-deps:
   base: '>=4.7 && <5'
-  bytestring: '>=0.11 && <0.12'
-  streamly: '>=0.9 && <0.10'
-  streamly-core: '>=0.1 && <0.2'
+  bytestring: '>=0.10.10.0 && <0.12'
+  containers: '>=0.6.2.1 && <0.8'
+  streamly: '>=0.10.0 && <0.11'
+  streamly-core: '>=0.2.0 && <0.3'
 changelog: |
+  ## 0.3.0
+
+  * Updated for Streamly 0.10.0.
+  * Eliminated the `Void` seed for `readArchive`.
+  * Added the ability to map over headers and filter out entries during `readArchive`.
+  * Generalized `groupByHeader` to `groupByLeft`.
+  * Added utility functions: `eitherByLeft`, `chunkOn`, `chunkOnFold`.
+
   ## 0.2.0
 
   * Updated for Streamly 0.9.0.
@@ -50,92 +60,80 @@ description: |
 
   module Main where
 
-  import Crypto.Hash (hashFinalize, hashInit, hashUpdate)
-  import Crypto.Hash.Algorithms (SHA256)
+  import Crypto.Hash
   import Data.ByteString (ByteString)
-  import Data.Function ((&))
-  import Data.Maybe (fromJust, fromMaybe)
-  import Data.Void (Void)
+  import Data.Function
+  import Data.Functor
+  import Data.Maybe
+  import Streamly.Data.Fold (Fold)
   import qualified Streamly.Data.Fold as F
   import qualified Streamly.Data.Stream.Prelude as S
   import Streamly.External.Archive
-    ( Header,
-      groupByHeader,
-      headerPathName,
-      readArchive,
-    )
-  import Streamly.Internal.Data.Fold.Type (Fold (Fold), Step (Partial))
-  import Streamly.Internal.Data.Unfold.Type (Unfold)
 
   main :: IO ()
   main = do
-    -- Obtain an unfold for the archive.
-    -- For each entry in the archive, we will get a Header followed
-    -- by zero or more ByteStrings containing chunks of file data.
-    let unf :: Unfold IO Void (Either Header ByteString) =
-          readArchive "/path/to/archive.tar.gz"
-
-    -- Create a fold for converting each entry (which, as we saw
-    -- above, is a Left followed by zero or more Rights) into a
-    -- path and corresponding SHA-256 hash (Nothing for no data).
+    -- A fold for converting each archive entry (which is a Header followed by
+    -- zero or more ByteStrings) into a path and corresponding SHA-256 hash
+    -- (Nothing for no data).
     let entryFold :: Fold IO (Either Header ByteString) (String, Maybe String) =
-          Fold
+          F.foldlM'
             ( \(mpath, mctx) e ->
                 case e of
                   Left h -> do
                     mpath' <- headerPathName h
-                    return $ Partial (mpath', mctx)
+                    return (mpath', mctx)
                   Right bs ->
-                    return $
-                      Partial
-                        ( mpath,
-                          Just . (`hashUpdate` bs) $
-                            fromMaybe (hashInit @SHA256) mctx
-                        )
+                    return
+                      ( mpath,
+                        Just . (`hashUpdate` bs) $
+                          fromMaybe (hashInit @SHA256) mctx
+                      )
             )
-            (return $ Partial (Nothing, Nothing))
-            ( \(mpath, mctx) ->
-                return
-                  ( show $ fromJust mpath,
-                    show . hashFinalize <$> mctx
-                  )
-            )
+            (return (Nothing, Nothing))
+            <&> ( \(mpath, mctx) ->
+                    ( show $ fromMaybe (error "path expected") mpath,
+                      show . hashFinalize <$> mctx
+                    )
+                )
 
-    -- Execute the stream, grouping at the headers (the Lefts) using the
-    -- above fold, and output the paths and SHA-256 hashes along the way.
-    S.unfold unf undefined
-      & groupByHeader entryFold
+    -- Execute the stream, grouping at the headers (the Lefts) using the above
+    -- fold, and output the paths and SHA-256 hashes along the way.
+    S.unfold readArchive (id, "/path/to/archive.tar.gz")
+      & groupByLeft entryFold
       & S.mapM print
       & S.fold F.drain
   ```
 
   ## Benchmarks
 
-  See `./bench/README.md`. We find on our machine<sup>†</sup> that (1) reading an archive using this library is just as fast as using plain Haskell `IO` code; and that (2) both are somewhere between 1.7x (large files) and 2.5x (many 1-byte files) slower than C.
+  See `./bench/README.md`. Summary (with rough figures from our machine<sup>†</sup>):
+   * For 1-byte files, this library has roughly a 70 ns/byte overhead compared to plain Haskell `IO` code, which has roughly a 895 ns/byte overhead compared to plain C.
+   * For larger (> 10 KB) files, this library performs just as good as plain Haskell `IO` code, which has roughly a 0.15 ns/byte overhead compared to plain C.
 
-  The former fulfills the promise of [streamly](https://hackage.haskell.org/package/streamly) and stream fusion. The differences to C are presumably explained by the marshalling of data into the Haskell world and are currently small enough for our purposes.
-
-  <sup>†</sup> April 2023; [Linode](https://linode.com); Debian 11, Dedicated 32GB: 16 CPU, 640GB Storage, 32GB RAM.
+  <sup>†</sup> July 2024; NixOS 22.11; Intel i7-12700K (3.6 GHz, 12 cores); Corsair VENGEANCE LPX DDR4 RAM 64GB (2 x 32GB) 3200MHz; Samsung 970 EVO Plus SSD 2TB (M.2 NVMe).
 description-type: markdown
-hash: bebf7db36615524dc9783920a83e3e083456497e0289902c42c4fa1557581aef
+hash: 0f15ea4085c21c49bdb071fac80d35b2cd5b0143d02da51587869f2f6cb38a5e
 homepage: https://github.com/shlok/streamly-archive#readme
-latest: 0.2.0
+latest: 0.3.0
 license-name: BSD-3-Clause
 maintainer: sd-haskell@quant.is
 synopsis: Stream data from archives using the streamly library.
 test-bench-deps:
   QuickCheck: '>=2.13.2 && <2.15'
+  async: '>=2.2.2 && <2.3'
   base: '>=4.7 && <5'
-  bytestring: '>=0.11 && <0.12'
+  bytestring: '>=0.10.10.0 && <0.12'
+  containers: '>=0.6.2.1 && <0.8'
   cryptonite: '>=0.26'
-  directory: '>=1.3.6.0 && <1.4'
+  directory: '>=1.3.1 && <1.4'
   filepath: '>=1.4.2.1 && <1.5'
-  streamly: '>=0.9 && <0.10'
+  split: '>=0.2.3.5 && <0.3'
+  streamly: '>=0.10.0 && <0.11'
   streamly-archive: '>=0'
-  streamly-core: '>=0.1 && <0.2'
+  streamly-core: '>=0.2.0 && <0.3'
   tar: '>=0.5.1.1 && <0.6'
   tasty: '>=1.2.3 && <1.5'
-  tasty-hunit: '>=0.10.0.2 && <0.11'
+  tasty-hunit: '>=0.10.1 && <0.11'
   tasty-quickcheck: '>=0.10.1.1 && <0.11'
   temporary: '>=1.3 && <1.4'
   zlib: '>=0.6.2.1 && <0.7'
