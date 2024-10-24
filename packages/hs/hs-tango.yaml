@@ -1,0 +1,132 @@
+all-versions:
+- 1.0.0
+author: DESY
+basic-deps:
+  base: '>=4.17.0 && <5'
+  derive-storable: '>=0.3.1 && <0.4'
+  text: '>=2.0.2 && <3'
+  unliftio: '>=0.2.25 && <0.3'
+changelog: "2024-10-24  Philipp Middendorf  <philipp.middendorf@cfel.de>\n\n\t* Initial
+  release at 1.0.\n\n"
+changelog-type: text
+description: |
+  * hs-tango
+
+  [[https://www.gnu.org/licenses/gpl-3.0][https://img.shields.io/badge/License-GPLv3-blue.svg]]
+  [[Hackage][https://img.shields.io/hackage/v/hs-tango.svg]]
+  [[CI][https://github.com/pmiddend/hs-tango/actions/workflows/build-with-ubuntu.yaml/badge.svg]]
+
+
+  ** How to install
+  *** General instructions
+  A simple =cabal install hs-tango= should suffice to build and install the library, as you would for any other Haskell library. Of course, you need to have the development packages for Tango (namely "cpptango") installed.
+
+  The [[https://tango-controls.readthedocs.io/en/latest/installation/tango-on-linux.html#debian-ubuntu][Tango documentation]] has instructions on how to install Tango for different operating systems. On *Debian* and *Ubuntu*, for example, you can do =apt install libtango-dev=.
+  *** With Nix
+
+  If you're using the Nix package manager, you have to enable flakes, and then use the accompanying =flake.nix=. To get Tango, it uses the [[https://gitlab.desy.de/cfel-sc-public/tango-flake][tango-flake]] from your truly. You can simply clone the repository, do =nix develop=, and then =cabal build=.
+  ** Usage
+  *** Client, reading attributes
+
+  There is haddock documentation available. But just to illustrate how to use the library, here's a little client example:
+
+  #+begin_src haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module Main where
+
+  import Tango.Client(
+    parseTangoUrl,
+    withDeviceProxy,
+    getTimeout,
+    AttributeName(..),
+    readBoolAttribute,
+    readBoolSpectrumAttribute
+  )
+
+  main :: IO ()
+  main =
+    case parseTangoUrl "sys/tg_test/1" of
+      Left e -> error "couldn't resolve tango URL"
+      Right deviceAddress -> withDeviceProxy deviceAddress $ \proxy -> do
+        timeout <- getTimeout proxy
+        putStrLn $ "proxy timeout is " <> show timeout
+
+        booleanResult <- readBoolAttribute proxy (AttributeName "boolean_scalar")
+        putStrLn $ "boolean_scalar is " <> show booleanResult
+
+        booleanResultBetter <- readBoolAttribute proxy (AttributeName "boolean_scalar")
+        putStrLn $ "boolean_scalar better is " <> show booleanResultBetter
+
+        booleanSpectrumResult <- readBoolSpectrumAttribute proxy (AttributeName "boolean_spectrum")
+        putStrLn $ "boolean_spectrum is " <> show booleanSpectrumResult
+  #+end_src
+  *** Client, subscribing to events
+
+  In this example, we are subscribing to changes in the attribute =boolean_scalar= and waiting for two changes (the =forM_= loop).
+
+  #+begin_src haskell
+  {-# LANGUAGE BlockArguments #-}
+  {-# LANGUAGE ImportQualifiedPost #-}
+  {-# LANGUAGE OverloadedStrings #-}
+  {-# LANGUAGE ScopedTypeVariables #-}
+
+  module Main where
+
+  import Control.Concurrent (newChan, readChan, writeChan)
+  import Control.Monad (forM_)
+  import Control.Monad.IO.Class (liftIO)
+  import Data.Int (Int16)
+  import Data.Text.IO qualified as TIO
+  import Tango.Client
+
+  main =
+    case parseTangoUrl "sys/tg_test/1" of
+      Left e -> error "couldn't resolve tango URL"
+      Right deviceAddress -> withDeviceProxy deviceAddress \proxy -> do
+        timeout <- getTimeout proxy
+
+        chan <- newChan
+
+        let attributeName = AttributeName "boolean_scalar"
+            eventCallback attribute bool = liftIO do
+              boolValue <- readBoolAttribute proxy attributeName
+              putStrLn $ "got a change: " <> show boolValue
+              writeChan chan True
+
+        pollAttribute proxy attributeName (Milliseconds 2000)
+
+        withSubscribedEvent proxy attributeName ChangeEvent False eventCallback do
+          forM_ [0 .. 2] \_ -> do
+            putStrLn "waiting for change"
+            _ <- readChan chan
+            putStrLn "received change"
+  #+end_src
+
+  ** What's missing
+
+  - Server: Everything
+  - Client
+    + Setting advanced attribute properties, specifically event-related ones like =rel_change= and the period for periodic events. This is no technical difficulty, you just have to write the code.
+    + Commands returning or receiving an =UInt32=. I'm not sure how to handle this, since tango has no such data type.
+    + In event callbacks, it would be good to transport more information like the list of errors, not just a boolean (see cppTango's =event.h=)
+    + Dynamic attribute properties such as the "quality" (currently we're only exporting read/write value)
+  ** Rationale for the used dependencies
+
+  - =derive-storable= so that we can just declare data types as records, and have C =Storable= instances generated
+  - =text= to replace =String= for textual data (=ByteString= might have been an option, we haven't decided yet)
+  - =unliftio= to have the opssibility to have code running in =MonadIO=
+  ** Interesting links/documentation
+
+  - [[https://www.esrf.fr/computing/cs/tango/tango_doc/kernel_doc/cpp_doc/classTango_1_1DeviceProxy.html][DeviceProxy C++ API reference]]
+description-type: text
+hash: b90255ecf8e539487a81e3bfbd573e534153fb2abb86b4f5d90681a7f12c8b78
+homepage: https://github.com/pmiddend/hs-tango
+latest: 1.0.0
+license-name: MIT
+maintainer: philipp.middendorf@desy.de
+synopsis: Bindings to the Tango Controls system
+test-bench-deps:
+  base: '>=4.7 && <5'
+  hs-tango: '>=0'
+  text: '>=0'
