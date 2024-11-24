@@ -1,9 +1,9 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Soumik Sarkar
 basic-deps:
   base: '>=4.15 && <5.0'
-  bytestring: '>=0.10.12 && <0.13'
   containers: '>=0.6.4 && <0.8'
   deepseq: '>=1.4.5 && <1.6'
   ghc-bignum: '>=1.1 && <1.4'
@@ -11,6 +11,16 @@ basic-deps:
   text: '>=2.0.1 && <2.2'
   transformers: '>=0.5.6 && <0.7'
 changelog: |
+  ### 0.2.0.0 -- 2024-11-24
+
+  * Breaking changes
+    * Parsing fails more eagerly. This affects lazy list parsing and parsing via
+      the `Regex.Base` functions `prepareParser` and `stepParser`.
+  * Additions
+    * Added `Regex.Base.parseNext`.
+  * Other
+    * Some internal modules are now exported.
+
   ### 0.1.0.0 -- 2024-03-04
 
   * First version.
@@ -27,7 +37,7 @@ description: |
 
   * Parsers based on [regular expressions](https://en.wikipedia.org/wiki/Regular_expression),
     capable of parsing [regular languages](https://en.wikipedia.org/wiki/Regular_language).
-    There are no extra features that would make parsing non-regular languages
+    Note that there are no extra features to make parsing non-regular languages
     possible.
   * Regexes are composed using combinators.
   * Resumable parsing of sequences of any type containing values of any type.
@@ -36,7 +46,19 @@ description: |
   * Parsing runtime is linear in the length of the sequence being parsed. No
     exponential backtracking.
 
-  ## Example
+  ## Examples
+
+  ### Versus regex patterns
+
+  ```
+  ^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?
+  ```
+
+  Can you guess what this matches?
+
+  This is a non-validating regex to extract parts of a URI, from
+  [RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986#appendix-B). It can
+  be translated as follows.
 
   ```hs
   {-# LANGUAGE OverloadedStrings #-}
@@ -55,9 +77,6 @@ description: |
     , fragment  :: Maybe Text
     } deriving Show
 
-  -- ^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?
-  -- A non-validating regex to extract parts of a URI, from RFC 3986
-  -- Translated:
   uriRE :: REText URI
   uriRE = URI
     <$> optional (R.someTextOf (CS.not ":/?#") <* R.char ':')
@@ -75,9 +94,87 @@ description: |
             , fragment = Just "parser-regex" })
   ```
 
+  ### More parsing
+
+  Parsing is straightforward, even for tasks which may be impractical with
+  submatch extraction typically offered by regex libraries.
+
+  ```hs
+  import Control.Applicative ((<|>))
+  import Data.Text (Text)
+
+  import Regex.Text (REText)
+  import qualified Regex.Text as R
+  import qualified Data.CharSet as CS
+
+  data Expr
+    = Var Text
+    | Expr :+ Expr
+    | Expr :- Expr
+    | Expr :* Expr
+    deriving Show
+
+  exprRE :: REText Expr
+  exprRE = var `R.chainl1` mul `R.chainl1` (add <|> sub)
+    where
+      var = Var <$> R.someTextOf CS.asciiLower
+      add = (:+) <$ R.char '+'
+      sub = (:-) <$ R.char '-'
+      mul = (:*) <$ R.char '*'
+  ```
+  ```hs
+  >>> import qualified Regex.Text as R
+  >>> R.reParse exprRE "a+b-c*d*e+f"
+  Just (((Var "a" :+ Var "b") :- ((Var "c" :* Var "d") :* Var "e")) :+ Var "f")
+  ```
+
+  ### Find and replace
+
+  Find and replace using regexes are supported for `Text` and lists.
+
+  ```hs
+  >>> import Control.Applicative ((<|>))
+  >>> import qualified Data.Text as T
+  >>> import qualified Regex.Text as R
+  >>>
+  >>> data Color = Blue | Orange deriving Show
+  >>> let re = Blue <$ R.text "blue" <|> Orange <$ R.text "orange"
+  >>> R.find re "color: orange"
+  Just Orange
+  >>>
+  >>> let re = T.toUpper <$> (R.text "cat" <|> R.text "dog" <|> R.text "fish")
+  >>> R.replaceAll re "locate selfish hotdog"
+  "loCATe selFISH hotDOG"
+  ```
+
+  ### Parse any sequence
+
+  Regexes are not restricted to parsing text. For example, one may parse vectors
+  from the [vector](https://hackage.haskell.org/package/vector) library, because
+  why not.
+
+  ```hs
+  import Regex.Base (Parser)
+  import qualified Regex.Base as R
+  import qualified Data.Vector.Generic as VG
+
+  parseVector :: VG.Vector v c => Parser c a -> v c -> Maybe a
+  parseVector = R.parseFoldr VG.foldr
+  ```
+  ```hs
+  >>> import Control.Applicative (many)
+  >>> import qualified Data.Vector as V
+  >>> import qualified Regex.Base as R
+  >>>
+  >>> let p = R.compile $ many ((,) <$> R.satisfy even <*> R.satisfy odd)
+  >>> let v = V.fromList [0..5] :: V.Vector Int
+  >>> parseVector p v
+  Just [(0,1),(2,3),(4,5)]
+  ```
+
   ## Documentation
 
-  Please find the documentation on Hackage:
+  Documentation is available on Hackage:
   [parser-regex](https://hackage.haskell.org/package/parser-regex)
 
   Already familiar with regex patterns? See the
@@ -88,33 +185,44 @@ description: |
   ### `regex-applicative`
 
   [`regex-applicative`](https://hackage.haskell.org/package/regex-applicative) is
-  the primary inspiration for this library, and provides a similar set of
-  features.
-  `parser-regex` attempts to be a more fully-featured library built on the
-  ideas of `regex-applicative`.
+  the primary inspiration for this library, and is similar in many ways.
+
+  `parser-regex` attempts to be a more efficient and featureful library built on
+  the ideas of `regex-applicative`, though it does not aim to provide a superset
+  of `regex-applicative`'s API.
 
   ### Traditional regex libraries
 
-  Other alternatives are more traditional regex libraries that use regex patterns,
-  like [`regex-tdfa`](https://hackage.haskell.org/package/regex-tdfa) and
-  [`regex-pcre`](https://hackage.haskell.org/package/regex-pcre)/
-  [`regex-pcre-builtin`](https://hackage.haskell.org/package/regex-pcre-builtin).
+  These libraries use regex patterns.
 
-  Reasons to use `parser-regex` over traditional regex libraries:
+  * [`regex-pcre`](https://hackage.haskell.org/package/regex-pcre)/[`regex-pcre-builtin`](https://hackage.haskell.org/package/regex-pcre-builtin)
+  * [`regex-tdfa`](https://hackage.haskell.org/package/regex-tdfa)
+  * [`pcre-light`](https://hackage.haskell.org/package/pcre-light)/[`pcre-heavy`](https://hackage.haskell.org/package/pcre-heavy)
+  * [`pcre2`](https://hackage.haskell.org/package/pcre2)
+
+  Consider using these if
+
+  * The terseness of regex patterns is well-suited for your use case.
+  * You need something very fast for typical use cases. `regex-pcre`,
+    `regex-pcre-builtin`, `pcre-light`, `pcre-heavy` are faster than
+    `parser-regex` for typical use cases, but there are trade-offs—such as losing
+    Unicode support and a risk of [ReDoS](https://en.wikipedia.org/wiki/ReDoS).
+
+  Use `parser-regex` instead if
 
   * You prefer parser combinators over regex patterns
   * You need more powerful parsing capabilities than just submatch extraction
-  * You need to parse a sequence type that is not supported by these regex
-    libraries
+  * You need to parse a sequence that is not supported by the above libraries
 
-  Reasons to use traditional regex libraries over `parser-regex`:
+  For a detailed comparison of regex libraries,
+  [see here](https://github.com/meooow25/parser-regex/tree/master/bench).
 
-  * The terseness of regex patterns is better suited for your use case
-  * You need something very fast, and adversarial input is not a concern.
-    Use `regex-pcre`/`regex-pcre-builtin`.
+  ### Other options
 
-  For a more detailed comparison of regex libraries, see
-  [here](https://github.com/meooow25/parser-regex/tree/master/bench).
+  If you are not restricted to regexes, there are many other parsing libraries you
+  may use, too many to list here. See the
+  ["Parsing" category on Hackage](https://hackage.haskell.org/packages/#cat:Parsing)
+  for a start.
 
   ## Contributing
 
@@ -122,20 +230,18 @@ description: |
   Please [open an issue](https://github.com/meooow25/parser-regex/issues) as the
   first step.
 description-type: markdown
-hash: 958a1c4b2beeacaa9dc2be155ade74ae5a3dd7b36f2f9666fc3f229b58249e1a
+hash: 0950a11caa5e2e0741e878f16f92fccc646f35e639954bd718343c0e05e95eb2
 homepage: https://github.com/meooow25/parser-regex
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: soumiksarkar.3120@gmail.com
 synopsis: Regex based parsers
 test-bench-deps:
-  QuickCheck: '>=2.14.3 && <2.15'
+  QuickCheck: '>=2.14.3 && <2.16'
   base: '>=0'
-  bytestring: '>=0'
-  containers: '>=0'
   parser-regex: '>=0'
   quickcheck-classes-base: '>=0.6.2 && <0.7'
   tasty: '>=1.5 && <1.6'
   tasty-hunit: '>=0.10.1 && <0.11'
-  tasty-quickcheck: '>=0.10.3 && <0.11'
+  tasty-quickcheck: '>=0.10.3 && <0.12'
   text: '>=0'
