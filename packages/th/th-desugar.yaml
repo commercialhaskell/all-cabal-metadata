@@ -30,6 +30,7 @@ all-versions:
 - '1.15'
 - '1.16'
 - '1.17'
+- '1.18'
 author: Richard Eisenberg <rae@cs.brynmawr.edu>
 basic-deps:
   base: '>=4.9 && <5'
@@ -38,13 +39,105 @@ basic-deps:
   mtl: '>=2.1 && <2.4'
   ordered-containers: '>=0.2.2'
   syb: '>=0.4'
-  template-haskell: '>=2.11 && <2.23'
+  template-haskell: '>=2.11 && <2.24'
   th-abstraction: '>=0.6 && <0.8'
-  th-orphans: '>=0.13.7'
+  th-compat: '>=0.1 && <0.2'
+  th-orphans: '>=0.13.11'
   transformers-compat: '>=0.6.3'
 changelog: |
   `th-desugar` release notes
   ==========================
+
+  Version 1.18 [2024.12.11]
+  -------------------------
+  * Support GHC 9.12.
+  * Add further support for embedded types in terms. The `DExp` type now has a
+    `DForallE` data constructor (mirroring `ForallE` and `ForallVisE` in
+    `template-haskell`) and a `DConstrainedE` data constructor (mirroring
+    `ConstrainedE` in `template-haskell`).
+  * The `DLamE` and `DCaseE` data constructors (as well as the related
+    `mkDLamEFromDPats` function) are now deprecated in favor of the new
+    `DLamCasesE` data constructor. `DLamE`, `DCaseE`, and `mkDLamEFromDPats` will
+    be removed in a future release of `th-desugar`, so users are encouraged to
+    migrate. For more details on how to migrate your code, see [this
+    document](https://github.com/goldfirere/th-desugar/blob/master/docs/LambdaCaseMigration.md).
+  * The type of the `dsMatches` function has changed:
+
+    ```diff
+    -dsMatches :: DsMonad q => Name         -> [Match] -> q [DMatch]
+    +dsMatches :: DsMonad q => MatchContext -> [Match] -> q [DMatch]
+    ```
+
+    In particular:
+
+    * `dsMatches` function no longer includes a `Name` argument for the
+      variable being scrutinized, as the new approach that `th-desugar` uses to
+      desugar `Match`es no longer requires this.
+    * `dsMatches` now requires a `MatchContext` argument, which
+      determines what kind of "`Non-exhaustive patterns in ...`" error it raises
+      when reaching a fallthrough case for non-exhaustive matches.
+  * Add a `maybeDCasesE :: MatchContext -> [DExp] -> [DClause] -> DExp` function.
+    `maybeDCasesE` is similar to `maybeDCaseE` except that it matches on multiple
+    expressions (using `\\cases`) instead of matching on a single expression.
+  * Add support for desugaring higher-order uses of embedded type patterns (e.g.,
+    `\(type a) (x :: a) -> x :: a`) and invisible type patterns (e.g.,
+    `\ @a (x :: a) -> x :: a`).
+  * Add a `Quote` instance for `DsM`.
+  * Add `mapDTVName` and `mapDTVKind` functions, which allow mapping over the
+    `Name` and `DKind` of a `DTyVarBndr`, respectively.
+  * Export `substTyVarBndr` from `Language.Haskell.TH.Desugar.Subst`.
+  * Add a `Language.Haskell.TH.Desugar.Subst.Capturing` module. This exposes
+    mostly the same API as `Language.Haskell.TH.Desugar.Subst`, except that the
+    substitution functions in `Language.Haskell.TH.Desugar.Subst.Capturing` do
+    not avoid capture when subtituting into a @forall@ type. As a result, these
+    substitution functions are pure rather than monadic.
+  * Add `dMatchUpSAKWithDecl`, a function that matches up type variable binders
+    from a standalone kind signature to the corresponding type variable binders
+    in the type-level declaration's header:
+
+    * The type signature for `dMatchUpSAKWithDecl` returns
+      `[DTyVarBndr ForAllTyFlag]`, where `ForAllTyFlag` is a new data type that
+      generalizes both `Specificity` and `BndrVis`.
+    * Add `dtvbForAllTyFlagsToSpecs` and `dtvbForAllTyFlagsToBndrVis` functions,
+      which allow converting the results of calling `dMatchUpSAKWithDecl` to
+      `[DTyVarBndrSpec]` or `[DTyVarBndrVis]`, respectively.
+    * Also add `matchUpSAKWithDecl`, `tvbForAllTyFlagsToSpecs`, and
+      `tvbForAllTyFlagsToBndrVis` functions, which work over `TyVarBndr` instead
+      of `DTyVarBndr`.
+  * Locally reifying the type of a data constructor or class method now yields
+    type signatures with more precise type variable information, as `th-desugar`
+    now incorporates information from the standalone kind signature (if any) for
+    the parent data type or class, respectively. For instance, consider the
+    following data type declaration:
+
+    ```hs
+    type P :: forall {k}. k -> Type
+    data P (a :: k) = MkP
+    ```
+
+    In previous versions of `th-desugar`, locally reifying `MkP` would yield the
+    following type:
+
+    ```hs
+    MkP :: forall k (a :: k). P a
+    ```
+
+    This was subtly wrong, as `k` is marked as specified (i.e., eligible for
+    visible type application), not inferred. In `th-desugar-1.18`, however, the
+    locally reified type will mark `k` as inferred, as expected:
+
+    ```hs
+    MkP :: forall {k} (a :: k). P a
+    ```
+
+    Similarly, desugaring `MkP` from Template Haskell to `th-desugar` results
+    in a data constructor with the expected type above.
+    * As a result of these changes, the type of `dsCon` has changed slightly:
+
+      ```diff
+      -dsCon :: DsMonad q => [DTyVarBndrUnit] -> DType -> Con -> q [DCon]
+      +dsCon :: DsMonad q => [DTyVarBndrSpec] -> DType -> Con -> q [DCon]
+      ```
 
   Version 1.17 [2024.05.12]
   -------------------------
@@ -883,99 +976,274 @@ description: |
   impossible to tell whether a reified function type is linear or not. See, for
   instance, [GHC#18378](https://gitlab.haskell.org/ghc/ghc/-/issues/18378).
 
-  ## Limited support for embedded types in patterns
+  ## Limitations of support for desugaring guards
 
-  In GHC 9.10 or later, the `RequiredTypeArguments` language extension allows one
-  to write definitions with embedded types in patterns, e.g.,
-
-  ```hs
-  idv :: forall a -> a -> a
-  idv (type a) = id @a
-  ```
-
-  `th-desugar` supports writing patterns like `(type a)` via the `DTypeP` data
-  constructor of `DPat`. Be warned, however, that `th-desugar` only supports
-  desugaring `DTypeP` in the clauses of function declarations, such as the
-  declaration of `idv` above. As a result, `th-desugar` does not support
-  desugaring `DTypeP` in any other position, including:
-
-  * Lambda expressions. For example, the following is not supported:
-
-    ```hs
-    idv2 :: forall a -> a -> a
-    idv2 = \(type a) -> id @a
-    ```
-  * `\case` expressions. For example, the following is not supported:
-
-    ```hs
-    idv3 :: forall a -> a -> a
-    idv3 = \case
-      (type a) -> id @a
-    ```
-  * `\cases` expressions. For example, the following is not supported:
-
-    ```hs
-    idv4 :: forall a -> a -> a
-    idv4 = \cases
-      (type a) x -> x :: a
-    ```
-
-  Note that all of the example above use an explicit `type` keyword, but the same
-  considerations apply for embedded type patterns that do not use the `type`
-  keyword. That is, `th-desugar` supports desugaring the following:
+  `th-desugar` supports guards in the sense that it will desugar guards to
+  equivalent code that instead uses `case` expressions. For example, this code:
 
   ```hs
-  idv' :: forall a -> a -> a
-  idv' a = id @a
+  f (x, y)
+    | x == "hello" = x
+    | otherwise = y
   ```
 
-  But `th-desugar` does not support desugaring any of the following:
+  Will be desugared to this code:
 
   ```hs
-  idv2' :: forall a -> a -> a
-  idv2' = \a -> id @a
-
-  idv3' :: forall a -> a -> a
-  idv3' = \case
-    a -> id @a
-
-  idv4' :: forall a -> a -> a
-  idv4' = \cases
-    a x -> x :: a
+  f arg =
+    case arg of
+      (x, y) ->
+        case x2 == "hello" of
+          True  -> x
+          False -> y
   ```
 
-  As a workaround, one can convert uses of lambdas and `LambdaCase` to function
-  declarations, which are fully supported. See also [this `th-desugar`
-  issue](https://github.com/goldfirere/th-desugar/issues/210), which proposes a
-  different approach to desugaring that would allow all of the examples above to
-  be accepted.
+  This has the advantage that it saves users from needing to care about the
+  complexities of guards. It does have some drawbacks, however, which we describe
+  below.
 
-  ## Limited support for invisible type patterns
+  ### Desugaring guards can result in quadratic code size
 
-  In GHC 9.10 or later, the `TypeAbstractions` language extension allows one to
-  write definitions with invisible type patterns, e.g.,
+  If you desugar this program involving guards:
 
   ```hs
-  f :: a -> a
-  f @a = id @a
+  data T = A Int | B Int | C Int
+
+  f :: T -> T -> Maybe Int
+  f (A x1) (A x2)
+    | x1 == x2
+    = Just x1
+  f (B x1) (B x2)
+    | x1 == x2
+    = Just x1
+  f (C x1) (C x2)
+    | x1 == x2
+    = Just x1
+  f _ _ = Nothing
   ```
 
-  `th-desugar` supports writing patterns like `@a` via the `DInvisP` data
-  constructor of `DPat`. Be warned, however, that `th-desugar` only supports
-  desugaring `DInvisP` in the clauses of function declarations, such as the
-  declaration of `f` above. As a result, `th-desugar` does not support desugaring
-  `DInvisP` in any other position, such as lambda expressions or `\cases`
-  expressions.
+  You will end up with:
 
-  Ultimately, this limitation has the same underlying cause as `th-desugar`'s
-  limitations surrounding embedded types in patterns (see the "Limited support
-  for embedded types in patterns" section above). As a result, the same
-  workaround applies: convert uses of lambdas and `LambdaCase` to function
-  declarations, which are fully supported.
+  ```hs
+  f :: T -> T -> Maybe Int
+  f arg1 arg2 =
+    case (# arg1, arg2 #) of
+      (# A x1, A x2 #) ->
+        case x1 == x2 of
+          True ->
+            Just x1
+          False ->
+            case (# arg1, arg2 #) of
+              (# B y1, B y2 #) ->
+                case y1 == y2 of
+                  True ->
+                    Just y1
+                  False ->
+                    case (# arg1, arg2 #) of
+                      (# C z1, C z2 #) ->
+                        case z1 == z2 of
+                          True ->
+                            Just z1
+                          False ->
+                            case (# arg1, arg2 #) of
+                              (# _, _ #) ->
+                                Nothing
+                      (# _, _ #) ->
+                        Nothing
+              (# C y1, C y2 #) ->
+                case y1 == y2 of
+                  True ->
+                    Just y1
+                  False ->
+                    case (# arg1, arg2 #) of
+                      (# _, _ #) ->
+                        Nothing
+              (# _, _ #) ->
+                Nothing
+      (# B x1, B x2 #) ->
+        case x1 == x2 of
+          True ->
+            Just x1
+          False ->
+            case (# arg1, arg2 #) of
+              (# C y1, C y2 #) ->
+                case y1 == y2 of
+                  True ->
+                    Just y1
+                  False ->
+                    case (# arg1, arg2 #) of
+                      (# _, _ #) ->
+                        Nothing
+              (# _, _ #) ->
+                Nothing
+      (# C x1, C x2 #) ->
+        case x1 == x2 of
+          True ->
+            Just x1
+          False ->
+            case (# arg1, arg2 #) of
+              (# _, _ #) ->
+                Nothing
+      (# _, _ #) ->
+        Nothing
+  ```
+
+  That is signficantly more code. In the worst case, the algorithm that
+  `th-desugar` uses for desugaring guards can lead to a quadratic increase in
+  code size. One way to avoid this is avoid having incomplete guards that fall
+  through to later clauses. That is, if you rewrite the original code to this:
+
+  ```hs
+  f :: T -> T -> Maybe Int
+  f (A x1) (A x2)
+    | x1 == x2
+    = Just x1
+    | otherwise
+    = Nothing
+  f (B x1) (B x2)
+    | x1 == x2
+    = Just x1
+    | otherwise
+    = Nothing
+  f (C x1) (C x2)
+    | x1 == x2
+    = Just x1
+    | otherwise
+    = Nothing
+  ```
+
+  Then `th-desugar` will desugar it to:
+
+  ```hs
+  f :: T -> T -> Maybe Int
+  f arg1 arg2 =
+    case (# arg1, arg2 #) of
+      (# A x1, A x2 #) ->
+        case x1 == x2 of
+          True ->
+            Just x1
+          False ->
+            Nothing
+      (# B x1, B x2 #) ->
+        case x1 == x2 of
+          True ->
+            Just x1
+          False ->
+            Nothing
+      (# C x1, C x2 #) ->
+        case x1 == x2 of
+          True ->
+            Just x1
+          False ->
+            Nothing
+  ```
+
+  This code, while still more verbose than the original, uses a constant amount
+  of extra code per clause.
+
+  ### Desugaring guards can produce more warnings than the original code
+
+  The approach that `th-desugar` uses to desugar guards can result in code that
+  produces GHC compiler warnings (if `-fenable-th-splice-warnings` is enabled)
+  where the original code does not. For example, consider the example from above:
+
+  ```hs
+  data T = A Int | B Int | C Int
+
+  f :: T -> T -> Maybe Int
+  f (A x1) (A x2)
+    | x1 == x2
+    = Just x1
+  f (B x1) (B x2)
+    | x1 == x2
+    = Just x1
+  f (C x1) (C x2)
+    | x1 == x2
+    = Just x1
+  f _ _ = Nothing
+  ```
+
+  This code compiles without any GHC warnings. If you desugar this code using
+  `th-desugar`, however, it will produce these warnings:
+
+  ```
+  warning: [-Woverlapping-patterns]
+      Pattern match is redundant
+      In a case alternative: (# B y1, B y2 #) -> ...
+     |
+     |             (# B y1, B y2 #) ->
+     |             ^^^^^^^^^^^^^^^^^^^...
+
+  warning: [-Woverlapping-patterns]
+      Pattern match is redundant
+      In a case alternative: (# C y1, C y2 #) -> ...
+     |
+     |             (# C y1, C y2 #) ->
+     |             ^^^^^^^^^^^^^^^^^^^...
+
+  warning: [-Woverlapping-patterns]
+      Pattern match is redundant
+      In a case alternative: (# C y1, C y2 #) -> ...
+     |
+     |             (# C y1, C y2 #) ->
+     |             ^^^^^^^^^^^^^^^^^^^...
+  ```
+
+  GHC is correct here: these matches are wholly redundant. `th-desugar` could
+  potentially recognize this and perform a more sophisticated analysis to detect
+  and remove such matches when desugaring guards, but it currently doesn't do
+  such an analysis.
+
+  ## No support for view patterns
+
+  `th-desugar` does not support desugaring view patterns. An alternative to using
+  view patterns in the patterns of a function is to use pattern guards.
+  Currently, there is not a viable workaround for using view patterns in pattern
+  synonym definitions—see [this `th-desugar`
+  issue](https://github.com/goldfirere/th-desugar/issues/174).
+
+  ## No support for or-patterns
+
+  `th-desugar` does not support desugaring
+  [or-patterns](https://github.com/ghc-proposals/ghc-proposals/blob/c9401f037cb22d1661931b2ec621925101052997/proposals/0522-or-patterns.rst).
+  See [this `th-desugar`
+  issue](https://github.com/goldfirere/th-desugar/issues/232).
+
+  ## No support for `ApplicativeDo`
+
+  `th-desugar` does not take the `ApplicativeDo` extension into account when
+  desugaring `do` notation. For example, if you desugar this:
+
+  ```hs
+  {-# LANGUAGE ApplicativeDo #-}
+
+  f x y = do
+    x' <- x
+    y' <- y
+    return (x' ++ y')
+  ```
+
+  Then `th-desugar` will translate the uses of `<-` in the `do` block to uses of
+  `Monad` operations (e.g., `(>>=)`) rather than `Applicative` operations (e.g.,
+  `(<*>)`). See [this `th-desugar`
+  issue](https://github.com/goldfirere/th-desugar/issues/138).
+
+  ## No support for `RecursiveDo`
+
+  `th-desugar` does not support the `RecursiveDo` extension at all, so it cannot
+  desugar any uses of `mdo` expressions or `rec` statements.
+
+  ## No support for unresolved infix operators
+
+  `th-desugar` does not support desugaring unresolved infix operators, such as
+  `UInfixE`. You are unlikely to encounter this limitation when dealing with
+  Template Haskell quotes, since quoted infix operators will translate to uses of
+  `InfixE` rather than `UInfixE`. Rather, this limitation would only be
+  encountered if you manually construct a Template Haskell `Exp` using `UInfixE`.
 description-type: markdown
-hash: 6bacdaa0954d3d0ecf0506193d0a38ef8f6cc97fbc698596c8d061f4576d6e4a
+hash: 872c907679a711f6429a0d14203c5a487db847485e1e371544604ae1d2db8164
 homepage: https://github.com/goldfirere/th-desugar
-latest: '1.17'
+latest: '1.18'
 license-name: BSD-3-Clause
 maintainer: Ryan Scott <ryan.gl.scott@gmail.com>
 synopsis: Functions to desugar Template Haskell
@@ -990,4 +1258,4 @@ test-bench-deps:
   template-haskell: '>=0'
   th-abstraction: '>=0'
   th-desugar: '>=0'
-  th-orphans: '>=0.13.9'
+  th-orphans: '>=0'
