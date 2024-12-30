@@ -8,6 +8,7 @@ all-versions:
 - 0.3.1
 - 0.3.2
 - 0.3.3
+- 0.3.4
 author: Julian Bruder
 basic-deps:
   aeson: '>=2.2.3 && <2.3'
@@ -28,6 +29,17 @@ changelog: |
 
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   and this project adheres to [PVP versioning](https://pvp.haskell.org/).
+
+  ## v0.3.4 _(2024-12-30)_
+
+  ### Added
+  - Added class `HasTemplateLink` for fully templated links to endpoints
+  - Added combinator `data Title (sym :: Symbol)` for human-readable titles of resources
+
+  ### Changed
+  - Class `HasRelationLink` now returns complete links instead of partially templated ones
+  - Replaced all usages of `Link` with `RelationLink`, allowing more flexibility when gathering information about the resource the link refers to
+  - Extended the rendering of `HALResource` by props `type` (Content-Type) and `title`
 
   ## v0.3.3 _(2024-12-28)_
 
@@ -155,18 +167,19 @@ description: |
 
   -- add a link to the address-resource with the relation "address" for the user-resource
   instance Resource res => ToResource res User where
-    toResource _ usr = addRel ("address", CompleteLink $ mkAddrLink $ addressId usr) $ wrap usr
+    toResource _ ct usr = addRel ("address", mkAddrLink $ addressId usr) $ wrap usr
       where
-        mkAddrLink = safeLink (Proxy @AddressGetOne) (Proxy @AddressGetOne)
+        mkAddrLink = toRelationLink $ resourcifyProxy (Proxy @AddressGetOne) ct
   ```
 
   Further we define our API as usual:
   ```haskell
   type Api = UserApi :<|> AddressApi
 
-  type UserApi = UserGetOne :<|> UserGetAll :<|> UserGetAllCool
-  type UserGetOne     = "api" :> "user" :> Capture "id" Int :> Get '[JSON] User
-  type UserGetAll     = "api" :> "user" :> Get '[JSON] [User]
+  type UserApi = UserGetOne :<|> UserGetAll :<|> UserGetQuery
+  type UserGetOne    = "api" :> "user" :> Title "The user with the given id" :> Capture "id" Int :> Get '[JSON] User
+  type UserGetAll    = "api" :> "user" :> Get '[JSON] [User]
+  type UserGetQuery  = "api" :> "user" :> "query" :> QueryParam "addrId" Int :> QueryParam "income" Double :> Get '[JSON] User
 
   type AddressApi = AddressGetOne
   type AddressGetOne = "api" :> "address" :> Capture "id" Int :> Get '[JSON] Address
@@ -183,9 +196,11 @@ description: |
   This is nothing but the usual servant-server implementation, just that the implementation is not floating around in the source code and instead is bound to a class instance.
   ```haskell
   instance HasHandler UserGetOne where
-    getHandler _ _ = \uId -> return $ User uId 1 1000
+    getHandler _ _ = \uId -> return $ User uId 0 0
   instance HasHandler UserGetAll where
     getHandler _ _ = return [User 1 1 1000, User 2 2 2000, User 42 3 3000]
+  instance HasHandler UserGetQuery where
+    getHandler _ _ = \mAddrId mIncome -> return $ User 42 (maybe 0 id mAddrId) (maybe 0 id mIncome)
   instance HasHandler AddressGetOne where
     getHandler _ _ = \aId -> return $ Address aId "Foo St" "BarBaz"
   ```
@@ -198,6 +213,50 @@ description: |
 
   For now `apiServer` and `layerServer` exist in isolation, but the goal is to merge them into one.
 
+  When we now run the `layerServer` and request `GET http://host:port/api/user/query`, we get:
+  ```json
+  {
+      "_embedded": {},
+      "_links": {
+          "addrId": {
+              "href": "/api/user/query{?addrId}",
+              "templated": true,
+              "type": "application/hal+json"
+          },
+          "income": {
+              "href": "/api/user/query{?income}",
+              "templated": true,
+              "type": "application/hal+json"
+          },
+          "self": {
+              "href": "/api/user/query",
+              "type": "application/hal+json"
+          }
+      }
+  }
+  ```
+
+  Similar for `userServer` and `GET http://host:port/api/user/42`:
+  ```json
+  {
+      "_embedded": {},
+      "_links": {
+          "address": {
+              "href": "/api/address/0",
+              "type": "application/hal+json"
+          },
+          "self": {
+              "href": "/api/user/42",
+              "title": "The user with the given id",
+              "type": "application/hal+json"
+          }
+      },
+      "addressId": 0,
+      "income": 0,
+      "usrId": 42
+  }
+  ```
+
   The complete example can be found [here](https://github.com/bruderj15/servant-hateoas/blob/main/src/Servant/Hateoas/Example.hs).
 
   ## Contact information
@@ -205,9 +264,9 @@ description: |
 
   Please feel free to contact me through GitHub.
 description-type: markdown
-hash: 96d20e1acb768104f27df93ec9b7a70223f2b518f65c576a70182a33bac309b7
+hash: 326feecff08cd9a1070f19e85f080f731321e0460971733cc8e3fa3ff6c59a8a
 homepage: https://github.com/bruderj15/servant-hateoas
-latest: 0.3.3
+latest: 0.3.4
 license-name: BSD-3-Clause
 maintainer: julian.bruder@outlook.com
 synopsis: HATEOAS extension for servant
