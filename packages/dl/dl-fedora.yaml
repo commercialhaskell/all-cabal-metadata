@@ -23,6 +23,7 @@ all-versions:
 - '1.2'
 - 1.2.1
 - '1.3'
+- '2.0'
 author: Jens Petersen <juhpetersen@gmail.com>
 basic-deps:
   ansi-wl-pprint: '>=0'
@@ -37,6 +38,7 @@ basic-deps:
   http-directory: '>=0.1.10'
   http-types: '>=0'
   optparse-applicative: '>=0'
+  pretty-terminal: '>=0'
   regex-posix: '>=0'
   simple-cmd: '>=0.2'
   simple-cmd-args: '>=0.1.8'
@@ -48,13 +50,25 @@ basic-deps:
 changelog: |
   # Changelog
 
-  ## 1.3 (2025-02-XX)
+  ## 2.0 (2025-03-07)
+  - move short `-d` option from `--dl` to `--dir`
+  - simplify the download dir logic
+    (now falls back to current directory if ~/Downloads/ doesn't exist)
+  - partial downloads are now staged in a `.dl-fedora-partial/` subdirectory
+  - promote KDE to edition
+  - accumulate download errors and report number of failures
+  - 'next' is now also accepted as a release alias
+  - add `--all-desktops`
+  - add `--dir option` to override download dir
+  - add `--exclude` editions switch
+
+  ## 1.3 (2025-02-16)
   - F42 Workstation now created with Kiwi
   - KDE spin renamed to KDE Desktop
   - add COSMIC for F42
   - use "c{9,10}s-live" for alt live respins instead of --cs-live-respin
-  - support downloading multiple editions/spins or all editions/spins:
-    --all-editions and --all-spins defined per release or respin
+  - support downloading multiple or all editions/spins:
+    --all-editions and --all-spins are defined per release or respin
   - handle Kiwi use for different versions
   - rawhide can now be specified by version number (uses fedora-release)
   - respin --local: now correctly lists latest respin (not oldest)
@@ -241,9 +255,11 @@ description: |
   `dl-fedora c10s` : downloads a Centos Stream net installer.
 
   By default dl-fedora downloads to `~/Downloads/`
-  (correctly the XDG user "DOWNLOADS" directory),
-  but if you create an `iso` subdirectory there (`~/Downloads/iso/`)
-  it will use that directory instead.
+  (correctly the XDG user "DOWNLOAD" directory), or `~/Downloads/iso/` if it exists.
+  If `~/Downloads/` doesn't exist then the current directory is used.
+  You can override the download directory with `--dir DIR` (which can be relative: eg `.`).
+  Curl downloads to a `.dl-fedora-partial` subdirectory first (which can safely be removed when not using dl-fedora)
+  and the downloaded file is then moved up to the actual download directory when complete.
 
   `dl-fedora` downloads the latest mirrored image redirected from
   `download.fedoraproject.org` by default.
@@ -252,7 +268,7 @@ description: |
   _if_ your mirror is not synced yet.
 
   If the image is already found to be downloaded
-  it will not be re-downloaded of course.
+  it will not be re-downloaded of course (unless you use a different `--dir` say).
   Curl is used to do the downloading: partial downloads will continue.
 
   A symlink to the latest iso is also created:
@@ -260,23 +276,24 @@ description: |
 
   It also tries to check the iso checksum and its gpg signature.
 
-  There are a couple of edition abbreviations:
-  - `ws` and `gnome` are aliases for `workstation` (default edition)
-  - `sb` is short for `silverblue`.
-
-  Also release aliases:
+  There are some release aliases:
   - {`8`,`9`,`10`} are aliases for {`c8s`, `c9s`, `c10s`}
   - `{8,9,10}-{live,respin}` are aliases for `{c8s,c9s,c10s}-{live,respin}`
   - currently `11` is an alias for eln
   - the current rawhide version can be used for `rawhide`
-  - `current` is an alias for the latest current stable Fedora release
+  - `next` is an alias for the next Fedora release (either Rawhide or "branched")
+  - `current` is an alias for the latest current stable Fedora release (though you may prefer newer `respin`)
   - `previous` is an alias for the previous current stable Fedora release
+
+  Also a few edition abbreviations:
+  - `ws` and `gnome` are aliases for `workstation` (default edition)
+  - `sb` is short for `silverblue`.
 
   ## Usage
   `$ dl-fedora --version`
 
   ```
-  1.3
+  2.0
   ```
   `$ dl-fedora --help`
 
@@ -286,16 +303,17 @@ description: |
   Usage: dl-fedora [--version] [-g|--gpg-keys] [--no-checksum | --checksum]
                    [--debug] [-T|--no-http-timeout]
                    [(-c|--check) | (-l|--local) | --list | (-R|--replace)]
-                   [-n|--dry-run] [-r|--run]
-                   [(-L|--latest) | (-d|--dl) | (-k|--koji) | (-m|--mirror URL)]
+                   [-d|--dir DIRECTORY] [-n|--dry-run] [-r|--run]
+                   [(-L|--latest) | --dl | (-k|--koji) | (-m|--mirror URL)]
                    [--dvd] [--cs-devel | --cs-test | --cs-production]
                    [--alt-cs-extra-edition ('MAX'|'MIN')] [-a|--arch ARCH] RELEASE
-                   [--all-spins | --all-editions | [EDITION...]]
+                   [--all-desktops | --all-spins | --all-editions | [-x|--exclude]
+                     [EDITION...]]
 
     Tool for downloading Fedora iso file images.
     RELEASE = release number, respin, rawhide, test (Beta), stage (RC), eln, c9s, c10s, c9s-live
-    EDITION = {cloud,container,everything,server,workstation,budgie,cinnamon,
-               cosmic,i3,kde,kdemobile,lxde,lxqt,mate,miracle,soas,sway,xfce,
+    EDITION = {cloud,container,everything,kde,server,workstation,budgie,cinnamon,
+               cosmic,i3,kdemobile,lxde,lxqt,mate,miracle,soas,sway,xfce,
                silverblue,kinoite,onyx,sericea,iot} [default: workstation]
 
     See <https://github.com/juhp/dl-fedora/#readme>
@@ -313,11 +331,12 @@ description: |
     --list                   List spins and editions
     -R,--replace             Delete previous snapshot image after downloading
                              latest one
+    -d,--dir DIRECTORY       Download directory [default: ~/Downloads/iso]
     -n,--dry-run             Don't actually download anything
     -r,--run                 Boot image in QEMU
     -L,--latest              Get latest image either from mirror or dl.fp.o if
                              newer
-    -d,--dl                  Use dl.fedoraproject.org (dl.fp.o)
+    --dl                     Use dl.fedoraproject.org (dl.fp.o)
     -k,--koji                Use koji.fedoraproject.org
     -m,--mirror URL          Mirror url for /pub [default
                              https://download.fedoraproject.org/pub]
@@ -331,8 +350,10 @@ description: |
                              Centos Stream Alternative Live Spin editions
                              (MAX,MIN)
     -a,--arch ARCH           Specify arch [default: x86_64]
+    --all-desktops           Get all Fedora desktops
     --all-spins              Get all Fedora Spins
     --all-editions           Get all Fedora editions
+    -x,--exclude             Exclude specified editions
   ```
 
   ## References
@@ -345,12 +366,13 @@ description: |
 
   Please report issues or pull requests at <https://github.com/juhp/dl-fedora>.
 description-type: markdown
-hash: 822d64d7891f8328fa09e2fd18ce24037adf9bfb2664adff8b7eff4c1d654374
+hash: f4ae1a8a3d80ebc6de26e8079ca466010e596ad565b198d2cd3e1623398def54
 homepage: https://github.com/juhp/dl-fedora
-latest: '1.3'
+latest: '2.0'
 license-name: GPL-3.0-only
 maintainer: Jens Petersen <juhpetersen@gmail.com>
 synopsis: Fedora image download tool
 test-bench-deps:
   base: '>=4 && <5'
+  fedora-releases: '>=0'
   simple-cmd: '>=0'
