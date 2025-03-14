@@ -1,0 +1,132 @@
+all-versions:
+- 0.1.0.0
+author: ''
+basic-deps:
+  base: '>=4.16 && <4.22'
+  bytestring: '>=0'
+  crypton-connection: '>=0'
+  crypton-x509-system: '>=0'
+  data-default: '>=0'
+  http-client: '>=0'
+  http-client-tls: '>=0'
+  tls: '>=1.8 && <2.3'
+  tls-sslkeylogfile: '>=0'
+changelog: |
+  <!--
+  SPDX-FileCopyrightText: 2025 Mercury Technologies, Inc
+
+  SPDX-License-Identifier: MIT
+  -->
+
+  ## 0.1.0.0 (2025-03-07)
+
+  - Initial release
+changelog-type: markdown
+description: |
+  <!--
+  SPDX-FileCopyrightText: 2025 Mercury Technologies, Inc
+
+  SPDX-License-Identifier: MIT
+  -->
+
+  # tls-sslkeylogfile
+
+  This package adds support for the [`SSLKEYLOGFILE` standard](https://www.ietf.org/archive/id/draft-thomson-tls-keylogfile-00.html) to Haskell programs using the `tls` and/or `http-client` libraries.
+
+  This packages uses the functionality built into the Haskell `tls` library to extract the *session keys* of TLS sessions and store them in the `SSLKEYLOGFILE` format.
+  In TLS, the session keys are ephemeral *symmetric* keys used to encrypt just the data for each session.
+  They are generated and exchanged during the TLS handshake, and with modern TLS cipher suites with [Perfect Forward Secrecy], are handled via completely separate machinery (Diffie-Hellman) from the server's private key, the latter only being used to sign the handshake.
+  As far as key material is concerned, session keys are not very sensitive: they are generated for every session and grabbing them for debugging only allows access to the traffic for which the keys are known.
+
+  [Perfect Forward Secrecy]: https://en.wikipedia.org/wiki/Forward_secrecy
+
+  Using session keys allows for (relatively) easy debugging of HTTPS traffic using commonly-available packet sniffers like Wireshark *without altering the traffic at all*, and without wider security impacts like e.g. adding local TLS certification authorities to the system keyring.
+
+  For more details on TLS interception using session keys, see: <https://jade.fyi/blog/announcing-clipper/>.
+
+  ## Related work
+
+  - [mitmproxy](https://mitmproxy.org/) - an intercepting TLS proxy with a lot of features.
+
+    It can operate as a proxy with fake certificates in various modes including capturing raw traffic and tampering with it, acting as a traditional HTTPS proxy, and more.
+    It's really cool.
+
+    However, the fake certificates mode can be unfortunate since they require certificate configuration in the application and are not transparent: you can't use mitmproxy to debug TLS implementation bugs, for instance, since it changes the traffic to intercept it.
+  - [clipper](https://github.com/lf-/clipper) - a fully integrated TLS session-key-log based packet sniffer for Linux by the same author as this package.
+
+    Clipper does the same thing as this package for rustls and OpenSSL with no application-level changes, implemented by injecting code into the process.
+    It captures traffic transparently and can either generate pcapng files with included keys or decode traffic on-the-fly to display it in Chrome DevTools.
+
+    However, it does not support either extracting keys from Haskell or capturing traffic on macOS.
+
+  ## Usage
+
+  Set up tls-sslkeylogfile on a simple program (see [examples/demo/Demo.hs](./examples/demo/Demo.hs)):
+
+  ```haskell
+  import Network.TLS.SSLKeyLogFile
+  import Network.HTTP.Client (parseRequest, httpLbs, Response (..))
+
+  main :: IO ()
+  main = do
+    man <- makeManager
+
+    req <- parseRequest "https://example.com/index.html"
+    resp <- httpLbs req man
+    putStrLn $ "The status code was: " ++ show (responseStatus resp)
+  ```
+
+  Then run it with some interception:
+
+  In one terminal, capture some packets (tcpdump can equally be used):
+
+  ```
+  $ tshark -w pakits.pcapng -i en9 'port 443'
+  Capturing on 'REDACTED: en9'
+  322 ^C
+  ```
+
+  In another, run the program with `SSLKEYLOGFILE` set:
+
+  ```
+  $ SSLKEYLOGFILE=keys.log cabal run keylogfile-demo
+  The status code was: Status {statusCode = 200, statusMessage = "OK"}
+  ```
+
+  After the debugee finishes, the `tshark` command should be CTRL-C'd.
+
+  `keys.log` will look like the following:
+
+  ```
+  SERVER_HANDSHAKE_TRAFFIC_SECRET aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  CLIENT_HANDSHAKE_TRAFFIC_SECRET aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  SERVER_TRAFFIC_SECRET_0 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  CLIENT_TRAFFIC_SECRET_0 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  ```
+
+  The actual keys are replaced with placeholders here for readability.
+  This is a TLS 1.3 session because there are lines that are not tagged `CLIENT_RANDOM`.
+
+  Put the keys into the pcapng so the analysis tools work nicely:
+
+  ```
+  $ editcap --inject-secrets tls,keys.log pakits.pcapng pakits2.pcapng
+  ```
+
+  Then, look at the packets with tshark:
+
+  ```
+  $ tshark -r pakits2.pcapng -T fields -e '_ws.col.Info' --display-filter http
+  GET /index.html HTTP/1.1
+  HTTP/1.1 200 OK  (text/html)
+  ```
+
+  Here's our traffic! If you wanted a nicer UX of looking at it, just open the pcapng file in Wireshark, the encrypted traffic will be right there decrypted for you.
+description-type: markdown
+hash: 58ac431ab7d07980871348bd43f98be1f79988c3fb12de5f94163f8965716bf1
+homepage: https://github.com/MercuryTechnologies/tls-sslkeylogfile#readme
+latest: 0.1.0.0
+license-name: MIT
+maintainer: Jade Lovelace <jadel@mercury.com>
+synopsis: SSLKEYLOGFILE support for Haskell
+test-bench-deps: {}
