@@ -1,0 +1,196 @@
+all-versions:
+- 0.1.0.0
+author: Jakob Schöttl
+basic-deps:
+  aeson: '>=0'
+  base: '>=4.7 && <5'
+  bytestring: '>=0'
+  http-client: '>=0'
+  http-types: '>=0'
+  network-uri: '>=0'
+  text: '>=0'
+  time: '>=0'
+changelog: |
+  # Changelog for `erpnext-api-client`
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+changelog-type: markdown
+description: |
+  # erpnext-api-client
+
+  This is a Haskell API client for
+  [ERPNext](https://github.com/frappe/erpnext). It aims to be a
+  light-weight library based on
+  [http-client](https://hackage.haskell.org/package/http-client) and
+  user-provided record types.
+
+  ERPNext has the concept of
+  [DocTypes](https://docs.frappe.io/erpnext/user/manual/en/doctype) which
+  model entities like Customer, Sales Order, etc.
+
+  The [ERPNext REST
+  API](https://docs.frappe.io/framework/user/en/api/rest) basically has
+  seven types of requests covering CRUD operations, remote method calls,
+  and file uploads.
+
+  CRUD operations on a given DocType are:
+
+  -   `GET` list of all documents of a DocType (`getDocTypeList`)
+  -   `POST` to create a new document (`postDocType`)
+  -   `GET` a document by name (`getDocType`)
+  -   `PUT` to update a document by name (`putDocType`)
+  -   `DELETE` a document by name (`deleteDocType`)
+
+  Note: Remote method calls and file uploads are not yet supported.
+
+  DocTypes in ERPNext can be extended and newly created by users. This is
+  why this library does not come with any predefined types for DocTypes.
+  Instead, users can provide their own types with only the fields they
+  need.
+
+  This library also provides tooling to generate Haskell record types for
+  DocTypes from a simple DSL (see section below).
+
+  ## Usage
+
+  This sample code makes a GET request for a named document of the given
+  DocType.
+
+  ``` haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import ERPNext.Client
+  import Network.HTTP.Client
+  import Data.Aeson
+  import GHC.Generics
+
+  data Customer = Customer
+    { name :: String
+    } deriving Generic
+
+  instance FromJSON Customer
+  instance ToJSON Customer
+  instance IsDocType Customer where
+    docTypeName = "Customer"
+
+  main :: IO ()
+  main = do
+    let config = mkConfig "https://erpnext.example.com" "api-key" (mkSecret "api-secret")
+    manager <- newManager defaultManagerSettings
+    response <- getDocType manager config "Company A" :: IO (ApiResponse Customer)
+    case response of
+      Ok _ c _ -> putStrLn $ name c
+      Err r _ -> print r
+  ```
+
+  ``` bash
+  stack runhaskell example1.hs
+  ```
+
+  ## Scope and Limits
+
+  -   Only [token-based
+      authentication](https://docs.frappe.io/framework/user/en/api/rest#1-token-based-authentication)
+      is supported.
+  -   [Remote Method
+      Calls](https://docs.frappe.io/framework/user/en/api/rest#remote-method-calls)
+      are not yet supported.
+  -   [File
+      Uploads](https://docs.frappe.io/framework/user/en/api/rest#file-uploads)
+      are not yet supported.
+
+  ## Data records for DocTypes
+
+  Haskell record types for the DocTypes can be coded by hand which
+  requires some boiler plate like Aeson instances, handling `null` or
+  missing values, and writing helper functions like `mkCustomer`.
+
+  This library provides tooling to generate Haskell record types from a
+  simple DSL very similar to [persistent's model definition
+  syntax](https://hackage.haskell.org/package/persistent/docs/Database-Persist-Quasi.html).
+
+  1.  A script generates an [OpenAPI
+      Specification](https://swagger.io/specification/) file in `yaml`
+      format.
+  2.  The
+      [Haskell-OpenAPI-Client-Code-Generator](https://github.com/Haskell-OpenAPI-Code-Generator/Haskell-OpenAPI-Client-Code-Generator/)
+      generates an Haskell API client, from which only the type
+      definitions can be used.
+
+  The resulting files are a separate Haskell package which can be added as
+  dependency. The resulting record types can be used together with this
+  API client but the `IsDocType` instance must still be defined by hand.
+
+  ****The API client part generated from the OpenAPI spec can not be
+  used.****
+
+  ``` example
+  $ ./scripts/gen-openapi-yaml.sh models > openapi.yaml
+  $ openapi3-code-generator-exe \
+      --specification openapi.yaml \
+      --package-name erpnext-api-client-models \
+      --module-name ERPNextAPI \
+      --force --output-dir api-client/
+  $ tree api-client/
+  api-client/
+  ├── erpnext-api-client-models.cabal
+  ├── src
+  │   ├── ERPNextAPI
+  │   │   ├── Common.hs
+  │   │   ├── Configuration.hs
+  │   │   ├── Operations
+  │   │   │   └── DummyOperation.hs
+  │   │   ├── SecuritySchemes.hs
+  │   │   ├── TypeAlias.hs
+  │   │   ├── Types     <---- here are the generated types
+  │   │   │   ├── Customer.hs
+  │   │   │   ├── Order.hs
+  │   │   │   ├── Supplier.hs
+  │   │   └── Types.hs
+  │   └── ERPNextAPI.hs
+  ├── stack.yaml
+  └── stack.yaml.lock
+  ```
+
+  ## Note on TLS problems
+
+  If you're running ERPNext in your test environment, chances are that
+  your server does not have a valid TLS certificate signed by a trusted
+  CA.
+
+  In this case you can configure the HTTP connection manager's TLS
+  settings like this:
+
+  ``` haskell
+  import Network.HTTP.Client
+  import Network.HTTP.Client.TLS (mkManagerSettings)
+  import Network.Connection (TLSSettings (..))
+
+  …
+
+  let tlsSettings =
+        mkManagerSettings
+          ( TLSSettingsSimple
+              { settingDisableCertificateValidation = True
+              , settingDisableSession = False
+              , settingUseServerName = False
+              }
+          )
+          Nothing
+  manager <- Network.HTTP.Client.newManager tlsSettings
+  …
+  ```
+
+  ``` bash
+  stack runhaskell --package crypton-connection --package http-client-tls example1.hs
+  ```
+description-type: markdown
+hash: d8fded78e2f133b4095713f2811c7c07d09f136a7aa0d558d9b7b848c167cad6
+homepage: https://github.com/schoettl/erpnext-api-client
+latest: 0.1.0.0
+license-name: MIT
+maintainer: jakob.schoettl@intensovet.de
+synopsis: Generic API client library for ERPNext
+test-bench-deps: {}
