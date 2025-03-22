@@ -1,0 +1,147 @@
+all-versions:
+- 0.1.0.0
+author: Simon Désaulniers
+basic-deps:
+  base: ^>=4.17.2.1
+  bytestring: ^>=0.11.5
+  containers: '>=0.6.7 && <0.7'
+  data-default: '>=0.8.0 && <0.9'
+  lens: '>=5.3.3 && <5.4'
+  mtl: '>=2.2.2 && <2.3'
+  random: '>=1.2.1 && <1.3'
+  stm: '>=2.5.1 && <2.6'
+  transformers: '>=0.5.6 && <0.6'
+changelog: |
+  # Revision history for opendht-hs
+
+  ## 0.1.0.0 -- YYYY-mm-dd
+
+  * First version. Released on an unsuspecting world.
+changelog-type: markdown
+description: |2+
+
+  ## opendht-hs
+
+  Haskell bindings for [OpenDHT](https://github.com/savoirfairelinux/opendht)
+  (based on opendht-c, the C bindings for OpenDHT) exposing only pure Haskell data
+  tnypes.
+
+  This library defines a monad taking care of all pointers used to interact with
+  opendht-c.
+
+  ### Example
+
+  ```haskell
+  module Main where
+
+  import qualified Data.ByteString as BS
+  import qualified Data.ByteString.Char8 as BSC
+  import qualified Data.ByteString.Internal as BSI
+
+  import Control.Monad
+  import Control.Monad.Trans
+  import Control.Concurrent
+
+  import OpenDHT.Value
+  import OpenDHT.InfoHash
+  import OpenDHT.PublicKey
+  import OpenDHT.DhtRunner ( runDhtRunnerM
+                           )
+  import qualified OpenDHT.DhtRunner as DhtRunner
+
+  getCb :: Value -> IO Bool
+  getCb v = valueCb v False
+
+  doneCb :: MVar () -> Bool -> IO ()
+  doneCb mv success = do
+    let status
+          | success   = "Success!"
+          | otherwise = "Fail!"
+    putStrLn status
+    putMVar mv ()
+
+  valueCb :: Value -> Bool -> IO Bool
+  valueCb (MetaValue {}) _                       = undefined
+  valueCb (InputValue {}) _                      = undefined
+  valueCb (StoredValue _ _ (PublicKey {}) _ _) _ = undefined
+  valueCb (StoredValue d i (ExportedKey o) rId utype) expired = liftIO cb >> return True
+    where
+      ownerStr = if null o then "none" else take 50 o
+      dString  = map BSI.w2c (BS.unpack d)
+      cb = do
+        putStrLn $ "Value "            <> if expired then "expired!" else "received!"
+        putStrLn $ ">> data: "         <> take 50 dString
+        putStrLn $ ">> value id: "     <> show i
+        putStrLn $ ">> value owner: "  <> ownerStr
+        putStrLn $ ">> recipient id: " <> show rId
+        putStrLn $ ">> user type: "    <> show utype
+
+  shutdownCb :: IO ()
+  shutdownCb = do
+    putStrLn "Shutting down!"
+
+  main :: IO ()
+  main = do
+    mv         <- newEmptyMVar
+    runDhtRunnerM shutdownCb $ do
+      DhtRunner.run 0
+      DhtRunner.bootstrap "bootstrap.ring.cx" "4222"
+
+      h <- lift randomInfoHash
+      let
+        dataStr = "my data"
+        v       = InputValue { _valueData     = BSC.pack dataStr
+                             , _valueUserType = "mytype"
+                             }
+      liftIO $ putStrLn $ "Putting value " <> show dataStr
+      void $ DhtRunner.put h v (doneCb mv) False
+      liftIO $ takeMVar mv
+
+      liftIO $ putStrLn "Getting back the value..."
+      DhtRunner.get h getCb (doneCb mv)
+      liftIO $ takeMVar mv
+  ```
+
+  This would yield the following text on `stdout`:
+
+  ```
+  Putting value "my data"
+  Success!
+  Getting back the value...
+  Value received!
+  >> data: my data
+  >> value id: 11921635044826781238
+  >> value owner: none
+  >> recipient id: 0000000000000000000000000000000000000000
+  >> user type: "mytype"
+  Success!
+  Shutting down!
+  ```
+
+  ### Using opendht-hs
+
+  Make sure to pass `-threaded` to GHC because this library makes use of
+  threading.
+
+  ### Dependencies
+
+  * For building only:
+    * ghc `>=9.4.8`
+    * cabal `>=3.12.1.0`
+    * c2hs (tested on `0.28.8`)
+  * OpenDHT's C bindings `>=3.3.0`.
+
+  ### Author(s)
+
+  Simon Désaulniers (sim.desaulniers@gmail.com)
+
+  <!-- vim: set sts=2 ts=2 sw=2 tw=0 et :-->
+
+description-type: markdown
+hash: 87ba912127806b49c68de20a8f274dd2b1f795969b195c0f831230c5c733e1b1
+homepage: ''
+latest: 0.1.0.0
+license-name: GPL-3.0-or-later
+maintainer: sim.desaulniers@gmail.com
+synopsis: Haskell bindings for OpenDHT
+test-bench-deps: {}
