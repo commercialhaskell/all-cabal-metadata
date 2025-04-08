@@ -36,124 +36,269 @@ all-versions:
 - 0.6.8
 - 0.6.9
 - 0.6.10
+- '1'
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   base: '>=4.11 && <5'
   bytestring: '>=0.10 && <0.13'
   text: '>=1.2 && <3'
-  text-builder-dev: '>=0.3.10 && <0.4'
-changelog: |2
+  text-builder-core: ^>=0.1.1.1
+  time: '>=1.12 && <2'
+  transformers: '>=0.5 && <0.7'
+changelog: |
+  # 1
+
+  Major performance optimization achieved by getting rid of the "length" function. Since this was an unavoidable breaking change, other breaking changes were added as well.
+
+  Major redesign done to declutter the API from experimental features, dropping some and isolating others to "text-builder-dev" to reduce the need for further major releases of this library down the road. Order brought to naming conventions of the formatter-functions.
+
+  ## Breaking changes and migration instructions
+
+  - `Text.Builder` module renamed to `TextBuilder` to fully conform to the [convention](https://www.reddit.com/r/haskell/comments/1qrilm/packages_and_namespaces_naming_convention/) of having the root namespace of the library map to its name.
+  - `Builder` type was renamed to `TextBuilder`.
+  - `run` renamed to `toText`.
+  - `length` removed to increase performance of the whole abstraction.
+  - `null` renamed to `isEmpty` to leave declarative naming only for constructor-functions.
+  - `putToStdOut`, `putToStdErr`, `putLnToStdOut`, `putLnToStdErr` removed to reduce the bloat of the API. Just use similar functions on `Text`.
+  - `padFromLeft` and `padFromRight` moved to "text-builder-dev-0.4".
+  - `asciiByteString` renamed to `unsafeUtf8ByteString`. ASCII is a subset of UTF-8 and the previous implementation was unsafe any way.
+  - `hexData` moved to "text-builder-dev-0.4" as `byteStringHexEncoding`.
+  - `unicodeCodePoint` renamed to `unicodeCodepoint`.
+  - `utf16CodeUnits1`, `utf16CodeUnits2`, `utf8CodeUnits1`, `utf8CodeUnits2`, `utf8CodeUnits3`, `utf8CodeUnits4` moved to "text-builder-core-0.1" and removed from the public API to reduce the bloat. Nobody seems to have been using them. If you need them, open a ticket in "text-builder-core".
+  - `unsignedDecimal` - removed because it was unsafe. Use `decimal`.
+  - `thousandSeparatedUnsignedDecimal` - removed because it was unsafe. Use `thousandSeparatedDecimal`.
+  - `dataSizeInBytesInDecimal` moved to "text-builder-dev-0.4" as `approximateDataSize`.
+  - `unsignedBinary` and `unsignedPaddedBinary` replaced with `binary`, which is now safe and handles negative values.
+  - `hexadecimal` and `unsignedHexadecimal` replaced with `hexadecimal`, which is now safe and handles negative values.
+  - `decimalDigit` and `hexadecimalDigit` removed. Seemed to not be useful. If you think otherwise open a ticket.
+  - `fixedDouble` moved to "text-builder-dev-0.4" as `doubleFixedPoint`. It does not have an efficient implementation yet is based on `printf`.
+  - `doublePercent` moved to "text-builder-dev-0.4" as `doubleFixedPointPercent`. Same reasons.
+  - `intervalInSeconds` moved to "text-builder-dev-0.4" as `diffTimeSeconds` and `picoseconds`.
+
+  ## Non-breaking
+
+  - `unicodeCodepoint` is now safe. It replaces invalid codepoints with a default one.
+  - `char` is now safe for the same reasons.
 
   # 0.6.8
 
-  - Migrated to the namespacing convention where the root namespace matches the package name 1-1 with no special cases. The support for previous naming convention is still provided though
+  - Migrated to the namespacing convention where the root namespace matches the package name 1-1 with no special cases. The support for previous naming convention is still provided though.
 changelog-type: markdown
 description: |
   # Summary
 
-  - Efficient monoidal builder of strict textual values
-  - Text formatting library, an alternative to `printf` or the "formatting" Haskell library
+  Fast strict text builder and simple type-safe formatting library for Haskell.
 
   # Performance
 
-  The benchmarks show that it's about 2 times faster than the lazy text builder supplied with the "text" package. In the years of existence of this package the collected user feedback proves that it's faster in fact.
+  The benchmarks measure the monoidal composition of builders constructed from `Text` simulating left- and right-biased appends and `mconcat`.
+
+  The results show the following:
+
+  - It's 2-3 times faster than the `Data.Text.Lazy.Builder` supplied with the "text" package.
+  - It's 1.25 times faster than the `Data.Text.Encoding.StrictTextBuilder` which has recently arrived in "text".
+  - It's 1.2-2 times faster than "text-builder-linear".
+  - It's 1.1 times slower than `Data.Text.Text` in case of using `mconcat` over texts. In all other cases `Text` is slower and slows down exponentially, which is not surprising.
+
+  In the years of existence of this package multiple user-stories have been collected proving the performance boosts after switching to it.
 
   ```
-  benchmarking Left-biased mappend/1kB/TextBuilder
-  time                 4.567 μs   (4.552 μs .. 4.584 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 4.570 μs   (4.551 μs .. 4.592 μs)
-  std dev              64.42 ns   (49.19 ns .. 81.46 ns)
-  variance introduced by outliers: 12% (moderately inflated)
-
-  benchmarking Left-biased mappend/1kB/Data.Text.Lazy.Builder
-  time                 8.855 μs   (8.805 μs .. 8.901 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 8.867 μs   (8.821 μs .. 8.908 μs)
-  std dev              137.9 ns   (114.6 ns .. 160.4 ns)
-  variance introduced by outliers: 13% (moderately inflated)
-
-  benchmarking Left-biased mappend/1MB/TextBuilder
-  time                 9.546 ms   (9.415 ms .. 9.773 ms)
-                       0.998 R²   (0.995 R² .. 1.000 R²)
-  mean                 9.407 ms   (9.351 ms .. 9.493 ms)
-  std dev              184.7 μs   (92.85 μs .. 333.3 μs)
-
-  benchmarking Left-biased mappend/1MB/Data.Text.Lazy.Builder
-  time                 17.04 ms   (16.85 ms .. 17.21 ms)
-                       0.999 R²   (0.999 R² .. 1.000 R²)
-  mean                 17.09 ms   (16.99 ms .. 17.19 ms)
-  std dev              228.4 μs   (181.4 μs .. 285.3 μs)
-
-  benchmarking Right-biased mappend/1kB/TextBuilder
-  time                 4.481 μs   (4.467 μs .. 4.499 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 4.486 μs   (4.470 μs .. 4.508 μs)
-  std dev              61.86 ns   (44.45 ns .. 87.66 ns)
-  variance introduced by outliers: 11% (moderately inflated)
-
-  benchmarking Right-biased mappend/1kB/Data.Text.Lazy.Builder
-  time                 8.751 μs   (8.701 μs .. 8.798 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 8.751 μs   (8.697 μs .. 8.805 μs)
-  std dev              159.2 ns   (134.4 ns .. 205.0 ns)
-  variance introduced by outliers: 17% (moderately inflated)
-
-  benchmarking Right-biased mappend/1MB/TextBuilder
-  time                 7.057 ms   (7.035 ms .. 7.086 ms)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 7.071 ms   (7.050 ms .. 7.093 ms)
-  std dev              57.85 μs   (43.37 μs .. 83.06 μs)
-
-  benchmarking Right-biased mappend/1MB/Data.Text.Lazy.Builder
-  time                 15.10 ms   (14.96 ms .. 15.30 ms)
-                       0.999 R²   (0.999 R² .. 1.000 R²)
-  mean                 15.15 ms   (15.04 ms .. 15.25 ms)
-  std dev              273.0 μs   (208.6 μs .. 392.6 μs)
-
-  benchmarking mconcat/1kB/TextBuilder
-  time                 4.778 μs   (4.756 μs .. 4.800 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 4.784 μs   (4.770 μs .. 4.802 μs)
-  std dev              58.27 ns   (48.36 ns .. 72.11 ns)
-
-  benchmarking mconcat/1kB/Data.Text.Lazy.Builder
-  time                 8.046 μs   (8.009 μs .. 8.087 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 8.053 μs   (8.021 μs .. 8.084 μs)
-  std dev              102.3 ns   (81.50 ns .. 130.5 ns)
-
-  benchmarking mconcat/1MB/TextBuilder
-  time                 8.902 ms   (8.856 ms .. 8.931 ms)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 8.892 ms   (8.868 ms .. 8.926 ms)
-  std dev              81.44 μs   (62.67 μs .. 119.7 μs)
-
-  benchmarking mconcat/1MB/Data.Text.Lazy.Builder
-  time                 10.56 ms   (10.39 ms .. 10.68 ms)
-                       0.999 R²   (0.998 R² .. 0.999 R²)
-  mean                 10.50 ms   (10.42 ms .. 10.60 ms)
-  std dev              260.2 μs   (191.2 μs .. 375.9 μs)
+  All
+    Competition
+      Left-biased mappend
+        100B
+          TextBuilder.TextBuilder:              OK
+            187  ns ±  14 ns, 960 B  allocated,   0 B  copied, 6.0 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            215  ns ±  17 ns, 1.2 KB allocated,   0 B  copied, 6.0 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            510  ns ±  27 ns, 2.6 KB allocated,   1 B  copied, 6.0 MB peak memory
+          Data.Text.Text:                       OK
+            216  ns ±  15 ns, 1.6 KB allocated,   0 B  copied, 6.0 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            424  ns ±  30 ns, 4.2 KB allocated,   2 B  copied, 6.0 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            368  ns ±  26 ns, 1.3 KB allocated,   0 B  copied, 6.0 MB peak memory
+        1kB
+          TextBuilder.TextBuilder:              OK
+            1.54 μs ± 144 ns, 8.3 KB allocated,   8 B  copied, 6.0 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            1.85 μs ± 131 ns,  12 KB allocated,  10 B  copied, 6.0 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            4.66 μs ± 458 ns,  24 KB allocated,  31 B  copied, 6.0 MB peak memory
+          Data.Text.Text:                       OK
+            3.80 μs ± 257 ns, 104 KB allocated,  85 B  copied, 6.0 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            24.5 μs ± 1.7 μs, 358 KB allocated, 451 B  copied, 6.0 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            3.04 μs ± 213 ns,  12 KB allocated,   6 B  copied, 6.0 MB peak memory
+        10kB
+          TextBuilder.TextBuilder:              OK
+            15.5 μs ± 1.2 μs,  82 KB allocated, 175 B  copied, 8.0 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            18.3 μs ± 536 ns, 121 KB allocated, 439 B  copied, 8.0 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            47.7 μs ± 3.4 μs, 242 KB allocated, 1.9 KB copied, 8.0 MB peak memory
+          Data.Text.Text:                       OK
+            355  μs ±  19 μs, 9.6 MB allocated,  19 KB copied,  13 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            2.63 ms ± 251 μs,  34 MB allocated, 264 KB copied,  13 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            30.6 μs ± 1.7 μs, 110 KB allocated, 202 B  copied,  13 MB peak memory
+        100kB
+          TextBuilder.TextBuilder:              OK
+            201  μs ±  14 μs, 1.0 MB allocated,  14 KB copied,  13 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            195  μs ±  19 μs, 1.2 MB allocated,  39 KB copied,  13 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            520  μs ±  30 μs, 2.4 MB allocated, 174 KB copied,  13 MB peak memory
+          Data.Text.Text:                       OK
+            28.1 ms ± 2.0 ms, 954 MB allocated, 476 KB copied,  25 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            616  ms ±  34 ms, 4.7 GB allocated, 136 MB copied,  25 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            361  μs ±  33 μs, 1.5 MB allocated,  15 KB copied,  25 MB peak memory
+      Right-biased mappend
+        100B
+          TextBuilder.TextBuilder:              OK
+            188  ns ±  13 ns, 960 B  allocated,   0 B  copied,  25 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            231  ns ±  17 ns, 1.2 KB allocated,   0 B  copied,  25 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            500  ns ±  34 ns, 2.6 KB allocated,   1 B  copied,  25 MB peak memory
+          Data.Text.Text:                       OK
+            214  ns ±  18 ns, 1.6 KB allocated,   0 B  copied,  25 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            283  ns ±  13 ns, 1.8 KB allocated,   0 B  copied,  25 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            363  ns ±  19 ns, 1.3 KB allocated,   0 B  copied,  25 MB peak memory
+        1kB
+          TextBuilder.TextBuilder:              OK
+            1.59 μs ± 123 ns, 8.3 KB allocated,   7 B  copied,  25 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            1.98 μs ± 120 ns,  12 KB allocated,   9 B  copied,  25 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            4.66 μs ± 281 ns,  24 KB allocated,  30 B  copied,  25 MB peak memory
+          Data.Text.Text:                       OK
+            3.76 μs ±  72 ns, 104 KB allocated,  79 B  copied,  25 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            2.23 μs ± 215 ns,  17 KB allocated,  29 B  copied,  25 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            3.03 μs ± 249 ns,  12 KB allocated,  11 B  copied,  25 MB peak memory
+        10kB
+          TextBuilder.TextBuilder:              OK
+            15.6 μs ± 1.0 μs,  82 KB allocated, 205 B  copied,  25 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            32.7 μs ± 2.0 μs, 185 KB allocated, 556 B  copied,  25 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            47.6 μs ± 4.1 μs, 242 KB allocated, 2.1 KB copied,  25 MB peak memory
+          Data.Text.Text:                       OK
+            437  μs ±  14 μs, 9.6 MB allocated,  22 KB copied,  28 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            24.9 μs ± 1.0 μs, 168 KB allocated, 1.9 KB copied,  28 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            30.4 μs ± 1.7 μs, 110 KB allocated, 427 B  copied,  28 MB peak memory
+        100kB
+          TextBuilder.TextBuilder:              OK
+            176  μs ±  11 μs, 820 KB allocated,  18 KB copied,  28 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            363  μs ±  34 μs, 1.8 MB allocated,  51 KB copied,  28 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            561  μs ±  41 μs, 2.4 MB allocated, 191 KB copied,  28 MB peak memory
+          Data.Text.Text:                       OK
+            31.4 ms ± 1.5 ms, 954 MB allocated, 379 KB copied,  36 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            315  μs ±  13 μs, 1.6 MB allocated, 182 KB copied,  36 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            333  μs ±  26 μs, 1.3 MB allocated,  34 KB copied,  36 MB peak memory
+      mconcat
+        100B
+          TextBuilder.TextBuilder:              OK
+            125  ns ± 6.6 ns, 496 B  allocated,   0 B  copied,  36 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            166  ns ±  13 ns, 1.0 KB allocated,   0 B  copied,  36 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            324  ns ±  27 ns, 2.1 KB allocated,   0 B  copied,  36 MB peak memory
+          Data.Text.Text:                       OK
+            117  ns ± 7.2 ns, 280 B  allocated,   0 B  copied,  36 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            212  ns ±  17 ns, 1.7 KB allocated,   0 B  copied,  36 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            175  ns ±  13 ns, 936 B  allocated,   0 B  copied,  36 MB peak memory
+        1kB
+          TextBuilder.TextBuilder:              OK
+            1.21 μs ± 104 ns, 3.6 KB allocated,   1 B  copied,  36 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            1.69 μs ± 117 ns, 9.8 KB allocated,  10 B  copied,  36 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            3.04 μs ± 301 ns,  20 KB allocated,  16 B  copied,  36 MB peak memory
+          Data.Text.Text:                       OK
+            1.07 μs ±  74 ns, 2.0 KB allocated,   1 B  copied,  36 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            1.76 μs ± 154 ns,  16 KB allocated,  20 B  copied,  36 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            1.42 μs ±  58 ns, 8.0 KB allocated,   3 B  copied,  36 MB peak memory
+        10kB
+          TextBuilder.TextBuilder:              OK
+            15.0 μs ± 838 ns,  35 KB allocated,   5 B  copied,  36 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            32.0 μs ± 2.3 μs, 162 KB allocated, 563 B  copied,  36 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            34.8 μs ± 1.7 μs, 202 KB allocated, 927 B  copied,  36 MB peak memory
+          Data.Text.Text:                       OK
+            10.6 μs ± 899 ns,  20 KB allocated,   5 B  copied,  36 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            22.0 μs ± 1.7 μs, 160 KB allocated, 1.3 KB copied,  36 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            16.3 μs ± 1.4 μs,  71 KB allocated,  13 B  copied,  36 MB peak memory
+        100kB
+          TextBuilder.TextBuilder:              OK
+            176  μs ±  15 μs, 352 KB allocated,  55 B  copied,  36 MB peak memory
+          Data.Text.Encoding.StrictTextBuilder: OK
+            437  μs ±  21 μs, 1.8 MB allocated,  78 KB copied,  36 MB peak memory
+          Data.Text.Lazy.Builder.Builder:       OK
+            333  μs ±  26 μs, 2.0 MB allocated,  84 KB copied,  36 MB peak memory
+          Data.Text.Text:                       OK
+            106  μs ±  10 μs, 195 KB allocated,  60 B  copied,  36 MB peak memory
+          Data.Text.Lazy.Text:                  OK
+            264  μs ±  15 μs, 1.6 MB allocated,  97 KB copied,  36 MB peak memory
+          Data.Text.Builder.Linear:             OK
+            170  μs ± 8.1 μs, 952 KB allocated, 166 B  copied,  36 MB peak memory
+    Features
+      intercalate
+        TextBuilder:                            OK
+          420  ns ±  28 ns, 3.8 KB allocated,   1 B  copied,  36 MB peak memory
+        Text:                                   OK
+          143  ns ± 9.9 ns, 824 B  allocated,   0 B  copied,  36 MB peak memory
+      binary:                                   OK
+        62.8 ns ± 3.7 ns, 152 B  allocated,   0 B  copied,  36 MB peak memory
+      octal:                                    OK
+        25.1 ns ± 1.7 ns,  96 B  allocated,   0 B  copied,  36 MB peak memory
+      decimal:                                  OK
+        48.5 ns ± 3.8 ns, 560 B  allocated,   0 B  copied,  36 MB peak memory
+      hexadecimal:                              OK
+        20.8 ns ± 2.1 ns, 104 B  allocated,   0 B  copied,  36 MB peak memory
   ```
 
   # How it works
 
   It constructs text in two phases. In the first one it estimates the size of the byte array and in the second one it allocates it once and populates it in one go.
-
-  # What is text-builder-dev?
-
-  It is a lower-level library which this one wraps and provides a stable interface for. It serves as a testing ground for new features and design exploration.
 description-type: markdown
-hash: 24e403038fb6b885c8a0f310e782d40ca80eb1b5359b90fbe74db98b84e1094b
+hash: 53b28af3d4977595b78f4f70213747b7d985014f895a6a6ac7fe578705eb9ca8
 homepage: https://github.com/nikita-volkov/text-builder
-latest: 0.6.10
+latest: '1'
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
-synopsis: Efficient strict text builder
+synopsis: Efficient and flexible strict text builder
 test-bench-deps:
-  criterion: '>=1.5.6.1 && <2'
-  rerebase: '>=1 && <2'
-  tasty: '>=1.2.3 && <2'
-  tasty-hunit: '>=0.10.0.2 && <0.11'
-  tasty-quickcheck: '>=0.10.1 && <0.12'
+  QuickCheck: '>=2.14 && <3'
+  base: '>=4.11 && <5'
+  bytestring: '>=0.10 && <0.13'
+  quickcheck-classes: '>=0.6.5 && <0.7'
+  quickcheck-instances: '>=0.3.32 && <0.4'
+  tasty: '>=1.5.3 && <2'
+  tasty-bench: ^>=0.4.1
+  tasty-quickcheck: '>=0.11.1 && <0.12'
+  text: '>=2.1.2 && <3'
   text-builder: '>=0'
+  text-builder-linear: ^>=0.1.3
