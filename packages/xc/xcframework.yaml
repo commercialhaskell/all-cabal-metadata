@@ -1,0 +1,83 @@
+all-versions:
+- 0.1.0.0
+author: Rodrigo Mesquita
+basic-deps:
+  Cabal: '>=3.14 && <4'
+  Cabal-hooks: '>=3.14 && <4'
+  base: '>=4.18 && <5'
+  directory: '>=1.3.8 && <2'
+  filepath: '>=1.5.2 && <2'
+  process: '>=1.6.19 && <2'
+  temporary: '>=1.3 && <1.4'
+changelog: |
+  # Revision history for xcframework
+
+  ## 0.1.0.0 -- YYYY-mm-dd
+
+  * First version. Released on an unsuspecting world.
+changelog-type: markdown
+description: "# xcframework\n\nCabal hooks for producing an\n[XCFramework](https://developer.apple.com/documentation/xcode/creating-a-multi-platform-binary-framework-bundle)\nfrom
+  a Haskell library bundling the library binary artifact, the RTS and\nforeign-exports
+  headers, and a modulemap exporting the headers as Swift\nmodules.\n\nRefer also
+  to the [release blogpost](https://alt-romes.github.io/posts/2025-07-05-packaging-a-haskell-library-as-a-swift-binary-xcframework.html).\n\n##
+  How to Use\n\nIn your cabal file, change the `build-type` to `Hooks` (and set `cabal-version:\n3.14`
+  if not set already):\n\n```diff\n- build-type:     Simple\n+ build-type:     Hooks\n```\n\nAnd
+  add a `setup-depends` stanza with a dependency on `xcframework`:\n\n```diff\n+ custom-setup\n+
+  \  setup-depends:\n+     base        >= 4.18 && < 5,\n+     xcframework >= 0.1\n```\n\nFinally,
+  create a file called `SetupHooks.hs` in the root of your Cabal package\nwith the
+  following contents, substituting the `_build/MyHaskellLib.xcframework` string for
+  the\nfilepath to where the `.xcframework` should be written:\n\n```haskell\nmodule
+  SetupHooks ( setupHooks ) where\n\nimport Distribution.XCFramework.SetupHooks\n\nsetupHooks
+  :: SetupHooks\nsetupHooks = xcframeworkHooks \"_build/MyHaskellLib.xcframework\"\n```\n\nNow,
+  whenever you run `cabal build`, the libraries will also be bundled into an `.xcframework`.\n\n##
+  How to use the XCFramework in XCode\n\nIn XCode:\n\n1. Navigate to the target settings
+  of your project.\n2. Find under \"General\" the \"Frameworks, Libraries, and Embedded
+  Content\" (or similar) section.\n3. Click the add button and add the `.xcframework`
+  framework outputted at the specified path by Cabal\n\nNow, in the entry Swift module,
+  import the RTS and init/exit the RTS. For\ninstance, in a sample SwiftUI app:\n\n```diff\n
+  \ import SwiftUI\n+ import Haskell.Foreign.Rts\n  \n  @main\n  struct MyExample:
+  App {\n+ \n+     init() {\n+         hs_init(nil, nil)\n+\n+         NotificationCenter.default\n+
+  \          .addObserver(forName: NSApplication.willTerminateNotification,\n+                        object:
+  nil, queue: .main) { _ in\n+           hs_exit()\n+         }\n+     }\n+ \n      var
+  body: some Scene {\n          WindowGroup {\n              ContentView()\n          }\n
+  \     }\n  }\n```\n\nFinally, in any Swift module, do `import Haskell.Foreign.Exports`.
+  For now, the\nname `Haskell.Foreign.Exports` is fixed and exports all foreign-exported\nfunctions,
+  but it could be improved in the future (perhaps it's a good task to\ncontribute
+  a patch for!)\n\nFor example, if your Haskell module looked like:\n\n```\nmodule
+  MyLib (doSomething) where\n\nfib :: Integral b => Int -> b\nfib n = round $ phi
+  ** fromIntegral n / sq5\n  where\n    sq5 = sqrt 5 :: Double\n    phi = (1 + sq5)
+  / 2\n\ndoSomething :: IO Int\ndoSomething = do\n  putStrLn \"doing some thing\"\n
+  \ return $ fib 42\n\nforeign export ccall doSomething :: IO Int\n```\n\nIn your
+  Swift module you can now\n\n```swift\nimport Haskell.Foreign.Exports\n\nlet x =
+  doSomething()\n```\n\n## Building simple Swift package\n\nThe `.xcframework` can
+  also be easily used in a standalone swift package built\nwith `swift build`.\n\nIn
+  your `Package.swift`, add `MyHaskellLib.xcframework` as a binary target and\nmake
+  it a dependency of your main target. For instance, a simple library would\nlook
+  like:\n\n```swift\n// swift-tools-version: 6.1\nimport PackageDescription\n\nlet
+  package = Package(\n    name: \"MySwiftLib\",\n    platforms: [\n        .macOS(.v15)\n
+  \   ],\n    products: [\n        .library(name: \"MySwiftLib\", targets: [\"MySwiftLib\"])\n
+  \   ],\n    targets: [\n        .target(name: \"MySwiftLib\", dependencies: [\"MyHaskellLib\"],
+  path: \"Swift\"),\n        .binaryTarget(\n            name: \"MyHaskellLib\",\n
+  \           path: \"haskell/_build/MyHaskellLib.xcframework\"\n        )\n    ]\n)\n```\n\nNow
+  you can use the `Haskell.Foreign.Export` import in any module in the\npackage as
+  explained above, for instance in `Swift/MySwiftLib.hs`:\n\n```swift\nimport Foundation\nimport
+  Haskell.Foreign.Exports\n\npublic struct Fib {\n  var val: Int64\n}\n\npublic func
+  mkFib() -> Fib {\n    let x = doSomething()\n    return Fib(val: x)\n}\n```\n\nBuild
+  the Swift package using `swift build` in the project root.\n\n\n## Must use Cabal
+  Foreign Library stanza\n\nUnfortunately, while I don't figure out how to link the
+  right amount of things\ninto the `.xcframework` after building a normal `library`
+  component in Cabal,\nthe `foreign export`s must be exported from a `foreign-library`
+  Cabal stanza:\n\n```\nforeign-library myexample\n    type: native-shared\n    options:
+  standalone\n    other-modules:    MyLib\n    build-depends:    base ^>=4.20.0.0\n
+  \   hs-source-dirs:   src\n    default-language: GHC2021\n```\n\nTo clarify the
+  instructions, I put together [a small demo\nproject](https://github.com/alt-romes/hs-xcframework-simple-demo/)
+  with a\nworking setup -- if you want to try it out. Remember to build the Cabal
+  library first!\n\n"
+description-type: markdown
+hash: 16a8efa15b57e5b03267ca61732130de86f067bf6c09db93431d10cfe28da56f
+homepage: https://github.com/alt-romes/haskell-swift
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: rodrigo.m.mesquita@gmail.com
+synopsis: Cabal hooks for producing an XCFramework from a Haskell library
+test-bench-deps: {}
