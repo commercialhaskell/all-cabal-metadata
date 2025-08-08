@@ -1,0 +1,251 @@
+all-versions:
+- 0.1.0.0
+author: Oleksandr Zhabenko
+basic-deps:
+  aeson: '>=1.4'
+  base: '>=4.7 && <5'
+  bytestring: '>=0.10'
+  cache: '>=0.1'
+  case-insensitive: '>=1.2.1.0'
+  clock: '>=0.8.3 && <1'
+  containers: '>=0.6'
+  deepseq: '>=0'
+  directory: '>=1.3.4.0 && <1.4'
+  focus: '>=1.0.3'
+  hashable: '>=1.4.2.0 && <2'
+  http-types: '>=0.12.3 && <0.13'
+  iproute: '>=1.7.10'
+  list-t: '>=1.0.5 && <2'
+  network: '>=3.1.2 && <3.2 || ^>=3.2.0'
+  stm: '>=2.5.0 && <2.6'
+  stm-containers: '>=1.2 && <2'
+  text: '>=1.2'
+  time: '>=1.9'
+  unordered-containers: '>=0.2.17 && <0.3'
+  wai: '>=3.2.3 && <3.3'
+changelog: |+
+  # Revision history for keter-rate-limiting-plugin
+
+  ## 0.1.0.0 -- 2025-08-08
+
+  * First version. Released on an unsuspecting world.
+
+changelog-type: markdown
+description: |
+  # keter-rate-limiting-plugin
+
+  **keter-rate-limiting-plugin** is a modern, high-performance, and highly customizable rate-limiting plugin for [Keter](https://github.com/snoyberg/keter). It addresses [issue \#301](https://github.com/snoyberg/keter/issues/301) and brings robust, production-grade request throttling to Haskell web applications, featuring efficient in-memory caching and IP zone isolation.
+
+  This library is inspired by [rack-attack](https://github.com/rack/rack-attack) and and [Ruby on Rails](https://github.com/rails/rails) (for Keter.RateLimiter.Notifications) and provides a powerful middleware for Keter-managed applications, though it can be integrated with any WAI-compatible Haskell web stack.
+
+  ## Features
+
+    - **Five window algorithms**:
+        - Fixed Window
+        - Sliding Window
+        - Token Bucket
+        - Leaky Bucket
+        - TinyLRU (Least Recently Used)
+    - **IP Zone Support**: Isolate caches and throttling policies per IP zone, customer segment, or any other logical grouping.
+    - **Flexible Throttle Configuration**: Set limits, periods, algorithms, and unique identifiers on a per-throttle basis.
+    - **WAI Middleware**: Integrates seamlessly as a middleware into any WAI application.
+    - **Convenient and Customizable API**:
+        - Use simple wrappers for common scenarios with automatic key composition.
+        - Or, for advanced use, fully control cache key structure and throttling logic.
+    - **Memory-efficient**: Designed for large-scale, high-traffic deployments with automatic cleanup of expired entries.
+    - **Easy Integration**: Minimal code changes are required to get started.
+
+  ## Why Use This Plugin?
+
+    - **Scalability**: Per-zone caches and flexible throttling allow you to scale from single-user apps to multi-tenant platforms.
+    - **Performance**: The in-memory backend is built on efficient STM-based containers for high-concurrency workloads.
+    - **Security**: Protects your application from abusive clients and denial-of-service attacks.
+    - **Flexibility**: Choose between the convenience of wrappers and the full customizability of manual key management.
+    - **Production-Ready**: Inspired by industry-standard tools, thoroughly documented, and designed for reliability.
+    - **Open Source**: MIT licensed and community-friendly.
+
+  ## Installation
+
+  Add the package to your `build-depends` in your project's `.cabal` file or `package.yaml`.
+
+  **For Cabal:**
+
+  ```cabal
+  build-depends:
+    , keter-rate-limiting-plugin
+  ```
+
+  **For Stack (`package.yaml`):**
+
+  ```yaml
+  dependencies:
+  - keter-rate-limiting-plugin
+  ```
+
+  Then, rebuild your project. No external C libraries are required.
+
+  ## Quick Start
+
+  The following example sets up a simple WAI application with a single rate-limiting rule: 10 requests per 60 seconds from a given IP address. It also demonstrates assigning requests to different IP zones.
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import Keter.RateLimiter.WAI
+  import Keter.RateLimiter.Cache (Algorithm(..))
+  import Keter.RateLimiter.IPZones (defaultIPZone)
+  import Network.Wai (Request, responseLBS, Application)
+  import Network.HTTP.Types (status200)
+  import Network.Wai.Handler.Warp (run)
+  import Data.Text.Encoding (encodeUtf8)
+
+  -- A simple application that runs behind the middleware.
+  myApp :: Application
+  myApp _ respond = respond $ responseLBS status200 [] "Hello, you are not rate limited!"
+
+  main :: IO ()
+  main = do
+    -- 1. Initialize the rate limiter configuration.
+    -- This function determines the IP Zone for each request.
+    -- Here, we route traffic from "127.0.0.1" to "local_zone" and all other traffic to the default zone.
+    env <- initConfig (\req -> if requestHeaderHost req == Just "127.0.0.1" then "local_zone" else defaultIPZone)
+
+    -- 2. Define a throttle rule.
+    let ipThrottle = ThrottleConfig
+          { throttleLimit      = 10
+          , throttlePeriod     = 60
+          , throttleAlgorithm  = FixedWindow
+          , throttleIdentifier = \req -> fmap (encodeUtf8 . show) (remoteHost req) -- Identify requests by IP address
+          , throttleTokenBucketTTL = Nothing -- Not used for FixedWindow
+          }
+
+    -- 3. Add the throttle rule to the environment.
+    env' <- addThrottle env "req/ip" ipThrottle
+
+    -- 4. Wrap your application with the middleware.
+    let appWithMiddleware = attackMiddleware env' myApp
+
+    putStrLn "Server starting on port 8080..."
+    run 8080 appWithMiddleware
+  ```
+
+  ## Example Usage
+
+  ### Using the Convenient API
+
+  The `CacheWithZone` module provides helpers that automatically compose cache keys from the algorithm, zone, and user key, simplifying common use cases.
+
+  ```haskell
+  import Keter.RateLimiter.Cache
+  import Keter.RateLimiter.CacheWithZone
+
+  -- Create a store and cache for the Fixed Window algorithm
+  fixedWindowStore <- createInMemoryStore @'FixedWindow
+  let cache = newCache FixedWindow fixedWindowStore
+
+  -- Increment a counter for a user in a specific zone.
+  -- The key "rate_limiter:zoneX:userX" is created automatically.
+  -- The request is allowed if the count is within the limit.
+  isAllowed <- allowFixedWindowRequest cache "zoneX" "userX" 100 3600 -- 100 requests per hour
+  ```
+
+  ### Using the Customizable API
+
+  For more complex scenarios, you can manually construct cache keys and interact directly with the `Cache` module. This gives you full control over the key structure.
+
+  ```haskell
+  import Keter.RateLimiter.Cache
+
+  -- Use the same cache from the previous example.
+  let customKey = "rate_limiter:fixed_window:logins:zoneY:userY"
+
+  -- Manually increment the counter for the custom key.
+  newCount <- incrementCache cache customKey 60 -- TTL of 60 seconds
+
+  -- Manually read the value.
+  mVal <- readCache cache customKey :: IO (Maybe Int)
+  ```
+
+  ### Token Bucket Example (with TTL)
+
+  The Token Bucket algorithm allows for bursts of traffic. You can also specify a TTL for how long an idle bucket remains in memory.
+
+  ```haskell
+  import Keter.RateLimiter.WAI
+  import Keter.RateLimiter.Cache (Algorithm(..))
+
+  let tokenBucketThrottle = ThrottleConfig
+        { throttleLimit      = 100 -- Bucket capacity
+        , throttlePeriod     = 60  -- Refills 100 tokens over 60 seconds
+        , throttleAlgorithm  = TokenBucket
+        , throttleIdentifier = \req -> getAuthToken req -- A function to get a user's API token
+        , throttleTokenBucketTTL = Just 7200 -- Purge idle buckets after 2 hours
+        }
+
+  -- env' <- addThrottle env "api/token" tokenBucketThrottle
+  ```
+
+  ## Testing
+
+  This package includes an extensive test suite covering all supported rate-limiting algorithms, IP zone isolation, and cache management.
+
+  To run the tests:
+
+  ```bash
+  cabal test
+  ```
+
+  or
+
+  ```bash
+  stack test
+  ```
+
+  ## When to Use This Library
+
+    - You need robust and efficient request throttling for your Haskell web application.
+    - You want to protect your service from abuse and DoS attacks.
+    - You require per-zone or per-user isolation of throttling policies.
+    - You value both convenience and the ability to customize behavior as needed.
+
+  ## License
+
+  MIT License © 2025 Oleksandr Zhabenko
+
+  ## References
+
+    - [rack-attack (Ruby)](https://github.com/rack/rack-attack)
+    - [keter (Haskell)](https://github.com/snoyberg/keter)
+description-type: markdown
+hash: 32a470f1c4763fe26b255e1912ae9432601be250e023dbb64309eac372ec2d06
+homepage: https://github.com/Oleksandr-Zhabenko/keter-rate-limiting-plugin
+latest: 0.1.0.0
+license-name: MIT
+maintainer: oleksandr.zhabenko@yahoo.com
+synopsis: Simple Keter rate limiting plugin.
+test-bench-deps:
+  HUnit: '>=0'
+  aeson: '>=1.4'
+  async: '>=2.2.4 && <2.3'
+  base: '>=4 && <5'
+  bytestring: '>=0.10'
+  cache: '>=0.1'
+  case-insensitive: '>=1.2.1.0'
+  clock: '>=0.8.3 && <1'
+  containers: '>=0.6.4 && <0.8'
+  directory: '>=1.3.4.0 && <1.4'
+  filepath: '>=1.4.2 && <1.6'
+  hashable: '>=1.4.2.0 && <2'
+  http-types: '>=0.12.3 && <0.13'
+  keter-rate-limiting-plugin: '>=0'
+  network: '>=3.1.2 && <3.2 || ^>=3.2.0'
+  random: '>=1.2.1 && <1.4'
+  stm: '>=2.5.0 && <2.6'
+  stm-containers: '>=1.2 && <2'
+  tasty: '>=1.4 && <1.6'
+  tasty-hunit: '>=0.10 && <0.11'
+  temporary: '>=1.3 && <1.4'
+  text: '>=1.2.5 && <3.0'
+  time: '>=1.9'
+  wai: '>=3.2.3 && <3.3'
+  wai-extra: '>=3.0.3 && <3.2'
