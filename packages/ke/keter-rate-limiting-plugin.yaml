@@ -1,5 +1,5 @@
 all-versions:
-- 0.1.1.0
+- 0.1.2.0
 author: Oleksandr Zhabenko
 basic-deps:
   aeson: '>=1.4'
@@ -33,212 +33,151 @@ changelog: "# Revision history for keter-rate-limiting-plugin\n\n## 0.1.0.0 -- 2
   every request (especially important for multiple throttles per zone/user etc). Improved
   documentation. Added more tests and some dependencies (most of them are already
   dependencies — at least indirect — of keter) and removed not used any more dependency
-  on containers. \n\n"
+  on containers. \n\n## 0.1.2.0 -- 2025-08-18\n\n* First version revised D. Changed
+  Keter.RateLimiter.WAI module to more declaraive approach recommended by @jappeace
+  for keter integration. Reflected the changes in the README.md file.\n\n"
 changelog-type: markdown
-description: |
-  # keter-rate-limiting-plugin
-
-  **keter-rate-limiting-plugin** is a modern, high-performance, and highly customizable rate-limiting plugin for [Keter](https://github.com/snoyberg/keter). It addresses [issue \#301](https://github.com/snoyberg/keter/issues/301) and brings robust, production-grade request throttling to Haskell web applications, featuring efficient in-memory caching with HashMap-based lookups and IP zone isolation.
-
-  This library is inspired by [rack-attack](https://github.com/rack/rack-attack) and and [Ruby on Rails](https://github.com/rails/rails) (for Keter.RateLimiter.Notifications) and provides a powerful middleware for Keter-managed applications, though it can be integrated with any WAI-compatible Haskell web stack.
-
-  ## Features
-
-    - **Five window algorithms**:
-        - Fixed Window
-        - Sliding Window
-        - Token Bucket
-        - Leaky Bucket
-        - TinyLRU (Least Recently Used)
-    - **IP Zone Support**: Isolate caches and throttling policies per IP zone, customer segment, or any other logical grouping with efficient HashMap-based zone lookups.
-    - **Flexible Throttle Configuration**: Set limits, periods, algorithms, and unique identifiers on a per-throttle basis, stored in optimized HashMap structures.
-    - **WAI Middleware**: Integrates seamlessly as a middleware into any WAI application.
-    - **Convenient and Customizable API**:
-        - Use simple wrappers for common scenarios with automatic key composition.
-        - Or, for advanced use, fully control cache key structure and throttling logic.
-    - **Memory-efficient**: Designed for large-scale, high-traffic deployments with automatic cleanup of expired entries and HashMap-based O(1) average-case lookups.
-    - **Easy Integration**: Minimal code changes are required to get started.
-
-  ## Why Use This Plugin?
-
-    - **Scalability**: Per-zone caches with HashMap-based storage and flexible throttling allow you to scale from single-user apps to multi-tenant platforms.
-    - **Performance**: The in-memory backend is built on efficient STM-based containers with HashMap optimizations for high-concurrency workloads.
-    - **Security**: Protects your application from abusive clients and denial-of-service attacks.
-    - **Flexibility**: Choose between the convenience of wrappers and the full customizability of manual key management.
-    - **Production-Ready**: Inspired by industry-standard tools, thoroughly documented, and designed for reliability with efficient data structures.
-    - **Open Source**: MIT licensed and community-friendly.
-
-  ## Installation
-
-  Add the package to your `build-depends` in your project's `.cabal` file or `package.yaml`.
-
-  **For Cabal:**
-
-  ```cabal
-  build-depends:
-    , keter-rate-limiting-plugin
-  ```
-
-  **For Stack (`package.yaml`):**
-
-  ```yaml
-  dependencies:
-  - keter-rate-limiting-plugin
-  ```
-
-  Then, rebuild your project. No external C libraries are required.
-
-  ## Quick Start
-
-  The following example sets up a simple WAI application with a single rate-limiting rule: 10 requests per 60 seconds from a given IP address. It also demonstrates assigning requests to different IP zones using efficient HashMap-based zone resolution.
-
-  ```haskell
-  {-# LANGUAGE OverloadedStrings #-}
-
-  import Keter.RateLimiter.WAI
-  import Keter.RateLimiter.Cache (Algorithm(..))
-  import Keter.RateLimiter.IPZones (defaultIPZone)
-  import Network.Wai (Request, responseLBS, Application)
-  import Network.HTTP.Types (status200)
-  import Network.Wai.Handler.Warp (run)
-  import Data.Text.Encoding (encodeUtf8)
-
-  -- A simple application that runs behind the middleware.
-  myApp :: Application
-  myApp _ respond = respond $ responseLBS status200 [] "Hello, you are not rate limited!"
-
-  main :: IO ()
-  main = do
-    -- 1. Initialize the rate limiter configuration.
-    -- This function determines the IP Zone for each request.
-    -- Here, we route traffic from "127.0.0.1" to "local_zone" and all other traffic to the default zone.
-    -- The environment uses HashMap-based storage for efficient zone cache lookups.
-    env <- initConfig (\req -> if requestHeaderHost req == Just "127.0.0.1" then "local_zone" else defaultIPZone)
-
-    -- 2. Define a throttle rule.
-    let ipThrottle = ThrottleConfig
-          { throttleLimit      = 10
-          , throttlePeriod     = 60
-          , throttleAlgorithm  = FixedWindow
-          , throttleIdentifier = \req -> fmap (encodeUtf8 . show) (remoteHost req) -- Identify requests by IP address
-          , throttleTokenBucketTTL = Nothing -- Not used for FixedWindow
-          }
-
-    -- 3. Add the throttle rule to the environment.
-    -- The throttle is stored in a HashMap for O(1) average-case retrieval.
-    env' <- addThrottle env "req/ip" ipThrottle
-
-    -- 4. Wrap your application with the middleware.
-    let appWithMiddleware = attackMiddleware env' myApp
-
-    putStrLn "Server starting on port 8080..."
-    run 8080 appWithMiddleware
-  ```
-
-  ## Example Usage
-
-  ### Using the Convenient API
-
-  The `CacheWithZone` module provides helpers that automatically compose cache keys from the algorithm, zone, and user key, simplifying common use cases while leveraging efficient HashMap-based zone lookups.
-
-  ```haskell
-  import Keter.RateLimiter.Cache
-  import Keter.RateLimiter.CacheWithZone
-
-  -- Create a store and cache for the Fixed Window algorithm
-  fixedWindowStore <- createInMemoryStore @'FixedWindow
-  let cache = newCache FixedWindow fixedWindowStore
-
-  -- Increment a counter for a user in a specific zone.
-  -- The key "rate_limiter:zoneX:userX" is created automatically.
-  -- The request is allowed if the count is within the limit.
-  -- Zone lookup uses HashMap for O(1) average performance.
-  isAllowed <- allowFixedWindowRequest cache "zoneX" "userX" 100 3600 -- 100 requests per hour
-  ```
-
-  ### Using the Customizable API
-
-  For more complex scenarios, you can manually construct cache keys and interact directly with the `Cache` module. This gives you full control over the key structure while still benefiting from HashMap-optimized storage.
-
-  ```haskell
-  import Keter.RateLimiter.Cache
-
-  -- Use the same cache from the previous example.
-  let customKey = "rate_limiter:fixed_window:logins:zoneY:userY"
-
-  -- Manually increment the counter for the custom key.
-  newCount <- incrementCache cache customKey 60 -- TTL of 60 seconds
-
-  -- Manually read the value.
-  mVal <- readCache cache customKey :: IO (Maybe Int)
-  ```
-
-  ### Token Bucket Example (with TTL)
-
-  The Token Bucket algorithm allows for bursts of traffic. You can also specify a TTL for how long an idle bucket remains in memory. The throttle configuration is efficiently stored and retrieved using HashMap-based lookups.
-
-  ```haskell
-  import Keter.RateLimiter.WAI
-  import Keter.RateLimiter.Cache (Algorithm(..))
-
-  let tokenBucketThrottle = ThrottleConfig
-        { throttleLimit      = 100 -- Bucket capacity
-        , throttlePeriod     = 60  -- Refills 100 tokens over 60 seconds
-        , throttleAlgorithm  = TokenBucket
-        , throttleIdentifier = \req -> getAuthToken req -- A function to get a user's API token
-        , throttleTokenBucketTTL = Just 7200 -- Purge idle buckets after 2 hours
-        }
-
-  -- env' <- addThrottle env "api/token" tokenBucketThrottle
-  -- The throttle will be stored in the environment's HashMap for efficient retrieval
-  ```
-
-  ## Performance Characteristics
-
-  This library is optimized for high-performance scenarios:
-
-  - **HashMap-based zone caches**: O(1) average-case lookup for IP zone cache resolution
-  - **HashMap-based throttle storage**: O(1) average-case retrieval of throttle configurations
-  - **STM-based concurrent access**: Thread-safe operations with minimal contention
-  - **Memory-efficient algorithms**: Automatic cleanup of expired entries across all rate limiting algorithms
-  - **Scalable architecture**: Designed to handle thousands of concurrent requests with minimal overhead
-
-  ## Testing
-
-  This package includes an extensive test suite covering all supported rate-limiting algorithms, IP zone isolation, cache management, and HashMap-based performance optimizations.
-
-  To run the tests:
-
-  ```bash
-  cabal test
-  ```
-
-  or
-
-  ```bash
-  stack test
-  ```
-
-  ## When to Use This Library
-
-    - You need robust and efficient request throttling for your Haskell web application.
-    - You want to protect your service from abuse and DoS attacks.
-    - You require per-zone or per-user isolation of throttling policies with efficient lookups.
-    - You value both convenience and the ability to customize behavior as needed.
-    - You need high-performance rate limiting that can scale to handle large numbers of concurrent requests and zones.
-
-  ## License
-
-  MIT License © 2025 Oleksandr Zhabenko
-
-  ## References
-
-    - [rack-attack (Ruby)](https://github.com/rack/rack-attack)
-    - [keter (Haskell)](https://github.com/snoyberg/keter)
+description: "# keter-rate-limiting-plugin\n\n**keter-rate-limiting-plugin** is a
+  modern, high-performance, and highly customizable rate-limiting plugin for [Keter](https://github.com/snoyberg/keter).
+  It addresses [issue \\#301](https://github.com/snoyberg/keter/issues/301) and brings
+  robust, production-grade request throttling to Haskell web applications, featuring
+  efficient in-memory caching with HashMap-based lookups and IP zone isolation.\n\nThis
+  library is inspired by [rack-attack](https://github.com/rack/rack-attack) and [Ruby
+  on Rails](https://github.com/rails/rails) (for Keter.RateLimiter.Notifications)
+  and provides a powerful middleware for Keter-managed applications, though it can
+  be integrated with any WAI-compatible Haskell web stack.\n\n## Features\n\n- **Five
+  window algorithms**:\n    - Fixed Window\n    - Sliding Window\n    - Token Bucket\n
+  \   - Leaky Bucket\n    - TinyLRU (Least Recently Used)\n- **IP Zone Support**:
+  Isolate caches and throttling policies per IP zone, customer segment, or any other
+  logical grouping with efficient HashMap-based zone lookups.\n- **Declarative Configuration**:
+  Define throttling rules using JSON/YAML configuration with automatic serialization
+  support.\n- **Flexible Client Identification**: Multiple strategies for identifying
+  clients (IP, headers, cookies, combinations).\n- **Configurable Zone Derivation**:
+  Flexible strategies for deriving IP zones from requests.\n- **WAI Middleware**:
+  Integrates seamlessly as a middleware into any WAI application.\n- **Convenient
+  and Customizable API**:\n    - Use declarative configuration for common scenarios
+  with automatic setup.\n    - Or, for advanced use, fully control cache key structure
+  and throttling logic.\n- **Memory-efficient**: Designed for large-scale, high-traffic
+  deployments with automatic cleanup of expired entries and HashMap-based O(1) average-case
+  lookups.\n- **Easy Integration**: Minimal code changes are required to get started.\n\n##
+  Why Use This Plugin?\n\n- **Scalability**: Per-zone caches with HashMap-based storage
+  and flexible throttling allow you to scale from single-user apps to multi-tenant
+  platforms.\n- **Performance**: The in-memory backend is built on efficient STM-based
+  containers with HashMap optimizations for high-concurrency workloads.\n- **Security**:
+  Protects your application from abusive clients and denial-of-service attacks.\n-
+  **Flexibility**: Choose between declarative configuration and full programmatic
+  customization.\n- **Production-Ready**: Inspired by industry-standard tools, thoroughly
+  documented, and designed for reliability with efficient data structures.\n- **Open
+  Source**: MIT licensed and community-friendly.\n\n## Installation\n\nAdd the package
+  to your `build-depends` in your project's `.cabal` file or `package.yaml`.\n\n**For
+  Cabal:**\n\n```cabal\nbuild-depends:\n  , keter-rate-limiting-plugin\n```\n\n**For
+  Stack (`package.yaml`):**\n\n```yaml\ndependencies:\n- keter-rate-limiting-plugin\n```\n\nThen,
+  rebuild your project. No external C libraries are required.\n\n## Quick Start\n\n###
+  Declarative Configuration (Recommended)\n\nThe recommended approach uses declarative
+  configuration that can be loaded from JSON or YAML files:\n\n```haskell\n{-# LANGUAGE
+  OverloadedStrings #-}\n\nimport Keter.RateLimiter.WAI\nimport Keter.RateLimiter.Cache
+  (Algorithm(..))\nimport Network.Wai (responseLBS, Application)\nimport Network.HTTP.Types
+  (status200)\nimport Network.Wai.Handler.Warp (run)\n\n-- A simple application that
+  runs behind the middleware.\nmyApp :: Application\nmyApp _ respond = respond $ responseLBS
+  status200 [] \"Hello, you are not rate limited!\"\n\nmain :: IO ()\nmain = do\n
+  \ -- 1. Define declarative configuration\n  let config = RateLimiterConfig\n        {
+  rlZoneBy = ZoneIP  -- Separate zones by client IP\n        , rlThrottles = \n            [
+  RLThrottle \"api\"   100 3600 FixedWindow IdIP Nothing        -- 100 requests/hour
+  by IP\n            , RLThrottle \"login\" 5   300  TokenBucket  IdIP (Just 600)
+  \   -- 5 login attempts/5min by IP with 10min idle timeout\n            ]\n        }\n\n
+  \ -- 2. Build middleware from configuration\n  middleware <- buildRateLimiter config\n\n
+  \ -- 3. Apply middleware to your application\n  let appWithMiddleware = middleware
+  myApp\n\n  putStrLn \"Server starting on port 8080...\"\n  run 8080 appWithMiddleware\n```\n\n###
+  JSON Configuration\n\nYou can also load configuration from JSON files:\n\n```json\n{\n
+  \ \"zone_by\": \"ip\",\n  \"throttles\": [\n    {\n      \"name\": \"api\",\n      \"limit\":
+  100,\n      \"period\": 3600,\n      \"algorithm\": \"fixed_window\",\n      \"identifier_by\":
+  \"ip\"\n    },\n    {\n      \"name\": \"login\",\n      \"limit\": 5,\n      \"period\":
+  300,\n      \"algorithm\": \"token_bucket\",\n      \"identifier_by\": \"ip\",\n
+  \     \"token_bucket_ttl\": 600\n    }\n  ]\n}\n```\n\n### Advanced Programmatic
+  Configuration\n\nFor more control, you can build the environment programmatically:\n\n```haskell\nimport
+  Keter.RateLimiter.WAI\nimport Keter.RateLimiter.Cache (Algorithm(..))\nimport Keter.RateLimiter.IPZones
+  (defaultIPZone)\nimport Data.Text.Encoding (encodeUtf8)\n\nmain :: IO ()\nmain =
+  do\n  -- 1. Initialize environment with custom zone logic\n  env <- initConfig $
+  \\req -> \n    case requestHeaderHost req of\n      Just \"api.example.com\" ->
+  \"api_zone\"\n      Just \"admin.example.com\" -> \"admin_zone\"\n      _ -> defaultIPZone\n\n
+  \ -- 2. Add throttle configurations\n  let apiThrottle = ThrottleConfig\n        {
+  throttleLimit      = 1000\n        , throttlePeriod     = 3600\n        , throttleAlgorithm
+  \ = FixedWindow\n        , throttleIdentifier = \\req -> fmap (encodeUtf8 . show)
+  (remoteHost req)\n        , throttleTokenBucketTTL = Nothing\n        }\n\n  let
+  loginThrottle = ThrottleConfig\n        { throttleLimit      = 5\n        , throttlePeriod
+  \    = 300\n        , throttleAlgorithm  = TokenBucket\n        , throttleIdentifier
+  = \\req -> fmap (encodeUtf8 . show) (remoteHost req)\n        , throttleTokenBucketTTL
+  = Just 600\n        }\n\n  env' <- addThrottle env \"api\" apiThrottle\n  env''
+  <- addThrottle env' \"login\" loginThrottle\n\n  -- 3. Create middleware\n  let
+  middleware = buildRateLimiterWithEnv env''\n      appWithMiddleware = middleware
+  myApp\n\n  putStrLn \"Server starting on port 8080...\"\n  run 8080 appWithMiddleware\n```\n\n##
+  Configuration Reference\n\n### Client Identification Strategies (`IdentifierBy`)\n\n-
+  `\"ip\"` - Identify by client IP address\n- `\"ip+path\"` - Identify by IP address
+  and request path\n- `\"ip+ua\"` - Identify by IP address and User-Agent header\n-
+  `{\"header\": \"X-API-Key\"}` - Identify by custom header value\n- `{\"cookie\":
+  \"session_id\"}` - Identify by cookie value\n- `{\"header+ip\": \"X-User-ID\"}`
+  - Identify by header value combined with IP\n\n### Zone Derivation Strategies (`ZoneBy`)\n\n-
+  `\"default\"` - All requests use the same cache (no zone separation)\n- `\"ip\"`
+  - Separate zones by client IP address\n- `{\"header\": \"X-Tenant-ID\"}` - Separate
+  zones by custom header value\n\n### Rate Limiting Algorithms\n\n- **`FixedWindow`**
+  - Traditional fixed-window counting\n- **`SlidingWindow`** - Precise sliding-window
+  with timestamp tracking\n- **`TokenBucket`** - Allow bursts up to capacity, refill
+  over time\n- **`LeakyBucket`** - Smooth rate limiting with configurable leak rate\n-
+  **`TinyLRU`** - Least-recently-used eviction for memory efficiency\n\n## Example
+  Usage\n\n### Using the Convenient API\n\nThe `CacheWithZone` module provides helpers
+  that automatically compose cache keys from the algorithm, zone, and user key, simplifying
+  common use cases while leveraging efficient HashMap-based zone lookups.\n\n```haskell\nimport
+  Keter.RateLimiter.Cache\nimport Keter.RateLimiter.CacheWithZone\n\n-- Create a store
+  and cache for the Fixed Window algorithm\nfixedWindowStore <- createInMemoryStore
+  @'FixedWindow\nlet cache = newCache FixedWindow fixedWindowStore\n\n-- Increment
+  a counter for a user in a specific zone.\n-- The key \"rate_limiter:zoneX:userX\"
+  is created automatically.\n-- The request is allowed if the count is within the
+  limit.\n-- Zone lookup uses HashMap for O(1) average performance.\nisAllowed <-
+  allowFixedWindowRequest cache \"zoneX\" \"userX\" 100 3600 -- 100 requests per hour\n```\n\n###
+  Using the Customizable API\n\nFor more complex scenarios, you can manually construct
+  cache keys and interact directly with the `Cache` module. This gives you full control
+  over the key structure while still benefiting from HashMap-optimized storage.\n\n```haskell\nimport
+  Keter.RateLimiter.Cache\n\n-- Use the same cache from the previous example.\nlet
+  customKey = \"rate_limiter:fixed_window:logins:zoneY:userY\"\n\n-- Manually increment
+  the counter for the custom key.\nnewCount <- incrementCache cache customKey 60 --
+  TTL of 60 seconds\n\n-- Manually read the value.\nmVal <- readCache cache customKey
+  :: IO (Maybe Int)\n```\n\n### Multi-Algorithm Configuration Example\n\n```haskell\nlet
+  config = RateLimiterConfig\n      { rlZoneBy = ZoneHeader \"X-Tenant-ID\"  -- Separate
+  by tenant\n      , rlThrottles = \n          [ RLThrottle \"api_burst\"     100
+  \ 60   TokenBucket   IdIP              (Just 300)\n          , RLThrottle \"api_sustained\"
+  1000 3600 FixedWindow   IdIP              Nothing\n          , RLThrottle \"login\"
+  \        5    300  LeakyBucket   IdIP              Nothing\n          , RLThrottle
+  \"admin\"         50   3600 SlidingWindow (IdHeader \"X-Admin-Key\") Nothing\n          ,
+  RLThrottle \"lru_cache\"     1000 60   TinyLRU       IdIPAndPath       Nothing\n
+  \         ]\n      }\n```\n\n## Performance Characteristics\n\nThis library is optimized
+  for high-performance scenarios:\n\n- **HashMap-based zone caches**: O(1) average-case
+  lookup for IP zone cache resolution\n- **HashMap-based throttle storage**: O(1)
+  average-case retrieval of throttle configurations\n- **STM-based concurrent access**:
+  Thread-safe operations with minimal contention\n- **Memory-efficient algorithms**:
+  Automatic cleanup of expired entries across all rate limiting algorithms\n- **Scalable
+  architecture**: Designed to handle thousands of concurrent requests with minimal
+  overhead\n\n## Testing\n\nThis package includes an extensive test suite covering
+  all supported rate-limiting algorithms, IP zone isolation, cache management, and
+  HashMap-based performance optimizations.\n\nTo run the tests:\n\n```bash\ncabal
+  test\n```\n\nor\n\n```bash\nstack test\n```\n\n## When to Use This Library\n\n-
+  You need robust and efficient request throttling for your Haskell web application.\n-
+  You want to protect your service from abuse and DoS attacks.\n- You require per-zone
+  or per-user isolation of throttling policies with efficient lookups.\n- You value
+  both declarative configuration and the ability to customize behavior as needed.\n-
+  You need high-performance rate limiting that can scale to handle large numbers of
+  concurrent requests and zones.\n\n## Migration from Earlier Versions\n\nIf you're
+  upgrading from an earlier version that used the programmatic API, the declarative
+  configuration approach is now recommended:\n\n**Old approach:**\n```haskell\nenv
+  <- initConfig getZoneFunction\nenv' <- addThrottle env \"api\" throttleConfig\nlet
+  middleware = attackMiddleware env'\n```\n\n**New recommended approach:**\n```haskell\nlet
+  config = RateLimiterConfig { ... }\nmiddleware <- buildRateLimiter config\n```\n\nThe
+  old programmatic API is still fully supported for advanced use cases.\n\n## License\n\nMIT
+  License © 2025 Oleksandr Zhabenko\n\n## References\n\n- [rack-attack (Ruby)](https://github.com/rack/rack-attack)\n-
+  [keter (Haskell)](https://github.com/snoyberg/keter)\n"
 description-type: markdown
-hash: 9cf53decdd4799ff491c427b7d190b1d26affd1be754ae560c9e9aedc7c78d4b
+hash: 4f9942b7ae7d138a1c040b0c5f9c0f0e2e380f5e03b7eed625301b80dee5bc12
 homepage: https://github.com/Oleksandr-Zhabenko/keter-rate-limiting-plugin
-latest: 0.1.1.0
+latest: 0.1.2.0
 license-name: MIT
 maintainer: oleksandr.zhabenko@yahoo.com
 synopsis: Simple Keter rate limiting plugin.
