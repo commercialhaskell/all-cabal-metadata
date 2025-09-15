@@ -1,227 +1,107 @@
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
+- 0.1.0.2
 author: Li-yao Xia
 basic-deps:
   base: '>=4.18 && <4.22'
   bluefin: '>=0.0.6 && <0.1'
-  bluefin-internal: <0.1
-changelog: |
-  # Revision history for bluefin-algae
-
-  ## 0.1.0.1 -- 2024-05-04
-
-  - Include `README.md` in the cabal distribution.
-
-  ## 0.1.0.0 -- 2024-05-04
-
-  - First version. Released on an unsuspecting world.
+  bluefin-internal: <0.2
+changelog: "# Revision history for bluefin-algae\r\n\r\n## 0.1.0.2 -- 2025-09-15\r\n\r\n-
+  Compatibility with GHC 9.12:\r\n  + Enable `DataKinds` to silence warnings\r\n\r\n##
+  0.1.0.1 -- 2024-05-04\r\n\r\n- Include `README.md` in the cabal distribution.\r\n\r\n##
+  0.1.0.0 -- 2024-05-04\r\n\r\n- First version. Released on an unsuspecting world.\r\n"
 changelog-type: markdown
-description: |
-  Named algebraic effect handlers in Bluefin
-  ==========================================
-
-  This package leverages the delimited continuations primitives added in
-  GHC 9.6 to implement algebraic effects in the Bluefin effect system.
-
-  Algebraic effects are a minimalistic basis for **user-defined effects**.
-  Using algebraic effects, we can reimplement, from scratch, effects that
-  were built-in the Bluefin library, and more.
-
-  This is an experimental project. There are surprising performance
-  characteristics which may be problematic for practical applications.
-  [Details down below.](#quadratic-behavior-of-non-tail-recursion)
-
-  ## Free monads in `IO`
-
-  An algebraic effect library is basically a free monad library with support for
-  extensible effects.
-
-  Effect handlers---the core primitive of algebraic effects---are conceptually
-  folds of trees, aka.
-  [`iter` in free](https://hackage.haskell.org/package/free-5.2/docs/Control-Monad-Free.html)
-  or [`cata` in recursion-schemes](https://hackage.haskell.org/package/recursion-schemes-5.2.2.5/docs/Data-Functor-Foldable.html#v:cata).
-
-  Effect systems---such as Bluefin---enable combinations of effects within a
-  single parameterized monad. Bluefin Algae seamlessly integrates with Bluefin's
-  infrastructure in order to compose algebraic effects.
-
-  The main novelties in Bluefin Algae are:
-
-  - computations use the same representation as `IO` (`State# s -> (# State# s, a #)`)
-    instead of recursive types or continuation-passing encodings.
-    This is possible thanks to the recently available primitives for delimited
-    continuations.
-
-  - thanks to Bluefin, effects are statically scoped: performing an operation
-    requires a handle which identifies a specific handler.
-
-    This enables new forms of abstraction boundaries.
-    A function `Eff s a -> Eff s a` cannot handle the operations of its argument.
-    The argument must be explicitly parameterized by the handler to allow
-    handling by its caller: `(forall z. Handler f z -> Eff (z : s) a) -> Eff s a`.
-
-  ## Highlights
-
-  ### Concurrency
-
-  In the following example, two threads yield a string back and forth, appending
-  a suffix every time.
-
-  ```haskell
-  import Bluefin.Algae.Coroutine
-
-  pingpong :: Eff ss String
-  pingpong = withCoroutine coThread mainThread
-    where
-      coThread z0 h = do
-        z1 <- yield h (z0 ++ "pong")
-        z2 <- yield h (z1 ++ "dong")
-        yield h (z2 ++ "bong")
-      mainThread h = do
-        s1 <- yield h "ping"
-        s2 <- yield h (s1 ++ "ding")
-        s3 <- yield h (s2 ++ "bing")
-        pure s3
-
-  -- runPureEff pingpong == "pingpongdingdongbingbong"
-  ```
-
-  Note that `coThread` and `mainThread` are just `IO` computations under the hood.
-  And we can interleave their executions without native multithreading. This is the
-  power of delimited continuations.
-
-  ### Nondeterminism
-
-  With the ability to interrupt and resume operations freely, we can do
-  backtracking search in the `Eff` monad.
-
-  ```haskell
-  import Bluefin.Algae.NonDeterminism as NonDet
-
-  pythagoras :: z :> zz => Handler Choice z -> Eff zz (Int, Int, Int)
-  pythagoras choice = do
-    x <- pick choice [1 .. 10]
-    y <- pick choice [1 .. 10]
-    z <- pick choice [1 .. 10]
-    assume choice (x .^ 2 + y .^ 2 == z .^ 2)
-    pure (x, y, z)
-
-    where (.^) = (Prelude.^) :: Int -> Int -> Int
-
-  -- runPureEff (NonDet.toList pythagoras) == [(3,4,5),(4,3,5),(6,8,10),(8,6,10)]
-  ```
-
-  #### Backtracking and state
-
-  Resuming continuations more than once exposes the impurity of the
-  implementation of the built-in state effect in `Bluefin.State`.
-  Here is a program using nondeterminism and state. There are two branches
-  (`choose`), both modify the state (`incr`).
-
-  ```haskell
-  import qualified Bluefin.State as B
-
-  nsExampleB :: [Int]
-  nsExampleB = runPureEff $ NonDet.toList \choice ->
-    snd <$> B.runState 0 \state -> do
-      _ <- choose choice True False
-      B.modify (+ 1) state
-
-  -- nsExampleB == [1,2]
-  ```
-
-  The state handler (`runState`) is under the nondeterminism handler
-  (`NonDet.toList`), which suggests a state-passing interpetation, where the
-  original state is restored upon backtracking (both branches return `1`):
-
-  ```haskell
-  nsExamplePure :: [Int]
-  nsExamplePure = runPureEff $ NonDet.toList \choice ->
-    let state = 0                          -- initial state
-    _ <- choose choice True False
-    let state' = state' + 1                -- modify' (+ 1)
-    pure state'                            -- (snd <$> runState) returns the final state
-
-  -- nsExamplePure == [1,1]
-  ```
-
-  Because `Bluefin.State` is backed by `IORef`, the mutation persists
-  through backtracking (the second branch returns `2` in the first example).
-
-  In comparison, the state effect defined using algebraic effects
-  (`Bluefin.Algae.State`) has the state-passing semantics.
-
-  ```haskell
-  import qualified Bluefin.Algae.State as A
-
-  nsExampleA :: [Int]
-  nsExampleA = runPureEff $ NonDet.toList \choice ->
-    A.execState 0 \state -> do
-      _ <- choose choice True False
-      A.modify' (+ 1) state
-
-  -- nsExampleA == [1,1]
-  ```
-
-  ### Truly scoped exceptions.
-
-  The scoped exceptions from `Bluefin.Exception` are not completely scoped because
-  they can be observed by `bracket`. That is probably the right behavior in practice,
-  but makes the semantics of Bluefin less clear. For the sake of science,
-  `Bluefin.Algae.Exception` provides truly scoped exceptions, and implements
-  "`bracket`-observable" scoped exceptions on top.
-
-  ## Lowlights
-
-  ### Quadratic behavior of non-tail recursion.
-
-  For example, the following recursive counter will take time quadratic in `n`
-  because every call of `modify'` traverses the call stack to find its handler
-  and capture the continuation.
-
-  ```haskell
-  leftRecCounter :: z :> zz => Handler (State Int) z -> Int -> Eff zz ()
-  leftRecCounter _state 0 = pure ()
-  leftRecCounter state n = do
-    leftRecCounter state (n - 1)
-    modify' state (+ 1)
-  ```
-
-  ## Comparison
-
-  ### Bluefin
-
-  The Bluefin effect system provides a well-scoped [handle pattern][handle].
-  Unlike algebraic effects with which other computational effects can be
-  user-defined, Bluefin provides a collection of built-in effects
-  (state, exceptions, coroutines).
-
-  Without delimited continuations, only tail-resumptive algebraic effect handlers
-  are expressible in Bluefin. Those are effect handlers restricted to the
-  following form, which is equivalent to type `forall r. f r -> Eff ss r`.
-
-  ```haskell
-  (\e k -> _ >>= k)
-    :: forall r. f r -> (r -> Eff ss a) -> Eff ss a
-  ```
-
-  [handle]: https://jaspervdj.be/posts/2018-03-08-handle-pattern.html
-
-  ## More reading
-
-  Named effect handlers are described in the literature in:
-
-  - [Binders by day, labels by night](https://maciejpirog.github.io/papers/binders-labels.pdf)
-      by Dariusz Biernacki et al.
-  - [First-class names for effect handlers](https://www.microsoft.com/en-us/research/uploads/prod/2021/05/namedh-tr.pdf)
-      by Ningning Xie et al. (impemented in the [Koka](https://koka-lang.github.io/koka/doc/index.html) language)
-  - [Effects, capabilities, and Boxes](https://dl.acm.org/doi/pdf/10.1145/3527320)
-      by Jonathan Brachtäuser et al.
+description: "Named algebraic effect handlers in Bluefin\r\n==========================================\r\n\r\n[![Hackage](https://img.shields.io/hackage/v/bluefin-algae.svg)](https://hackage.haskell.org/package/bluefin-algae)\r\n\r\nThis
+  package leverages the delimited continuations primitives added in\r\nGHC 9.6 to
+  implement algebraic effects in the Bluefin effect system.\r\n\r\nAlgebraic effects
+  are a minimalistic basis for **user-defined effects**.\r\nUsing algebraic effects,
+  we can reimplement, from scratch, effects that\r\nwere built-in the Bluefin library,
+  and more.\r\n\r\nThis is an experimental project. There are surprising performance\r\ncharacteristics
+  which may be problematic for practical applications.\r\n[Details down below.](#quadratic-behavior-of-non-tail-recursion)\r\n\r\n##
+  Free monads in `IO`\r\n\r\nAn algebraic effect library is basically a free monad
+  library with support for\r\nextensible effects.\r\n\r\nEffect handlers—the core
+  primitive of algebraic effects—are conceptually\r\nfolds of trees, aka.\r\n[`iter`
+  in free](https://hackage.haskell.org/package/free-5.2/docs/Control-Monad-Free.html)\r\nor
+  [`cata` in recursion-schemes](https://hackage.haskell.org/package/recursion-schemes-5.2.2.5/docs/Data-Functor-Foldable.html#v:cata).\r\n\r\nEffect
+  systems—such as Bluefin—enable combinations of effects within a\r\nsingle parameterized
+  monad. Bluefin Algae seamlessly integrates with Bluefin's\r\ninfrastructure in order
+  to compose algebraic effects.\r\n\r\nThe main novelties in Bluefin Algae are:\r\n\r\n-
+  computations use the same representation as `IO` (`State# s -> (# State# s, a #)`)\r\n
+  \ instead of recursive types or continuation-passing encodings.\r\n  This is possible
+  thanks to the recently available primitives for delimited\r\n  continuations.\r\n\r\n-
+  thanks to Bluefin, effects are statically scoped: performing an operation\r\n  requires
+  a handle which identifies a specific handler.\r\n\r\n  This enables new forms of
+  abstraction boundaries.\r\n  A function `Eff s a -> Eff s a` cannot handle the operations
+  of its argument.\r\n  The argument must be explicitly parameterized by the handler
+  to allow\r\n  handling by its caller: `(forall z. Handler f z -> Eff (z : s) a)
+  -> Eff s a`.\r\n\r\n## Highlights\r\n\r\n### Concurrency\r\n\r\nIn the following
+  example, two threads yield a string back and forth, appending\r\na suffix every
+  time.\r\n\r\n```haskell\r\nimport Bluefin.Algae.Coroutine\r\n\r\npingpong :: Eff
+  ss String\r\npingpong = withCoroutine coThread mainThread\r\n  where\r\n    coThread
+  z0 h = do\r\n      z1 <- yield h (z0 ++ \"pong\")\r\n      z2 <- yield h (z1 ++
+  \"dong\")\r\n      yield h (z2 ++ \"bong\")\r\n    mainThread h = do\r\n      s1
+  <- yield h \"ping\"\r\n      s2 <- yield h (s1 ++ \"ding\")\r\n      s3 <- yield
+  h (s2 ++ \"bing\")\r\n      pure s3\r\n\r\n-- runPureEff pingpong == \"pingpongdingdongbingbong\"\r\n```\r\n\r\nNote
+  that `coThread` and `mainThread` are just `IO` computations under the hood.\r\nAnd
+  we can interleave their executions without native multithreading. This is the\r\npower
+  of delimited continuations.\r\n\r\n### Nondeterminism\r\n\r\nWith the ability to
+  interrupt and resume operations freely, we can do\r\nbacktracking search in the
+  `Eff` monad.\r\n\r\n```haskell\r\nimport Bluefin.Algae.NonDeterminism as NonDet\r\n\r\npythagoras
+  :: z :> zz => Handler Choice z -> Eff zz (Int, Int, Int)\r\npythagoras choice =
+  do\r\n  x <- pick choice [1 .. 10]\r\n  y <- pick choice [1 .. 10]\r\n  z <- pick
+  choice [1 .. 10]\r\n  assume choice (x .^ 2 + y .^ 2 == z .^ 2)\r\n  pure (x, y,
+  z)\r\n\r\n  where (.^) = (Prelude.^) :: Int -> Int -> Int\r\n\r\n-- runPureEff (NonDet.toList
+  pythagoras) == [(3,4,5),(4,3,5),(6,8,10),(8,6,10)]\r\n```\r\n\r\n#### Backtracking
+  and state\r\n\r\nResuming continuations more than once exposes the impurity of the\r\nimplementation
+  of the built-in state effect in `Bluefin.State`.\r\nHere is a program using nondeterminism
+  and state. There are two branches\r\n(`choose`), both modify the state (`incr`).\r\n\r\n```haskell\r\nimport
+  qualified Bluefin.State as B\r\n\r\nnsExampleB :: [Int]\r\nnsExampleB = runPureEff
+  $ NonDet.toList \\choice ->\r\n  snd <$> B.runState 0 \\state -> do\r\n    _ <-
+  choose choice True False\r\n    B.modify (+ 1) state\r\n\r\n-- nsExampleB == [1,2]\r\n```\r\n\r\nThe
+  state handler (`runState`) is under the nondeterminism handler\r\n(`NonDet.toList`),
+  which suggests a state-passing interpetation, where the\r\noriginal state is restored
+  upon backtracking (both branches return `1`):\r\n\r\n```haskell\r\nnsExamplePure
+  :: [Int]\r\nnsExamplePure = runPureEff $ NonDet.toList \\choice ->\r\n  let state
+  = 0                  -- initial state that was passed to runState\r\n  _ <- choose
+  choice True False\r\n  let state' = state + 1         -- modify (+ 1)\r\n  pure
+  state'                    -- (snd <$> runState) returns the final state\r\n\r\n--
+  nsExamplePure == [1,1]\r\n```\r\n\r\nBecause `Bluefin.State` is backed by `IORef`,
+  the mutation persists\r\nthrough backtracking (the second branch returns `2` in
+  the first example).\r\n\r\nIn comparison, the state effect defined using algebraic
+  effects\r\n(`Bluefin.Algae.State`) has the state-passing semantics.\r\n\r\n```haskell\r\nimport
+  qualified Bluefin.Algae.State as A\r\n\r\nnsExampleA :: [Int]\r\nnsExampleA = runPureEff
+  $ NonDet.toList \\choice ->\r\n  A.execState 0 \\state -> do\r\n    _ <- choose
+  choice True False\r\n    A.modify (+ 1) state\r\n\r\n-- nsExampleA == [1,1]\r\n```\r\n\r\n###
+  Truly scoped exceptions.\r\n\r\nThe scoped exceptions from `Bluefin.Exception` are
+  not completely scoped because\r\nthey can be observed by `bracket`. That is probably
+  the right behavior in practice,\r\nbut makes the semantics of Bluefin less clear.
+  For the sake of science,\r\n`Bluefin.Algae.Exception` provides truly scoped exceptions,
+  and implements\r\n\"`bracket`-observable\" scoped exceptions on top.\r\n\r\n## Lowlights\r\n\r\n###
+  Quadratic behavior of non-tail recursion.\r\n\r\nFor example, the following recursive
+  counter will take time quadratic in `n`\r\nbecause every call of `modify` traverses
+  the call stack to find its handler\r\nand capture the continuation.\r\n\r\n```haskell\r\nleftRecCounter
+  :: z :> zz => Handler (State Int) z -> Int -> Eff zz ()\r\nleftRecCounter _state
+  0 = pure ()\r\nleftRecCounter state n = do\r\n  leftRecCounter state (n - 1)\r\n
+  \ modify state (+ 1)\r\n```\r\n\r\n## Comparison\r\n\r\n### Bluefin\r\n\r\nThe Bluefin
+  effect system provides a well-scoped [handle pattern][handle].\r\nUnlike algebraic
+  effects with which other computational effects can be\r\nuser-defined, Bluefin provides
+  a collection of built-in effects\r\n(state, exceptions, coroutines).\r\n\r\nWithout
+  delimited continuations, only tail-resumptive algebraic effect handlers\r\nare expressible
+  in Bluefin. Those are effect handlers restricted to the\r\nfollowing form, which
+  is equivalent to type `forall r. f r -> Eff ss r`.\r\n\r\n```haskell\r\n(\\e k ->
+  _ >>= k)\r\n  :: forall r. f r -> (r -> Eff ss a) -> Eff ss a\r\n```\r\n\r\n[handle]:
+  https://jaspervdj.be/posts/2018-03-08-handle-pattern.html\r\n\r\n## More reading\r\n\r\nNamed
+  effect handlers are described in the literature in:\r\n\r\n- [Binders by day, labels
+  by night](https://maciejpirog.github.io/papers/binders-labels.pdf)\r\n    by Dariusz
+  Biernacki et al.\r\n- [First-class names for effect handlers](https://www.microsoft.com/en-us/research/uploads/prod/2021/05/namedh-tr.pdf)\r\n
+  \   by Ningning Xie et al. (impemented in the [Koka](https://koka-lang.github.io/koka/doc/index.html)
+  language)\r\n- [Effects, capabilities, and Boxes](https://dl.acm.org/doi/pdf/10.1145/3527320)\r\n
+  \   by Jonathan Brachtäuser et al.\r\n"
 description-type: markdown
-hash: 1d9b893f1ace99b392b12cf1ad1cafb89017070eed61aa57c44af6f2301058ca
+hash: 126fecb28d8d1fc68c18a95eae08c5ce23cc3e094eec696e9f059ea1d7572bd1
 homepage: ''
-latest: 0.1.0.1
+latest: 0.1.0.2
 license-name: MIT
 maintainer: lysxia@gmail.com
 synopsis: Algebraic effects and named handlers in Bluefin.
