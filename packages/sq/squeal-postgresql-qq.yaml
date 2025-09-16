@@ -5,6 +5,7 @@ all-versions:
 - 0.1.2.0
 - 0.1.2.1
 - 0.1.3.0
+- 0.1.4.0
 author: Rick Owens
 basic-deps:
   aeson: '>=2.1.2.1 && <2.3'
@@ -12,12 +13,44 @@ basic-deps:
   bytestring: '>=0.11.3.0 && <0.13'
   generics-sop: '>=0.5.1.3 && <0.6'
   postgresql-syntax: '>=0.4.1 && <0.5'
+  scientific: '>=0.3.7.0 && <0.4'
   squeal-postgresql: '>=0.9.1.3 && <0.10'
   template-haskell: '>=2.20.0.0 && <2.24'
   text: '>=1.2.5.0 && <2.2'
   time: '>=1.9.3 && <1.15'
   uuid: '>=1.3.15 && <1.4'
 changelog: |
+  ### 0.1.4.0
+
+  * New features
+    * Support for SQL window functions (`OVER` clause).
+      * `select name, row_number() over () as rn from users` [✔]
+      * `select name, rank() over (partition by employee_id order by name) as r from users` [✔]
+      * `select email, sum(id) over (partition by user_id) as user_total from emails` [✔]
+      * `select email, avg(id) over (partition by user_id) as user_avg from emails` [✔]
+      * `select email, min(id) over (partition by user_id) as user_min from emails` [✔]
+      * `select email, max(id) over (partition by user_id) as user_max from emails` [✔]
+    * Support for SQL set operations (`UNION`, `INTERSECT`, `EXCEPT`).
+      * `select name from users union select name from users_copy` [✔]
+      * `select name from users union all select name from users_copy` [✔]
+      * `select name from users intersect select name from users_copy` [✔]
+      * `select name from users intersect all select name from users_copy` [✔]
+      * `select name from users except select name from users_copy` [✔]
+      * `select name from users except all select name from users_copy` [✔]
+    * Support for `WITH RECURSIVE` clauses.
+      * `with recursive t as ( select 1 as n union all select (n + 1) as n from t where n < 100) select n from t` [✔]
+      * `with recursive users_cte as ( select id, name from users union all select id, name from users_cte) select * from users_cte` [✔]
+    * Support for aggregate functions (`sum`, `avg`, `min`, `max`).
+      * `select sum(id) as total_ids from emails` [✔]
+      * `select sum(all id) as total_ids from emails` [✔]
+      * `select sum(distinct id) as total_ids from emails` [✔]
+      * `select count(distinct id) as distinct_ids from emails` [✔]
+      * `select count(all id) as all_ids from emails` [✔]
+      * `select avg(id) as avg_id from emails` [✔]
+      * `select min(id) as min_id from emails` [✔]
+      * `select max(id) as max_id from emails` [✔]
+    * Support for `PGnumeric` type, mapping to `Scientific`.
+
   ### 0.1.3.0
 
   * New features
@@ -196,8 +229,7 @@ description: |
   package.
 
   I think I've got a very large and usable segment of SQL supported but
-  of course there are unsupported features that are kind of important such
-  as common table expressions.
+  of course there are some unsupported features.
 
   I don't foresee backwards incompatable changes being a problem because,
   after all, the "interface" is mostly the SQL language, which is
@@ -237,8 +269,8 @@ description: |
   ### General Query Structure
   * `TABLESAMPLE` clause
   * `ONLY` keyword for table inheritance
-  * `WINDOW` clause and window functions (`OVER`)
   * `INTO` clause (`SELECT ... INTO ...`)
+  * `WINDOW` clause for defining named windows (e.g. `WINDOW w AS ...`)
   * `ORDER BY USING`
   * `FOR READ ONLY` locking clause
   * `FOR UPDATE/SHARE OF` with qualified table names.
@@ -249,42 +281,51 @@ description: |
   * `LIMIT` with comma offset (e.g. `LIMIT 10, 20`)
   * `LIMIT ALL`
   * `FETCH` clause
+  * `ORDER BY`, `LIMIT`, `OFFSET`, or locking clauses on the immediate operands of a set operation (`UNION`, `INTERSECT`, `EXCEPT`).
   * Advanced `GROUP BY` features (`GROUPING SETS`, `CUBE`, `ROLLUP`)
-  * Multi-row `VALUES` clause (e.g. `VALUES (1, 'a'), (2, 'b')`)
+  * Multi-row `VALUES` clause in `SELECT` statements (e.g. `SELECT * FROM (VALUES (1, 'a'), (2, 'b'))`). Multi-row `INSERT ... VALUES` is supported.
+  * `VALUES` clause with `ORDER BY`, `LIMIT`, `OFFSET`, or locking clauses.
+  * `SELECT` without a `FROM` clause cannot have other clauses like `WHERE`, `GROUP BY`, etc.
+  * Multiple `*` in a `SELECT` list.
 
   ### Common Table Expressions (WITH clauses)
-  * Recursive `WITH` clauses (`WITH RECURSIVE ...`)
   * `MATERIALIZED` / `NOT MATERIALIZED` hints
+  * Schema-qualified CTEs (e.g. `WITH public.my_cte AS ...`)
   * Column lists for CTEs are only partially supported (e.g., not for top-level `SELECT` statements)
   * Data-modifying statements (`INSERT`, `UPDATE`, `DELETE`) within a `WITH` clause
 
   ### Data Manipulation (INSERT/UPDATE/DELETE)
-  * `ON CONFLICT` with a column list conflict target (e.g. `ON CONFLICT (col1, col2) ...`)
+  * `ON CONFLICT` with a column list conflict target (e.g. `ON CONFLICT (col1, col2) ...`). Only `ON CONFLICT ON CONSTRAINT ...` is supported.
+  * `ON CONFLICT` without a conflict target (e.g. `ON CONFLICT DO NOTHING`).
   * `INSERT ... DEFAULT VALUES`
   * `INSERT INTO table (columns) SELECT ...` (must omit column list)
+  * `INSERT ... VALUES` without a column list.
   * `OVERRIDING` clause for identity columns in `INSERT`
   * Column indirection in `INSERT` target lists (e.g., `INSERT INTO tbl (col[1]) ...`)
   * Complex relation expressions in `UPDATE` or `DELETE` targets
   * Column indirection in `UPDATE SET` clauses (e.g., `UPDATE tbl SET col[1] = ...`)
   * `UPDATE` with multiple-column `SET` (e.g. `SET (a,b) = (1,2)`)
+  * `RETURNING` expressions must have an alias if they are not simple column references.
+  * Implicitly aliased expressions in `RETURNING` are not supported.
 
   ### Expressions and Functions
   * `LIKE` with `ESCAPE`
   * `OPERATOR()` syntax
   * Parameter indirection (e.g., `$1[i]`)
+  * Column array access (e.g. `col[1]`)
   * Indirection on parenthesized expressions (e.g., `(expr)[i]`)
   * Aggregate `FILTER` clause
   * `WITHIN GROUP` clause for aggregates
-  * `DISTINCT` in function arguments
   * `ORDER BY` in function arguments
   * Function name indirection (e.g., `schema.func`)
   * Named or colon-syntax function arguments (e.g. `my_func(arg_name => 'val')`)
 
   ### Types and Casting
   * `SETOF` type modifier
+  * Nullable type modifier `?` (e.g. `int?`)
   * `BIT` and `BIT VARYING` types
   * `INTERVAL` with qualifiers
-  * Types with precision/scale (`TIMESTAMP`, `TIME`, `FLOAT`, `NUMERIC`, etc.)
+  * Types with precision/scale (`TIMESTAMP`, `TIME`, `FLOAT`, etc.)
   * Qualified type names (e.g., `schema.my_type`)
   * `CURRENT_TIMESTAMP` with precision
   * Multidimensional arrays with explicit bounds
@@ -326,7 +367,17 @@ description: |
       select employee_id, name, count(id) from users group by employee_id, name [✔]
     common table expressions
       with users_cte as (select * from users) select * from users_cte [✔]
+      with recursive t as ( select 1 as n union all select (n + 1) as n from t where n < 100) select n from t [✔]
+      with recursive users_cte as ( select id, name from users union all select id, name from users_cte) select * from users_cte [✔]
       with users_cte as (select * from users), emails_cte as (select * from emails) select users_cte.*, emails_cte.email from users_cte join emails_cte on users_cte.id = emails_cte.user_id [✔]
+    set operations
+      select name from users union select name from users_copy [✔]
+      select name from users union all select name from users_copy [✔]
+      select name from users intersect select name from users_copy [✔]
+      select name from users intersect all select name from users_copy [✔]
+      select name from users except select name from users_copy [✔]
+      select name from users except all select name from users_copy [✔]
+      (select name from users) union (select name from users_copy) [✔]
   inserts
     insert into emails (id, user_id, email) values (1, 'user-1', 'foo@bar') [✔]
     insert into emails (id, user_id, email) values (1, 'user-1', $1) [✔]
@@ -350,6 +401,12 @@ description: |
       insert into emails (id, user_id, email) values (1, 'user-1', 'foo@bar') returning * [✔]
     with common table expressions
       with new_user (id, name, bio) as (values ('id_new', 'new_name', 'new_bio')) insert into users_copy select * from new_user [✔]
+    on conflict
+      insert into users_copy (id, name, bio) values ('id1', 'name1', null) on conflict on constraint pk_users_copy do nothing [✔]
+      insert into users_copy (id, name, bio) values ('id1', 'name1', 'bio1') on conflict on constraint pk_users_copy do update set name = 'new_name' [✔]
+      insert into users_copy (id, name, bio) values ('id1', 'name1', null) on conflict on constraint pk_users_copy do update set name = 'new_name' where users_copy.name = 'old_name' [✔]
+      insert into users_copy (id, name, bio) values ('id1', 'name1', null) on conflict on constraint pk_users_copy do nothing returning id [✔]
+      insert into users_copy (id, name, bio) values ('id1', 'name1', 'bio1') on conflict on constraint pk_users_copy do update set name = 'new_name' returning * [✔]
   deletes
     delete from users where true [✔]
     delete from emails where id = 1 [✔]
@@ -393,6 +450,15 @@ description: |
       select "upper"(users.name) as upper_name from users [✔]
       select now() as current_time [✔]
       select current_date as today [✔]
+      aggregate functions
+        select sum(id) as total_ids from emails [✔]
+        select sum(all id) as total_ids from emails [✔]
+        select sum(distinct id) as total_ids from emails [✔]
+        select count(distinct id) as distinct_ids from emails [✔]
+        select count(all id) as all_ids from emails [✔]
+        select avg(id) as avg_id from emails [✔]
+        select min(id) as min_id from emails [✔]
+        select max(id) as max_id from emails [✔]
       haskell variables in expressions [✔]
     select (emails.id + 1) * 2 as calc from emails [✔]
     select * from users where users.name in ('Alice', 'Bob') [✔]
@@ -414,11 +480,20 @@ description: |
       select * from users order by name desc [✔]
     having clause
       select employee_id, count(id) from users group by employee_id having count(id) > 1 [✔]
+    window functions
+      select name, row_number() over () as rn from users [✔]
+      select name, rank() over (partition by employee_id order by name) as r from users [✔]
+      select email, sum(id) over (partition by user_id) as user_total from emails [✔]
+      select email, avg(id) over (partition by user_id) as user_avg from emails [✔]
+      select email, min(id) over (partition by user_id) as user_min from emails [✔]
+      select email, max(id) over (partition by user_id) as user_max from emails [✔]
+      select name, row_number() over (order by name), rank() over (order by name) from users [✔]
+      select name, row_number() over (partition by employee_id order by name), rank() over (order by name) from users [✔]
   ```
 description-type: markdown
-hash: 8bc5132cbfd2661c74cdcbbb102128ba072ac43dbd413253a42f5e03468f69db
+hash: fe21b3e82662b4b24b54ddb876f5f7f288d1f9fafbfc683ab34671060e72e350
 homepage: https://github.com/owensmurray/squeal-postgresql-qq
-latest: 0.1.3.0
+latest: 0.1.4.0
 license-name: MIT
 maintainer: rick@owensmurray.com
 synopsis: QuasiQuoter transforming raw sql into Squeal expressions.
@@ -429,6 +504,7 @@ test-bench-deps:
   generics-sop: '>=0.5.1.3 && <0.6'
   hspec: '>=2.11.7 && <2.12'
   postgresql-syntax: '>=0.4.1 && <0.5'
+  scientific: '>=0.3.7.0 && <0.4'
   squeal-postgresql: '>=0.9.1.3 && <0.10'
   squeal-postgresql-qq: '>=0'
   template-haskell: '>=2.20.0.0 && <2.24'
