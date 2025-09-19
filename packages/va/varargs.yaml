@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0.0
+- 0.1.0.1
 author: Ian Duncan
 basic-deps:
   base: '>=4.7 && <5'
@@ -17,14 +18,196 @@ changelog: |
   ## 0.1.0.0 - YYYY-MM-DD
 changelog-type: markdown
 description: |
-  # varargs
+  # VarArgs
+
+  [![Hackage](https://img.shields.io/hackage/v/varargs.svg)](https://hackage.haskell.org/package/varargs)
+  [![Hackage Dependencies](https://img.shields.io/hackage-deps/v/varargs.svg)](https://packdeps.haskellers.com/reverse/varargs)
+
+  A type-level library for working with variadic functions using type-level lists of argument types. This library provides utilities for sequencing monadic actions over variadic function arguments, mapping over results, and folding over arguments with constraints.
+
+  ## Overview
+
+  The core idea is to represent variadic functions as type-level lists of argument types paired with a result type, enabling type-safe operations over functions with arbitrary numbers of arguments.
+
+  This library was originally part of the [temporal-sdk](https://github.com/MercuryTechnologies/hs-temporal-sdk) project at Mercury, but extracted as a standalone library for broader use.
+
+  ## Features
+
+  - **Type-level function analysis**: Extract argument types and result types from function signatures
+  - **Monadic sequencing**: Sequence monadic actions over variadic function arguments
+  - **Result mapping**: Transform the result type of variadic functions
+  - **Constrained folding**: Fold over arguments with type class constraints
+  - **Monad hoisting**: Transform the monad context of variadic functions
+  - **Compile-time validation**: Ensure functions use expected monads
+
+  ## Quick Start
+
+  ```haskell
+  {-# LANGUAGE DataKinds, TypeApplications, TypeOperators #-}
+  import VarArgs
+
+  -- Extract argument types from a function
+  type Args = ArgsOf (Int -> String -> Bool -> IO String)
+  -- Args = '[Int, String, Bool]
+
+  -- Construct a function type from argument list and result
+  type MyFunc = '[Int, String, Bool] :->: IO String
+  -- MyFunc = Int -> String -> Bool -> IO String
+
+  -- Map over the result type
+  convertToString :: (Int -> Bool -> String) -> (Int -> Bool -> [String])
+  convertToString = mapResult @'[Int, Bool] @String @[String] (pure . show)
+
+  -- Fold over arguments with constraints
+  showAll :: Int -> Bool -> [String]
+  showAll = foldMapArgs @'[Int, Bool] @Show @[String] (pure . show)
+
+  -- Sequence monadic actions
+  liftToIO :: IO (Int -> Bool -> IO String) -> (Int -> Bool -> IO String)
+  liftToIO = sequenceArgs @'[Int, Bool] @IO
+  ```
+
+  ## Core Types
+
+  ### Type Families
+
+  - `ArgsOf f` - Extract argument types from a function type
+  - `MonadResultOf m f` - Extract result type from a monadic function with validation
+  - `ArgsAndResult f args` - Decompose function into arguments and result
+  - `(:->:) args result` - Construct function type from argument list and result
+  - `AllArgs c args` - Apply constraint to all argument types
+
+  ### Type Classes
+
+  - `VarArgs args` - Operations over variadic functions represented as type-level lists
+
+  ## Key Functions
+
+  ### Sequencing and Mapping
+
+  ```haskell
+  -- Sequence monadic actions over variadic function arguments
+  sequenceArgs :: (VarArgs args, Monad m) => m (args :->: m result) -> args :->: m result
+
+  -- Map over the result type
+  mapResult :: VarArgs args => (result -> result') -> (args :->: result) -> (args :->: result')
+
+  -- Hoist natural transformation over result monad
+  hoistResult :: VarArgs args => (forall x. m x -> n x) -> (args :->: m result) -> (args :->: n result)
+  ```
+
+  ### Folding Operations
+
+  ```haskell
+  -- Fold over arguments with constraints
+  foldlArgs :: (VarArgs args, AllArgs c args) => (forall a. c a => b -> a -> b) -> b -> (args :->: b)
+
+  -- Fold and map to monoid
+  foldMapArgs :: (VarArgs args, AllArgs c args, Monoid m) => (forall a. c a => a -> m) -> args :->: m
+
+  -- Monadic fold over arguments
+  foldMArgs :: (VarArgs args, AllArgs c args, Monad m) => (forall a. c a => b -> a -> m b) -> b -> args :->: m b
+
+  -- Monadic fold discarding result
+  foldMArgs_ :: (VarArgs args, AllArgs c args, Monad m) => (forall a. c a => b -> a -> m b) -> b -> args :->: m ()
+  ```
+
+  ## Examples
+
+  ### Function Type Analysis
+
+  ```haskell
+  -- Extract argument types
+  type Args1 = ArgsOf (Int -> String -> Bool)
+  -- Args1 = '[Int, String, Bool]
+
+  type Args2 = ArgsOf (IO String)
+  -- Args2 = '[]
+
+  -- Extract result from monadic function
+  type Result1 = MonadResultOf IO (Int -> String -> IO String)
+  -- Result1 = String
+
+  -- This would cause a compile-time error:
+  -- type Result2 = MonadResultOf IO (Int -> String)
+  -- Error: This function must use the (IO) monad.
+  ```
+
+  ### Result Transformation
+
+  ```haskell
+  -- Convert result type
+  intToString :: (Int -> Bool -> Int) -> (Int -> Bool -> String)
+  intToString = mapResult @'[Int, Bool] @Int @String show
+
+  -- Change monad context
+  maybeToEither :: (Int -> Bool -> Maybe String) -> (Int -> Bool -> Either String String)
+  maybeToEither = hoistResult @'[Int, Bool] @String @Maybe @(Either String) (maybe (Left "Nothing") Right)
+  ```
+
+  ### Argument Processing
+
+  ```haskell
+  -- Collect all arguments into a list
+  collectArgs :: Int -> String -> Bool -> [String]
+  collectArgs = foldMapArgs @'[Int, String, Bool] @Show @[String] (pure . show)
+
+  -- Print all arguments and count them
+  printAndCount :: (AllArgs Show args) => args :->: IO Int
+  printAndCount = foldMArgs @args @Show @Int @IO (\count x -> print x >> pure (count + 1)) 0
+
+  -- Just print all arguments
+  printAll :: (AllArgs Show args) => args :->: IO ()
+  printAll = foldMArgs_ @args @Show @() (\_ x -> print x) ()
+  ```
+
+  ## Use Cases
+
+  This library is particularly useful for:
+
+  - **RPC/API generation**: Converting Haskell functions into serializable RPC definitions
+  - **Code generation**: Analyzing function signatures for metaprogramming
+  - **Generic programming**: Working with functions of arbitrary arity in a type-safe way
+  - **Monadic lifting**: Applying monadic operations to variadic functions
+  - **Function composition**: Building complex function transformations
+
+  ## Requirements
+
+  - Tested against GHC 9.6 and later, might work with older things
+  - The following extensions are required:
+    - `DataKinds`
+    - `TypeFamilies`
+    - `TypeOperators`
+    - `TypeApplications`
+    - `AllowAmbiguousTypes`
+    - `RankNTypes`
+    - `ScopedTypeVariables`
+
+  ## Installation
+
+  Add `varargs` to your cabal file.
+
+  ## Documentation
+
+  For more detailed information, see:
+
+  - [Hackage documentation](https://hackage.haskell.org/package/varargs)
+  - [Original article](https://www.iankduncan.com/articles/2023-08-30-functions-into-rpc-definitions)
+
+  ## License
+
+  BSD-3-Clause
+
+  ## Contributing
+
+  Contributions are welcome! Please feel free to submit a Pull Request.
 description-type: markdown
-hash: f7f3d7b6e4cbb3a9601e461169384589fd3065d88ecc45791a56c4d261fa6be7
+hash: 1a7db2596fa418c0a45cd4de3fa6f3742b853a2e495168005fbfb9148f857596
 homepage: https://github.com/iand675/varargs#readme
-latest: 0.1.0.0
+latest: 0.1.0.1
 license-name: BSD-3-Clause
 maintainer: ian@iankduncan.com
-synopsis: ''
+synopsis: Utilities for working with variadic functions using type-level lists
 test-bench-deps:
   base: '>=4.7 && <5'
   varargs: '>=0'
