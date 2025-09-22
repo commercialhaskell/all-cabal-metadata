@@ -1,0 +1,361 @@
+all-versions:
+- 0.1.0.0
+author: Eiko
+basic-deps:
+  async: <2.4
+  base: '>=4 && <5'
+  data-default: '>=0.8.0 && <0.9'
+  deepseq: <1.6
+  exceptions: <0.11
+  haskell-src-meta: '>=0.8 && <0.9'
+  monad-control: '>=1.0.3 && <1.1'
+  mtl: <2.4
+  parsec: '>=3 && <4'
+  resourcet: '>=1.3.0 && <1.4'
+  stm: <2.6
+  template-haskell: <2.24
+  text: <2.2
+  transformers-base: '>=0.4.6 && <0.5'
+changelog: |
+  # Revision history for monad-effect
+
+  ## 0.1.0.0 -- 2025-09-20
+
+  * First release of monad-effect
+changelog-type: markdown
+description: "# A lightweight, fast, and algebraic effect system that makes sense\n\nThis
+  project is in experimental beta, it may change relatively quickly. I will definitely
+  improve it when I use it more in other projects. Feedbacks and contributions are
+  welcome!\n\n## The `EffT` Monad Transformer\n\nThe core type of the library is the
+  `EffT` monad transformer, which can be understood as follows:\n\n```haskell\nnewtype
+  EffT (mods :: [Type]) (es :: [Type]) (m :: Type -> Type) a\n  = EffT { SystemRead
+  mods -> SystemState mods -> m (Result es a, SystemState mods) }\n```\n\n(This is
+  a simplification of the actual type, but basically the same idea, see the later
+  sections for explanation.)\n\nIt is a single layer of reader and state monad together
+  with composable error handling.\n\n* The unit of effect is a `Module`, which just
+  has some custom data families defining its Read and State types.\n\n* `mods` is
+  a list of modules that the effect uses.\n\n* `es` is the list of errors that the
+  effect can throw, which is explicit and algebraic.\n\n* `SystemRead mods` is a data
+  family that holds all the read-only data for the modules in `mods`.\n\n* `SystemState
+  mods` is a data family that holds all the pure-states for the modules in `mods`.\n\nAlgebraic
+  exceptions are a key feature of this library, it is easy to throw ad-hoc exception
+  types and the type system will make sure you deal with them or acknowledge their
+  existence.\n\n## Key Features\n\n### **Algebraic Exceptions**\n\nI'm a believer
+  in algebraic data structures and I think exceptions should be made explicit and
+  algebraic. In classic Haskell and other languages like Rust, exceptions are made
+  algebraic using `Maybe` or `Either` types. Haskell provides monadic supports and
+  a `ExceptT` monad transformer for these types, making them joyful to use, I surely
+  love them!\n\nBut there are some problems with `Maybe` and `Either`:\n\n* `Maybe`
+  gives you no information about the error, it is composable but not informative.
+  The same problem with `MaybeT`.\n\n* `Either e` gives you information of type `e`,
+  but if you have multiple different `Either e_i` types in your program, there is
+  no obvious way to compose them except by using `Either Text`, `Either SomeException`
+  or `Either e0 (Either e1 (Either e2 e3))`. The former is tempting to use but it
+  gives us no obvious way to catch specific errors (you don't want to parse the Text
+  message to find out what went wrong), and the latter is not ergonomic at all.\n\n*
+  `ExceptT` has the same problem as `Either` and it also has a *small pitfall*, the
+  order of composing monad transformers matters. Think about what `StateT s (ExceptT
+  e m) a` and `ExceptT e (StateT s m) a` mean.\n\n  - `ExceptT e m` is isomorphic
+  to `m (Either e a)`, so `StateT s (m (Either e *)) a` 'desugars' to\n\n    `s ->
+  m (Either e (a, s))`. Depending on what you want the computation to be, this might
+  not be what you want, because once you have an algebraic exception `e`, not only
+  the result `a` is lost, the state during the computation until the exception step
+  is also lost. You will need to start over with an initial state. Maybe this is the
+  behavior you want to have, but it is not obvious what behavior you are using by
+  looking at the type signature.\n\n  - On the other hand, `ExceptT e (StateT s m)
+  a` is isomorphic to `StateT s m (Either e a)`, which desugars to\n\n    `s -> m
+  (Either e a, s)`. This is the more 'correct' behavior, during the computation once
+  you have an exception, the state until the exception step is preserved.\n\nTo solve
+  all these problems, we made the following designs:\n\n* A `Result es a` type that
+  is a sum type of all the exception types in the type level list `es` and return
+  type `a`. This is achieved not by using `Either` but a custom GADT:\n\n  ```haskell\n
+  \ data Result (es :: [Type]) a where\n    RSuccess :: a -> Result '[] a\n    RFailure
+  :: !(EList es) -> Result es a\n\n  data EList (es :: [Type]) where\n    EHead ::
+  !e -> EList (e ': es)\n    ETail :: !(EList es) -> EList (e ': es)\n  ```\n\n  Here
+  `EList es` is a sum type that has value in exactly one of the types in `es` and
+  is by construction must be non-empty.\n\n  `Result es a` behaves like `Either (EList
+  es) a`, but better: if `es = '[]`, then `Result '[] a` is just isomorphic to `a`,
+  there is no `RFailure` case!\n  \n* The type inside `EffT` is `SystemRead mods ->
+  SystemState mods -> m (Result es a, SystemState mods)`, which means that the state
+  is preserved when an algebraic exception is thrown. This is the same as `StateT
+  s m (Either e a)`.\n\n  Note if you have a blowup in the base monad `m`, then you
+  will still lose everything in `(Result es a, SystemState mods)` since blowing up
+  `m` can be thought as branching a `Left` case in `m`. The idea is that you should
+  wrap your low-level routine in algebraic exceptions so that everything goes explicit
+  and algebraic.\n\n### **Purity**\n\nInstead of giving up purity and using `IORef`
+  or `TVar` for every state, we allow the possibility of having pure states in the
+  effect modules. We also provide two built-in modules: `SModule s` is a module that
+  holds a pure state of type `s`, and `RModule r` is a module that holds a read-only
+  value of type `r`. You can use these modules to store pure states and read-only
+  values in the effect system. There are also template haskell functions for easily
+  generating modules in `Module.RS.QQ`.\n\nLet's see a simple example that combines
+  the use of `SModule` and algebraic exceptions:\n\n```haskell\nimport Control.Monad.Effect
+  -- the EffT types and useful combinators\nimport qualified Data.Map  as M\nimport
+  qualified Data.Text as T\n\n-- | Wraps your effectul routine into EffT monad transformer\nmyLookup
+  :: (Show k, Ord k, Monad m) => k -> EffT '[SModule (M.Map k v)] '[ErrorText \"Map.keyNotFound\"]
+  m v\nmyLookup k\n  = effMaybeInWith (errorText @\"Map.keyNotFound\" $ \" where key
+  = \" <> T.pack (show k)) -- wraps Maybe into an exception\n  $ getsS (M.lookup k)
+  -- this just returns a monadic value of type `Maybe v`\n\n-- | This effect can run
+  as a pure function! Put m = Identity for example.\nlookups :: forall v m. (Monad
+  m) => EffT '[SModule (M.Map T.Text v)] '[ErrorText \"Map.keyNotFound\"] m (v, v,
+  v)\nlookups = do\n  foo <- myLookup \"foo\"  -- this will throw an exception if
+  \"foo\" is not found\n  bar <- myLookup \"bar\"  -- instead of Nothing, you get
+  an algebraic exception `ErrorText \"Map.keyNotFound\"` explaining what went wrong\n
+  \ baz <- myLookup \"baz\"  -- just like Maybe and Either, when an exception is thrown,
+  the computation stops and immediately returns\n  return (foo, bar, baz)\n```\n\nHere
+  `ErrorText (s :: k)` is a newtype wrapper for `Text` is for you to create ad-hoc
+  exception types very easily. We also provided `ErrorValue (s :: k) (v :: Type)`
+  that is a newtype wrapping `v` if you want a more concrete type.\n\n### **Performant**\n\nIn
+  fact the library defines a more general `EffT'` type that is also polymorphic in
+  the container that holds the list of types\n\n```haskell\nnewtype EffT' (c :: (Type
+  -> Type) -> [Type] -> Type) (mods :: [Type]) (es :: [Type]) (m :: Type -> Type)
+  a\n  = EffT' { SystemRead c mods -> SystemState c mods -> m (Result es a, SystemState
+  c mods) }\n\n-- | Short hand monads, recommended, uses FData under the hood\ntype
+  Eff   mods es  = EffT' FData mods es IO\ntype EffT  mods es  = EffT' FData mods
+  es\ntype Pure  mods es  = EffT' FData mods es Identity\ntype In    mods es  = In'
+  \  FData mods es\n\n-- | Short hand monads which uses FList instead of FData as
+  the data structure\ntype EffL  mods es = EffT' FList mods es IO\ntype EffLT mods
+  es = EffT' FList mods es\ntype PureL mods es = EffT' FList mods es Identity\ntype
+  InL   mods es = In'   FList mods es\n```\n\nAnd we have two containers implemented,
+  a standard heterogeneous list `c = FList`\n\n```haskell\ndata FList (f :: Type ->
+  Type) (ts :: [Type]) where\n  FNil  :: FList f '[]\n  FCons :: !(f t) -> !(FList
+  f ts) -> FList f (t : ts)\ninfixr 5 `FCons`\n```\n\nAnd a more performant data family
+  `c = FData`. The `FData` container is used by default, instead of storing a list
+  as your data structure, it creates a data container that is indexed by the list\n\n```haskell\ndata
+  family FData (f :: Type -> Type) (ts :: [Type]) :: Type\n\ndata instance FData f
+  '[] = FData0\ndata instance FData f '[t] = FData1\n  { fdata1_0 :: !(f t)\n  }\ndata
+  instance FData f '[t1, t2] = FData2\n  { fdata2_0 :: !(f t1)\n  , fdata2_1 :: !(f
+  t2)\n  }\ndata instance FData f '[t1, t2, t3] = FData3\n  { fdata3_0 :: !(f t1)\n
+  \ , fdata3_1 :: !(f t2)\n  , fdata3_2 :: !(f t3)\n  }\ndata instance FData f '[t1,
+  t2, t3, t4] = FData4\n  { fdata4_0 :: !(f t1)\n  , fdata4_1 :: !(f t2)\n  , fdata4_2
+  :: !(f t3)\n  , fdata4_3 :: !(f t4)\n  }\ndata instance FData f '[t1, t2, t3, t4,
+  t5] = FData5\n  { fdata5_0 :: !(f t1)\n  , fdata5_1 :: !(f t2)\n  , fdata5_2 ::
+  !(f t3)\n  , fdata5_3 :: !(f t4)\n  , fdata5_4 :: !(f t5)\n  }\n```\n\nThis is much
+  more performant than a list (which GHC cannot inline recursive functions operating
+  on it), and GHC optimizes it very well. The performance of `FData` over `FList`
+  is about `5~100` times faster!\n\nOf course we did not write the instances by hand,
+  rather we used Template Haskell to generate all the instances including the methods
+  to extract values from the data structure and to update/compose them. Currently
+  we generated instances up to 19 types in the list, which should be more than enough.
+  (Remark: the error type `es` does not live in `FData` and have no limit).\n\nA count-down
+  benchmark shows that `EffT` is 25 times faster than `StateT` without optimization,
+  and as fast as a `StateT` with correct optimization (`-O2 -flate-dmd-anal`, for
+  which both optimizes to a really fast simple loop!)\n\n```haskell\n{-# LANGUAGE
+  DataKinds, PartialTypeSignatures #-}\nmodule Main (main) where\n\nimport Control.Monad.Effect\nimport
+  Criterion.Main\nimport Data.TypeList\nimport Data.TypeList.FData\nimport Module.RS\nimport
+  qualified Control.Monad.State as S\n\ntestEffStateFPoly :: _ => EffT' flist '[RModule
+  (), SModule Int, SModule Bool] NoError IO ()\ntestEffStateFPoly = do\n  x <- getS
+  @Int\n  modifyS not\n  if x < 1_000_000\n    then putS (x + 1) >> testEffStateFPoly\n
+  \   else return ()\n\ntestMtlState :: S.StateT ((), Int, Bool) IO ()\ntestMtlState
+  = do\n  x <- S.gets (\\(_, x, _) -> x)\n  S.modify (\\(_, x', b) -> ((), x', not
+  b))\n  if x < 1_000_000\n    then do\n      S.modify (\\(_, _, b) -> ((), x + 1,
+  b))\n      testMtlState\n    else return ()\n\nmain = defaultMain\n    [ bgroup
+  \"State Effect Eff\"\n      [ bench \"FList\" $ whnfIO $ runEffTNoError\n          (RRead
+  () :*** SRead :*** SRead :*** FNil)\n          (RState :*** SState 0 :*** SState
+  False :*** FNil)\n          testEffStateFPoly\n      , bench \"FData\" $ whnfIO
+  $ runEffTNoError\n          (FData3 (RRead ()) SRead SRead)\n          (FData3 (RState)
+  (SState 0) (SState False))\n          testEffStateFPoly\n      ]\n    , bgroup \"Mtl
+  State\"\n      [ bench \"StateT\" $ whnfIO $ S.runStateT testMtlState ((), 0, False)\n
+  \     ]\n    ]\n```\n\nHere `:***` is a pattern synonym, you can use it to replace
+  `FCons` and even use it in pattern matching `FData` or constructing `FData`, with
+  `fNil` being a polymorphic empty container.\n\nTested on my laptop with GHC 9.12.2:\n\n```plain\n--------
+  With -O2 -flate-dmd-anal\n\nbenchmarking State Effect Eff/FList\ntime                 4.971
+  ms   (4.031 ms .. 5.956 ms)\n                     0.887 R²   (0.843 R² .. 0.985
+  R²)\nmean                 5.264 ms   (4.919 ms .. 5.648 ms)\nstd dev              1.239
+  ms   (975.3 μs .. 1.412 ms)\nvariance introduced by outliers: 90% (severely inflated)\n\nbenchmarking
+  State Effect Eff/FData\ntime                 117.6 μs   (117.5 μs .. 117.7 μs)\n
+  \                    1.000 R²   (1.000 R² .. 1.000 R²)\nmean                 117.5
+  μs   (117.2 μs .. 117.7 μs)\nstd dev              865.3 ns   (639.9 ns .. 1.398
+  μs)\n\nbenchmarking Mtl State/StateT\ntime                 117.1 μs   (116.8 μs
+  .. 117.3 μs)\n                     1.000 R²   (1.000 R² .. 1.000 R²)\nmean                 117.3
+  μs   (117.2 μs .. 117.5 μs)\nstd dev              463.5 ns   (345.5 ns .. 691.4
+  ns)\n```\n\nThe optimization friendly design of the library allows you to use it
+  in performance critical code without sacrificing purity and composability, it can
+  be used as a drop-in replacement (upgrade!) for `StateT`, `ExceptT`, `ReaderT`,
+  or even `IO` monad, which is more performant and composable!\n\n### Flexible\n\n####
+  Represents Common Monads\n\nThe `EffT` monad can be easily transformed into other
+  monads, making it really a more flexible and composable replacement for `StateT`,
+  `ExceptT`, `ReaderT`, or even `IO` monad.\n\nFor example,\n\n* the type `EffT '[]
+  '[] m a` is just isomorphic to `m a`\n\n* the type `EffT '[] '[e] m a` is isomorphic
+  to `m (Either e a)`\n\n* the type `EffT '[] es m a` is isomorphic to `m (Result
+  es a)`\n\n```haskell\ntype NoError = '[] -- just a synonym\n\n-- | runs the EffT'
+  with no modules and no error\nrunEffT00 :: (Monad m, ConsFNil c) => EffT' c '[]
+  NoError m a -> m a\nrunEffT00 = fmap resultNoError . runEffT0\n\n-- | runs the EffT'
+  with no modules and a single possible error type, return as classic Either type\nrunEffT01
+  :: (Monad m, ConsFNil c) => EffT' c '[] '[e] m a -> m (Either e a)\nrunEffT01 =
+  fmap (first fromElistSingleton . resultToEither) . runEffT0\n\n-- | runs the EffT'
+  with no modules\nrunEffT0 :: (Monad m, ConsFNil c) => EffT' c '[] es m a -> m (Result
+  es a)\nrunEffT0 = fmap fst . runEffT fNil fNil\n\n-- | Convert the first error in
+  the effect to Either\nerrorToEither :: Monad m => EffT' c mods (e : es) m a -> EffT'
+  c mods es m (Either e a)\n\n-- | Convert all errors to Either\nerrorToEitherAll
+  :: Monad m => EffT' c mods es m a -> EffT' c mods NoError m (Either (EList es) a)\n--
+  (... more functions to convert EffT between common types ...)\n```\n\n#### Eliminate
+  Effects\n\nEffects can be eliminated! Imagine if you have 5 reader modules, you
+  should be able to give a reader value and eliminate it from the effect type. This
+  is achieved by the following functions:\n\n```haskell\n-- | Runs a EffT' computation
+  and eliminate the most outer effect with its input given\n--\n-- Warning: `ModuleState
+  mod` will be lost when the outer EffT' returns an exception\nrunEffTOuter :: forall
+  mod mods es m c a. (ConsFDataList c (mod : mods), ConsFData1 c mods, Monad m)\n
+  \ => ModuleRead mod -> ModuleState mod -> EffT' c (mod : mods) es m a -> EffT' c
+  mods es m (a, ModuleState mod)\n\n-- | the same as runEffTOuter, but discards the
+  state\nrunEffTOuter_ :: forall mod mods es m c a. (ConsFDataList c (mod : mods),
+  ConsFData1 c mods, Monad m)\n  => ModuleRead mod -> ModuleState mod -> EffT' c (mod
+  : mods) es m a -> EffT' c mods es m a\n\n-- | Running an inner module of EffT, eliminates
+  it\nrunEffTIn :: forall mod mods es m c a. (RemoveElem c mods, Monad m, In' c mod
+  mods)\n  => ModuleRead mod -> ModuleState mod -> EffT' c mods es m a\n  -> EffT'
+  c (Remove (FirstIndex mod mods) mods) es m (a, ModuleState mod)\n\n-- | The same
+  as runEffTIn, but discards the state\nrunEffTIn_ :: forall mod mods es m c a. (RemoveElem
+  c mods, Monad m, In' c mod mods)\n  => ModuleRead mod -> ModuleState mod -> EffT'
+  c mods es m a\n  -> EffT' c (Remove (FirstIndex mod mods) mods) es m a\n```\n\n####
+  Throw Algebraic and Catch Algebraic Exceptions\n\nYou can throw algebraic exceptions
+  in the effect system using `effThrowIn` and catch them using `effCatch`. After they
+  are caught, the error type is removed from the error list.\n\n```haskell\n```haskell\n--
+  | Throw into the error list\neffThrowIn :: (Monad m, InList e es) => e -> EffT'
+  c mods es m a\n\n-- | Throw into the error list\neffThrow :: (Monad m, InList e
+  es) => e -> EffT' c mods es m a\neffThrow = effThrowIn\n\n-- | Catch the first error
+  in the error list, and handle it with a handler function\neffCatch :: Monad m =>
+  EffT' c mods (e : es) m a -> (e -> EffT' c mods es m a) -> EffT' c mods es m a\n\n--
+  | Catch a specific error type in the error list, and handle it with a handler function.\n--
+  This will remove the error type from the error list.\neffCatchIn:: forall e es mods
+  m c a es'. (Monad m, InList e es, es' ~ Remove (FirstIndex e es) es)\n  => EffT'
+  c mods es m a -> (e -> EffT' c mods es' m a) -> EffT' c mods es' m a\n```\n\n##
+  An Example\n\n```haskell\nmodule Examples where\n\nimport Control.Exception\nimport
+  Control.Monad\nimport Control.Monad.Effect -- the EffT types and useful combinators\nimport
+  Module.RS -- built in modules, a reader module and a state module\nimport System.IO\nimport
+  qualified Data.Map  as M\nimport qualified Data.Text as T\n\n-- $ our monad-effect
+  provides **module management** and **composable exceptions**\n-- it's algebraic,
+  performant, make sense, without sacrificing purity\n\n-- | Wraps your effectul routine
+  into EffT monad transformer\nmyLookup :: (Show k, Ord k, Monad m) => k -> EffT '[SModule
+  (M.Map k v)] '[ErrorText \"Map.keyNotFound\"] m v\nmyLookup k\n  = effMaybeInWith
+  (ErrorText @\"Map.keyNotFound\" $ \" where key = \" <> T.pack (show k)) -- wraps
+  Maybe into an exception\n  $ getsS (M.lookup k) -- this just returns a monadic value
+  of type `Maybe v`\n\n-- | This effect can run in pure monads! like Identity\nlookups
+  :: forall v m. (Monad m) => EffT '[SModule (M.Map T.Text v)] '[ErrorText \"Map.keyNotFound\"]
+  m (v, v, v)\nlookups = do\n  foo <- myLookup \"foo\"  -- this will throw an exception
+  if \"foo\" is not found\n  bar <- myLookup \"bar\"  -- instead of Nothing, you get
+  an algebraic exception `ErrorText \"Map.keyNotFound\"` explaining what went wrong\n
+  \ baz <- myLookup \"baz\"  -- just like Maybe and Either, when an exception is thrown,
+  the computation stops and immediately returns\n  return (foo, bar, baz)\n\nparse
+  :: String -> Maybe [Double]\nparse = undefined -- some parsing logic that returns
+  `Nothing` on failure\n\ncomputeAverageFromFile\n  :: FilePath\n  -> Eff                            --
+  a synonym, Eff mods es a = EffT mods es IO a\n      '[SModule (M.Map T.Text Int)]
+  -- this effect can read and modify a value of type (Map Text Int)\n      [ IOException
+  \                -- composable and explicit exceptions\n      , ErrorText \"empty-file\"
+  \     -- you know what types of error this effect can produce\n      , ErrorText
+  \"zero-numbers\"    -- just by observing its type signature\n      , ErrorText \"Map.keyNotFound\"\n
+  \     ]\n      Double                        -- return type\ncomputeAverageFromFile
+  fp = do\n  -- | the `liftIOException :: IO a -> Eff '[] '[IOException] a` captures
+  `IOException`\n  content <- embedError . liftIOException $ readFile' fp\n\n  --
+  | throw an Algebraic error instead of an exception that you have no idea\n  when
+  (null content) $ do\n    effThrowIn (\"file is empty\" :: ErrorText \"empty-file\")\n\n
+  \ -- | this `pureMaybeInWith :: In e es => e -> Maybe a -> Eff mods es a` turns
+  a Maybe value into an ad-hoc exception type!\n  parsed <- pureMaybeInWith (\"parse
+  error\" :: ErrorText \"parse-error\") (parse content) \n    `effCatch` (\\(_ ::
+  ErrorText \"parse-error\") -> return [0])\n  -- ^ you can catch exception and deal
+  with it, so the error is eliminated from the list\n\n  -- | The type system will
+  check whether you have the module needed to perform this action\n  _ <- embedEffT
+  $ lookups @Int\n\n  -- | The type system will force you remember that we can return
+  an exception with an custom type `ErrorText \"zero-numbers\"`\n  when (null parsed)
+  $ do\n    effThrowIn (\"zero numbers\" :: ErrorText \"zero-numbers\")\n\n  return
+  $ sum parsed / fromIntegral (length parsed)\n```\n\n## Template Haskell Utilities
+  For Simple Effect Modules\n\nIn `Module.RS.QQ`, we provide some Template Haskell
+  utilities for easily generating simple reader modules, state modules, and reader-state
+  modules.\n\nThe `makeRModule` function generates a reader module, for example\n\ngiven
+  the following information:\n\n```haskell\n[makeRModule|MyModule\n  myRecord1 ::
+  !MyType1\n  myRecord2 :: MyType2\n|]\n```\n\nit should generate\n\n```haskell\ndata
+  MyModule\n\ntype MyModuleRead = ModuleRead MyModule\n\ninstance Module MyModule
+  where\n  data ModuleRead MyModule  = MyModuleRead { myRecord1 :: !MyType1, myRecord2
+  :: MyType2 }\n  data ModuleState MyModule = MyModuleState deriving (Generic, NFData)\n\nrunMyModule
+  :: (ConsFDataList c mods, Monad m) => ModuleRead MyModule -> EffT' c (MyModule :
+  mods) errs m a -> EffT' mods errs m a\nrunMyModule r = runEffTOuter_ r MyModuleState\n{-#
+  INLINE runMyModule #-}\n\nrunRModuleIn :: (ConsFDataList c mods, RemoveElem c mods,
+  Monad m, In' c MyModule mods) => ModuleRead MyModule -> EffT' c mods es m a -> EffT'
+  c (Remove (FirstIndex MyModule mods) mods) es m a\nrunRModuleIn r = runEffTIn_ r
+  MyModuleState\n{-# INLINE runMyModuleIn #-}\n\n-- It also generates obvious instances
+  for `ModuleEvent` and `ModuleInitData`.\n-- If this is to be avoided (for example
+  you want to write your own instances), use `makeRModule__` instead.\n```\n\nIf you
+  don't want the `derive (Generic, NFData)`, use `makeRModule_` instead.\n\nAnother
+  function `makeRSModule` generates a reader-state module, for example\n\n```haskell\n[makeRSModule|\nMyRSModule\n
+  \ Read  myField1 :: !MyType1\n  Read  myField2 :: MyType2\n  State myStateField1
+  :: !MyStateType1\n  State myStateField2 :: MyStateType2\n|]\n```\n\nit should generate\n\n*
+  data MyRSModule\n* generate data instances for Module `<MyModule>`\n* generate `run<MyModule>,
+  run<MyModule>', run<MyModule>_ and run<MyModule>In, run<MyModule>In', run<MyModule>In_`
+  functions\n* generate type synonym for `type MyModuleRead = ModuleRead <MyModule>`
+  and `type MyModuleState = ModuleState <MyModule>`\n\nSimilarly, if you don't want
+  the deriving behavior, use `makeRSModule_` instead.\n\nCaveat: unfortunately, currently
+  you can't have type variables in the module type constructor when you use the template
+  haskell utilitys, currently you have to write your own module declaration. We wish
+  to add support for this in the future.\n\n## Style\n\n`monad-effect` does not make
+  the choice of how you should structure your effects. You can put configs, pure states,
+  enviroments, handlers, into your effect module. You can make the effect module coupled
+  to a particular implementation for convenience and speed, or if you want to enforce
+  the algebraic effect style where the effects and interpreters are decoupled, it
+  can be written this way for example, it is all up to you:\n\n```haskell\n{-# LANGUAGE
+  DataKinds, TypeFamilies, RequiredTypeArguments #-}\nmodule Module.Prometheus.Counter
+  where\n\nimport Control.Monad.Effect\nimport System.Metrics.Prometheus.Metric.Counter
+  as C\n\n-- | A prometheus counter module that has a name\ndata PrometheusCounter
+  (name :: k)\n\n-- | Counter effects written in algebraic effect style\ndata PrometheusCounterEffect
+  a where\n  AddAndSampleCounter :: Int -> PrometheusCounterEffect CounterSample\n
+  \ AddCounter          :: Int -> PrometheusCounterEffect ()\n  IncCounter          ::
+  \       PrometheusCounterEffect ()\n  SetCounter          :: Int -> PrometheusCounterEffect
+  ()\n  SampleCounter       ::        PrometheusCounterEffect CounterSample\n\n--
+  | The effect handler type for a prometheus counter with given counter name\ntype
+  PrometheusCounterHandler (name :: k) = forall c mods es m a. (In' c (PrometheusCounter
+  name) mods, MonadIO m) => PrometheusCounterEffect a -> EffT' c mods es m a\n\n--
+  | The module is declared as a reader module that carries a counter handler\ninstance
+  Module (PrometheusCounter name) where\n  newtype ModuleRead  (PrometheusCounter
+  name) = PrometheusCounterRead { prometheusCounterHandler :: PrometheusCounterHandler
+  name }\n  data    ModuleState (PrometheusCounter name) = PrometheusCounterState\n\n--
+  | Specify / interpret a counter effect with given counter name\nrunPrometheusCounter\n
+  \ :: forall name\n  -> ( ConsFDataList c (PrometheusCounter name : mods)\n     ,
+  Monad m\n     )\n  => PrometheusCounterHandler name -> EffT' c (PrometheusCounter
+  name ': mods) es m a -> EffT' c mods es m a\nrunPrometheusCounter name handler =
+  runEffTOuter_ (PrometheusCounterRead @_ @name handler) PrometheusCounterState\n{-#
+  INLINE runPrometheusCounter #-}\n\n-- | Carry out a counter effect with given counter
+  name\nprometheusCounterEffect :: forall name -> (In' c (PrometheusCounter name)
+  mods, MonadIO m) => PrometheusCounterEffect a -> EffT' c mods es m a\nprometheusCounterEffect
+  name eff = do\n  PrometheusCounterRead handler <- askModule @(PrometheusCounter
+  name)\n  handler eff\n{-# INLINE prometheusCounterEffect #-}\n\n-- | Use a specific
+  counter to carry out a counter effect\nuseCounter :: Counter -> PrometheusCounterHandler
+  name\nuseCounter counter IncCounter              = liftIO $ C.inc counter\nuseCounter
+  counter (AddCounter n)          = liftIO $ C.add n counter\nuseCounter counter (SetCounter
+  n)          = liftIO $ C.set n counter\nuseCounter counter (AddAndSampleCounter
+  n) = liftIO $ C.addAndSample n counter\nuseCounter counter SampleCounter           =
+  liftIO $ C.sample counter\n{-# INLINE useCounter #-}\n\n-- | A counter handler that
+  does nothing\nnoCounter :: Monad m => PrometheusCounterEffect a -> EffT mods es
+  m a\nnoCounter IncCounter              = pure ()\nnoCounter (AddCounter _)          =
+  pure ()\nnoCounter (SetCounter _)          = pure ()\nnoCounter (AddAndSampleCounter
+  _) = pure (CounterSample 0)\nnoCounter SampleCounter           = pure (CounterSample
+  0)\n{-# INLINE noCounter #-}\n```\n\n## Flags\n\nUse `-fconstraint-solver-iterations=16`
+  or `19` to avoid some type checker issues.\n\n## Some Benchmarks\n\nSee the `benchmark`
+  folder for more benchmarks. The benchmarks are copied from `heftia`, another effect
+  system library and I added some modified versions.\n\n#### Countdown `-O2`\n![Countdown-O2](https://raw.githubusercontent.com/Eiko-Tokura/monad-effect/3aeceddb0c7e452b34032b404a5fdc068df322de/benchmark/bench-result-O2/countdown-deep.svg)\n\n####
+  Countdown `-O0`\n![Countdown-O0](https://raw.githubusercontent.com/Eiko-Tokura/monad-effect/3aeceddb0c7e452b34032b404a5fdc068df322de/benchmark/bench-result-O0/countdown-deep.svg)\n\n####
+  Deep Catch `-O2`\n![Catch-O2](https://raw.githubusercontent.com/Eiko-Tokura/monad-effect/3aeceddb0c7e452b34032b404a5fdc068df322de/benchmark/bench-result-O2/catch-deep.svg)\n\n####
+  Deep Catch `-O0`\n![Catch-O0](https://raw.githubusercontent.com/Eiko-Tokura/monad-effect/3aeceddb0c7e452b34032b404a5fdc068df322de/benchmark/bench-result-O0/catch-deep.svg)\n\n####
+  Local State `-O2`\n![Local-O2](https://raw.githubusercontent.com/Eiko-Tokura/monad-effect/3aeceddb0c7e452b34032b404a5fdc068df322de/benchmark/bench-result-O2/local-deep.svg)\n\n####
+  Local State `-O0`\n![Local-O0](https://raw.githubusercontent.com/Eiko-Tokura/monad-effect/3aeceddb0c7e452b34032b404a5fdc068df322de/benchmark/bench-result-O0/local-deep.svg)\n"
+description-type: markdown
+hash: b2c8b920448d8bef2960a86948220a8543fd4abd0e4088f1709ba83a54c2ca07
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: eikochanowo@outlook.com
+synopsis: A fast and lightweight effect system.
+test-bench-deps:
+  base: '>=4 && <5'
+  containers: '>=0'
+  criterion: '>=0'
+  data-effects: '>=0'
+  effectful: '>=2.3 && <2.6'
+  freer-simple: ^>=1.2
+  fused-effects: ^>=1.1
+  heftia-effects: '>=0'
+  logict: '>=0.7.0.3 && <0.9'
+  monad-effect: '>=0'
+  mtl: '>=2.2 && <2.4'
+  parsec: '>=0'
+  polysemy: ^>=1.9
+  tasty-bench: '>=0.3 && <0.5'
+  text: '>=0'
+  unix: '>=0'
