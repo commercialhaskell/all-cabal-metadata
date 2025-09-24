@@ -1,0 +1,91 @@
+all-versions:
+- 0.1.0.0
+author: Matt Parsons
+basic-deps:
+  base: '>=4.7 && <5'
+  stm: '>=0'
+  stm-delay: '>=0'
+  unliftio: '>=0'
+changelog: |
+  # Changelog for `timeout-snooze`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## Unreleased
+
+  ## 0.1.0.0 - YYYY-MM-DD
+changelog-type: markdown
+description: "# timeout-snooze\n\nThis package provides a `Timeout` that can be snoozed,
+  allowing you to give extra time to the action.\n\nThe primary purpose of this package
+  is to support a timeout for `hspec` tests that can be reset during flaky test detection
+  (where we rerun a test case, and if it succeeds the second time, we call it a flake).\nWhen
+  we initially implemented flaky test detection, we simply doubled our timeout, but
+  this is unnecessarily lax, and makes true problems take twice as long to be detected.\n\nThe
+  system is based on the `stm-delay` package, which leverages the GHC event manager
+  API.\nThis package incurs a single thread overhead for `race` for the timeout.\n\n##
+  Comparison with Existing Implementations\n\n### `System.Timeout`\n\nThis module
+  lives in `base` and gives you an efficient function:\n\n```haskell\ntimeout :: Int
+  -> IO a -> IO (Maybe a)\n```\n\nHowever, it is not possible to extend the timeout.\n\n###
+  [`time-manager`](https://www.stackage.org/haddock/lts-24.12/time-manager-0.2.3/System-TimeManager.html)
+  `System.TimeManager`\n\nThis implementation is used in warp to provide slow loris
+  protection.\nThis is a bit heavier duty.\nInstead of forking a thread for each action,
+  a `Manager` is used to store a list of timeout actions.\nThe `Manager` thread wakes
+  every `N` microseconds, looks through the list of actions, and toggles them to `Inactive`
+  if they are `Active`.\nThe next `N` microseconds, if an action is still `Inactive`,
+  then it is canceled.\n\nThe `Handle` can be `tickle`d to reset the state to `Active`,
+  or `pause` can be used to pause the time.\nHowever, the actual time delay of the
+  action is set to the `Manager`, which means that different tests cannot have different
+  timeouts.\nWe have some known long running tests, and so we need configurable timeouts
+  in our implementation.\nFor this reason, `time-manager` is not suitable.\n\n###
+  [`timer-wheel`](https://hackage.haskell.org/package/timer-wheel)\n\n`TimerWheel`
+  allows us to create timers and is efficiently designed.\nTimers can be set arbitrarily
+  far in the future, so we do get customizable timeouts.\nHowever, there doesn't appear
+  to be a way to reset the timer, so this does not satisfy our needs.\n\nAdditionally,
+  it relies on a `ki` library which has an opinionated notion of how concurrency is
+  done.\nThe assumptions made in `ki` are invalid in `hspec`, which renders it useless
+  to me.\n\n### [`async-timer`](https://hackage.haskell.org/package/async-timer)\n\nThe
+  package `async-timer` allows for customizable `TimeoutConf`, and the given `Timer`
+  can be reset.\nThe actual timer loop is implemented using `Control.Concurrent.Async.race`.\n\nI
+  believe this could be used for my purpose.\nWe would write:\n\n```haskell\ntimeoutKillThread
+  :: Int -> (IO () -> IO a) -> IO (Maybe a)\ntimeoutKillThread micros action = do\n
+  \   let conf = setInterval micros defaultConf\n    withAsyncTimer conf \\timer ->
+  do\n        ea <- race (wait timer) (action (reset timer))\n        case ea of\n
+  \           Left e -> pure Nothing\n            Right a -> pure (Just a)\n```\n\nNow,
+  this is a bit unsatisfying to me.\nI don't think I am so performance sensitive here
+  that I want to go the `time-manager` approach with a global registered reaper thread
+  instead of `N` reaper threads - the complexity there is challenging, particularly
+  since extending that design with custom timeouts would be tricky.\nBut this implementation
+  here requires us to fork *many* threads:\n\n1. `withAsyncTimer` forks a thread for
+  `timerLoop` in a `withAsync`\n2. We fork a thread with `race` for `wait timer`\n3.
+  `timerLoop` does `race`, forking an additional thread for the sleep.\n\nThat's `3N`
+  extra threads.\nThat's quite a lot of overhead.\n\n### [`stm-delay`](https://hackage.haskell.org/package/stm-delay)\n\nThis
+  package uses the GHC event manager, which makes it the most efficient option: no
+  threads are forked for the timer, just a registered action.\n\nMy primary reservation
+  with the library is age.\nIt was initially written in 2012, updated in 2014, but
+  it did receive a patch in 2024.\n\nThis allows us to write:\n\n```haskell\ntimeoutKillThread
+  :: Int -> (IO () -> IO a) -> IO (Maybe a)\ntimeoutKillThread micros action = do\n
+  \   delay <- newDelay micros \n    let bump = updateDelay delay micros\n    ea <-
+  race (atomically (waitDelay delay)) (action bump)\n    case ea of\n        Left
+  () -> pure Nothing\n        Right a -> pure (Just a)\n```\n\nWe incur an extra thread
+  for `race`.\nWe could avoid that, but it would essentially require us re-implementing
+  the `stm-delay` but instead of `writeTVar` we'd be doing `killThread` - which the
+  docs for [`TimeoutCallback`](https://www.stackage.org/haddock/lts-24.12/base-4.20.2.0/GHC-Event.html#t:TimeoutCallback)
+  explicitly warn against.\n\nI'm pretty pleased with a single thread overhead.\n"
+description-type: markdown
+hash: 2e8c4f493aa0db4842866fb53165887d4f66c67ff370bb7de796cda91bbc96f2
+homepage: https://github.com/parsonsmatt/timeout-snooze#readme
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: parsonsmatt@gmail.com
+synopsis: Efficient timeout with reset
+test-bench-deps:
+  base: '>=4.7 && <5'
+  hspec: '>=0'
+  stm: '>=0'
+  stm-delay: '>=0'
+  timeout-snooze: '>=0'
+  unliftio: '>=0'
