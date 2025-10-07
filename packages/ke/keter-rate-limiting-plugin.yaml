@@ -1,5 +1,6 @@
 all-versions:
 - 0.2.0.1
+- 0.2.0.2
 author: Oleksandr Zhabenko
 basic-deps:
   aeson: '>=1.4'
@@ -41,7 +42,9 @@ changelog: "# Revision history for keter-rate-limiting-plugin\n\n## 0.1.0.0 -- 2
   integration and to prevent potential memory leak when keter reloads configuration.
   \n\n## 0.2.0.1 -- 2025-09-28\n\n* Second version revised A. Updated documentation
   in README.md to include basic information on keter integration (expected in the
-  keter-2.3.0). \n"
+  keter-2.3.0). \n\n## 0.2.0.2 -- 2025-10-07\n\n* Second version revised B. Updated
+  documentation in README.md. Fixed mixed stdout and stderr output in nix integration
+  tests that could lead to failures.\n\n"
 changelog-type: markdown
 description: "# keter-rate-limiting-plugin\n\n**keter-rate-limiting-plugin** is a
   modern, high-performance, and highly customizable rate-limiting plugin for [Keter](https://github.com/snoyberg/keter).
@@ -130,60 +133,59 @@ description: "# keter-rate-limiting-plugin\n\n**keter-rate-limiting-plugin** is 
   up to capacity, refill over time\n- **`LeakyBucket`** - Smooth rate limiting with
   configurable leak rate\n- **`TinyLRU`** - Least-recently-used eviction for memory
   efficiency\n\n## Example Usage\n\n## For the Keter Users (is expected to be introduced
-  in keter-2.3.0, see the README there\nand / or Changelog file)\n\n### Important
-  notes\n\nConfigure middleware in app bundles (config/keter.yaml), \nnot in the global
-  Keter daemon config. The global keter-config.yaml \nremains for listeners, TLS,
-  ip-from-header, healthcheck-path, etc. \nRequests to healthcheck-path are never
-  rate-limited.\n\n### Quick Start\n\nAttach a rate-limiter to any stanza via a middleware
-  list.\n\nExample bundle config (config/keter.yaml):\n\n```yaml\nstanzas:\n  - type:
-  webapp\n    exec: ./my-app\n    hosts: [\"www.example.com\"]\n    middleware:\n
-  \     - rate-limiter:\n          zone_by: default\n          throttles:\n            -
-  name: \"ip-basic\"\n              limit: 100\n              period: 60\n              algorithm:
-  FixedWindow\n              identifier_by: ip\n\n  - type: reverse-proxy\n    hosts:
-  [\"api.example.com\"]\n    to: \"http://127.0.0.1:9000\"\n    middleware:\n      -
-  rate-limiter:\n          zone_by: { header: \"X-Tenant-ID\" }\n          throttles:\n
-  \           - name: \"tenant-api\"\n              limit: 1000\n              period:
-  3600\n              algorithm: SlidingWindow\n              identifier_by: { header:
-  \"X-Api-Key\" }\n\n  - type: static-files\n    hosts: [\"static.example.com\"]\n
-  \   root: ./static\n    middleware:\n      - rate-limiter:\n          zone_by: ip\n
-  \         throttles:\n            - name: \"static-ip\"\n              limit: 300\n
-  \             period: 60\n              algorithm: LeakyBucket\n              identifier_by:
-  ip\n```\n\nTip: You can stack multiple middleware blocks if you need \ndifferent
-  protections. They run in order.\n\n### Field Reference\n\n* `rate-limiter`: top-level
-  middleware key.\n* `zone_by`:\n  1. `\"default\"`: counters are isolated per vhost
-  (Host header). Good per-domain isolation.\n  2. `\"ip\"`: counters are isolated
-  per client IP zone. Good for IP fairness.\n  3. `{ \"header\": \"X-Header\" }`:
-  per-tenant/customer isolation via a header value.\n* `throttles`: list of rules.
-  Each rule:\n  1. `name`: a label for logs/metrics.\n  2. `limit`: integer capacity
-  or max requests.\n  3. `period`: seconds (window or refill/leak interval depending
-  on algorithm).\n  4. `algorithm`: one of `FixedWindow | SlidingWindow | TokenBucket
-  | LeakyBucket | TinyLRU`.\n  5. `identifier_by`:\n     * `\"ip\"`: identify by client
-  IP (honors global ip-from-header).\n     * `\"ip+path\"`: combine IP and path for
-  path-specific throttles (e.g., /login).\n     * `\"ip+ua\"`: combine IP and User-Agent.\n
-  \    * `{ \"header\": \"X-User\" }`: identify by a header value.\n     * `{ \"cookie\":
-  \"session\" }`: identify by a cookie value.\n     * `{ \"header+ip\": \"X-Key\"
-  }`: combine header and IP.\n  6. `token_bucket_ttl`: optional seconds; TokenBucket
-  only (evicts idle buckets).\n\n### Choosing Algorithms\n\nRule of thumb for common
-  scenarios:\n\n* **FixedWindow**\n  1. When: Simple quotas (e.g., 100 req/min per
-  IP).\n  2. Pros: Simple, low overhead.\n  3. Cons: Window boundary bursts possible.\n
-  \ 4. Use for: Public pages, basic protections.\n\n* **SlidingWindow**\n  1. When:
-  Smoother enforcement over time; avoid boundary spikes.\n  2. Pros: More accurate
-  rolling rate.\n  3. Cons: More state churn than FixedWindow.\n  4. Use for: API
-  endpoints where fairness matters.\n\n* **TokenBucket**\n  1. When: Allow short bursts
-  but control average rate.\n  2. Pros: Classic API limiter; bursty but bounded.\n
-  \ 3. Cons: Requires sensible period; consider TTL for idle buckets.\n  4. Use for:
-  Developer APIs, webhook receivers.\n  5. Tip: Set token_bucket_ttl (e.g., 1800s)
-  to evict idle buckets.\n\n* **LeakyBucket**\n  1. When: Smooth out bursts to a steady
-  outflow.\n  2. Pros: Predictable, backpressure-like effect.\n  3. Cons: Tuning capacity
-  vs leak rate.\n  4. Use for: Form submissions, login attempts.\n\n* **TinyLRU**\n
-  \ 1. When: Lightweight micro-throttling with tiny memory footprint.\n  2. Pros:
-  Very small, simple.\n  3. Cons: Coarser control than others.\n  4. Use for: Edge
-  micro-protection, complementary limits.\n\n### Practical Patterns\n\n* Path-specific
-  throttles (e.g., login):\n\n```yaml\nmiddleware:\n  - rate-limiter:\n      zone_by:
-  default\n      throttles:\n        - name: \"login\"\n          limit: 5\n          period:
-  60\n          algorithm: SlidingWindow\n          identifier_by: ip+path\n```\n\n*
-  API key quotas per tenant:\n\n```yaml\nmiddleware:\n  - rate-limiter:\n      zone_by:
-  { header: \"X-Tenant-ID\" }\n      throttles:\n        - name: \"tenant-quota\"\n
+  in keter-2.3.0, see the README there and / or Changelog file)\n\n### Important notes\n\nConfigure
+  middleware in app bundles (config/keter.yaml), \nnot in the global Keter daemon
+  config. The global keter-config.yaml \nremains for listeners, TLS, ip-from-header,
+  healthcheck-path, etc. \nRequests to healthcheck-path are never rate-limited.\n\n###
+  Quick Start\n\nAttach a rate-limiter to any stanza via a middleware list.\n\nExample
+  bundle config (config/keter.yaml):\n\n```yaml\nstanzas:\n  - type: webapp\n    exec:
+  ./my-app\n    hosts: [\"www.example.com\"]\n    middleware:\n      - rate-limiter:\n
+  \         zone_by: default\n          throttles:\n            - name: \"ip-basic\"\n
+  \             limit: 100\n              period: 60\n              algorithm: FixedWindow\n
+  \             identifier_by: ip\n\n  - type: reverse-proxy\n    hosts: [\"api.example.com\"]\n
+  \   to: \"http://127.0.0.1:9000\"\n    middleware:\n      - rate-limiter:\n          zone_by:
+  { header: \"X-Tenant-ID\" }\n          throttles:\n            - name: \"tenant-api\"\n
+  \             limit: 1000\n              period: 3600\n              algorithm:
+  SlidingWindow\n              identifier_by: { header: \"X-Api-Key\" }\n\n  - type:
+  static-files\n    hosts: [\"static.example.com\"]\n    root: ./static\n    middleware:\n
+  \     - rate-limiter:\n          zone_by: ip\n          throttles:\n            -
+  name: \"static-ip\"\n              limit: 300\n              period: 60\n              algorithm:
+  LeakyBucket\n              identifier_by: ip\n```\n\nTip: You can stack multiple
+  middleware blocks if you need \ndifferent protections. They run in order.\n\n###
+  Field Reference\n\n* `rate-limiter`: top-level middleware key.\n* `zone_by`:\n  1.
+  `\"default\"`: counters are isolated per vhost (Host header). Good per-domain isolation.\n
+  \ 2. `\"ip\"`: counters are isolated per client IP zone. Good for IP fairness.\n
+  \ 3. `{ \"header\": \"X-Header\" }`: per-tenant/customer isolation via a header
+  value.\n* `throttles`: list of rules. Each rule:\n  1. `name`: a label for logs/metrics.\n
+  \ 2. `limit`: integer capacity or max requests.\n  3. `period`: seconds (window
+  or refill/leak interval depending on algorithm).\n  4. `algorithm`: one of `FixedWindow
+  | SlidingWindow | TokenBucket | LeakyBucket | TinyLRU`.\n  5. `identifier_by`:\n
+  \    * `\"ip\"`: identify by client IP (honors global ip-from-header).\n     * `\"ip+path\"`:
+  combine IP and path for path-specific throttles (e.g., /login).\n     * `\"ip+ua\"`:
+  combine IP and User-Agent.\n     * `{ \"header\": \"X-User\" }`: identify by a header
+  value.\n     * `{ \"cookie\": \"session\" }`: identify by a cookie value.\n     *
+  `{ \"header+ip\": \"X-Key\" }`: combine header and IP.\n  6. `token_bucket_ttl`:
+  optional seconds; TokenBucket only (evicts idle buckets).\n\n### Choosing Algorithms\n\nRule
+  of thumb for common scenarios:\n\n* **FixedWindow**\n  1. When: Simple quotas (e.g.,
+  100 req/min per IP).\n  2. Pros: Simple, low overhead.\n  3. Cons: Window boundary
+  bursts possible.\n  4. Use for: Public pages, basic protections.\n\n* **SlidingWindow**\n
+  \ 1. When: Smoother enforcement over time; avoid boundary spikes.\n  2. Pros: More
+  accurate rolling rate.\n  3. Cons: More state churn than FixedWindow.\n  4. Use
+  for: API endpoints where fairness matters.\n\n* **TokenBucket**\n  1. When: Allow
+  short bursts but control average rate.\n  2. Pros: Classic API limiter; bursty but
+  bounded.\n  3. Cons: Requires sensible period; consider TTL for idle buckets.\n
+  \ 4. Use for: Developer APIs, webhook receivers.\n  5. Tip: Set token_bucket_ttl
+  (e.g., 1800s) to evict idle buckets.\n\n* **LeakyBucket**\n  1. When: Smooth out
+  bursts to a steady outflow.\n  2. Pros: Predictable, backpressure-like effect.\n
+  \ 3. Cons: Tuning capacity vs leak rate.\n  4. Use for: Form submissions, login
+  attempts.\n\n* **TinyLRU**\n  1. When: Lightweight micro-throttling with tiny memory
+  footprint.\n  2. Pros: Very small, simple.\n  3. Cons: Coarser control than others.\n
+  \ 4. Use for: Edge micro-protection, complementary limits.\n\n### Practical Patterns\n\n*
+  Path-specific throttles (e.g., login):\n\n```yaml\nmiddleware:\n  - rate-limiter:\n
+  \     zone_by: default\n      throttles:\n        - name: \"login\"\n          limit:
+  5\n          period: 60\n          algorithm: SlidingWindow\n          identifier_by:
+  ip+path\n```\n\n* API key quotas per tenant:\n\n```yaml\nmiddleware:\n  - rate-limiter:\n
+  \     zone_by: { header: \"X-Tenant-ID\" }\n      throttles:\n        - name: \"tenant-quota\"\n
   \         limit: 1000\n          period: 3600\n          algorithm: TokenBucket\n
   \         identifier_by: { header: \"X-Api-Key\" }\n          token_bucket_ttl:
   1800\n```\n\n* Mixed protections on the same host:\n\n```yaml\nmiddleware:\n  -
@@ -267,9 +269,9 @@ description: "# keter-rate-limiting-plugin\n\n**keter-rate-limiting-plugin** is 
   References\n\n- [rack-attack (Ruby)](https://github.com/rack/rack-attack)\n- [keter
   (Haskell)](https://github.com/snoyberg/keter)\n"
 description-type: markdown
-hash: 1e40e370a692c742b6aa36d9dd8c53c514387145a3ecd77ed7b98b60155e56d5
+hash: 6acaa5d02305ef9be93c61541f47c459e5f9d062befeb88ddcac58f39f35a5c1
 homepage: https://github.com/Oleksandr-Zhabenko/keter-rate-limiting-plugin
-latest: 0.2.0.1
+latest: 0.2.0.2
 license-name: MIT
 maintainer: oleksandr.zhabenko@yahoo.com
 synopsis: Simple Keter rate limiting plugin.
