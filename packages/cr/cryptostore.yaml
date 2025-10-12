@@ -7,6 +7,7 @@ all-versions:
 - 0.3.0.0
 - 0.3.0.1
 - 0.3.1.0
+- 0.4.0.0
 author: Olivier Chéron
 basic-deps:
   asn1-encoding: '>=0.9 && <0.10'
@@ -22,6 +23,47 @@ basic-deps:
   x509-validation: '>=1.5'
 changelog: |
   # Revision history for cryptostore
+
+  ## 0.4.0.0 - 2025-10-12
+
+  * Private keys are now represented as type `KeyPair` defined in module
+    `Crypto.Store.PKCS8` instead of `PrivKey`.  This ensures that the
+    corresponding public key is always available and that the library detects
+    and reports data mistakes involving a wrong public key.  A new error
+    `PublicPrivateKeyMismatch` is added for that purpose and returned by
+    functions `certSigner`, `withRecipientKeyAgree`, `fromCredential` and
+    `fromNamedCredential`.  Behavior of functions `toCredential` and
+    `toNamedCredential` is now more strict, they return a key and leaf
+    certificate that always match.  Functions to convert `KeyPair` to/from the
+    usual type `PrivKey` are also exposed from module `Crypto.Store.PKCS8`.
+
+  * Added support of PBMAC1 for PKCS#12 integrity.  Type `IntegrityParams` used
+    in functions `writeP12File` and `writeP12FileToMemory` is modified.
+    A low-level function for PBMAC1 is also available in the PKCS5 module.
+
+  * CMS now supports SHA-3 algorithms in HMAC, ECDSA, or as digest algorithm
+
+  * Functions `pemToKey`, `pemToPubKey` and `pemToContentInfo` are modified to
+    return error details when a PEM object cannot be read.  The old API signature
+    that discarded error details is available with functions renamed
+    `pemToKeyAccum`, `pemToPubKeyAccum` and `pemToContentInfoAccum`.
+
+  * Function `generateEncryptionParams` is removed and can be replaced with
+    functions `ecbParams`, `generateCBCParams`, `generateCFBParams` or
+    `generateCTRParams` according to the desired mode.
+
+  * Functions `generateAuthEnc128Params` and `generateAuthEnc256Params` are
+    replaced with `authEnc128Params` and `authEnc256Params`.  The new API expects
+    a `ContentEncryptionParams` argument instead of `ContentEncryptionAlg`.
+
+  * CMS encrypted data, enveloped data and authenticated-enveloped data now
+    support optional HKDF-SHA256 derivation of the content-encryption key.  When
+    generating encryption parameters, enable the key derivation feature with a
+    call to functions `deriveEncryptionKey` or `authDeriveEncryptionKey`.  The
+    feature prevents AEAD-to-CBC downgrade attack scenarios for `CCM` and `GCM`
+    modes but requires support from the receiving end.
+
+  * Fixed encoding of some HMAC and PRF parameters
 
   ## 0.3.1.0 - 2024-05-05
 
@@ -112,7 +154,6 @@ changelog-type: markdown
 description: |
   # cryptostore
 
-  [![Build Status](https://github.com/ocheron/cryptostore/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/ocheron/cryptostore/actions/workflows/tests.yml)
   [![BSD](https://img.shields.io/badge/License-BSD-blue)](https://en.wikipedia.org/wiki/BSD_licenses)
   [![Haskell](https://img.shields.io/badge/Language-Haskell-lightgrey)](https://haskell.org/)
 
@@ -145,7 +186,7 @@ description: |
   > :m Crypto.Store.PKCS8
   > (key : _) <- readKeyFile "/path/to/privkey.pem" -- assuming single key
   > recover "mypassword" key
-  Right (PrivKeyRSA ...)
+  Right (keyPairFromPrivKey (PrivKeyRSA ...))
   ```
 
   Generating a private key and writing to disk, without encryption:
@@ -153,7 +194,8 @@ description: |
   ```haskell
   > :m Crypto.PubKey.RSA Crypto.Store.PKCS8 Data.X509
   > privKey <- PrivKeyRSA . snd <$> generate (2048 `div` 8) 0x10001
-  > writeKeyFile PKCS8Format "/path/to/privkey.pem" [privKey]
+  > let keyPair = keyPairFromPrivKey privKey
+  > writeKeyFile PKCS8Format "/path/to/newkey.pem" [keyPair]
   ```
 
   Generating a private key and writing to disk, with password-based encryption:
@@ -162,11 +204,12 @@ description: |
   > :set -XOverloadedStrings
   > :m Crypto.PubKey.RSA Crypto.Store.PKCS8 Data.X509 Crypto.Store.PKCS5
   > privKey <- PrivKeyRSA . snd <$> generate (2048 `div` 8) 0x10001
+  > let keyPair = keyPairFromPrivKey privKey
   > salt <- generateSalt 16
   > let kdf = PBKDF2 salt 200000 Nothing PBKDF2_SHA256
-  > encParams <- generateEncryptionParams (CBC AES256)
+  > encParams <- generateCBCParams AES256
   > let pbes = PBES2 (PBES2Parameter kdf encParams)
-  > writeEncryptedKeyFile "/path/to/privkey.pem" pbes "mypassword" privKey
+  > writeEncryptedKeyFile "/path/to/newkey.pem" pbes "mypassword" keyPair
   Right ()
   ```
 
@@ -216,7 +259,7 @@ description: |
   > getAllSafeX509Certs contents
   [SignedExact {getSigned = ...}]
   > recover password (getAllSafeKeys contents)
-  Right [PrivKeyRSA ...]
+  Right [keyPairFromPrivKey (PrivKeyRSA ...)]
   ```
 
   Reading a binary PKCS #12 file using distinct integrity and privacy passwords:
@@ -224,13 +267,13 @@ description: |
   ```haskell
   > :set -XOverloadedStrings
   > :m Crypto.Store.PKCS12
-  > Right p12 <- readP12File "/path/to/file.p12"
+  > Right p12 <- readP12File "/path/to/other.p12"
   > let Right (_, pkcs12) = recoverAuthenticated "myintegritypassword" p12
   > let Right contents = recover "myprivacypassword" (unPKCS12 pkcs12)
   > getAllSafeX509Certs contents
   [SignedExact {getSigned = ...}]
   > recover "myprivacypassword" (getAllSafeKeys contents)
-  Right [PrivKeyRSA ...]
+  Right [keyPairFromPrivKey (PrivKeyRSA ...)]
   ```
 
   Generating a PKCS #12 file containing a private key:
@@ -244,21 +287,22 @@ description: |
 
   -- Put the key inside a bag
   > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5 Crypto.Store.CMS
+  > let keyPair = keyPairFromPrivKey privKey
   > let attrs = setFriendlyName "Some Key" []
-  >     keyBag = Bag (KeyBag $ FormattedKey PKCS8Format privKey) attrs
+  >     keyBag = Bag (KeyBag $ FormattedKey PKCS8Format keyPair) attrs
   >     contents = SafeContents [keyBag]
 
   -- Encrypt the contents
   > salt <- generateSalt 16
   > let kdf = PBKDF2 salt 200000 Nothing PBKDF2_SHA256
-  > encParams <- generateEncryptionParams (CBC AES256)
+  > encParams <- generateCBCParams AES256
   > let pbes = PBES2 (PBES2Parameter kdf encParams)
   >     Right pkcs12 = encrypted pbes "mypassword" contents
 
   -- Save to PKCS #12 with integrity protection (same password)
   > salt' <- generateSalt 16
-  > let iParams = (DigestAlgorithm SHA256, PBEParameter salt' 200000)
-  > writeP12File "/path/to/privkey.p12" iParams "mypassword" pkcs12
+  > let iParams = TraditionalIntegrity (DigestAlgorithm SHA256) (PBEParameter salt' 200000)
+  > writeP12File "/path/to/newkey.p12" iParams "mypassword" pkcs12
   Right ()
   ```
 
@@ -270,7 +314,7 @@ description: |
   > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5 Crypto.Store.CMS
 
   -- Read PKCS #12 content as credential
-  > Right p12 <- readP12File "/path/to/file.p12"
+  > Right p12 <- readP12File "/path/to/other.p12"
   > let Right (_, pkcs12) = recoverAuthenticated "myintegritypassword" p12
   > let Right (Just cred) = recover "myprivacypassword" (toCredential pkcs12)
   > cred
@@ -279,24 +323,58 @@ description: |
   -- Scheme to reencrypt the key
   > saltK <- generateSalt 16
   > let kdfK = PBKDF2 saltK 200000 Nothing PBKDF2_SHA256
-  > encParamsK <- generateEncryptionParams (CBC AES256)
+  > encParamsK <- generateCBCParams AES256
   > let sKey = PBES2 (PBES2Parameter kdfK encParamsK)
 
   -- Scheme to reencrypt the certificate chain
   > saltC <- generateSalt 8
   > let kdfC = PBKDF2 saltC 100000 Nothing PBKDF2_SHA256
-  > encParamsC <- generateEncryptionParams (CBC AES128)
+  > encParamsC <- generateCBCParams AES128
   > let sCert = PBES2 (PBES2Parameter kdfC encParamsC)
 
   -- Write the content back to a new file
   > let Right pkcs12' = fromCredential (Just sCert) sKey "myprivacypassword" cred
   > salt <- generateSalt 16
-  > let iParams = (DigestAlgorithm SHA256, PBEParameter salt 200000)
+  > let iParams = TraditionalIntegrity (DigestAlgorithm SHA256) (PBEParameter salt 200000)
   > writeP12File "/path/to/newfile.p12" iParams "myintegritypassword" pkcs12'
   ```
 
   Variants `toNamedCredential` and `fromNamedCredential` are also available when
   PKCS #12 elements need an alias (friendly name).
+
+  The library also supports integrity protection with PBMAC1 as defined in
+  [RFC 9579](https://tools.ietf.org/html/rfc9579). The following example shows
+  how to use PBKDF2 with SHA-256 HMAC and PRF:
+
+  ```haskell
+  > :set -XOverloadedStrings
+
+  -- Generate a private key
+  > :m Crypto.PubKey.RSA Data.X509
+  > privKey <- PrivKeyRSA . snd <$> generate (2048 `div` 8) 0x10001
+
+  -- Put the key inside a bag
+  > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5 Crypto.Store.CMS
+  > let keyPair = keyPairFromPrivKey privKey
+  > let attrs = setFriendlyName "Some Key" []
+  >     keyBag = Bag (KeyBag $ FormattedKey PKCS8Format keyPair) attrs
+  >     contents = SafeContents [keyBag]
+
+  -- Encrypt the contents
+  > salt <- generateSalt 16
+  > let kdf = PBKDF2 salt 200000 Nothing PBKDF2_SHA256
+  > encParams <- generateCBCParams AES256
+  > let pbes = PBES2 (PBES2Parameter kdf encParams)
+  >     Right pkcs12 = encrypted pbes "mypassword" contents
+
+  -- Save to PKCS #12 with PBMAC1 integrity protection (same password)
+  > salt' <- generateSalt 16
+  > let kdf' = PBKDF2 salt' 200000 (Just 32) PBKDF2_SHA256
+  > let authScheme = PBMAC1 $ PBMAC1Parameter kdf' (HMAC SHA256)
+  > let iParams = AuthSchemeIntegrity authScheme
+  > writeP12File "/path/to/newkey.p12" iParams "mypassword" pkcs12
+  Right ()
+  ```
 
   ## Cryptographic Message Syntax
 
@@ -335,7 +413,7 @@ description: |
   > let info = DataCI "Hi, what will you need from the cryptostore?"
 
   -- Content encryption will use AES-128-CBC
-  > ceParams <- generateEncryptionParams (CBC AES128)
+  > ceParams <- generateCBCParams AES128
   > ceKey <- generateKey ceParams :: IO ContentEncryptionKey
 
   -- Encrypt the Content Encryption Key with a Password Recipient Info,
@@ -343,7 +421,7 @@ description: |
   -- that the recipient will need to know
   > salt <- generateSalt 16
   > let kdf = PBKDF2 salt 200000 Nothing PBKDF2_SHA256
-  > keParams <- generateEncryptionParams (CBC AES128)
+  > keParams <- generateCBCParams AES128
   > let pri = forPasswordRecipient "mypassword" kdf (PWRIKEK keParams)
 
   -- Generate the enveloped structure for this single recipient.  Encrypted
@@ -383,7 +461,7 @@ description: |
 
   -- Read signer certificate and private key
   > (key : _) <- readKeyFile "/path/to/privkey.pem" -- assuming single key
-  > let Right priv = recover "mypassword" key
+  > let Right pair = recover "mypassword" key
   > chain <- readSignedObject "/path/to/cert.pem" :: IO [SignedCertificate]
   > let cert = CertificateChain chain
 
@@ -393,7 +471,7 @@ description: |
 
   -- Generate the signed structure with a single signer.  Signed content is
   -- kept attached in the structure.
-  > let signer = certSigner (RSAPSS params) priv cert (Just []) []
+  > let signer = certSigner (RSAPSS params) pair cert (Just []) []
   > Right signedData <- signData [signer] info
   > let signedCI = toAttachedCI signedData
   > writeCMSFile "/path/to/signed.pem" [signedCI]
@@ -454,9 +532,9 @@ description: |
   stream where some parts have already been encoded.  Retaining the original
   BER/DER encoding is required when incorporating MACed or signed content.
 description-type: markdown
-hash: ce4762361b509d1719b5d500604a5a1f2d75c2c53f4fe75f7c4ef2faec4f8352
-homepage: https://github.com/ocheron/cryptostore
-latest: 0.3.1.0
+hash: 8c23b5e1fd06769f7777a572d1ecde39de1bc833eff7df9da225c079e0692a6b
+homepage: https://codeberg.org/ocheron/cryptostore
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: olivier.cheron@gmail.com
 synopsis: Serialization of cryptographic data types
