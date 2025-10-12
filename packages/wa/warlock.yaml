@@ -1,0 +1,312 @@
+all-versions:
+- 0.1.0.0
+- 0.1.0.1
+author: Ian Duncan
+basic-deps:
+  barbies: '>=2.0'
+  base: '>=4.7 && <5'
+  template-haskell: '>=0'
+  witch: '>=0'
+changelog: |
+  # Changelog for `autowitch`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## Unreleased
+
+  ## 0.1.0.0 - YYYY-MM-DD
+changelog-type: markdown
+description: "# Warlock\n\nAutomatic type-safe mapping between Haskell data types
+  using Template Haskell and the `witch` library.\n\n**\U0001F4D6 New to Warlock?
+  Start with the [comprehensive tutorial](src/Warlock/Tutorial.hs)!**\n\n## Features\n\n-
+  **Compile-time type safety**: Field names and constructor names checked at compile-time
+  using TH `Name`\n- **Two matching strategies**:\n  - `ByPosition`: Structural mapping
+  by declaration order\n  - `ByName`: Semantic mapping with configurable rules\n-
+  **Record and positional constructors**: Support for both named fields and positional
+  arguments\n- **Multi-constructor ADTs**: Full support for sum types with multiple
+  constructors\n- **Flexible field rules**:\n  - Compile-time checked field names
+  (`'fieldName`)\n  - Virtual fields via `HasField` with `#fieldName` syntax\n  -
+  Computed fields combining multiple sources\n  - Disassemble fields splitting one
+  into many\n- **Type-safe constructor mapping**:\n  - Explicit mappings: `[('OldCon,
+  'NewCon)]`\n  - Helper functions: `addSuffix`, `stripSuffix`, `replaceSuffix`\n
+  \ - Custom transformations: `Transform (++ \"V2\")`\n- **Type-safe conversions**:
+  Uses `witch`'s `From`/`TryFrom` for nested type conversions\n- **Field evolution**:
+  Handle API versioning with added/removed fields\n- **Common conventions built-in**:
+  `datatypePrefixConfig`, `constructorPrefixConfig`, etc.\n\n## Quick Start\n\n###
+  Simple Record Mapping\n\n```haskell\n{-# LANGUAGE TemplateHaskell #-}\n{-# LANGUAGE
+  MultiParamTypeClasses #-}\n\nimport Warlock\nimport qualified Witch as W\n\ndata
+  Person = Person { name :: String, age :: Int }\ndata Employee = Employee { name
+  :: String, age :: Int }\n\n-- Derive mapping: fields matched by name\nderiveAutomap
+  (ByName defaultConfig) ''Person ''Employee\n\n-- Use it\nlet person = Person \"Alice\"
+  30\nlet employee = W.from person :: Employee\n```\n\n### Handling Naming Conventions\n\n```haskell\ndata
+  Person = Person\n  { personName :: String\n  , personAge :: Int\n  }\n\ndata Employee
+  = Employee\n  { employeeName :: String\n  , employeeAge :: Int\n  }\n\n-- Automatically
+  handles type-prefixed fields\nderiveAutomap (ByName datatypePrefixConfig) ''Person
+  ''Employee\n```\n\n### Positional Matching\n\n```haskell\ndata Point2D = Point2D
+  Int Int\ndata Vector2D = Vector2D Int Int\n\n-- Maps by position: 1st → 1st, 2nd
+  → 2nd\nderiveAutomap ByPosition ''Point2D ''Vector2D\n```\n\n### Multi-Constructor
+  ADTs with Field Evolution\n\n```haskell\ndata PaymentV1\n  = CardPaymentV1 { cardNumber
+  :: String, expiry :: String }\n  | CashPaymentV1 { amount :: Double }\n\ndata PaymentV2\n
+  \ = CardPaymentV2\n      { cardNumber :: String\n      , expiry :: String\n      ,
+  cvv :: String  -- New field!\n      }\n  | CashPaymentV2 { amount :: Double, currency
+  :: String }\n\n-- Handle field evolution with defaults and constructor mapping\nderiveAutomap\n
+  \ (ByName $\n    defaultConfig\n    `withConstructorMap` replaceSuffix \"V1\" \"V2\"\n
+  \   `withDefaults`\n      [ ('cvv, [| \"000\" |])\n      , ('currency, [| \"USD\"
+  |])\n      ])\n  ''PaymentV1\n  ''PaymentV2\n```\n\n## Field References: Compile-Time
+  Safety\n\nWarlock uses Template Haskell `Name` for compile-time checked field references:\n\n```haskell\n--
+  ✅ Compile-time checked - typos caught at compile time!\nrename 'newBalance 'oldBalance\ndefaultTo
+  'region [| \"US\" |]\n\n-- ✅ Virtual fields use #fieldName syntax (OverloadedLabels)\nvirtualField
+  'empName #fullName\n\n-- ✅ Or use strings for virtual fields\nvirtualField 'empName
+  \"fullName\"\n```\n\n**Benefits:**\n- Typos in field names → compile errors\n- Refactoring
+  tools can track field renames\n- IDE autocomplete works\n- No runtime surprises\n\n##
+  Field Rules\n\n### Composable Builder Pattern\n\n```haskell\n{-# LANGUAGE OverloadedLabels
+  #-}\n\nimport Warlock\nimport Data.Function ((&))\n\n-- Build rules step-by-step\nfield
+  'balance & fromField 'balance_cents\nfield 'region & withDefault [| \"US\" |]\nfield
+  'empName & fromField #fullName & asVirtual  -- Virtual field!\nfield 'newBalance
+  & fromField 'oldBalance & withDefault [| 0 |]\n```\n\n### Pre-composed Helpers\n\n```haskell\n--
+  For convenience\nrename 'balance 'balance_cents           -- Real fields (TH Name)\ndefaultTo
+  'region [| \"US\" |]\nvirtualField 'empName #fullName          -- Virtual field
+  (OverloadedLabels)\nvirtualField 'empName \"fullName\"         -- Or String\nignore
+  'internalField\nmapField 'name (\\src dst -> [| customTransform |])\n```\n\n###
+  Available Modifiers\n\n- `fromField` - Specify source field (accepts `'name` or
+  `#name`)\n- `withDefault` - Provide default value when source is missing\n- `withExpr`
+  - Custom TH expression\n- `asVirtual` - Use `HasField` to access virtual/computed
+  fields\n- `withComputed` - Combine multiple source fields\n\n## Field Manipulation
+  Patterns\n\n### Virtual Fields (HasField)\n\nUse runtime `HasField` instances to
+  access computed properties:\n\n```haskell\n{-# LANGUAGE DataKinds #-}\n{-# LANGUAGE
+  OverloadedLabels #-}\nimport GHC.Records (HasField(..))\n\ndata Person = Person\n
+  \ { firstName :: String\n  , lastName :: String\n  , age :: Int\n  }\n\n-- Define
+  virtual field at runtime\ninstance HasField \"fullName\" Person String where\n  getField
+  (Person first last _) = first ++ \" \" ++ last\n\ndata Employee = Employee\n  {
+  empName :: String\n  , empAge :: Int\n  }\n\n-- Map from virtual field using #syntax\nderiveAutomap\n
+  \ (ByName $ defaultConfig\n    `withRules`\n      [ virtualField 'empName #fullName\n
+  \     , rename 'empAge 'age\n      ])\n  ''Person\n  ''Employee\n```\n\n**Characteristics:**\n-
+  **Source:** 1 field via `HasField` instance\n- **When:** Runtime (via `getField`)\n-
+  **Syntax:** `#fieldName` (OverloadedLabels) or `\"fieldName\"`\n\n### Computed Fields
+  (combineFields)\n\nCombine multiple source fields at compile-time:\n\n```haskell\nderiveAutomap\n
+  \ (ByName $ defaultConfig\n    `withRules`\n      [ combineFields 'fullName $ do\n
+  \         firstName <- get 'firstName\n          lastName <- get 'lastName\n          pure
+  [| $firstName ++ \" \" ++ $lastName |]\n      , rename 'age 'personAge\n      ])\n
+  \ ''PersonV1\n  ''PersonV2\n```\n\n**Monadic FieldGetter interface:**\n- `get 'fieldName`
+  - Extract field as TH expression (Q Exp)\n- `getName 'fieldName` - Extract field's
+  Name (advanced)\n- Compile-time error if field doesn't exist\n- Type-safe, no manual
+  `varE` needed\n\n**Characteristics:**\n- **Source:** N fields from source record\n-
+  **When:** Compile-time (Template Haskell)\n- **Syntax:** Monadic do-notation with
+  `get`\n\n### Disassembled Fields (disassembleFields)\n\nSplit one source field into
+  multiple destination fields:\n\n```haskell\nderiveAutomap\n  (ByName $ defaultConfig\n
+  \   `withRules`\n      ( disassembleFields 'fullName\n          [ 'firstName .=
+  do\n              src <- getSource\n              pure [| case words $src of\n                        (f:_)
+  -> f\n                        _ -> \"\"\n                   |]\n          , 'lastName
+  .= do\n              src <- getSource\n              pure [| case words $src of\n
+  \                       (_:l:_) -> l\n                        _ -> \"\"\n                   |]\n
+  \         ]\n      ++\n      [ rename 'age 'personAge ]\n      ))\n  ''PersonV1\n
+  \ ''PersonV2\n```\n\n**Monadic DisassembleGetter interface:**\n- `getSource` - Get
+  source field as TH expression (Q Exp)\n- `getSourceName` - Get source field as Name
+  (advanced)\n- Clean syntax, no manual `varE` needed\n\n**Characteristics:**\n- **Source:**
+  1 field from source record\n- **Target:** N fields in destination record\n- **When:**
+  Compile-time (Template Haskell)\n- **Syntax:** Monadic do-notation with `getSource`\n\n##
+  Constructor Mapping\n\nMap constructor names with compile-time safety:\n\n### Direct
+  Mapping (Compile-time Checked!)\n\n```haskell\n-- ✅ Constructor names checked at
+  compile time\ndefaultConfig `withConstructorMap`\n  [ ('CircleShape, 'CircleInfo)\n
+  \ , ('RectangleShape, 'RectangleInfo)\n  ]\n```\n\n### Helper Functions\n\n```haskell\n--
+  Add suffix: Foo → FooV2\ndefaultConfig `withConstructorMap` addSuffix \"V2\"\n\n--
+  Strip suffix: FooV2 → Foo\ndefaultConfig `withConstructorMap` stripSuffix \"V2\"\n\n--
+  Replace suffix: FooV1 → FooV2\ndefaultConfig `withConstructorMap` replaceSuffix
+  \"V1\" \"V2\"\n```\n\n### Custom Transformations\n\n```haskell\n-- Wrap in Transform
+  for custom logic\ndefaultConfig `withConstructorMap` Transform (\\s -> s ++ \"V2\")\n\n--
+  Or pass function directly\ndefaultConfig `withConstructorMap` (++ \"V2\")\n```\n\n##
+  Configuration Presets\n\nCommon configurations for typical Haskell code:\n\n```haskell\n--
+  Most common: datatype-prefixed fields (personName ↔ employeeName)\nderiveAutomap
+  (ByName datatypePrefixConfig) ''Person ''Employee\n\n-- Constructor-prefixed fields\nderiveAutomap
+  (ByName constructorPrefixConfig) ''Person ''Employee\n\n-- Try both conventions
+  (datatype first, then constructor)\nderiveAutomap (ByName conventionalConfig) ''Person
+  ''Employee\n\n-- snake_case ↔ camelCase (e.g., for JSON/DB interop)\nderiveAutomap
+  (ByName snakeToCamelConfig) ''DbRecord ''HaskellRecord\nderiveAutomap (ByName camelToSnakeConfig)
+  ''HaskellRecord ''DbRecord\n\n-- Combine configs with helpers:\nderiveAutomap\n
+  \ (ByName $\n    datatypePrefixConfig\n    `withDefaults` [('newField, [| defaultVal
+  |])]\n    `withConstructorMap` addSuffix \"V2\")\n  ''OldType\n  ''NewType\n```\n\n##
+  Configuration Helpers\n\n- `withDefaults :: Config -> [(Name, Q Exp)] -> Config`
+  - Add default values\n- `withRenames :: Config -> [(Name, FieldRef)] -> Config`
+  - Add field renames\n- `withRules :: Config -> [FieldRule] -> Config` - Add custom
+  rules\n- `withConstructorMap :: Config -> ConstructorMapping -> Config` - Map constructor
+  names\n- `withNormalize :: Config -> (String -> String) -> Config` - Set normalization
+  function\n- `withRuleGens :: Config -> [RuleGenContext -> String -> Maybe FieldRule]
+  -> Config` - Add rule generators\n\n## Built-in Rule Generators\n\n- `datatypePrefixRules`
+  - Handles type-prefixed fields (personName → employeeName)\n- `constructorPrefixRules`
+  - Handles constructor-prefixed fields\n- `customPrefixRules` - Specify custom prefixes
+  manually\n- `stripConstructorPrefix` - Remove constructor prefixes\n- `addConstructorPrefix`
+  - Add constructor prefixes\n\n## ADT Support\n\n- ✅ Single-constructor records\n-
+  ✅ Multi-constructor records (sum types)\n- ✅ Positional constructors\n- ✅ Mixed
+  ADTs (multiple constructors)\n- ✅ Field addition with defaults\n- ✅ Field removal
+  (silently ignored)\n- ✅ Constructor matching by name (case-insensitive)\n- ✅ Compile-time
+  constructor name checking with `DirectMapping`\n- ⚠️ Cannot mix record and positional
+  in same constructor pair\n- ⚠️ Constructor names must be unique per module (use
+  qualified imports if needed)\n\n## Parameterized Types\n\nFor types with type parameters,
+  use `deriveWithType`:\n\n```haskell\ndata Container a = Container { value :: a }\ndata
+  IntContainer = IntContainer { value :: Int }\n\n-- Specify concrete type application\nderiveWithType
+  (ByName defaultConfig) [t| Container Int |] [t| IntContainer |]\n```\n\n## API Summary\n\n###
+  Main Derivation Functions\n\n- `derive :: MatchStrategy -> Name -> Name -> Q [Dec]`\n-
+  `deriveWithType :: MatchStrategy -> Q Type -> Q Type -> Q [Dec]`\n- `deriveTry ::
+  MatchStrategy -> Name -> Name -> Q [Dec]` - Generate `TryFrom` instead\n- `deriveBoth
+  :: MatchStrategy -> Name -> Name -> Q [Dec]` - Generate both directions\n\n### Match
+  Strategies\n\n- `ByPosition` - Structural matching (by declaration order)\n- `ByName
+  Config` - Semantic matching (by name with rules)\n\n### Types\n\n- `FieldRef` -
+  Either `RealField Name` or `VirtualField String`\n- `ConstructorMapping` - `Identity`,
+  `DirectMapping [(Name, Name)]`, or `Transform (String -> String)`\n- `FieldRule`
+  - Configuration for a single field mapping\n- `FieldGetter a` - Monad for extracting
+  source fields in `combineFields`\n- `DisassembleGetter a` - Monad for accessing
+  source field in `disassembleFields`\n\n## Warlock.Tweak - Type Generation with Modifications\n\nThe
+  `Warlock.Tweak` module generates new data types from existing ones with field modifications,
+  perfect for creating DTOs, API response types, and projections. Inspired by TypeScript's
+  utility types like `Pick<T, K>` and `Omit<T, K>`.\n\n### Quick Example\n\n```haskell\n{-#
+  LANGUAGE TemplateHaskell #-}\nimport qualified Warlock.Tweak as Tweak\nimport Warlock.Tweak
+  (pick, omit)\n\ndata User = User\n  { userId :: Int\n  , userName :: String\n  ,
+  userEmail :: String\n  , userPassword :: String  -- Sensitive!\n  , userCreatedAt
+  :: String\n  }\n\n-- Pick specific fields (TypeScript Pick<User, \"id\" | \"name\">)\npick
+  ''User \"UserSummary\" ['userId, 'userName]\n\n-- Omit sensitive fields (TypeScript
+  Omit<User, \"password\">)\nomit ''User \"UserResponse\" ['userPassword]\n\n-- Generates
+  new types + From instances automatically\n-- let summary = from user :: UserSummary\n```\n\n###
+  TypeScript-Style API\n\n**`pick`** - Select specific fields (like TypeScript's `Pick<T,
+  K>`):\n```haskell\n-- Simple usage\npick ''User \"UserMinimal\" ['userId, 'userName]\n\n--
+  With configuration\npick' (defaultTweakConfig `Tweak.stripPrefix` \"user\")\n      ''User
+  \"UserClean\" ['userName, 'userEmail]\n-- Generated: UserClean { name :: String,
+  email :: String }\n```\n\n**`omit`** - Exclude specific fields (like TypeScript's
+  `Omit<T, K>`):\n```haskell\n-- Simple usage\nomit ''User \"UserDTO\" ['userPassword,
+  'userCreatedAt]\n\n-- With configuration\nomit' (defaultTweakConfig `Tweak.addPrefix`
+  \"dto\")\n      ''User \"UserAPI\" ['userPassword]\n-- Generated: UserAPI { dtouserId
+  :: Int, dtouserName :: String, ... }\n```\n\n### Composable Configuration\n\nAll
+  functions support composable configuration using helper functions:\n\n**`stripPrefix`**
+  - Remove common prefix from fields:\n```haskell\npick' (defaultTweakConfig `Tweak.stripPrefix`
+  \"user\")\n      ''User \"UserClean\" ['userName, 'userEmail]\n-- userName -> name,
+  userEmail -> email\n```\n\n**`addPrefix`** - Add prefix to all fields:\n```haskell\nomit'
+  (defaultTweakConfig `Tweak.addPrefix` \"api\")\n      ''User \"UserAPI\" ['userPassword]\n--
+  userId -> apiuserId, userName -> apiuserName, etc.\n```\n\n**`replacePrefix`** -
+  Swap one prefix for another:\n```haskell\npick' (defaultTweakConfig `Tweak.replacePrefix`
+  (\"product\", \"item\"))\n      ''Product \"ItemSummary\" ['productId, 'productName]\n--
+  productId -> itemId, productName -> itemName\n```\n\n**`withRenames`** - Direct
+  field name mappings:\n```haskell\npick' (defaultTweakConfig `Tweak.withRenames`
+  [('userId, mkName \"id\")])\n      ''User \"UserRenamed\" ['userId, 'userName]\n--
+  userId -> id, userName stays userName\n```\n\n**Chain operations** - Combine multiple
+  transformations:\n```haskell\npick' (defaultTweakConfig\n        `Tweak.stripPrefix`
+  \"user\"\n        `Tweak.addPrefix` \"dto\")\n      ''User \"UserDTO\" ['userName,
+  'userEmail]\n-- userName -> dtoName, userEmail -> dtoEmail\n```\n\n### Configuration
+  Options\n\n```haskell\ndata TweakConfig = TweakConfig\n  { fieldSelector :: FieldSelector
+  \       -- Which fields to keep/drop\n  , fieldRenames :: [(Name, Name)]        --
+  Explicit field renames\n  , prefixOps :: [PrefixOp]              -- Prefix operations\n
+  \ , autoDerive :: Bool                    -- Auto-generate From instances (default:
+  True)\n  , deriveStrategy :: Maybe MatchStrategy -- Custom Warlock strategy\n  }\n\n--
+  Composable helpers:\nwithFields :: TweakConfig -> [Name] -> TweakConfig\nwithoutFields
+  :: TweakConfig -> [Name] -> TweakConfig\nTweak.withRenames :: TweakConfig -> [(Name,
+  Name)] -> TweakConfig\nTweak.addPrefix :: TweakConfig -> String -> TweakConfig\nTweak.stripPrefix
+  :: TweakConfig -> String -> TweakConfig\nTweak.replacePrefix :: TweakConfig -> (String,
+  String) -> TweakConfig\nwithAutoDerive :: TweakConfig -> Bool -> TweakConfig\nwithDeriveStrategy
+  :: TweakConfig -> MatchStrategy -> TweakConfig\n```\n\n### Use Cases\n\n**API Response
+  DTOs:**\n```haskell\n-- Omit sensitive fields for API responses\nomit ''User \"UserResponse\"
+  ['userPassword, 'userSalt, 'userTokens]\n```\n\n**Database to Domain:**\n```haskell\n--
+  Strip \"db\" prefix from Persistent-generated types\npick' (defaultTweakConfig `Tweak.stripPrefix`
+  \"dbUser\")\n      ''DbUser \"User\" ['dbUserId, 'dbUserName, 'dbUserEmail]\n```\n\n**Field
+  Projections:**\n```haskell\n-- Create minimal type for specific use cases\npick
+  ''User \"UserSummary\" ['userId, 'userName]\n```\n\n**API Versioning:**\n```haskell\n--
+  Add prefix for versioned types\npick' (defaultTweakConfig `Tweak.addPrefix` \"v2\")\n
+  \     ''User \"UserV2\" ['userId, 'userName, 'userEmail]\n```\n\n### Notes\n\n-
+  Automatically generates `From` instances between source and derived types (unless
+  `withAutoDerive False`)\n- Field names are automatically lowercased after prefix
+  operations to maintain Haskell conventions\n- Constructor name defaults to match
+  type name\n- Single-constructor record types only (no sum types or positional constructors
+  yet)\n- Module must be imported qualified to avoid name conflicts: `import qualified
+  Warlock.Tweak as Tweak`\n\n## Warlock.HKD - Higher-Kinded Data Generation\n\nGenerate
+  Higher-Kinded Data (HKD) versions of your types for use with libraries like `barbies`.
+  HKD types wrap each field in a type constructor, enabling powerful patterns for
+  validation, partial construction, and generic programming.\n\n```haskell\n{-# LANGUAGE
+  TemplateHaskell #-}\n{-# LANGUAGE TypeFamilies #-}\nimport Warlock.HKD\nimport Data.Functor.Identity\nimport
+  Witch (from)\n\ndata Person = Person\n  { name :: String\n  , age :: Int\n  , email
+  :: String\n  } deriving (Show, Eq)\n\n-- Generate HKD type with default config\nderiveHKD'
+  ''Person\n\n-- Now you have:\n-- - Type family: HKD Person f\n-- - Concrete type:
+  Person' f\n-- - From instances for Identity wrapper conversion\n```\n\n### Type
+  Family and Instances\n\nThe `deriveHKD` function generates:\n\n1. **A concrete HKD
+  data type** with fields wrapped in `f`:\n```haskell\ndata Person' f = Person'\n
+  \ { name :: f String\n  , age :: f Int\n  , email :: f String\n  }\n```\n\n2. **A
+  type family instance** for convenient syntax:\n```haskell\ntype instance HKD Person
+  f = Person' f\n```\n\n3. **From instances** for Identity conversion (bidirectional):\n```haskell\ninstance
+  From (Person' Identity) Person\ninstance From Person (Person' Identity)\n```\n\n###
+  Basic Usage\n\n**Bidirectional Conversion:**\n```haskell\nlet person = Person \"Alice\"
+  30 \"alice@example.com\"\nlet hkdPerson = from person :: HKD Person Identity\nlet
+  unwrapped = from hkdPerson :: Person\n```\n\n**Partial Construction with Maybe:**\n```haskell\n--
+  Build up a Person incrementally\nlet partial = Person' (Just \"Bob\") Nothing (Just
+  \"bob@example.com\") :: Person' Maybe\n\n-- Validate and convert when complete\nvalidatePerson
+  :: Person' Maybe -> Maybe Person\nvalidatePerson (Person' (Just n) (Just a) (Just
+  e)) = Just (Person n a e)\nvalidatePerson _ = Nothing\n```\n\n**Optional Fields:**\n```haskell\n--
+  Form validation where fields might be missing\ndata UserForm f = UserForm\n  { username
+  :: f String\n  , password :: f String\n  , confirmPassword :: f String\n  }\n\nderiveHKD'
+  ''UserForm\n\n-- During form filling, fields are Maybe String\nlet formInProgress
+  = UserForm' (Just \"alice\") Nothing Nothing :: UserForm' Maybe\n```\n\n### Configuration\n\nCustomize
+  field and constructor naming:\n\n**Field Prefix:**\n```haskell\ndata User = User\n
+  \ { userName :: String\n  , userEmail :: String\n  }\n\n-- Fields: hkduserName,
+  hkduserEmail\nderiveHKD (defaultHKDConfig `withFieldPrefix` \"hkd\") ''User\n```\n\n**Constructor
+  Suffix:**\n```haskell\n-- Constructor: PersonHKD instead of Person'\nderiveHKD (defaultHKDConfig
+  `withConstructorSuffix` \"HKD\") ''Person\n```\n\n**Custom Transforms:**\n```haskell\nderiveHKD
+  (defaultHKDConfig\n  `withFieldTransform` (\\name -> \"field_\" ++ name)\n  `withConstructorTransform`
+  (\\name -> name ++ \"_HKD\")\n) ''MyType\n```\n\n**Disable From Instances:**\n```haskell\n--
+  Generate only the HKD type, no From instances\nderiveHKD (withoutFromInstances defaultHKDConfig)
+  ''MyType\n```\n\n### Multi-Constructor Support\n\nHKD generation works with sum
+  types:\n\n```haskell\ndata Payment\n  = CreditCard { cardNumber :: String, cvv ::
+  String }\n  | Cash { amount :: Double }\n  | Check { checkNumber :: Int }\n\nderiveHKD'
+  ''Payment\n\n-- Generates Payment' with all constructors wrapped\nlet payment =
+  CreditCard \"1234\" \"123\"\nlet hkdPayment = from payment :: HKD Payment Identity\nlet
+  unwrapped = from hkdPayment :: Payment\n```\n\n### Integration with Barbies\n\nWhile
+  Warlock.HKD generates the HKD types and From instances, you can use `barbies` for
+  generic traversals by deriving the necessary instances:\n\n```haskell\n{-# LANGUAGE
+  StandaloneDeriving #-}\n{-# LANGUAGE DeriveGeneric #-}\nimport GHC.Generics (Generic)\nimport
+  qualified Barbies as B\n\ndata Person = Person { name :: String, age :: Int }\nderiveHKD'
+  ''Person\n\nderiving instance Generic (Person' f)\ninstance B.FunctorB Person'\ninstance
+  B.TraversableB Person'\ninstance B.ApplicativeB Person'\n\n-- Now use barbies operations\nvalidateFields
+  :: Person' Maybe -> Either [String] Person\nvalidateFields p = B.btraverse (maybe
+  (Left [\"missing\"]) Right) p\n```\n\n### Use Cases\n\n**Form Validation:**\n```haskell\n--
+  Track validation state per field\ndata PersonForm f = PersonForm\n  { name :: f
+  String\n  , age :: f Int\n  , email :: f String\n  }\n\ntype ValidationResult =
+  Either String\n\nvalidateForm :: PersonForm Maybe -> PersonForm ValidationResult\nvalidateForm
+  = -- validate each field\n\n-- Collect to final result\ncollectValidation :: PersonForm
+  (Either String) -> Either [String] Person\ncollectValidation = B.btraverse (either
+  (Left . pure) Right)\n```\n\n**Incremental Construction:**\n```haskell\n-- Build
+  complex objects step by step\ndata Config f = Config\n  { host :: f String\n  ,
+  port :: f Int\n  , timeout :: f Int\n  }\n\nemptyConfig :: Config Maybe\nemptyConfig
+  = Config Nothing Nothing Nothing\n\naddHost :: String -> Config Maybe -> Config
+  Maybe\naddHost h cfg = cfg { host = Just h }\n```\n\n**Optional Fields in APIs:**\n```haskell\n--
+  PATCH requests with optional updates\ndata UserUpdate f = UserUpdate\n  { updateName
+  :: f String\n  , updateEmail :: f String\n  , updateAge :: f Int\n  }\n\n-- Only
+  update provided fields\napplyUpdate :: User -> UserUpdate Maybe -> User\napplyUpdate
+  user upd = User\n  { userName = fromMaybe (userName user) (updateName upd)\n  ,
+  userEmail = fromMaybe (userEmail user) (updateEmail upd)\n  , userAge = fromMaybe
+  (userAge user) (updateAge upd)\n  }\n```\n\n## Learning Resources\n\n### Warlock.Tutorial\n\nFor
+  a comprehensive guide covering all features from basic to advanced usage, see the
+  **[Warlock.Tutorial](src/Warlock/Tutorial.hs)** module. This extensive tutorial
+  includes:\n\n- Introduction & core concepts (ByPosition vs ByName decision tree)\n-
+  Getting started with simple examples\n- Naming conventions (datatype prefix, constructor
+  prefix, snake/camel case)\n- Advanced field manipulation (virtual fields, computed
+  fields, disassembled fields)\n- Constructor mapping strategies\n- Type generation
+  with Warlock.Tweak (Pick/Omit DTOs)\n- Higher-Kinded Data with Warlock.HKD\n- Real-world
+  patterns (API versioning, database conversions, DTOs)\n- Advanced techniques and
+  troubleshooting\n\nThe tutorial is designed to be read sequentially and includes
+  complete, working examples for every concept.\n\n## License\n\nMIT\n"
+description-type: markdown
+hash: 3b05309713cc4e27ecc895248ada67f9476c122d9a2def439ed8de829b64bf06
+homepage: https://github.com/iand675/warlock#readme
+latest: 0.1.0.1
+license-name: BSD-3-Clause
+maintainer: ian@iankduncan.com
+synopsis: Automatic type-safe conversion between Haskell data types using Template
+  Haskell
+test-bench-deps:
+  barbies: '>=2.0'
+  base: '>=4.7 && <5'
+  containers: '>=0'
+  hspec: '>=2.0'
+  hspec-discover: '>=0'
+  template-haskell: '>=0'
+  text: '>=0'
+  warlock: '>=0'
+  witch: '>=0'
