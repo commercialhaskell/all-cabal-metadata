@@ -1,31 +1,157 @@
 all-versions:
 - 0.1.0.0
+- 0.1.1.0
 author: Obsidian Systems LLC
 basic-deps:
   aeson: '>=2.0 && <2.3'
-  base: '>=4.14 && <4.19'
-  jsaddle: '>=0.9.4 && <0.10'
-  jsaddle-dom: '>=0.9.4 && <0.10'
-  lens: '>=5.0.0 && <5.4'
-  text: '>=1.2.4 && <2.1'
+  base: '>=4.11 && <4.22'
+  jsaddle: '>=0.9.8 && <0.10'
+  lens: '>=5.0.1 && <5.4'
+  text: '>=1.2.4 && <2.2'
 changelog: |+
   # jsdom-extras changelog
+
+  ## 0.1.1.0
+
+  * Add JSDOM.Extras.WaitForJS
 
   ## 0.1.0.0
 
   * Initial release
 
 changelog-type: markdown
-description: "# jsdom-extras\n\nJavascript interop convenience functions\n\n[![Haskell](https://img.shields.io/badge/language-Haskell-orange.svg)](https://haskell.org)
-  [![Hackage](https://img.shields.io/hackage/v/jsdom-extras.svg)](https://hackage.haskell.org/package/jsdom-extras)
-  [![BSD3 License](https://img.shields.io/badge/license-BSD3-blue.svg)](https://github.com/obsidiansystems/beam-automigrate/blob/master/LICENSE)\n\n\n*
-  [JSON](src/JSDOM/Extras/JSON.hs)\n  * JSON.stringify\n  * JSON.parse\n* [console](src/JSDOM/Extras/Console.hs)\n
-  \ * console.log\n* [Object](src/JSDOM/Extras/Object.hs): Convenience functions for
-  convertion to/from JS Objects\n  * toObject\n  * fromObject\n  * lookup\n    \n"
+description: |
+  # jsdom-extras
+
+  Convenience utilities for working with **JSDOM / JSaddle** from Haskell. This package wraps a few common patterns you’ll reach for in browser-ish code: console logging, JSON ↔︎ JSVal conversion, small object helpers, and a tiny utility to wait for globals to appear.
+
+  > **Motivation**
+  > If you’re doing Reflex-DOM or JSaddle work, you often need to bridge `aeson` values, poke at JS objects, or
+  > ensure a script on the page has loaded before using it. `jsdom-extras` provides a small, typed toolkit for that.
+
+  ---
+
+  ## Features
+
+  * **Console logging** via `console.log` without requiring `Show` or manual conversions.
+  * **JSON helpers:** `Value ↔︎ JSVal` that work on both GHCJS and JSaddle-native backends.
+  * **Object helpers:** Build, decompose, and query JavaScript `Object`s in a few lines.
+  * **Wait for globals:** Poll for a `window` global and run code once it’s available.
+
+  ---
+
+  ## Quick start
+
+  Below are small, self‑contained snippets. All examples assume:
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+  import Language.Javascript.JSaddle (JSM, JSVal, MonadJSM)
+  import qualified JSDOM.Extras.ConsoleLog as C
+  import qualified JSDOM.Extras.JSON       as J
+  import qualified JSDOM.Extras.Object     as O
+  import qualified JSDOM.Extras.WaitForJS  as W
+  ```
+
+  ### 1) Console logging
+
+  ```haskell
+  hello :: MonadJSM m => m ()
+  hello = C.consoleLog ("Hello from Haskell!" :: JSM.String)
+  ```
+
+  No `Show` burden: anything with `ToJSVal` is fair game.
+
+  ### 2) JSON ↔︎ JSVal
+
+  ```haskell
+  import Data.Aeson (Value(..), object, (.=))
+
+  mkUser :: JSM JSVal
+  mkUser = J.jsValFromJSON (object ["name" .= ("Ada" :: String), "id" .= (1 :: Int)])
+
+  roundTrip :: JSVal -> JSM (Maybe Value)
+  roundTrip v = J.jsValToJSON v
+
+  stringified :: JSVal -> JSM JSM.String
+  stringified v = J.stringify v
+
+  parsed :: JSM JSVal
+  parsed = J.parse =<< J.toJSVal ("{\"ok\":true}" :: JSM.String)
+  ```
+
+  These functions are **platform‑independent**:
+
+  * On **GHCJS**, conversions use `toJSVal`/`fromJSVal`.
+  * On **JSaddle native**, we reuse JSaddle’s internal JSON bridges.
+
+  ### 3) Object helpers
+
+  ```haskell
+  mkObj :: MonadJSM m => m O.Object
+  mkObj = O.toObject [("answer", 42 :: Int), ("name", "Ada" :: JSM.String)]
+
+  readObj :: MonadJSM m => O.Object -> m [(JSM.String, JSVal)]
+  readObj = O.fromObject
+
+  findKey :: MonadJSM m => O.Object -> m (Maybe JSVal)
+  findKey o = O.lookup "answer" o
+
+  noop :: O.JSCallAsFunction
+  noop = O.doNothing
+  ```
+
+  `lookup` gracefully treats `null` and `undefined` as `Nothing`, and `toMaybe` is exposed if you need it directly.
+
+  ### 4) Wait for a global and use it
+
+  Useful when a script tag populates `window.SomeLib` asynchronously.
+
+  ```haskell
+  useWhenReady :: MonadJSM m => m ()
+  useWhenReady = W.withGlobalJS "SomeLib" $ \lib -> do
+    -- do something with `lib :: JSVal`
+    C.consoleLog ("SomeLib is ready" :: JSM.String)
+  ```
+
+  `waitForGlobalJS` polls at ~250ms intervals until the value is present (neither `null` nor `undefined`). If you want a non‑blocking probe, use `getGlobalJS` which returns `Maybe JSVal`.
+
+  ---
+
+  ## API reference
+
+  The library exposes four modules:
+
+  * `JSDOM.Extras.ConsoleLog`
+
+    * `consoleLog :: (MonadJSM m, ToJSVal a) => a -> m ()`
+
+  * `JSDOM.Extras.JSON`
+
+    * `jsValFromJSON :: Value -> JSM JSVal`
+    * `jsValToJSON   :: JSVal -> JSM (Maybe Value)`
+    * `stringify     :: MonadJSM m => JSVal -> m JSM.String`
+    * `parse         :: MonadJSM m => JSVal -> m JSVal`
+
+  * `JSDOM.Extras.Object`
+
+    * `type ToJSObject k v = (ToJSString k, ToJSVal v)`
+    * `singleton   :: (ToJSObject a b, MonadJSM m) => a -> b -> m Object`
+    * `toObject    :: (MonadJSM m, ToJSObject a b) => [(a, b)] -> m Object`
+    * `fromObject  :: MonadJSM m => Object -> m [(JSM.String, JSVal)]`
+    * `lookup      :: MonadJSM m => JSM.String -> Object -> m (Maybe JSVal)`
+    * `toMaybe     :: MonadJSM m => JSVal -> m (Maybe JSVal)`
+    * `doNothing   :: JSCallAsFunction`
+
+  * `JSDOM.Extras.WaitForJS`
+
+    * `getGlobalJS   :: MonadJSM m => Text -> m (Maybe JSVal)`
+    * `waitForGlobalJS :: MonadJSM m => Text -> m JSVal`
+    * `withGlobalJS  :: MonadJSM m => Text -> (JSVal -> m a) -> m a`
 description-type: markdown
-hash: d64875ff446db466698b181ccd6b86d05665d690d655c44981822fa407dc8d71
+hash: da246e3d543c242a14246af1a22da9dc91a621880b9a29c267abcdf57a92e998
 homepage: ''
-latest: 0.1.0.0
+latest: 0.1.1.0
 license-name: BSD-3-Clause
 maintainer: maintainer@obsidian.systems
 synopsis: Convenience utilities for JSDOM
