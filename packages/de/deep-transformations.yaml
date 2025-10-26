@@ -7,15 +7,64 @@ all-versions:
 - 0.2.2
 - 0.2.3
 - '0.3'
+- '0.4'
 author: Mario Blažević
 basic-deps:
   base: '>=4.11 && <5'
-  generic-lens: '>=1.2 && <2.3'
-  rank2classes: '>=1.4.1 && <1.6'
+  generic-lens: '>=1.2 && <2.4'
+  rank2classes: '>=1.5.5 && <1.6'
   template-haskell: '>=2.11 && <2.24'
   transformers: '>=0.5 && <0.7'
 changelog: |
   # Revision history for deep-transformations
+
+  ## 0.4 -- 2025-10-26
+
+  ### **BREAKING**
+
+  Major type changes:
+
+  * Moved the `attribution` method from the `AG.Attribution` class to the new `AG.At` class
+  * Changed the kind of the second parameter of the `AG.Atts` type family from `Type` to `(Type -> Type) -> (Type ->
+    Type) -> Type`
+  * As a consequence, removed the two deep&shallow type parameters of the `AG.Attribution` and `AG.At` classes
+  * Adopted the same naming scheme in `AG.Dimorphic` and `AG.Monomorphic`
+  * Dropped functions `applyDefault`, and `applyDefaultWithAttributes` from `Transformation.AG`
+
+  Major reorganization of the data types around the `Keep` semantics:
+
+  * Dropped `PreservingSemantics` from `AG`, `Monomorphic`, and `Dimorphic` modules
+  * Dropped `AG.knitKeeping`, making `AG.Keep` an attribution wrapper instead
+  * Dropped `Keep` from `Mono`/`Dimorphic` modules
+  * Replaced `AG.AllAtts` with the `AG.Kept` data type
+  * Introduced the `AG.Kept` attribute synthesized by the `AG.Keep` transformation wrapper
+
+  Breaking instance changes:
+
+  * Strengthened the `Foldable` constraint on the `attribution` method to `Traversable`
+  * Made the default `Bequether` & `Synthesizer` instances specific to `Auto`
+  * Dropped the fixed instance `Full.Functor (Transformation.Rank2.Map p q)`
+
+  ### Additions
+
+  * the `AG.Knit` transformation
+  * `Transformation.Coercion` and `Full.coerce`
+  * the wrapper `Dimorphic.T` separate from `Dimorphic.Auto`
+  * the `Origin` associated type
+  * `mapInherited` and `mapSynthesized`
+  * `Semigroup` and `Monoid` instances for `Inherited` and `Synthesized`
+  * `Deep.Const2`
+  * `instance Attribution (Keep t)`
+
+  ### Other improvements
+
+  * Added `test/RepMinKeep ` and `test/RepMinKeepAG`
+  * Bumped the lower bound of the `rank2classes` dependency to require the new `Rank2.coerce` method
+  * Bumped the upper bound of the `generic-lens` dependency
+  * Expanded documentation
+  * Fixed the Transformation doctests for docspec
+  * Turned `doctests` from a testsuite into a named library, dropped `cabal-doctest`
+  * Updated GitHub CI action
 
   ## 0.3 -- 2025-01-01
 
@@ -108,6 +157,7 @@ description: |
   ~~~ {.haskell}
   import Control.Applicative
   import Data.Coerce (coerce)
+  import Data.Functor.Compose
   import Data.Functor.Const
   import Data.Functor.Identity
   import Data.Monoid
@@ -190,11 +240,22 @@ description: |
     f `foldMap` Mul x y = f x <> f y
     f `foldMap` Let d e = f d <> f e
     f `foldMap` EVar v  = mempty
+
+  instance Rank2.Traversable (Decl f') where
+    f `traverse` (v := e) = (v :=) <$> f e
+    f `traverse` Seq x y  = Seq <$> f x <*> f y
+
+  instance Rank2.Traversable (Expr f') where
+    f `traverse` Con n   = pure (Con n)
+    f `traverse` Add x y = Add <$> f x <*> f y
+    f `traverse` Mul x y = Mul <$> f x <*> f y
+    f `traverse` Let d e = Let <$> f d <*> f e
+    f `traverse` EVar v  = pure (EVar v)
   ~~~
 
-  While the methods declared above can be handy, they are limited in requiring that the function argument `f` must be
-   polymorphic in the wrapped field type. In other words, it cannot behave one way for an `Expr` and another for a
-   `Decl`. That can be a severe handicap.
+  While the methods declared above can be handy, they are limited because they require that the function argument `f`
+   must be polymorphic in the wrapped field type. In other words, it cannot behave one way for an `Expr` and another
+   for a `Decl`. That can be a severe handicap.
 
   The class methods exported by `deep-transformations` therefore work not with polymorphic functions but with
   *transformations*. The instances of these classes are similar to the 'Rank2' instances above. Also as above, they can
@@ -223,6 +284,19 @@ description: |
     t `foldMap` Mul x y = t `Full.foldMap` x <> t `Full.foldMap` y
     t `foldMap` Let d e = t `Full.foldMap` d <> t `Full.foldMap` e
     t `foldMap` EVar v  = mempty
+
+  instance (Transformation t, Transformation.Codomain t ~ Compose m f, Applicative m,
+            Full.Traversable t Decl, Full.Traversable t Expr) => Deep.Traversable t Decl where
+    t `traverse` (v := e) = (v :=) <$> t `Full.traverse` e
+    t `traverse` Seq x y  = Seq <$> t `Full.traverse` x <*> t `Full.traverse` y
+
+  instance (Transformation t, Transformation.Codomain t ~ Compose m f, Applicative m,
+            Full.Traversable t Decl, Full.Traversable t Expr) => Deep.Traversable t Expr where
+    t `traverse` Con n   = pure (Con n)
+    t `traverse` Add x y = Add <$> t `Full.traverse` x <*> t `Full.traverse` y
+    t `traverse` Mul x y = Mul <$> t `Full.traverse` x <*> t `Full.traverse` y
+    t `traverse` Let d e = Let <$> t `Full.traverse` d <*> t `Full.traverse` e
+    t `traverse` EVar v  = pure (EVar v)
   ~~~
 
   Once the above boilerplate code is written or generated, no further boilerplate need be written.
@@ -347,29 +421,29 @@ description: |
    grammar. We can build one with the tools from
    [`Transformation.AG`](https://hackage.haskell.org/package/deep-transformations/docs/Transformation-AG.html).
 
-  First we declare another transformation, just like before. Its `Codomain` will now be something called the attribute
-   grammar semantics, and it performs bottom-up.
+  Instead of declaring another transformation like before, this time we'll use a predefined transformation called
+   `Knit`. Its `Codomain` will now be something called the attribute grammar semantics. It requires a parameter data
+   type, an instance of `Attribution`. The associated type `Origin` of the parameter is also the `Domain` of the
+   `Knit` transformation.
+
+  ~~~ {.haskell.ignore}
+  newtype Knit t = Knit t
+
+  instance AG.Attribution t => Transformation (Knit t) where
+     type Domain (Knit t) = AG.Origin t
+     type Codomain (Knit t) = Semantics t
+
+  type Semantics t = Inherited t Rank2.~> Synthesized t
+  ~~~
+
+  As noted above, we need a new data type to make an `Attribution` instance. Let's call it `DeadCodeEliminator`.
 
   ~~~ {.haskell}
   data DeadCodeEliminator = DeadCodeEliminator
 
-  type Sem = AG.Semantics DeadCodeEliminator
-
-  instance Transformation DeadCodeEliminator where
-     type Domain DeadCodeEliminator = Identity
-     type Codomain DeadCodeEliminator = AG.Semantics DeadCodeEliminator
-
-  instance DeadCodeEliminator `Transformation.At` Decl Sem Sem where
-    ($) = AG.applyDefault runIdentity
-
-  instance DeadCodeEliminator `Transformation.At` Expr Sem Sem where
-    ($) = AG.applyDefault runIdentity
-
-  instance Full.Functor DeadCodeEliminator Decl where
-    (<$>) = Full.mapUpDefault
-
-  instance Full.Functor DeadCodeEliminator Expr where
-    (<$>) = Full.mapUpDefault
+  instance AG.Attribution DeadCodeEliminator where
+     type Origin DeadCodeEliminator = Identity
+     unwrap DeadCodeEliminator = runIdentity
   ~~~
 
   We also need another bit of a boilerplate instance that can be automatically generated with Template Haskell functions
@@ -388,6 +462,9 @@ description: |
     Mul x1 y1 <*> ~(Mul x2 y2) = Mul (Rank2.apply x1 x2) (Rank2.apply y1 y2)
   ~~~
 
+  That's all the setup, the rest of the implementation consists of the actual attribute definitions specific to our
+  needs.
+
   ### Attributes
 
   Every type of node can have different inherited and synthesized attributes, so we need to declare what they are. Since
@@ -397,14 +474,14 @@ description: |
 
   ~~~ {.haskell}
   type Env = Var -> Maybe (Expr Identity Identity)
-  type instance AG.Atts (AG.Inherited DeadCodeEliminator) (Expr _ _) = Env
+  type instance AG.Atts (AG.Inherited DeadCodeEliminator) Expr = Env
   ~~~
 
   A declaration will also need to inherit the environment, if only to pass it on to the nested expressions. Because we
    want to discard useless assignments, it will also need to know the list of all referenced variables.
 
   ~~~ {.haskell}
-  type instance AG.Atts (AG.Inherited DeadCodeEliminator) (Decl _ _) = (Env, [Var])
+  type instance AG.Atts (AG.Inherited DeadCodeEliminator) Decl = (Env, [Var])
   ~~~
 
   A `Decl` needs to synthesize the environment of constant bindings it generates itself, as well as a modified
@@ -412,7 +489,7 @@ description: |
    need to wrap it in a `Maybe`.
 
   ~~~ {.haskell}
-  type instance AG.Atts (AG.Synthesized DeadCodeEliminator) (Decl _ _) = (Env, Maybe (Decl Identity Identity))
+  type instance AG.Atts (AG.Synthesized DeadCodeEliminator) Decl = (Env, Maybe (Decl Identity Identity))
   ~~~
 
   All declarations inside an `Expr` need to be trimmed, so the `Expr` itself may be simplified but never completely
@@ -421,20 +498,20 @@ description: |
    easier to reuse the existing `GetVariables` transformation.
 
   ~~~ {.haskell}
-  type instance AG.Atts (AG.Synthesized DeadCodeEliminator) (Expr _ _) = Expr Identity Identity
+  type instance AG.Atts (AG.Synthesized DeadCodeEliminator) Expr = Expr Identity Identity
   ~~~
 
-  Now we need to describe how to calculate the attributes, by declaring `Attribution` instances of the node types. The
-   method `attribution` takes as arguments: the transformation - in this case `DeadCodeEliminator`, the node, the node's
-   inherited attributes, and the synthesized attributes of all the node's children grouped under the node
-   constructor. The last two inputs are grouped in a pair for symmetry with the function result, which is a pair of the
-   node's synthesized attributes and the inherited attributes for all the node's children grouped under the node
+  Now we need to describe how to calculate the attributes, by declaring the `At` instances of the node
+   types. The method `attribution` takes as arguments: the transformation - in this case `DeadCodeEliminator`, the
+   node, the node's inherited attributes, and the synthesized attributes of all the node's children grouped under the
+   node constructor. The last two inputs are grouped in a pair for symmetry with the function result, which is a pair
+   of the node's synthesized attributes and the inherited attributes for all the node's children grouped under the node
    constructor. Perhaps this can be more succintly illustrated by the method's type signature:
 
   ~~~ {.haskell.ignore}
-  class Attribution t g deep shallow where
-     attribution :: sem ~ (Inherited t Rank2.~> Synthesized t)
-                 => t -> shallow (g deep deep)
+  class Attribution t => At t g where
+     attribution :: forall sem. Rank2.Traversable (g sem)
+                 => t -> Origin t (g sem sem)
                  -> (Inherited   t (g sem sem), g sem (Synthesized t))
                  -> (Synthesized t (g sem sem), g sem (Inherited t))
   ~~~
@@ -445,7 +522,7 @@ description: |
   because they don't have any children.
 
   ~~~ {.haskell}
-  instance AG.Attribution DeadCodeEliminator Expr Sem Identity where
+  instance DeadCodeEliminator `AG.At` Expr where
     attribution DeadCodeEliminator (Identity (EVar v)) (AG.Inherited env, _) =
       (AG.Synthesized (maybe (EVar v) id $ env v), EVar v)
     attribution DeadCodeEliminator (Identity (Con n)) (AG.Inherited env, _) =
@@ -482,7 +559,7 @@ description: |
   The rules for `Decl` are a bit more involved.
 
   ~~~ {.haskell}
-  instance AG.Attribution DeadCodeEliminator Decl Sem Identity where
+  instance DeadCodeEliminator `AG.At` Decl where
   ~~~
 
   A single variable binding can be in three distinct situations. If the variable is not referenced at all, we can just
@@ -517,21 +594,17 @@ description: |
 
   ~~~ {.haskell}
   -- |
-  -- >>> let s = Full.fmap DeadCodeEliminator (Identity $ bin Let d1 e1) `Rank2.apply` AG.Inherited (const Nothing)
+  -- >>> let s = Full.fmap (AG.Knit DeadCodeEliminator) (Identity $ bin Let d1 e1) `Rank2.apply` AG.Inherited (const Nothing)
   -- >>> s
   -- Synthesized {syn = Add (Identity (Con 42)) (Identity (Add (Identity (Mul (Identity (Con 42)) (Identity (Con 68)))) (Identity (Con 7))))}
   -- >>> Full.fmap ConstantFold $ Identity $ AG.syn s
   -- Identity (Con 2905)
   ~~~
 description-type: markdown
-hash: 030b2f7dfe416935199cab7122138191fa00ea9e81e53a57307609b3a67f044d
+hash: 84839d539adb51cbabec43a4845f53d1a8a0927377b069e7b05f273713ebe408
 homepage: https://github.com/blamario/grampa/tree/master/deep-transformations
-latest: '0.3'
+latest: '0.4'
 license-name: BSD-3-Clause
 maintainer: blamario@protonmail.com
 synopsis: Deep natural and unnatural tree transformations, including attribute grammars
-test-bench-deps:
-  base: '>=0'
-  deep-transformations: '>=0'
-  doctest: '>=0.8'
-  rank2classes: '>=0'
+test-bench-deps: {}
