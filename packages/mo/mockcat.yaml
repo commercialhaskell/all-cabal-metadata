@@ -11,6 +11,7 @@ all-versions:
 - 0.5.3.0
 - 0.5.4.0
 - 0.5.5.0
+- 0.6.0.0
 author: funnycat <pujoheadsoft@gmail.com>
 basic-deps:
   base: '>=4.7 && <5'
@@ -28,6 +29,10 @@ changelog: |
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   and this project adheres to the
   [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.6.0.0
+  ### Changed
+  - Removed the upper limit on variable arguments when creating stub functions. Previously, there was a restriction on the maximum number of arguments, but this limitation has been removed, allowing stub functions to accept an arbitrary number of arguments.
 
   ## 0.5.5.0
   ### Added
@@ -90,82 +95,134 @@ description: "<div align=\"center\">\n    <img src=\"logo.png\" width=\"830px\" 
   series typically work; open an issue if you hit a snag.\n* Older GHCs (< 9.2) are
   not targeted due to dependency bounds and modern TH/unliftio requirements.\n\nDesigned
   to be something you can pick up to stub one or two spots and then forget again –
-  more a handy extension of regular Haskell testing than a new framework.\n\n### Quick
-  Start\n\nFunction mock:\n```haskell\nimport Test.Hspec\nimport Test.MockCat\n\nspec
-  :: Spec\nspec = it \"simple function mock\" do\n  m <- createMock $ \"input\" |>
-  42\n  stubFn m \"input\" `shouldBe` 42\n  m `shouldApplyTo` \"input\"\n```\n\nTypeclass
-  mock:\n```haskell\n{-# LANGUAGE TemplateHaskell #-}\nimport Test.Hspec\nimport Test.MockCat\n\nclass
-  Monad m => KV m where\n  getKV :: String -> m (Maybe String)\n  putKV :: String
-  -> String -> m ()\n\nmakeMock [t|KV|]\n\nprogram :: KV m => m (Maybe String)\nprogram
-  = do\n  putKV \"k\" \"v\"\n  getKV \"k\"\n\nspec :: Spec\nspec = it \"kv\" do\n
-  \ r <- runMockT do\n    _putKV (\"k\" |> \"v\" |> ())\n    _getKV (\"k\" |> Just
-  \"v\")\n    program\n  r `shouldBe` Just \"v\"\n```\n\nNon‑invocation (two styles):\n```haskell\n
-  \ _putKV (\"x\" |> \"y\" |> ()) `expectApplyTimes` 0  -- (legacy name: applyTimesIs)\n
-  \ neverApply $ _putKV (\"x\" |> \"y\" |> ())\n```\n\n### Core Concepts (Brief)\n*
-  Pipeline DSL: `a |> b |> returnValue` describes one expected application.\n* Matchers:
-  `any`, `expect p label`, `expect_ p`, `$(expectByExpr [| predicate |])`.\n* Argument‑dependent
-  returns: `onCase` or `cases [...]` (including differing values for same arg on later
-  occurrences).\n* Counting: `expectApplyTimes` (legacy: `applyTimesIs`), `expectNever`
-  (legacy: `neverApply`), plus `shouldApplyTimes*` predicates on mocks.\n* Ordering:
-  `shouldApplyInOrder`, `shouldApplyInPartialOrder`.\n* Concurrency: Call recorded
-  only when result evaluated; counting atomic.\n* Partial mocks: `makePartialMock`
-  for generating only some methods.\n* Monadic return variation (`IO a`): enable with
-  `implicitMonadicReturn` option.\n\n### Concurrency & Laziness Semantics\nWithin
-  `runMockT`:\n1. Each evaluated application contributes 1 count (atomic IORef).\n2.
-  Unforced results are not recorded.\n3. Order checks reflect evaluation order, not
-  mere start time.\n4. Finish async work before verification.\n5. Fresh state per
-  `runMockT` – no cross‑test leakage.\n\n### Architecture Notes (≥ 0.5.3.0)\nRefactor
-  from `StateT` to `ReaderT (IORef [Definition])` to:\n* Provide lawful `MonadUnliftIO`
-  instance for safe `withRunInIO` / `async`.\n* Remove lost/double count races via
-  strict `atomicModifyIORef'`.\n* Eliminate `unsafePerformIO` & hidden global state.\n*
-  Simplify TH output & reduce constraint noise.\n\nMigration: internal `(modify/get)`
-  swapped to `addDefinition/getDefinitions` (via `MonadMockDefs`). Public DSL unchanged.\n\n<details>\n<summary><strong>Update
-  History</strong></summary>\n\n* **0.5.3.0**: `MockT` now implements `MonadUnliftIO`;
-  concurrency safety clarified; removal of `unsafePerformIO`.\n* **0.5.0**: `IO a`
-  stubs can return different values on successive applications.\n* **0.4.0**: Partial
-  mocks for typeclasses.\n* **0.3.0**: Typeclass mocks.\n* **0.2.0**: Argument‑dependent
-  return values (including differing values for identical args).\n* **0.1.0**: Initial
-  release.\n</details>\n\n---\nBelow is the full expanded reference (legacy detailed
-  sections). Collapse if you only need the quick start.\n\n<details>\n<summary><strong>Full
-  Reference (expanded)</strong></summary>\n\n<!-- BEGIN FULL REFERENCE (original content,
-  lightly normalized) -->\n## Examples\nStub Function\n```haskell\n-- create a stub
-  function\nstubFn <- createStubFn $ \"value\" |> True\n-- assert\nstubFn \"value\"
-  `shouldBe` True\n```\nVerification\n```haskell\n-- create a mock\nmock <- createMock
-  $ \"value\" |> True\n-- stub function\nlet stubFunction = stubFn mock\n-- assert\nstubFunction
-  \"value\" `shouldBe` True\n-- verify\nmock `shouldApplyTo` \"value\"\n```\nMock
-  of Type Class\n```haskell\nresult <- runMockT do\n  -- stub functions\n  _readFile
-  $ \"input.txt\" |> pack \"content\"\n  _writeFile $ \"output.txt\" |> pack \"content\"
-  |> ()\n  -- sut\n  program \"input.txt\" \"output.txt\"\n\nresult `shouldBe` ()\n```\n##
-  Stub Function Overview\nStub functions can be created with the `createStubFn` function.
-  \ \nThe arguments of `createStubFn` are the arguments expected to be applied, concatenated
-  by `|>`, where the last value of `|>` is the return value of the function.\n```haskell\ncreateStubFn
-  $ (10 :: Int) |> \"return value\"\n```\nThe same is true for stub functions in typeclass
-  mocks.\n```haskell\nrunMockT do\n  _readFile $ \"input.txt\" |> pack \"content\"\n```\nExpected
-  arguments can also be specified as conditions.\n```haskell\n-- Conditions other
-  than exact match\ncreateStubFn $ any |> \"return value\"\ncreateStubFn $ expect
-  (> 5) \"> 5\" |> \"return value\"\ncreateStubFn $ expect_ (> 5) |> \"return value\"\ncreateStubFn
-  $ $(expectByExpr [|(> 5)|]) |> \"return value\"\n```\nIt is also possible to change
-  the value returned depending on the argument.  \n(It is also possible to return
-  different values for the same argument.)\n```haskell\n-- Parameterized Stub\ncreateStubFn
-  do\n  onCase $ \"a\" |> \"return x\"\n  onCase $ \"b\" |> \"return y\"\ncreateStubFn
-  do\n  onCase $ \"arg\" |> \"x\"\n  onCase $ \"arg\" |> \"y\"\n```\n## Verification
-  Overview\nTo verify the application of a stub function, first create a mock with
-  the `createMock` function.  \nStub functions are retrieved from the mock with the
-  `stubFn` function and used.  \nVerification is performed on the mock.\n```haskell\n--
+  more a handy extension of regular Haskell testing than a new framework.\n\n### When
+  should you use mockcat?\nUse it when the following resonate:\n\n| Situation | Why
+  mockcat helps |\n|-----------|-------------------|\n| You only need 1–3 small mocks
+  and don’t want a heavy framework | Single expression `a |> b |> r` expectations
+  stay lightweight |\n| You want argument + occurrence sensitive returns | Multiple
+  `onCase` (including duplicate args) choose per call deterministically |\n| Verifying
+  exact / partial order matters | Built‑in `shouldApplyInOrder` / `shouldApplyInPartialOrder`
+  without extra harness |\n| Need to assert precise call counts (including zero) |
+  `expectApplyTimes`, `expectNever`, plus granular `shouldApplyTimes*` APIs |\n| Concurrency:
+  parallel tasks must not lose counts | Atomic recording + per‑call evaluation semantics
+  tested with property tests |\n| You prefer explicit, non‑magical DSL | Only `|>`
+  and a few combinators (`any`, `expect`, `expect_`, TH expectByExpr) |\n| You mix
+  real + mocked methods in a typeclass | `makePartialMock` keeps untouched members
+  real |\n| Occasional tests, not an application‑wide inversion setup | Zero global
+  registry; opt‑in per test |\n| Need monadic variation for `IO` results | Repeated
+  cases + monadic explicit returns under `implicitMonadicReturn` |\n\n### When should
+  you NOT use mockcat?\nConsider alternatives if:\n\n| Case | Probably better with
+  |\n|------|---------------------|\n| Large system with dozens of interacting behaviors
+  and deep expectations | A fuller test double / simulation layer or effect system
+  (e.g. Polysemy / fused‑effects) |\n| You want automatic generation of all mocks
+  and default fallbacks | Dedicated auto‑deriving mock frameworks |\n| Property‑based
+  orchestration of complex multi‑step protocols with shrinking | Use Hedgehog directly
+  (future integration planned) |\n| You require record‑style structured matchers (e.g.
+  JSON diff, partial AST pattern) | Custom predicate functions or a richer matcher
+  library layered on top |\n| You need time‑travel / virtual clock / deterministic
+  scheduling | A purpose built simulation or effect runtime |\n| Performance micro‑bench
+  harness of millions of calls | Hand coded stub (mockcat overhead is small but non‑zero)
+  |\n| Cross‑module pervasive dependency injection | Typeclass instances / reader
+  environment without mocks |\n\n### Design philosophy & trade‑offs\n* Favors readability
+  of individual expectations over bulk generation.\n* Explicit over implicit: no hidden
+  global state; verification is opt‑in or at `runMockT` boundary.\n* Encourages shrinking
+  scope: mocks local to the test file; does not push architectural rewrites.\n* Leaves
+  advanced generation (scenarios, property fuzz) as optional layering – PoCs exist,
+  but core stays minimal.\n* Concurrency correctness prioritized above micro‑optimizing
+  hot paths.\n\n### Migrating from handwritten stubs\nIf you already write tiny handmade
+  stubs:\n1. Replace the stub body with `createMock` + `stubFn`.\n2. Inline expectation
+  in the test (keep original type signature).\n3. Add verification only where it increases
+  confidence (don’t verify everything by habit).\n\n### Interoperability notes\n|
+  Layer | Status | Notes |\n|-------|--------|-------|\n| QuickCheck integration |
+  PoC | ParamSpec → Gen, scenario DSL prototypes |\n| Hedgehog integration | Planned
+  | Will focus on shrinking ordered call sequences |\n| Effect systems (Polysemy /
+  fused‑effects) | Manual | Wrap `MockT` inside effect stack or lift via newtype derivation
+  |\n| Benchmarking | Planned | Criterion harness template (compare hand stub vs mockcat)
+  |\n\n### FAQ (selected)\n**Q. Does mockcat force results strictly?**  \nNo. A call
+  is recorded when the return value is evaluated; unevaluated results don’t count.\n\n**Q.
+  How are duplicate argument cases resolved?**  \nLeft‑to‑right; once the last variant
+  is reached it repeats (sticky tail).\n\n**Q. Thread safety?**  \nAll state mutations
+  use a single `IORef` with atomic modification; properties cover contention scenarios.\n\n**Q.
+  Will the DSL expand a lot?**  \nCore is intentionally stable; higher level generators
+  / scenario DSL live in optional modules.\n\n**Q. How to debug a mismatch?**  \nFailure
+  message lists expected vs actual (or sequence diff). Add labels via `expect (>x)
+  \"label\"` for clarity.\n\n---\n\n### Quick Start\n\nFunction mock:\n```haskell\nimport
+  Test.Hspec\nimport Test.MockCat\n\nspec :: Spec\nspec = it \"simple function mock\"
+  do\n  m <- createMock $ \"input\" |> 42\n  stubFn m \"input\" `shouldBe` 42\n  m
+  `shouldApplyTo` \"input\"\n```\n\nTypeclass mock:\n```haskell\n{-# LANGUAGE TemplateHaskell
+  #-}\nimport Test.Hspec\nimport Test.MockCat\n\nclass Monad m => KV m where\n  getKV
+  :: String -> m (Maybe String)\n  putKV :: String -> String -> m ()\n\nmakeMock [t|KV|]\n\nprogram
+  :: KV m => m (Maybe String)\nprogram = do\n  putKV \"k\" \"v\"\n  getKV \"k\"\n\nspec
+  :: Spec\nspec = it \"kv\" do\n  r <- runMockT do\n    _putKV (\"k\" |> \"v\" |>
+  ())\n    _getKV (\"k\" |> Just \"v\")\n    program\n  r `shouldBe` Just \"v\"\n```\n\nNon‑invocation
+  (two styles):\n```haskell\n  _putKV (\"x\" |> \"y\" |> ()) `expectApplyTimes` 0
+  \ -- (legacy name: applyTimesIs)\n  neverApply $ _putKV (\"x\" |> \"y\" |> ())\n```\n\n###
+  Core Concepts (Brief)\n* Pipeline DSL: `a |> b |> returnValue` describes one expected
+  application.\n* Matchers: `any`, `expect p label`, `expect_ p`, `$(expectByExpr
+  [| predicate |])`.\n* Argument‑dependent returns: `onCase` or `cases [...]` (including
+  differing values for same arg on later occurrences).\n* Counting: `expectApplyTimes`
+  (legacy: `applyTimesIs`), `expectNever` (legacy: `neverApply`), plus `shouldApplyTimes*`
+  predicates on mocks.\n* Ordering: `shouldApplyInOrder`, `shouldApplyInPartialOrder`.\n*
+  Concurrency: Call recorded only when result evaluated; counting atomic.\n* Partial
+  mocks: `makePartialMock` for generating only some methods.\n* Monadic return variation
+  (`IO a`): enable with `implicitMonadicReturn` option.\n\n### Concurrency & Laziness
+  Semantics\nWithin `runMockT`:\n1. Each evaluated application contributes 1 count
+  (atomic IORef).\n2. Unforced results are not recorded.\n3. Order checks reflect
+  evaluation order, not mere start time.\n4. Finish async work before verification.\n5.
+  Fresh state per `runMockT` – no cross‑test leakage.\n\n### Architecture Notes (≥
+  0.5.3.0)\nRefactor from `StateT` to `ReaderT (IORef [Definition])` to:\n* Provide
+  lawful `MonadUnliftIO` instance for safe `withRunInIO` / `async`.\n* Remove lost/double
+  count races via strict `atomicModifyIORef'`.\n* Eliminate `unsafePerformIO` & hidden
+  global state.\n* Simplify TH output & reduce constraint noise.\n\nMigration: internal
+  `(modify/get)` swapped to `addDefinition/getDefinitions` (via `MonadMockDefs`).
+  Public DSL unchanged.\n\n<details>\n<summary><strong>Update History</strong></summary>\n\n*
+  **0.6.0.0**: Removed the upper limit on variable arguments when creating stub functions.\n*
+  **0.5.3.0**: `MockT` now implements `MonadUnliftIO`; concurrency safety clarified;
+  removal of `unsafePerformIO`.\n* **0.5.0**: `IO a` stubs can return different values
+  on successive applications.\n* **0.4.0**: Partial mocks for typeclasses.\n* **0.3.0**:
+  Typeclass mocks.\n* **0.2.0**: Argument‑dependent return values (including differing
+  values for identical args).\n* **0.1.0**: Initial release.\n</details>\n\n---\nBelow
+  is the full expanded reference (legacy detailed sections). Collapse if you only
+  need the quick start.\n\n<details>\n<summary><strong>Full Reference (expanded)</strong></summary>\n\n<!--
+  BEGIN FULL REFERENCE (original content, lightly normalized) -->\n## Examples\nStub
+  Function\n```haskell\n-- create a stub function\nstubFn <- createStubFn $ \"value\"
+  |> True\n-- assert\nstubFn \"value\" `shouldBe` True\n```\nVerification\n```haskell\n--
   create a mock\nmock <- createMock $ \"value\" |> True\n-- stub function\nlet stubFunction
   = stubFn mock\n-- assert\nstubFunction \"value\" `shouldBe` True\n-- verify\nmock
-  `shouldApplyTo` \"value\"\n```\nAs with stub functions, conditions can be specified
-  in the case of verification.\n```haskell\nmock `shouldApplyTo` any @String\nmock
-  `shouldApplyTo` expect_ (/= \"not value\")\nmock `shouldApplyTo` $(expectByExpr
-  [|(/= \"not value\")|])\n```\nYou can also verify the number of times it has been
-  applied.\n```haskell\nmock `shouldApplyTimes` (1 :: Int) `to` \"value\"\nmock `shouldApplyTimesGreaterThan`
-  (0 :: Int) `to` \"value\"\nmock `shouldApplyTimesGreaterThanEqual` (1 :: Int) `to`
-  \"value\"\nmock `shouldApplyTimesLessThan` (2 :: Int) `to` \"value\"\nmock `shouldApplyTimesLessThanEqual`
-  (1 :: Int) `to` \"value\"\nmock `shouldApplyTimesToAnything` (1 :: Int)\n```\nIn
-  the case of typeclass mocks, when `runMockT` is applied, verification that the prepared
-  stub functions have been applied is performed automatically.\n```haskell\nresult
-  <- runMockT do\n  _readFile $ \"input.txt\" |> pack \"Content\"\n  _writeFile $
-  \"output.text\" |> pack \"Content\" |> ()\n  operationProgram \"input.txt\" \"output.text\"\n\nresult
+  `shouldApplyTo` \"value\"\n```\nMock of Type Class\n```haskell\nresult <- runMockT
+  do\n  -- stub functions\n  _readFile $ \"input.txt\" |> pack \"content\"\n  _writeFile
+  $ \"output.txt\" |> pack \"content\" |> ()\n  -- sut\n  program \"input.txt\" \"output.txt\"\n\nresult
+  `shouldBe` ()\n```\n## Stub Function Overview\nStub functions can be created with
+  the `createStubFn` function.  \nThe arguments of `createStubFn` are the arguments
+  expected to be applied, concatenated by `|>`, where the last value of `|>` is the
+  return value of the function.\n```haskell\ncreateStubFn $ (10 :: Int) |> \"return
+  value\"\n```\nThe same is true for stub functions in typeclass mocks.\n```haskell\nrunMockT
+  do\n  _readFile $ \"input.txt\" |> pack \"content\"\n```\nExpected arguments can
+  also be specified as conditions.\n```haskell\n-- Conditions other than exact match\ncreateStubFn
+  $ any |> \"return value\"\ncreateStubFn $ expect (> 5) \"> 5\" |> \"return value\"\ncreateStubFn
+  $ expect_ (> 5) |> \"return value\"\ncreateStubFn $ $(expectByExpr [|(> 5)|]) |>
+  \"return value\"\n```\nIt is also possible to change the value returned depending
+  on the argument.  \n(It is also possible to return different values for the same
+  argument.)\n```haskell\n-- Parameterized Stub\ncreateStubFn do\n  onCase $ \"a\"
+  |> \"return x\"\n  onCase $ \"b\" |> \"return y\"\ncreateStubFn do\n  onCase $ \"arg\"
+  |> \"x\"\n  onCase $ \"arg\" |> \"y\"\n```\n## Verification Overview\nTo verify
+  the application of a stub function, first create a mock with the `createMock` function.
+  \ \nStub functions are retrieved from the mock with the `stubFn` function and used.
+  \ \nVerification is performed on the mock.\n```haskell\n-- create a mock\nmock <-
+  createMock $ \"value\" |> True\n-- stub function\nlet stubFunction = stubFn mock\n--
+  assert\nstubFunction \"value\" `shouldBe` True\n-- verify\nmock `shouldApplyTo`
+  \"value\"\n```\nAs with stub functions, conditions can be specified in the case
+  of verification.\n```haskell\nmock `shouldApplyTo` any @String\nmock `shouldApplyTo`
+  expect_ (/= \"not value\")\nmock `shouldApplyTo` $(expectByExpr [|(/= \"not value\")|])\n```\nYou
+  can also verify the number of times it has been applied.\n```haskell\nmock `shouldApplyTimes`
+  (1 :: Int) `to` \"value\"\nmock `shouldApplyTimesGreaterThan` (0 :: Int) `to` \"value\"\nmock
+  `shouldApplyTimesGreaterThanEqual` (1 :: Int) `to` \"value\"\nmock `shouldApplyTimesLessThan`
+  (2 :: Int) `to` \"value\"\nmock `shouldApplyTimesLessThanEqual` (1 :: Int) `to`
+  \"value\"\nmock `shouldApplyTimesToAnything` (1 :: Int)\n```\nIn the case of typeclass
+  mocks, when `runMockT` is applied, verification that the prepared stub functions
+  have been applied is performed automatically.\n```haskell\nresult <- runMockT do\n
+  \ _readFile $ \"input.txt\" |> pack \"Content\"\n  _writeFile $ \"output.text\"
+  |> pack \"Content\" |> ()\n  operationProgram \"input.txt\" \"output.text\"\n\nresult
   `shouldBe` ()\n```\n## Mock of monad type class\n### Example usage\nFor example,
   suppose the following monad type class `FileOperation` and a function `operationProgram`
   that uses `FileOperation` are defined.\n```haskell\nclass Monad m => FileOperation
@@ -393,16 +450,18 @@ description: "<div align=\"center\">\n    <img src=\"logo.png\" width=\"830px\" 
   [ \"a\" |> True,\n                                    \"c\" |> True\n                                  ]\n```\n<!--
   END FULL REFERENCE -->\n\n</details>"
 description-type: markdown
-hash: bdfb7699a1bc483c1aaa4721bb8b8fef7165303240ddef3c6140d34056b9d6d5
+hash: 2d14550e02fe3f76f7cb9f496eb9edcb3f97b50f1efbed7ff2b5a3ffe825c9a9
 homepage: https://github.com/pujoheadsoft/mockcat#readme
-latest: 0.5.5.0
+latest: 0.6.0.0
 license-name: MIT
 maintainer: funnycat <pujoheadsoft@gmail.com>
 synopsis: Mock library for test in Haskell.
 test-bench-deps:
+  QuickCheck: '>=2.14 && <2.17'
   async: '>=2.2.4 && <2.3'
   base: '>=4.7 && <5'
-  hspec: '>=2.11 && <2.12'
+  hashable: '>=1.4 && <1.6'
+  hspec: '>=2.11 && <2.13'
   mockcat: '>=0'
   mtl: '>=2.3.1 && <2.4'
   template-haskell: '>=2.18 && <2.24'
@@ -410,3 +469,4 @@ test-bench-deps:
   transformers: '>=0.5.6 && <0.7'
   unliftio: '>=0.2.25.0 && <0.2.26'
   unliftio-core: '>=0.2.1.0 && <0.2.2'
+  unordered-containers: '>=0.2.19 && <0.3'
