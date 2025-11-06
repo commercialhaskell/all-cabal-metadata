@@ -7,7 +7,8 @@ all-versions:
 - 0.2.4.2
 - 0.2.5.0
 - 0.2.6.0
-author: Alexander Bondarenko
+- 0.3.0.0
+author: IC Rainbow
 basic-deps:
   base: '>=4.7 && <5'
   containers: '>=0'
@@ -16,8 +17,34 @@ basic-deps:
   mono-traversable: '>=0'
   ptrdiff: '>=0'
   simple-affine-space: '>=0'
+  webcolor-labels: '>=0'
 changelog: |
   # Changelog for geomancy
+
+  ## 0.3.0.0
+
+  > `[0]` releases without row/col-major, handedness, and counter/clockwise confusion.
+
+  This release brings sanity and consistency around the transform stack.
+  - `Transform`s have proper *col-major* definitions.
+  - Operation ordering follows the GLSL convention.
+    * The composition order is `(p <> v <> m <> ...)` (from global to local).
+      Reverse your transforms to adjust.
+    * The application order is `m !* v` (with the operators becoming infixr 5, just under the `<>`).
+      It will do `Mᵀ * v` inside for SIMD reasons and to match what GLSL does for its `M * v` ops.
+  - `Geomancy.Vulkan.Projection` is right-handed, BUT produces *reverse-depth* range ([1; 0], In 3D infinite-Z converges to 0).
+    * Replace your depth tests with `OP_GREATER` and clear to `0.0` - get better precision for your migration troubles.
+  - `Geomancy.Vulkan.View` is *right-handed*, with +Z being forward.
+    * The intended up vector is still `vec3 0 (-1) 0` -- +Y down.
+      Silly as it sounds, this matches the XY plane of the window with XY plane in front of a "first person" camera.
+  - Axis rotations (using `rotateQ`) will appear clockwise when looking along the axis.
+  - Angle rotations follow Tait-Bryan angles (heading/elevation/bank or yaw/pitch/roll) in the y-x-z frame.
+    * `rotateZ (time * rate)` will follow the clock hands in 2D scenes and roll in 3D.
+    * `rotateX` will follow the sun from sunrise to sunset, pitching UP / increasing elevation.
+    * `rotateY` will turn you right, increasing yaw / heading eastwards.
+  - You're of course free to define your own transforms, just copy the modules and tune to your liking.
+    Just make sure that you use matching row/column constructors and the math layer will do the rest, fast.
+  - Added `webcolor-labels` instances for UVec3/Vec3/Vec4.
 
   ## 0.2.6.0
 
@@ -146,12 +173,6 @@ description: |
   * `Mat4` and `Vec4` are `ByteArray#`.
   * `Mat4`x`Mat4` and `Mat4`x`Vec4` is done with SIMD.
 
-  ## Matrix layout
-
-  CPU-side matrices compose in MVP order, optimized for `mconcat (local1 : local2 : ... : root)` operation.
-
-  GPU-side, in GLSL, it is `PVM * v`.
-
   ## The Numbers
 
   Storing a list of 1000 transformations (e.g. rendering instance data):
@@ -204,13 +225,55 @@ description: |
   Add that time to the poking that'll follow.
 
   Sure, it is in the lower microseconds range, but this budget can be used elsewhere.
+
+  ## Conventions
+
+  ### Matrix layout
+
+  Transforms produced, composed, and applied to mimic the GLSL order (col-major):
+
+  - `vec4 vPosOut = P * V * M * vPosIn;`
+  - `vPosOut = (p <> v <> m) !* vPosIn`
+
+  This way you don't have to transpose your transforms or fiddle with layout annotations.
+
+  ### Projections / Views
+
+  `Geomancy.Vulkan.Projection` is using the "reverse-depth" trick that remaps the vulkan default `[0; 1]` range to `[1; 0]`.
+  This grants extra precision with one less parameter to specify (you only need "near" now), but makes handedness reasoning tricky.
+  The default depth range the coordinate is left-handed (+X right, +Y down, +Z forward).
+  But after reversing the depth it has to be paired with a right-handed view function like `Geomancy.Vulkan.View.lookAtRH`.
+
+  The intended up vector is still `vec3 0 (-1) 0` -- +Y down.
+  Silly as it sounds, this matches the XY plane of the window with XY plane in front of a "first person" camera.
+
+  ### Rotations
+
+  Axis rotations (using `rotateQ`) will appear clockwise when looking along the axis.
+
+  Angle rotations follow Tait-Bryan angles (heading/elevation/bank or yaw/pitch/roll) in the y-x-z frame.
+  - `rotateZ (time * rate)` will follow the clock hands in 2D scenes and roll in 3D.
+  - `rotateX` will follow the sun from sunrise to sunset, increasing elevation / pitching UP.
+  - `rotateY` will turn you right, increasing yaw/heading eastwards.
+
+  Using `Geomancy.Quaternion.intrinsic roll pitch yaw` will make a rotation from the 3 angles in one go.
+  You can use it to `rotate` a point directly (e.g `vec3 0 0 1` to get a direction vector from Quaternion) or commit to a matrix using `Transform.rotateQ`.
+
+  ![yaw-pitch-roll](./yaw-pitch-roll.svg)
+
+  You're of course free to define your own transforms, just copy the modules and tune to your liking.
+  Just make sure that you use matching row/column constructors and the math layer will do the rest, fast.
+
+  ## GLSL-like functions
+
+  To further facilitate conversion between the host and shader code `Geomancy.Gl.Funs` provides common functions like `glFract` and `smoothstep`.
 description-type: markdown
-hash: 5b47feb19c1ff051a3b1f4feefbc03c09fc6585f89e3b69d6f3b47ad15253dc4
+hash: 237493387b0ac7036e0611df9074738985e5c1fed0dc2097bfb54f017f5c2e03
 homepage: ''
-latest: 0.2.6.0
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: aenor.realm@gmail.com
-synopsis: Geometry and matrix manipulation
+synopsis: Vectors and matrix manipulation
 test-bench-deps:
   base: '>=4.7 && <5'
   criterion: '>=0'
