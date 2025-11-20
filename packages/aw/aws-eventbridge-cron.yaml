@@ -1,6 +1,7 @@
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
+- 0.1.1.0
 author: Kushagra Gupta
 basic-deps:
   base: '>=4.14 && <5'
@@ -8,25 +9,26 @@ basic-deps:
   megaparsec: '>=0'
   text: '>=0'
   time: '>=0'
-changelog: |-
-  # Changelog
-
-  All notable changes to this project will be documented in this file.
-
-  The format is based on Keep a Changelog and this project adheres to
-  Semantic Versioning.
-
-  ## [0.1.0.1] - 2025-11-17
-  ### Added
-  - `ScheduleKind`, `scheduleKind`, and `isRecurring` helpers for classifying parsed schedules without re-parsing downstream.
-  - QuickCheck properties covering the new helpers to ensure they align with parsed expression variants.
-  - README documentation demonstrating schedule introspection and clarifying the helper API.
-
-  ## [0.1.0.0] - 2025-11-16
-  ### Added
-  - Initial `AWS.EventBridge.Cron` module for parsing and scheduling AWS Scheduler cron expressions.
-  - Support for `rate(...)` and `at(...)` expressions with validation, evaluation, and round-trip tests.
-  - Property-based and unit tests across all cron fields plus helper utilities.
+  tz: '>=0'
+  tzdata: '>=0'
+changelog: "# Changelog\n\nAll notable changes to this project will be documented
+  in this file.\n\nThe format is based on Keep a Changelog and this project adheres
+  to\nSemantic Versioning.\n\n## [0.1.1.0] - 2025-11-20\n### Added\n- `AWS.EventBridge.Schedule`
+  module that pairs schedules with an IANA timezone\n\t(via the `tz`/`tzdata` packages)
+  and exposes the full matrix of\n\t`nextRunTimes` variants for UTC, local, and zoned
+  outputs.\n- Smart constructors such as `scheduleFromText` plus helper variants\n\t(`nextRunTimesUTCFromLocal`,
+  `nextRunTimesZonedFromUTC`, etc.) documented with\n\tHaddock examples.\n- Property-style
+  regression tests in `ScheduleSpec` covering cron/one-time rate\n\tconversions, DST
+  transitions, and timezone-dependent outputs.\n- README examples describing timezone-aware
+  workflows and feature list updates.\n\n## [0.1.0.1] - 2025-11-17\n### Added\n- `ScheduleKind`,
+  `scheduleKind`, and `isRecurring` helpers for classifying parsed schedules without
+  re-parsing downstream.\n- QuickCheck properties covering the new helpers to ensure
+  they align with parsed expression variants.\n- README documentation demonstrating
+  schedule introspection and clarifying the helper API.\n\n## [0.1.0.0] - 2025-11-16\n###
+  Added\n- Initial `AWS.EventBridge.Cron` module for parsing and scheduling AWS Scheduler
+  cron expressions.\n- Support for `rate(...)` and `at(...)` expressions with validation,
+  evaluation, and round-trip tests.\n- Property-based and unit tests across all cron
+  fields plus helper utilities."
 changelog-type: markdown
 description: |-
   # aws-eventbridge-cron
@@ -47,6 +49,9 @@ description: |-
   - Schedule introspection helpers: `scheduleKind` returns a `ScheduleKind`, and
     `isRecurring` distinguishes recurring (`cron`/`rate`) expressions from
     `at(...)` one-time schedules.
+  - Timezone-aware helpers: `AWS.EventBridge.Schedule` pairs expressions with an
+    IANA timezone (via the `tz`/`tzdata` packages) and exposes `nextRunTimes`
+    variants for UTC, local, or fully-zoned outputs.
   - Extensive property-based test suite that mirrors the behaviour documented by
     AWS.
 
@@ -103,6 +108,65 @@ description: |-
   -- Right False
   ```
 
+  ### Timezone-Aware Schedules
+
+  EventBridge rules can set a schedule timezone. Use `AWS.EventBridge.Schedule` to
+  bind an expression to a `TZLabel` so you can request run times in UTC, as local
+  wall-clock values, or as `ZonedTime`s tagged with the appropriate offset.
+
+  ```haskell
+  import AWS.EventBridge.Schedule
+  import Data.Time (UTCTime(..), LocalTime, ZonedTime, fromGregorian)
+  import Data.Time.Zones.All (TZLabel(..))
+
+  baseUTC :: UTCTime
+  baseUTC = UTCTime (fromGregorian 2025 11 1) 0
+
+  zonedSchedule :: Either String Schedule
+  zonedSchedule = scheduleFromText America__New_York "cron(0 9 * NOV ? 2025)"
+
+  utcRuns :: Either String [UTCTime]
+  utcRuns = nextRunTimesUTC <$> zonedSchedule <*> pure baseUTC <*> pure 2
+  -- Right [2025-11-01 13:00:00 UTC,2025-11-02 14:00:00 UTC]
+
+  localRuns :: Either String [LocalTime]
+  localRuns = nextRunTimesLocalFromUTC <$> zonedSchedule <*> pure baseUTC <*> pure 2
+  -- Right [2025-11-01 09:00:00,2025-11-02 09:00:00]
+
+  zonedRuns :: Either String [ZonedTime]
+  zonedRuns = nextRunTimesZonedFromUTC <$> zonedSchedule <*> pure baseUTC <*> pure 2
+  -- Right [2025-11-01 09:00:00 EDT,2025-11-02 09:00:00 EST]
+  ```
+
+  Every combination of base input (`UTCTime`, `LocalTime`, `ZonedTime`) and output
+  form is available, so you can normalize timestamps at the edges of your system
+  and avoid comparing values that silently belong to different timezones.
+
+  ### API Overview
+
+  1. Parse using `parseCronText` (UTC) or `scheduleFromText` (timezone-aware).
+  2. Wrap with `scheduleFromExpr`/`scheduleFromText` if you need timezone metadata.
+  3. Choose an evaluation helper based on the base input you have and the output
+    you need. Prefer the primary trio (`nextRunTimesUTC`, `nextRunTimesLocal`,
+    `nextRunTimesZoned`) and reach for the conversion helpers when you want to
+    avoid manual conversions.
+
+  | Base input  | Output      | Function                           |
+  |-------------|-------------|------------------------------------|
+  | `UTCTime`   | `UTCTime`   | `nextRunTimesUTC`                  |
+  | `LocalTime` | `UTCTime`   | `nextRunTimesUTCFromLocal`         |
+  | `ZonedTime` | `UTCTime`   | `nextRunTimesUTCFromZoned`         |
+  | `UTCTime`   | `LocalTime` | `nextRunTimesLocalFromUTC`         |
+  | `LocalTime` | `LocalTime` | `nextRunTimesLocal`                |
+  | `ZonedTime` | `LocalTime` | `nextRunTimesLocalFromZoned`       |
+  | `UTCTime`   | `ZonedTime` | `nextRunTimesZonedFromUTC`         |
+  | `LocalTime` | `ZonedTime` | `nextRunTimesZonedFromLocal`       |
+  | `ZonedTime` | `ZonedTime` | `nextRunTimesZoned`                |
+
+  Use the conversion helpers when you already have a base timestamp in a specific
+  representation and want the library to handle the translation for you (for
+  example, UI-provided `LocalTime` that needs to be compared against UTC events).
+
   ### Error Reporting
 
   Parser and evaluator failures return `Left String` with human-readable error
@@ -149,9 +213,9 @@ description: |-
 
   [aws-docs]: https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html#cron-based
 description-type: markdown
-hash: f134e889c4912d3ffec7c161ba078e77f4433b2e1c5217a5165b907da902e3fc
+hash: 1b9846357af2b4801ef26a41bcfcbbe3166e9bc461e8ad42ac59c4b9552704bd
 homepage: https://github.com/kushagarr/aws-eventbridge-cron#readme
-latest: 0.1.0.1
+latest: 0.1.1.0
 license-name: BSD-3-Clause
 maintainer: Kushagra Gupta <khushiitrans@gmail.com>
 synopsis: AWS EventBridge cron, rate, and one-time parser with scheduler
@@ -166,3 +230,5 @@ test-bench-deps:
   tasty-quickcheck: '>=0.10 && <0.11'
   text: '>=0'
   time: '>=0'
+  tz: '>=0'
+  tzdata: '>=0'
