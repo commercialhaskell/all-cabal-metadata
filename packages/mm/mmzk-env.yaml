@@ -3,35 +3,28 @@ all-versions:
 - 0.1.1.0
 - 0.1.1.1
 - 0.1.2.0
+- 0.2.0.0
 author: Yitang Chen <mmzk1526@outlook.com>
 basic-deps:
   base: '>=4.16 && <5'
   containers: '>=0.6.7 && <0.7'
   gigaparsec: ^>=0.3.1
+  mmzk-env: '>=0'
   text: '>=2.1.3 && <2.2'
-changelog: |
-  # Revision history for mmzk-env
-
-
-  ## 0.1.2.0 -- 2025-11-16
-
-  * Add spport for parsing `Text`.
-
-
-  ## 0.1.1.1 -- 2025-09-29
-
-  * Fix typo in the cabal file.
-
-
-  ## 0.1.1.0 -- 2025-09-28
-
-  * Added support for parsing enumerated types using `EnumParser`.
-    * Updated documentation to include examples of enum parsing.
-
-
-  ## 0.1.0.0 -- 2025-08-03
-
-  * First version. Released on an unsuspecting world.
+changelog: "# Revision history for mmzk-env\n\n\n## 0.2.0.0 -- 2025-11-29\n\n* Witnessed
+  record parsing (witness types carry type-level information that determines parsing
+  behaviour):\n  * Add `RecordParserW` for witnessed record parsing.\n  * Add `TypeParserW`
+  for witnessed type parsing.\n  * Add `DefaultNum` witness type for providing default
+  numeric values.\n  \n* Add convenient `Maybe` result variants for parsers.\n\n*
+  Add runnable example executables in `app/`:\n  * `quickstart-example`: Basic environment
+  validation example.\n  * `enum-example`: Enumerated type parsing example.\n  * `newtype-example`:
+  Custom parser with newtype wrapper example.\n  * `witness-example`: Witness types
+  with default values example.\n\n* Add more tests.\n\n* Heavy refactoring.\n\n\n##
+  0.1.2.0 -- 2025-11-16\n\n* Add support for parsing `Text`.\n\n\n## 0.1.1.1 -- 2025-09-29\n\n*
+  Fix typo in the cabal file.\n\n\n## 0.1.1.0 -- 2025-09-28\n\n* Added support for
+  parsing enumerated types using `EnumParser`.\n  * Updated documentation to include
+  examples of enum parsing.\n\n\n## 0.1.0.0 -- 2025-08-03\n\n* First version. Released
+  on an unsuspecting world.\n"
 changelog-type: markdown
 description: |
   # mmzk-env
@@ -40,15 +33,29 @@ description: |
   type. It provides a type-safe way to parse and validate environment variables,
   ensuring that they conform to the expected types.
 
+  ## Contents
+
+  - [mmzk-env](#mmzk-env)
+    - [Contents](#contents)
+    - [Quick Start](#quick-start)
+    - [Enum Support](#enum-support)
+    - [Witness Types: Avoiding Newtype Boilerplate](#witness-types-avoiding-newtype-boilerplate)
+      - [The Problem: Newtype Boilerplate](#the-problem-newtype-boilerplate)
+      - [The Solution: Witnesses](#the-solution-witnesses)
+      - [Key Benefits](#key-benefits)
+      - [Available Witnesses](#available-witnesses)
+
   ## Quick Start
 
-  ```Haskell
-  module Data.Env where
+  **[Full example →](app/QuickstartExample.hs)**
 
-  import           Control.Monad.IO.Class
-  import           Data.Env.ExtractFields
-  import           Data.Env.RecordParser
-  import           GHC.Generics
+  ```Haskell
+  {-# LANGUAGE DeriveAnyClass #-}
+  {-# LANGUAGE DeriveGeneric #-}
+  {-# LANGUAGE TypeApplications #-}
+
+  import Data.Env
+  import GHC.Generics
 
   -- | Example: Define an environment schema
   data Config = Config
@@ -73,12 +80,15 @@ description: |
 
   ## Enum Support
 
+  **[Full example →](app/EnumExample.hs)**
+
   The library also supports automatic parsing of enumerated types. You can define an enum and derive the `TypeParser` instance using the helper type `EnumParser`.
 
   The extension `DerivingVia` is required for this feature.
 
   ```Haskell
   {-# LANGUAGE DerivingVia #-}
+  {-# LANGUAGE TypeApplications #-}
 
   data Gender = Male | Female
     deriving (Show, Eq, Enum, Bounded)
@@ -87,16 +97,135 @@ description: |
   print $ parseEnum @Gender "Male"   -- Right Male
   print $ parseEnum @Gender "Female" -- Right Female
   ```
+
+  ## Witness Types: Avoiding Newtype Boilerplate
+
+  The library provides a "witness" pattern that allows you to enhance parsing behaviour without wrapping values in newtypes. This is useful when you need features like default values, validation, or transformation but want to keep your final data types simple.
+
+  ### The Problem: Newtype Boilerplate
+
+  **[Full example →](app/NewtypeExample.hs)**
+
+  Let's say you want to parse a PostgreSQL port that defaults to 5432. Without witnesses, you might create a newtype wrapper:
+
+  ```Haskell
+  {-# LANGUAGE DeriveAnyClass #-}
+  {-# LANGUAGE DeriveGeneric #-}
+  {-# LANGUAGE TypeApplications #-}
+
+  import Data.Env
+  import Data.Env.TypeParser
+  import Data.Word
+  import GHC.Generics
+
+  -- Define a newtype wrapper for the port
+  newtype PsqlPort = PsqlPort Word16
+    deriving (Show, Eq)
+
+  -- Implement custom parsing with default value
+  instance TypeParser PsqlPort where
+    parseType "" = Right (PsqlPort 5432)  -- Default to 5432
+    parseType str = case parseType str of
+      Right port -> Right (PsqlPort port)
+      Left err   -> Left err
+
+  data Config = Config
+    { psqlPort :: PsqlPort
+    , dbName   :: String }
+    deriving (Show, Generic, EnvSchema)
+  ```
+
+  Now when you use your config, you have to constantly unwrap the value:
+
+  ```Haskell
+  unpackPort :: PsqlPort -> Word16
+  unpackPort (PsqlPort port) = port
+
+  connectToDatabase :: Config -> IO Connection
+  connectToDatabase cfg = connect $ defaultConnectInfo
+    { connectPort = unpackPort (psqlPort cfg)  -- Annoying unpacking!
+    , connectDatabase = dbName cfg }
+    where
+      unpackPort (PsqlPort port) = port
+  ```
+
+  ### The Solution: Witnesses
+
+  **[Full example →](app/WitnessExample.hs)**
+
+  With witness types, you can specify parsing behaviour at the type level while keeping the final value unwrapped:
+
+  ```Haskell
+  {-# LANGUAGE DataKinds #-}
+  {-# LANGUAGE DeriveGeneric #-}
+  {-# LANGUAGE DerivingVia #-}
+  {-# LANGUAGE FlexibleInstances #-}
+  {-# LANGUAGE StandaloneDeriving #-}
+  {-# LANGUAGE TypeApplications #-}
+
+  import Data.Env.RecordParserW
+  import Data.Env.Witness.DefaultNum
+  import Data.Word
+  import GHC.Generics
+  import Data.Env.TypeParserW
+
+  data Config c = Config
+    { psqlPort :: Column c (DefaultNum 5432 Word16) Word16  -- Defaults to 5432
+    , dbName   :: Column c (Solo String) String }
+    deriving (Generic)
+
+  deriving stock instance Show (Config 'Res)  -- For printing the result
+
+  -- Parse with defaults
+  main :: IO ()
+  main = do
+    errOrConfig <- parseRecordW @(Config 'Dec) mempty
+    case errOrConfig of
+      Left err  -> putStrLn $ "Parse failed: " ++ err
+      Right cfg -> connectToDatabase cfg  -- cfg :: Config 'Res
+  ```
+
+  The magic happens with the `Column` type family and the `ColumnType` phantom type:
+
+  - **`Config 'Dec`** (Declaration): The type used for parsing, where each field is `(witness, value)`
+    - This works under the hood for the generic instances and users typically don't interact with it directly
+  - **`Config 'Res`** (Result): The type you work with, where each field is just `value`
+  - **`Column c witness a`**: Expands to `(witness a, a)` when `c = 'Dec`, or just `a` when `c = 'Res`
+
+  Now your final config has no wrappers:
+
+  ```Haskell
+  connectToDatabase :: Config 'Res -> IO Connection
+  connectToDatabase cfg = connect $ defaultConnectInfo
+    { connectPort = psqlPort cfg  -- Direct access to Word16!
+    , connectDatabase = dbName cfg }
+  ```
+
+  ### Key Benefits
+
+  1. **No Unpacking**: Your final data type contains raw values (Word16, String, etc.), not newtypes
+  2. **Type-Level Defaults**: Default values are specified in the type signature using type-level naturals
+  3. **Flexible Parsing**: Different witness types provide different parsing strategies (defaults, validation, transformation)
+
+  ### Available Witnesses
+
+  - **`DefaultNum n a`**: Numeric types with a type-level default value `n`
+  - **`Solo a`**: Standard parsing without special behaviour (equivalent to `TypeParser`)
+  - **Custom witnesses**: You can define your own by implementing the `TypeParserW` class
+
+  More built-in witnesses will be provided.
+
+  For more complex parsing needs, witnesses provide a way to augment behaviour without polluting your domain types with wrapper noise.
 description-type: markdown
-hash: e294f3c0816c2a25e2abd39648260902e9892dafc3e9d6ef3fbafe6f231a719f
+hash: c0157ba8c6d765878330354eeaca0b8f0170ef37b38e19cb3da95dcd232a2aa2
 homepage: https://github.com/MMZK1526/mmzk-env
-latest: 0.1.2.0
+latest: 0.2.0.0
 license-name: MIT
 maintainer: Yitang Chen <mmzk1526@outlook.com>
 synopsis: Read environment variables into a user-defined data type
 test-bench-deps:
   base: '>=4.16 && <5'
   containers: '>=0'
-  gigaparsec: '>=0'
   hspec: ^>=2.11
+  mmzk-env: '>=0'
   text: '>=0'
