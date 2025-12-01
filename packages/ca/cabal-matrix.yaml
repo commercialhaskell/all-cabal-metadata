@@ -1,6 +1,7 @@
 all-versions:
 - 1.0.0.0
 - 1.0.1.0
+- 1.0.2.0
 author: mniip
 basic-deps:
   Cabal: '>=3.8 && <3.17'
@@ -27,6 +28,27 @@ basic-deps:
   vty-crossplatform: '>=0.1 && <0.5'
   word-wrap: '>=0.3 && <0.6'
 changelog: |
+  # 1.0.2.0
+
+  - `--blank-project` is a new mode for building packages directly from hackage,
+    and is a much faster alternative to `--install-lib`. It works by creating a
+    temporary `cabal.project` file, whose contents are simply
+    ```
+    extra-packages: target1, target2, ...
+    ```
+    This causes `target1`... to be interpreted as simultaneously a package to be
+    downloaded from hackage, and a package to be considered local, i.e. included
+    in the "build" step and excluded from the "deps" step.
+  - `--constraints` is a new option for specifying build constraints. It allows
+    specifying one or more constraints on package versions with
+    `--constraints "foo >1 , bar <2"`. It also allows specifying implication
+    constraints such as `--constraints "foo >1 :- bar <2"` e.g. as if all versions
+    `foo >1` were revised to include a `bar <2` constraint. More generally it
+    allows specifying disjunction constraints separated with `;`, such as
+    `--constraints "foo >1 ; bar <2 ; baz ==3"`. Disjunction/implication
+    constraints are translated to constraints guarded behind automatic cabal
+    flags.
+
   # 1.0.1.0
 
   - Binary operator options can now be parsed/formatted as JSON in a more compact
@@ -90,7 +112,7 @@ description: |
   figure this out, we can simply try building our package with each version of
   `bytestring` and see if it works or not! This can be achieved by running:
   ```sh
-  cabal-matrix -j1 foo --package bytestring=">= 0"
+  cabal-matrix -j1 foo --package bytestring
   ```
 
   This may take a while to complete, and you can try using a higher value of `-j`
@@ -138,7 +160,7 @@ description: |
   ```sh
   cabal-matrix -j1 foo --package bytestring=">=0.11.4 && <0.13"
   ```
-  You could even run the same command as before (`bytestring=">= 0"`), but this
+  You could even run the same command as before (`--package bytestring`), but this
   will save time (and table space!) by not focusing on configurations that are
   definitely outside the possible range.
 
@@ -269,32 +291,31 @@ description: |
 
   You could run e.g.:
   ```sh
-  cabal-matrix -j1 text --package text=">=0" --times --package bytestring=">=0"
+  cabal-matrix -j1 text --package text --times --package bytestring
   ```
   to try every `text` version against every `bytestring` version. However if
   you're running this from your project folder, then the constraints coming from
   your project's packages will prevent some versions from being available,
   possibly masking some `build fail`s as `no plan`s.
 
-  Instead you can move out of your project folder into a temporary directory, and
-  use `--install-lib`:
+  Instead you can ask `cabal-matrix` to create a blank project for building `text`
+  using `--blank-project`:
   ```sh
-  cd /tmp
-  cabal-matrix -j1 --install-lib text \
-    --package text=">=0" --times --package bytestring=">=0"
+  cabal-matrix -j1 --blank-project text \
+    --package text --times --package bytestring
   ```
 
   For a typical yet concrete example, we can time travel to the past using
   `--option --index-state=2025-10-01T00:00:00Z`, and try building `tar` against
   `directory`:
   ```sh
-  cabal-matrix -j1 --install-lib tar \
+  cabal-matrix -j1 --blank-project tar \
     --option --index-state=2025-10-01T00:00:00Z \
     --compiler ghc-9.2.8 \
     --times \
-    --package tar='>=0.6' \
+    --package tar=">=0.6" \
     --times \
-    --package directory='>=1.3'
+    --package directory=">=1.3"
   ```
 
   There is a clear cut corner of `build fail`s at `tar >=0.6.4` and
@@ -347,7 +368,7 @@ description: |
   can/should be relaxed, you can forward (using `--option`) `--allow-newer` and
   `--allow-older` to cabal:
   ```sh
-  cabal-matrix -j1 foo --package bytestring=">= 0" \
+  cabal-matrix -j1 foo --package bytestring \
     --option --allow-newer=foo:bytestring --option --allow-older=foo:bytestring
   ```
   This will tell cabal to ignore the `build-depends` constraints that your package
@@ -359,10 +380,45 @@ description: |
   relaxed to include those. Finally, some `no plan`s may remain as such, meaning
   the configuration was excluded for some other reason. You can read the `no plan`
   output to find out in more detail.
+
+  # Validating Hackage Revisions
+
+  If you have a hackage revision that you would like to apply, you can see how it
+  would affect the build plans by using a `--constraints` option with an
+  implication constraint. If as in the above example, we would like to revise
+  `tar >=0.6.4.0 && <=0.7.0.0` to tighten the bound on `directory` to `>=1.3.8`,
+  we can do so with:
+  ```sh
+  cabal-matrix -j1 --blank-project tar \
+    --option --index-state=2025-10-01T00:00:00Z \
+    --compiler ghc-9.2.8 \
+    --times \
+    --package tar=">=0.6" \
+    --times \
+    --package directory=">=1.3" \
+    --times \
+    --constraints "tar >=0.6.4.0 && <=0.7.0.0 :- directory >=1.3.8"
+  ```
+
+  Note that `--constraints` acts as a singleton list, so it needs to be
+  `--times`'ed with the rest of the build matrix. This allows, if necessary, to
+  apply different fixes to different parts of the build matrix.
+
+  This implication constraint will work even when we're not directly enumerating
+  every `tar` or `directory` version, and even when neither of them is our build
+  target. So if you're trying to build your package `foo`, and encouter a
+  `deps fail` because of e.g. `tar`/`directory`, after figuring out which versions
+  of `tar` and `directory` are conflicting, you can get back to building your
+  `foo` package by adding the same
+  `--constraints "tar >=0.6.4.0 && <=0.7.0.0 :- directory >=1.3.8"` option to your
+  build.
+
+  Note that there's currently no easy way to preview a revision that *relaxes* a
+  constraint.
 description-type: markdown
-hash: 0a00f25832ed54c6a12b700a4b6232737a58bf5f564847653723fe05ac130a20
+hash: 643251b73118b97a2c6e2e19e3044955160dbffbfde83485f75376aa4d57d499
 homepage: https://github.com/mniip/cabal-matrix
-latest: 1.0.1.0
+latest: 1.0.2.0
 license-name: BSD-3-Clause
 maintainer: mniip
 synopsis: Matrix builds for cabal
