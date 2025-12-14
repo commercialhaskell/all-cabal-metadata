@@ -1,0 +1,406 @@
+all-versions:
+- 0.1.0.0
+author: Junji Hashimoto
+basic-deps:
+  aeson: '>=2.0 && <3.0'
+  base: '>=4.7 && <5'
+  bytestring: '>=0.11 && <1.0'
+  conduit: '>=1.3 && <2.0'
+  conduit-extra: '>=1.3 && <2.0'
+  containers: '>=0.6 && <1.0'
+  http-client: '>=0.7 && <1.0'
+  http-client-tls: '>=0.3 && <1.0'
+  http-types: '>=0.12 && <1.0'
+  louter: '>=0'
+  mtl: '>=2.2 && <3.0'
+  optparse-applicative: '>=0.17 && <1.0'
+  random: '>=1.2 && <2.0'
+  regex-tdfa: '>=1.3 && <2.0'
+  scientific: '>=0.3 && <1.0'
+  text: '>=2.0 && <3.0'
+  transformers: '>=0.5 && <1.0'
+  unordered-containers: '>=0.2 && <1.0'
+  vector: '>=0.13 && <1.0'
+  wai: '>=3.2 && <4.0'
+  warp: '>=3.3 && <4.0'
+  yaml: '>=0.11 && <1.0'
+changelog: ''
+changelog-type: ''
+description: |
+  # Louter
+
+  Multi-protocol LLM proxy and Haskell client library. Connect to any LLM API (OpenAI, Anthropic, Gemini) using any SDK with automatic protocol translation.
+
+  ## Features
+
+  - **Protocol Translation**: OpenAI ↔ Anthropic ↔ Gemini automatic conversion
+  - **Dual Usage**: Haskell library or standalone proxy server
+  - **Streaming**: Full SSE support with smart buffering
+  - **Function Calling**: Works across all protocols (JSON and XML formats)
+  - **Vision**: Multimodal image support
+  - **Flexible Auth**: Optional authentication for local vs cloud backends
+
+  ## Quick Start
+
+  ### As a Proxy Server
+
+  ```bash
+  # Install
+  git clone https://github.com/junjihashimoto/louter.git
+  cd louter
+  cabal build all
+
+  # Configure
+  cat > config.yaml <<EOF
+  backends:
+    llama-server:
+      type: openai
+      url: http://localhost:11211
+      requires_auth: false
+      model_mapping:
+        gpt-4: qwen/qwen2.5-vl-7b
+  EOF
+
+  # Run
+  cabal run louter-server -- --config config.yaml --port 9000
+  ```
+
+  Now send OpenAI/Anthropic/Gemini requests to `localhost:9000`.
+
+  **Test it:**
+  ```bash
+  curl http://localhost:9000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello!"}]}'
+  ```
+
+  ### As a Haskell Library
+
+  **Add to your project:**
+  ```yaml
+  # package.yaml
+  dependencies:
+    - louter
+    - text
+    - aeson
+  ```
+
+  **Basic usage:**
+  ```haskell
+  import Louter.Client
+  import Louter.Client.OpenAI (llamaServerClient)
+
+  main = do
+    client <- llamaServerClient "http://localhost:11211"
+    response <- chatCompletion client $
+      defaultChatRequest "gpt-4" [Message RoleUser "Hello!"]
+    print response
+  ```
+
+  **Streaming:**
+  ```haskell
+  import Louter.Client
+  import Louter.Types.Streaming
+  import System.IO (hFlush, stdout)
+
+  main = do
+    client <- llamaServerClient "http://localhost:11211"
+    let request = (defaultChatRequest "gpt-4"
+          [Message RoleUser "Write a haiku"]) { reqStream = True }
+
+    streamChatWithCallback client request $ \event -> case event of
+      StreamContent txt -> putStr txt >> hFlush stdout
+      StreamFinish reason -> putStrLn $ "\n[Done: " <> reason <> "]"
+      StreamError err -> putStrLn $ "[Error: " <> err <> "]"
+      _ -> pure ()
+  ```
+
+  **Function calling:**
+  ```haskell
+  import Data.Aeson (object, (.=))
+
+  weatherTool = Tool
+    { toolName = "get_weather"
+    , toolDescription = Just "Get current weather"
+    , toolParameters = object
+        [ "type" .= ("object" :: Text)
+        , "properties" .= object
+            [ "location" .= object
+                [ "type" .= ("string" :: Text) ]
+            ]
+        , "required" .= (["location"] :: [Text])
+        ]
+    }
+
+  request = (defaultChatRequest "gpt-4"
+      [Message RoleUser "Weather in Tokyo?"])
+      { reqTools = [weatherTool]
+      , reqToolChoice = ToolChoiceAuto
+      }
+  ```
+
+  ## Use Cases
+
+  | Frontend | Backend | Use Case |
+  |----------|---------|----------|
+  | OpenAI SDK | Gemini API | Use OpenAI SDK with Gemini models |
+  | Anthropic SDK | Local llama-server | Use Claude Code with local models |
+  | Gemini SDK | OpenAI API | Use Gemini SDK with GPT models |
+  | Any SDK | Any Backend | Protocol-agnostic development |
+
+  ## Configuration
+
+  **Local model** (no auth):
+  ```yaml
+  backends:
+    local:
+      type: openai
+      url: http://localhost:11211
+      requires_auth: false
+      model_mapping:
+        gpt-4: qwen/qwen2.5-vl-7b
+  ```
+
+  **Cloud API** (with auth):
+  ```yaml
+  backends:
+    openai:
+      type: openai
+      url: https://api.openai.com
+      requires_auth: true
+      api_key: "${OPENAI_API_KEY}"
+      model_mapping:
+        gpt-4: gpt-4-turbo-preview
+  ```
+
+  **Multi-backend:**
+  ```yaml
+  backends:
+    local:
+      type: openai
+      url: http://localhost:11211
+      requires_auth: false
+      model_mapping:
+        gpt-3.5-turbo: qwen/qwen2.5-7b
+
+    openai:
+      type: openai
+      url: https://api.openai.com
+      requires_auth: true
+      api_key: "${OPENAI_API_KEY}"
+      model_mapping:
+        gpt-4: gpt-4-turbo-preview
+  ```
+
+  See [examples/](examples/) for more configurations.
+
+  ## API Types
+
+  ### Client Creation
+
+  ```haskell
+  -- Local llama-server (no auth)
+  import Louter.Client.OpenAI (llamaServerClient)
+  client <- llamaServerClient "http://localhost:11211"
+
+  -- Cloud APIs (with auth)
+  import Louter.Client.OpenAI (openAIClient)
+  import Louter.Client.Anthropic (anthropicClient)
+  import Louter.Client.Gemini (geminiClient)
+
+  client <- openAIClient "sk-..."
+  client <- anthropicClient "sk-ant-..."
+  client <- geminiClient "your-api-key"
+  ```
+
+  ### Request Types
+
+  ```haskell
+  -- ChatRequest
+  data ChatRequest = ChatRequest
+    { reqModel :: Text
+    , reqMessages :: [Message]
+    , reqTools :: [Tool]
+    , reqTemperature :: Maybe Float
+    , reqMaxTokens :: Maybe Int
+    , reqStream :: Bool
+    }
+
+  -- Message
+  data Message = Message
+    { msgRole :: MessageRole  -- RoleSystem | RoleUser | RoleAssistant
+    , msgContent :: Text
+    }
+
+  -- Tool
+  data Tool = Tool
+    { toolName :: Text
+    , toolDescription :: Maybe Text
+    , toolParameters :: Value  -- JSON schema
+    }
+  ```
+
+  ### Response Types
+
+  ```haskell
+  -- Non-streaming
+  chatCompletion :: Client -> ChatRequest -> IO (Either Text ChatResponse)
+
+  data ChatResponse = ChatResponse
+    { respId :: Text
+    , respChoices :: [Choice]
+    , respUsage :: Maybe Usage
+    }
+
+  -- Streaming
+  streamChatWithCallback :: Client -> ChatRequest -> (StreamEvent -> IO ()) -> IO ()
+
+  data StreamEvent
+    = StreamContent Text           -- Response text
+    | StreamReasoning Text         -- Thinking tokens
+    | StreamToolCall ToolCall      -- Complete tool call (buffered)
+    , StreamFinish FinishReason
+    | StreamError Text
+  ```
+
+  ## Docker
+
+  ```bash
+  # Build
+  docker build -t louter .
+
+  # Run with config
+  docker run -p 9000:9000 -v $(pwd)/config.yaml:/app/config.yaml louter
+
+  # Or use docker-compose
+  docker-compose up
+  ```
+
+  ## Testing
+
+  ```bash
+  # Python SDK integration tests (43+ tests)
+  python tests/run_all_tests.py
+
+  # Haskell unit tests
+  cabal test all
+  ```
+
+  ## Architecture
+
+  ```
+  Client Request (Any Format)
+      ↓
+  Protocol Converter
+      ↓
+  Core IR (OpenAI-based)
+      ↓
+  Backend Adapter
+      ↓
+  LLM Backend (Any Format)
+  ```
+
+  **Key Components:**
+  - **SSE Parser**: Incremental streaming with attoparsec
+  - **Smart Buffering**: Tool calls buffered until complete JSON
+  - **Type Safety**: Strict Haskell types throughout
+
+  **Streaming Strategy:**
+  - **Content/Reasoning**: Stream immediately (real-time output)
+  - **Tool Calls**: Buffer until complete (valid JSON required)
+  - **State Machine**: Track tool call assembly by index
+
+  ## Proxy Examples
+
+  ### Use OpenAI SDK with Local Models
+
+  ```python
+  from openai import OpenAI
+
+  client = OpenAI(
+      base_url="http://localhost:9000/v1",
+      api_key="not-needed"
+  )
+
+  response = client.chat.completions.create(
+      model="gpt-4",  # Routed to qwen/qwen2.5-vl-7b
+      messages=[{"role": "user", "content": "Hello!"}]
+  )
+  ```
+
+  ### Use Claude Code with Gemini
+
+  ```yaml
+  # config.yaml
+  backends:
+    gemini:
+      type: gemini
+      url: https://generativelanguage.googleapis.com
+      requires_auth: true
+      api_key: "${GEMINI_API_KEY}"
+      model_mapping:
+        claude-3-5-sonnet-20241022: gemini-2.0-flash
+  ```
+
+  ```bash
+  # Start proxy on Anthropic-compatible port
+  cabal run louter-server -- --config config.yaml --port 8000
+
+  # Configure Claude Code:
+  # API Endpoint: http://localhost:8000
+  # Model: claude-3-5-sonnet-20241022
+  ```
+
+  ## Monitoring
+
+  **Health check:**
+  ```bash
+  curl http://localhost:9000/health
+  ```
+
+  **JSON-line logging:**
+  ```bash
+  cabal run louter-server -- --config config.yaml --port 9000 2>&1 | jq .
+  ```
+
+  ## Troubleshooting
+
+  **Connection refused:**
+  ```bash
+  # Check backend is running
+  curl http://localhost:11211/v1/models
+  ```
+
+  **Invalid API key:**
+  ```bash
+  # Verify environment variable
+  echo $OPENAI_API_KEY
+  ```
+
+  **Model not found:**
+  - Check `model_mapping` in config
+  - Frontend model (client requests) → Backend model (sent to API)
+
+  ## Examples
+
+  See [examples/](examples/) for configuration examples and use cases.
+
+  ## License
+
+  MIT License - see LICENSE file.
+description-type: markdown
+hash: 53a72aaca3a3218043d3084b8bf421cd1365af5d43f60275d149ba476cd7580d
+homepage: ''
+latest: 0.1.0.0
+license-name: MIT
+maintainer: junji.hashimoto@gmail.com
+synopsis: Multi-protocol LLM router and client library
+test-bench-deps:
+  QuickCheck: '>=2.14'
+  aeson: '>=0'
+  base: '>=0'
+  bytestring: '>=0'
+  hspec: '>=2.10'
+  louter: '>=0'
+  text: '>=0'
+  unordered-containers: '>=0'
