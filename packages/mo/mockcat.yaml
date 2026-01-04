@@ -20,6 +20,7 @@ all-versions:
 - 1.3.0.0
 - 1.3.1.0
 - 1.3.2.0
+- 1.3.3.0
 author: funnycat <pujoheadsoft@gmail.com>
 basic-deps:
   base: '>=4.7 && <5'
@@ -34,12 +35,15 @@ basic-deps:
 changelog: "# Changelog for `mockcat`\n\nAll notable changes to this project will
   be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand
   this project adheres to the\n[Haskell Package Versioning Policy](https://pvp.haskell.org/).\n\n##
-  [1.3.2.0] - 2026-01-04\n### Added\n- **New Derivation Macros**:\n    - `deriveMockInstances`:
-  Automatically derives `MockT` instances for user-defined \"Capability\" type classes
-  (e.g., `MonadLogger`). It lifts operations to the base monad.\n        - *Note*:
-  Type Families are currently not supported.\n    - `deriveNoopInstance`: Generates
-  \"No-op\" instances where methods (returning `m ()`) do nothing. Useful for ignoring
-  specific interactions (e.g., `MonadAuditor`).\n\n### Improved\n- **Compile-Time
+  [1.3.3.0] - 2026-01-04\n### Added\n- **Type Families Support**: `deriveMockInstances`
+  now supports type classes containing Associated Type Families.\n- **Improved `withMockIO`**:
+  `withMockIO` now enables direct execution of IO actions within mock contexts without
+  `liftIO`.\n\n## [1.3.2.0] - 2026-01-04\n### Added\n- **New Derivation Macros**:\n
+  \   - `deriveMockInstances`: Automatically derives `MockT` instances for user-defined
+  \"Capability\" type classes (e.g., `MonadLogger`). It lifts operations to the base
+  monad.\n        - *Note*: Type Families are currently not supported.\n    - `deriveNoopInstance`:
+  Generates \"No-op\" instances where methods (returning `m ()`) do nothing. Useful
+  for ignoring specific interactions (e.g., `MonadAuditor`).\n\n### Improved\n- **Compile-Time
   Verification**: Enhanced robustness of internal verification scripts (`verify_th_errors.sh`)
   to ensure consistent error reporting across GHC versions.\n- **Documentation**:
   Clarified \"Capability vs. Control\" design philosophy and limitations regarding
@@ -235,18 +239,22 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   exiting the scope.\nUseful when you want \"Definition\" and \"Verification\" to
   be written close together.\n\n```haskell\nwithMock $ do\n  -- Write expectations
   (expects) at definition time\n  f <- mock (any ~> True)\n    `expects` do\n      called
-  once `with` \"arg\"\n\n  -- Execution\n  f \"arg\"\n```\n\n> [!IMPORTANT]\n> When
-  using `expects` (declarative verification), you MUST wrap the mock definition in
-  **parentheses `(...)`**.\n> The `$` operator pattern used in previous versions (`mock
-  $ ... expected ...`) will cause compilation errors due to precedence changes.\n>\n>
-  ❌ `mock $ any ~> True expects ...`\n> ✅ `mock (any ~> True) expects ...`\n\n> [!NOTE]\n>
-  You can also use `expects` for declarative verification inside `runMockT` blocks.\n>
-  This works seamlessly with generated typeclass mocks as well.\n>\n> ```haskell\n>
-  runMockT do\n>   _readFile \"config.txt\" ~> pure \"value\"\n>     `expects` called
-  once\n> ```\n\n### 4. Flexible Verification (Matchers)\n\nEven if arguments don't
-  have `Eq` instances, or you don't want to depend on specific values, you can verify
-  based on **intent**—\"what condition should be met\".\nMockcat provides **matchers**
-  to verify properties of functions, not just value equality.\n\n#### Allow Any Value
+  once `with` \"arg\"\n\n  -- Execution\n  f \"arg\"\n\n#### `withMockIO`: Simplified
+  IO Testing\n`withMockIO` is an IO-specialized version of `withMock`. It allows you
+  to run IO actions directly within the mock context without needing `liftIO`.\n\n```haskell\nit
+  \"IO test\" $ withMockIO do\n  f <- mock (any ~> pure \"result\")\n  res <- someIOCall
+  f\n  res `shouldBe` \"result\"\n```\n```\n\n> [!IMPORTANT]\n> When using `expects`
+  (declarative verification), you MUST wrap the mock definition in **parentheses `(...)`**.\n>
+  The `$` operator pattern used in previous versions (`mock $ ... expected ...`) will
+  cause compilation errors due to precedence changes.\n>\n> ❌ `mock $ any ~> True
+  expects ...`\n> ✅ `mock (any ~> True) expects ...`\n\n> [!NOTE]\n> You can also
+  use `expects` for declarative verification inside `runMockT` blocks.\n> This works
+  seamlessly with generated typeclass mocks as well.\n>\n> ```haskell\n> runMockT
+  do\n>   _readFile \"config.txt\" ~> pure \"value\"\n>     `expects` called once\n>
+  ```\n\n### 4. Flexible Verification (Matchers)\n\nEven if arguments don't have `Eq`
+  instances, or you don't want to depend on specific values, you can verify based
+  on **intent**—\"what condition should be met\".\nMockcat provides **matchers** to
+  verify properties of functions, not just value equality.\n\n#### Allow Any Value
   (`any`)\n\n```haskell\n-- Return True regardless of the argument\nf <- mock (any
   ~> True)\n\n-- Verify that it was called (arguments don't matter)\nf `shouldBeCalled`
   any\n```\n\n#### Verify with Conditions (`when`)\n\nYou can verify using \"conditions
@@ -281,12 +289,11 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   type classes (like `MonadLogger`, `MonadConfig`) that should just be lifted to the
   base monad, use `deriveMockInstances`.\n\n```haskell\nclass Monad m => MonadLogger
   m where\n  logInfo :: String -> m ()\n\nderiveMockInstances [t|MonadLogger|]\n```\nThis
-  generates an instance for `MockT m` that calls `lift . logInfo`.\n> [!NOTE]\n> `deriveMockInstances`
-  currently does not support type classes with Type Families.\n\n##### Explicit No-op
-  Instances (`deriveNoopInstance`)\nSometimes you want a mock to do nothing for certain
-  methods (especially those returning `m ()`) without having to define explicit stubs
-  or provide a base implementation.\n\n```haskell\nclass Monad m => MonadAuditor m
-  where\n  audit :: String -> m ()\n\nderiveNoopInstance [t|MonadAuditor|]\n```\nThis
+  generates an instance for `MockT m` that calls `lift . logInfo`.\n\n##### Explicit
+  No-op Instances (`deriveNoopInstance`)\nSometimes you want a mock to do nothing
+  for certain methods (especially those returning `m ()`) without having to define
+  explicit stubs or provide a base implementation.\n\n```haskell\nclass Monad m =>
+  MonadAuditor m where\n  audit :: String -> m ()\n\nderiveNoopInstance [t|MonadAuditor|]\n```\nThis
   generates an instance for `MockT m` where `audit` simply returns `pure ()`.\n\n\n---\n\n####
   Design Philosophy: Capability vs. Control\n\nMockcat makes a distinction between
   **Capability** and **Control** when it comes to type class derivation.\n\n*   **Capability
@@ -361,14 +368,13 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   ~> True)\n```\n\n---\n\n## Tested Versions\nmockcat is continuously tested in CI
   across these configurations:\n\n| GHC | Cabal | OS |\n|-----|-------|----|\n| 9.2.8
   | 3.10.3.0 / 3.12.1.0 | Ubuntu, macOS, Windows |\n| 9.4.8 | 3.10.3.0 / 3.12.1.0
-  | Ubuntu, macOS, Windows |\n| 9.6.3 | 3.10.3.0 / 3.12.1.0 | Ubuntu, macOS, Windows
-  |\n| 9.8.2 | 3.10.3.0 / 3.12.1.0 | Ubuntu, macOS, Windows |\n| 9.10.1 | 3.10.3.0
-  / 3.12.1.0 | Ubuntu, macOS, Windows |\n| 9.12.2 | 3.12.1.0 | Ubuntu, macOS, Windows
-  |\n\n_Happy Mocking!_ \U0001F431"
+  | Ubuntu, macOS, Windows |\n| 9.6.7 | 3.12.1.0 | Ubuntu, macOS, Windows |\n| 9.8.4
+  | 3.12.1.0 | Ubuntu, macOS, Windows |\n| 9.10.3 | 3.12.1.0 | Ubuntu, macOS, Windows
+  |\n| 9.12.2 | 3.12.1.0 | Ubuntu, macOS, Windows |\n\n_Happy Mocking!_ \U0001F431"
 description-type: markdown
-hash: 88753253a1167f83aac2e56c08025c7e33bc008990093978b9207b49f7a995ff
+hash: fef7d94cc98b31e68a8d52a173319834c52e5ee93bf30f3dacf881f2ecc894a1
 homepage: https://github.com/pujoheadsoft/mockcat#readme
-latest: 1.3.2.0
+latest: 1.3.3.0
 license-name: MIT
 maintainer: funnycat <pujoheadsoft@gmail.com>
 synopsis: Declarative mocking with a single arrow `~>`.
