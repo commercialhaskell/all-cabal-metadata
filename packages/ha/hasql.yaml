@@ -118,36 +118,100 @@ all-versions:
 - 1.9.3
 - 1.9.3.1
 - 1.9.3.2
+- '1.10'
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   aeson: '>=2 && <3'
   attoparsec: '>=0.10 && <0.15'
   base: '>=4.14 && <5'
   bytestring: '>=0.10 && <0.13'
-  bytestring-strict-builder: '>=0.4.5.1 && <0.5'
-  containers: '>=0.6 && <0.9'
+  bytestring-strict-builder: '>=0.4.5.4 && <0.5'
   contravariant: '>=1.3 && <2'
   dlist: '>=0.8 && <0.9 || >=1 && <2'
   hashable: '>=1.2 && <2'
   iproute: '>=1.7 && <1.8'
   mtl: '>=2 && <3'
-  postgresql-binary: '>=0.14.2 && <0.15'
+  postgresql-binary: ^>=0.15
+  postgresql-connection-string: ^>=0.1
   postgresql-libpq: '>=0.10.1 && <0.12'
   profunctors: '>=5.1 && <6'
   scientific: '>=0.3 && <0.4'
   text: '>=1 && <3'
   text-builder: '>=1 && <1.1'
   time: '>=1.9 && <2'
-  transformers: '>=0.6 && <0.7'
+  transformers: '>=0.5 && <0.7'
   unordered-containers: '>=0.2 && <0.3'
   uuid: '>=1.3 && <2'
   vector: '>=0.10 && <0.14'
   witherable: '>=0.5 && <0.6'
-changelog: "# 1.9\n\n- Revised the settings construction exposing a tree of modules\n-
-  Added a global prepared statements setting\n\n## Why the changes?\n\nTo introduce
-  the new global prepared statements setting and to make the settings API ready for
-  extension without backward compatibility breakage.\n\n## Instructions on upgrading
-  the 1.8 code\n\n### When explicit connection string is used\n\nReplace\n\n```haskell\nHasql.Connection.acquire
+changelog: "# 1.10\n\nMajor revision happened.\n\n## New Features\n\n- **OID by name
+  resolution**.\n\n  Encoders and decoders now support resolving PostgreSQL type OIDs
+  by their names at runtime. This enables working with custom types (enums, composite
+  types, domains) without hardcoding OID values. The system includes an OID cache
+  to optimize repeated lookups and automatically queries `pg_type` and related system
+  catalogs when needed. This change affects array, composite, and value encoders/decoders
+  throughout the codec system.\n\n- **Decoder compatibility checks**.\n\n  Previously
+  decoders were silently accepting values of different types, if binary decoding did
+  not fail. Now decoders check if the actual type of the column matches the expected
+  type of the decoder and report `UnexpectedColumnTypeStatementError` error if they
+  do not match. They also match the amount of columns in the result with the amount
+  of columns expected by the decoder and report an error if they do not match.\n\n-
+  **No resets on errors**.\n\n  Previously when an async exception was raised during
+  the execution of a session, the connection would get reestablished to recover from
+  any possible half-finished states. That led to a loss of the connection-local state
+  on the server side. Now the connection recovers without resetting.\n\n- **Redesigned
+  connection configuration API**.\n\n  The connection settings API has been completely
+  redesigned to be more composable and user-friendly. Settings are now represented
+  as a monoid, allowing easy combination of multiple configuration options. The API
+  now supports both URI and key-value connection string formats, with individual setters
+  for common parameters like host, port, user, password, etc.\n\n- **Custom codec
+  API**.\n\n  Added `Hasql.Encoders.custom` and `Hasql.Decoders.custom` functions
+  providing a low-level API for defining custom value encoders and decoders. These
+  functions offer fine-grained control over OID resolution, allowing you to:\n  -
+  Specify static OIDs when known at compile time\n  - Automatically resolve OIDs at
+  runtime by type name\n  - Declare dependencies on other types needed for serialization/deserialization
+  (e.g., field types in composite types)\n  - Implement custom binary encoding/decoding
+  logic with access to resolved OIDs\n\n  This is particularly useful for advanced
+  use cases like custom composite types with field validation or specialized binary
+  formats.\n\n## Breaking changes\n\n- Text instead of ByteString for textual data.\n
+  \ - The public API now uses `Text` instead of `ByteString` for SQL statements and
+  error messages.\n\n- Custom type mappings (enums and composite types) now require
+  specifying names for the types being mapped.\n  - This will automatically identify
+  the types with the DB and do deep compatibility checks.\n\n- Decoder checks are
+  now more strict and report `UnexpectedColumnTypeStatementError` when the actual
+  type of a column does not match the expected type of the decoder. Previously such
+  mismatches were silently ignored and could lead to either autocasts or runtime errors
+  in later stages.\n  - E.g., `int4` column decoded with `int8` decoder will now report
+  `UnexpectedColumnTypeStatementError` instead of silently accepting the value.\n\n-
+  Due to the above the oldest supported PostgreSQL version now is 10. In older versions
+  some types had different OIDs.\n\n- Session now has exclusive access to the connection
+  for its entire duration. Previously it was releasing and reacquiring the lock on
+  the connection between statements.\n  - If you need the old behaviour, you can use
+  `ReaderT Connection (ExceptT SessionError IO)`.\n\n- Dropped `MonadReader Connection`
+  instance for `Session`.\n\n- Dropped `Monad` and `MonadFail` instances for the `Row`
+  decoder. `Applicative` is enough for all practical purposes.\n\n- Errors model completely
+  overhauled.\n  - `ConnectionError` restructured and moved from the `Hasql.Connection`
+  module to `Hasql.Errors`.\n  - `SessionError` restructured and moved from the `Hasql.Session`
+  module to `Hasql.Errors`.\n\n- `usePreparedStatements` setting dropped. Use `disablePreparedStatements`
+  instead.\n\n- `Hasql.Session.sql` renamed to `Hasql.Session.script` to better reflect
+  its purpose.\n\n- Connection configuration API overhaul to improve UX.\n  - `Hasql.Connection.acquire`
+  now takes a single `Settings` value instead of a list of `Setting` values.\n  -
+  The `Hasql.Connection.Setting` module has been replaced with `Hasql.Connection.Settings`.\n
+  \ - Settings are now constructed using flat monoid composition instead of hierarchical
+  lists requiring multiple imports.\n  - Removed `Hasql.Connection.Setting.Connection`
+  and related submodules.\n\n- Custom value decoder signature changed.\n\n  The `Hasql.Decoders.custom`
+  function signature has been extended to support more explicit control over type
+  resolution. It now requires:\n  - Optional static OIDs parameter (previously implicit)\n
+  \ - List of additional type dependencies needed for decoding\n  - The decoder function
+  now receives an OID lookup function as its first parameter\n\n  This change enables
+  more robust custom type handling but requires updating existing custom decoder implementations.\n\n-
+  Exception instances on error types removed. The error types here were never thrown
+  as exceptions. Wrap them in your own exception type if you need to throw them.\n\n#
+  1.9\n\n- Revised the settings construction exposing a tree of modules\n- Added a
+  global prepared statements setting\n\n## Why the changes?\n\nTo introduce the new
+  global prepared statements setting and to make the settings API ready for extension
+  without backward compatibility breakage.\n\n## Instructions on upgrading the 1.8
+  code\n\n### When explicit connection string is used\n\nReplace\n\n```haskell\nHasql.Connection.acquire
   connectionString\n```\n\nwith\n\n```haskell\nHasql.Connection.acquire \n  [ Hasql.Connection.Setting.connection
   (Hasql.Connection.Setting.Connection.string connectionString)\n  ]\n```\n\n### When
   parameteric connection string is used\n\nReplace\n\n```haskell\nHasql.Connection.acquire
@@ -169,45 +233,49 @@ changelog: "# 1.9\n\n- Revised the settings construction exposing a tree of modu
   Added column number to `RowError` (breaking change).\n- Added `MonadReader Connection`
   instance for Session.\n"
 changelog-type: markdown
-description: "# Hasql\n\nPostgreSQL driver for Haskell, that prioritizes:\n\n- Performance\n-
-  Typesafety\n- Flexibility\n- Decentralization\n\n# Status\n\n[![Hackage](https://img.shields.io/hackage/v/hasql.svg)](https://hackage.haskell.org/package/hasql)\n[![Continuous
-  Haddock](https://img.shields.io/badge/haddock-master-blue)](https://nikita-volkov.github.io/hasql/)\n\nHasql
-  is production-ready, actively maintained and the API is pretty stable. It's used
-  by many companies and most notably by the [Postgrest](https://postgrest.org/) project.\n\n#
-  Ecosystem\n\nHasql is not just a single library, it is a granular ecosystem of composable
-  libraries, each isolated to perform its own task and stay simple.\n\n* [\"hasql\"](https://github.com/nikita-volkov/hasql)
-  - the root of the ecosystem, which provides the essential abstraction over the PostgreSQL
+description: "# Hasql\n\n[![Hackage](https://img.shields.io/hackage/v/hasql.svg)](https://hackage.haskell.org/package/hasql)\n[![Continuous
+  Haddock](https://img.shields.io/badge/haddock-master-blue)](https://nikita-volkov.github.io/hasql/)\n\nPostgreSQL
+  driver for Haskell, that prioritizes:\n\n- Performance\n- Typesafety\n- Flexibility\n\n#
+  Status\n\nHasql is production-ready, actively maintained and the API is moderately
+  stable. It's used by many companies and most notably by the [Postgrest](https://github.com/PostgREST/postgrest)
+  project.\n\n# Discussions\n\nJoin [GitHub Discussions](https://github.com/nikita-volkov/hasql/discussions)
+  to ask questions, provide feedback, suggest and vote on features, and help shape
+  the future of Hasql.\n\n# Ecosystem\n\nHasql is not just a single library, it is
+  a granular ecosystem of composable libraries, each isolated to perform its own task
+  and stay simple.\n\n- [\"hasql\"](https://github.com/nikita-volkov/hasql) - the
+  root of the ecosystem, which provides the essential abstraction over the PostgreSQL
   client functionality and mapping of values. Everything else revolves around that
-  library.\n\n* [\"hasql-th\"](https://github.com/nikita-volkov/hasql-th) - Template
+  library.\n\n- [\"hasql-th\"](https://github.com/nikita-volkov/hasql-th) - Template
   Haskell utilities, providing compile-time syntax checking and easy statement declaration.
-  \n* [\"hasql-transaction\"](https://github.com/nikita-volkov/hasql-transaction)
+  \n\n- [\"hasql-transaction\"](https://github.com/nikita-volkov/hasql-transaction)
   - an STM-inspired composable abstraction over database transactions providing automated
-  conflict resolution.\n\n* [\"hasql-dynamic-statements\"](https://github.com/nikita-volkov/hasql-dynamic-statements)
-  - a toolkit for generating statements based on the parameters.\n\n* [\"hasql-cursor-query\"](https://github.com/nikita-volkov/hasql-cursor-query)
-  - a declarative abstraction over cursors.\n\n* [\"hasql-cursor-transaction\"](https://github.com/nikita-volkov/hasql-cursor-transaction)
+  conflict resolution.\n\n- [\"hasql-dynamic-statements\"](https://github.com/nikita-volkov/hasql-dynamic-statements)
+  - a toolkit for generating statements based on the parameters.\n\n- [\"hasql-cursor-query\"](https://github.com/nikita-volkov/hasql-cursor-query)
+  - a declarative abstraction over cursors.\n\n- [\"hasql-cursor-transaction\"](https://github.com/nikita-volkov/hasql-cursor-transaction)
   - a lower-level abstraction over cursors, which however allows to fetch from multiple
   cursors simultaneously. Generally though \"hasql-cursor-query\" is the recommended
-  alternative.\n\n* [\"hasql-pool\"](https://github.com/nikita-volkov/hasql-pool)
-  - a Hasql-specialized abstraction over the connection pool.\n\n* [\"hasql-migration\"](https://github.com/tvh/hasql-migration)
-  - A port of postgresql-simple-migration for use with hasql.\n\n* [\"hasql-listen-notify\"](https://github.com/awkward-squad/hasql-listen-notify)
+  alternative.\n\n- [\"hasql-pool\"](https://github.com/nikita-volkov/hasql-pool)
+  - a Hasql-specialized abstraction over the connection pool.\n\n- [\"hasql-migration\"](https://github.com/tvh/hasql-migration)
+  - A port of postgresql-simple-migration for use with hasql.\n\n- [\"hasql-listen-notify\"](https://github.com/awkward-squad/hasql-listen-notify)
   / [\"hasql-notifications\"](https://github.com/diogob/hasql-notifications) - Support
-  for PostgreSQL asynchronous notifications.\n\n* [\"hasql-optparse-applicative\"](https://github.com/sannsyn/hasql-optparse-applicative)
-  - \"optparse-applicative\" parsers for Hasql.\n\n* [\"hasql-implicits\"](https://github.com/nikita-volkov/hasql-implicits)
-  - implicit definitions, such as default codecs for standard types.\n\n* [\"hasql-interpolate\"](https://github.com/awkward-squad/hasql-interpolate)
-  - a QuasiQuoter that supports interpolating Haskell expressions into Hasql queries.\n\n###
-  Benefits of being an ecosystem\n\n* **Simplicity.** Each library in isolation provides
-  a simple API, which is hopefully easier to comprehend.\n\n* **Flexibility and composability.**
-  The user picks and chooses the features, thus precisely matching the level of abstraction
-  that he needs for his task.\n\n* **Much more stable and more descriptive semantic
-  versioning.** E.g., a change in the API of the \"hasql-transaction\" library won't
-  affect any of the other libraries and it gives the user a more precise information
-  about which part of his application he needs to update to conform.\n\n* **Interchangeability
-  and competition of the ecosystem components.** E.g., [not everyone will agree](https://github.com/nikita-volkov/hasql/issues/41)
+  for PostgreSQL asynchronous notifications.\n\n- [\"hasql-optparse-applicative\"](https://github.com/sannsyn/hasql-optparse-applicative)
+  - \"optparse-applicative\" parsers for Hasql.\n\n- [\"hasql-implicits\"](https://github.com/nikita-volkov/hasql-implicits)
+  - implicit definitions, such as default codecs for standard types.\n\n- [\"hasql-interpolate\"](https://github.com/awkward-squad/hasql-interpolate)
+  - a QuasiQuoter that supports interpolating Haskell expressions into Hasql queries.\n\n<sup>Want
+  to list your package or correct something here? Make a PR.</sup>\n\n## Why make
+  it an ecosystem?\n\n- **Focus.**\nEach library in isolation provides a simple API,
+  which is focused on a specific task or a few related tasks.\n\n- **Flexibility.**\nThe
+  user picks and chooses the features, thus precisely matching the level of abstraction
+  that he needs for his task.\n\n- **Much more stable and descriptive semantic versioning.**\nE.g.,
+  a change in the API of the \"hasql-transaction\" library won't affect any of the
+  other libraries and it gives the user a more precise information about which part
+  of his application he needs to update to conform.\n\n- **Interchangeability and
+  competition of the ecosystem components.**\nE.g., [not everyone will agree](https://github.com/nikita-volkov/hasql/issues/41)
   with the restrictive design decisions made in the \"hasql-transaction\" library.
   However those decisions are not imposed on the user, and instead of having endless
   debates about how to abstract over transactions, another extension library can simply
   be released, which will provide a different interpretation of what the abstraction
-  over transactions should be.\n\n* **Horizontal scalability of the ecosystem.** Instead
+  over transactions should be.\n\n- **Horizontal scalability of the ecosystem.**\nInstead
   of posting feature- or pull-requests, the users are encouraged to release their
   own small extension-libraries, with themselves becoming the copyright owners and
   taking on the maintenance responsibilities. Compare this model to the classical
@@ -216,60 +284,93 @@ description: "# Hasql\n\nPostgreSQL driver for Haskell, that prioritizes:\n\n- P
   of a nice intro-level series of live Haskell+Bazel coding by the \"Ants Are Everywhere\"
   YouTube channel:\n\n- [Coding Day 20: Switching from postgresql-simple to Hasql](https://youtu.be/ce7bGKETtoA?si=RmY_yDG24EX6i38I)\n-
   [Coding Day 21: Refactoring the Hasql code](https://youtu.be/a9mPNXbT-qw?si=RTtXe6BXnZSQZzh-)\n\n##
-  Articles\n\n- [Organization of Hasql code in a dedicated library](https://github.com/nikita-volkov/hasql-tutorial1)\n\n#
+  Articles\n\n- [Organization of Hasql code in a dedicated library <sup>(outdated)</sup>](https://github.com/nikita-volkov/hasql-tutorial1)\n\n#
   Short Example\n\nFollowing is a complete application, which performs some arithmetic
   in Postgres using Hasql.\n\n```haskell\n{-# LANGUAGE OverloadedStrings, QuasiQuotes
-  #-}\nimport Prelude\nimport Data.Int\nimport Data.Functor.Contravariant\nimport
-  Hasql.Session (Session)\nimport Hasql.Statement (Statement(..))\nimport qualified
-  Hasql.Session as Session\nimport qualified Hasql.Decoders as Decoders\nimport qualified
-  Hasql.Encoders as Encoders\nimport qualified Hasql.Connection as Connection\nimport
-  qualified Hasql.Connection.Setting as ConnectionSetting\nimport qualified Hasql.Connection.Setting.Connection
-  as ConnectionSettingConnection\n\n\n\nmain :: IO ()\nmain = do\n  Right connection
-  <- Connection.acquire connectionSettings\n  result <- Session.run (sumAndDivModSession
-  3 8 3) connection\n  print result\n  where\n    connectionSettings = [ConnectionSetting.connection
-  $ ConnectionSettingConnection.string pstr]\n    pstr = \"host=localhost dbname=postgres
-  user=postgres port=5432\"\n\n\n-- * Sessions\n-- \n-- Session is an abstraction
-  over the database connection and all possible errors.\n-- It is used to execute
-  statements.\n-- It is composable and has a Monad instance.\n-- \n-- It's recommended
-  to define sessions in a dedicated 'Sessions'\n-- submodule of your project.\n-------------------------\n\nsumAndDivModSession
+  #-}\n\nimport Data.Functor.Contravariant\nimport Data.Int\nimport Hasql.Session
+  (Session)\nimport Prelude\nimport qualified Hasql.Connection as Connection\nimport
+  qualified Hasql.Connection.Settings as Settings\nimport qualified Hasql.Decoders
+  as Decoders\nimport qualified Hasql.Encoders as Encoders\nimport qualified Hasql.Session
+  as Session\nimport qualified Hasql.Statement as Statement\n\nmain :: IO ()\nmain
+  = do\n  Right connection <- Connection.acquire connectionSettings\n  result <- Connection.use
+  connection (sumAndDivModSession 3 8 3)\n  print result\n  where\n    connectionSettings
+  =\n      mconcat\n        [ Settings.hostAndPort \"localhost\" 5432,\n          Settings.user
+  \"postgres\",\n          Settings.password \"postgres\",\n          Settings.dbname
+  \"postgres\"\n          -- Prepared statements are enabled by default.\n          --
+  To disable them (e.g., for pgbouncer compatibility):\n          -- Settings.noPreparedStatements
+  True\n        ]\n\n-- * Sessions\n\n-- Session abstracts over the execution of operations
+  on a database connection.\n-- It is composable and has a Monad instance.\n-------------------------\n\nsumAndDivModSession
   :: Int64 -> Int64 -> Int64 -> Session (Int64, Int64)\nsumAndDivModSession a b c
   = do\n  -- Get the sum of a and b\n  sumOfAAndB <- Session.statement (a, b) sumStatement\n
   \ -- Divide the sum by c and get the modulo as well\n  Session.statement (sumOfAAndB,
-  c) divModStatement\n\n\n-- * Statements\n-- \n-- Statement is a definition of an
-  individual SQL-statement,\n-- accompanied by a specification of how to encode its
-  parameters and\n-- decode its result.\n-- \n-- It's recommended to define statements
-  in a dedicated 'Statements'\n-- submodule of your project.\n-------------------------\n\nsumStatement
-  :: Statement (Int64, Int64) Int64\nsumStatement = Statement sql encoder decoder
-  True where\n  sql = \"select $1 + $2\"\n  encoder =\n    (fst >$< Encoders.param
-  (Encoders.nonNullable Encoders.int8)) <>\n    (snd >$< Encoders.param (Encoders.nonNullable
-  Encoders.int8))\n  decoder = Decoders.singleRow (Decoders.column (Decoders.nonNullable
-  Decoders.int8))\n\ndivModStatement :: Statement (Int64, Int64) (Int64, Int64)\ndivModStatement
-  = Statement sql encoder decoder True where\n  sql = \"select $1 / $2, $1 % $2\"\n
-  \ encoder =\n    (fst >$< Encoders.param (Encoders.nonNullable Encoders.int8)) <>\n
-  \   (snd >$< Encoders.param (Encoders.nonNullable Encoders.int8))\n  decoder = Decoders.singleRow
-  row where\n    row =\n      (,) <$>\n      Decoders.column (Decoders.nonNullable
-  Decoders.int8) <*>\n      Decoders.column (Decoders.nonNullable Decoders.int8)\n```\n\nFor
-  the general use-case it is advised to prefer declaring statements using the \"hasql-th\"
+  c) divModStatement\n\n-- * Statements\n\n-- Statement is a definition of an individual
+  SQL-statement,\n-- accompanied by a specification of how to encode its parameters
+  and\n-- decode its result.\n-------------------------\n\n-- | A statement with two
+  integer parameters and an integer result.\nsumStatement :: Statement.Statement (Int64,
+  Int64) Int64\nsumStatement = Statement.preparable sql encoder decoder\n  where\n
+  \   -- The SQL of the statement, with $1, $2, ... placeholders for parameters.\n
+  \   sql =\n      \"select $1 + $2\"\n    -- Specification of how to encode the parameters
+  of the statement\n    -- where the association with placeholders is achieved by
+  order.\n    encoder =\n      mconcat\n        [ -- Encoder of the first parameter
+  as a non-nullable int8.\n          -- It extracts the first element of the tuple
+  using the contravariant functor\n          -- instance.\n          fst >$< Encoders.param
+  (Encoders.nonNullable Encoders.int8),\n          -- Encoder of the second parameter,\n
+  \         -- which extracts the second element of the tuple.\n          snd >$<
+  Encoders.param (Encoders.nonNullable Encoders.int8)\n        ]\n    -- Specification
+  of how to decode the result of the statement.\n    -- States that we expect a single
+  row with a single non-nullable int8 column.\n    decoder =\n      Decoders.singleRow\n
+  \       (Decoders.column (Decoders.nonNullable Decoders.int8))\n\ndivModStatement
+  :: Statement.Statement (Int64, Int64) (Int64, Int64)\ndivModStatement = Statement.preparable
+  sql encoder decoder\n  where\n    sql =\n      \"select $1 / $2, $1 % $2\"\n    encoder
+  =\n      mconcat\n        [ fst >$< Encoders.param (Encoders.nonNullable Encoders.int8),\n
+  \         snd >$< Encoders.param (Encoders.nonNullable Encoders.int8)\n        ]\n
+  \   -- Decoder that expects a single row with two non-nullable int8 columns,\n    --
+  returning the result as a tuple.\n    -- Uses the applicative functor instance to
+  combine two column decoders.\n    decoder =\n      Decoders.singleRow\n        (
+  (,)\n            <$> Decoders.column (Decoders.nonNullable Decoders.int8)\n            <*>
+  Decoders.column (Decoders.nonNullable Decoders.int8)\n        )\n```\n\nFor the
+  general use-case it is advised to prefer declaring statements using the \"hasql-th\"
   library, which validates the statements at compile-time and generates codecs automatically.
   So the above two statements could be implemented the following way:\n\n```haskell\nimport
-  qualified Hasql.TH as TH -- from \"hasql-th\"\n\nsumStatement :: Statement (Int64,
-  Int64) Int64\nsumStatement =\n  [TH.singletonStatement|\n    select ($1 :: int8
-  + $2 :: int8) :: int8\n    |]\n\ndivModStatement :: Statement (Int64, Int64) (Int64,
-  Int64)\ndivModStatement =\n  [TH.singletonStatement|\n    select\n      (($1 ::
-  int8) / ($2 :: int8)) :: int8,\n      (($1 :: int8) % ($2 :: int8)) :: int8\n    |]\n```\n"
+  qualified Hasql.TH as TH -- from \"hasql-th\"\n\nsumStatement :: Statement.Statement
+  (Int64, Int64) Int64\nsumStatement =\n  [TH.singletonStatement|\n    select ($1
+  :: int8 + $2 :: int8) :: int8\n  |]\n\ndivModStatement :: Statement.Statement (Int64,
+  Int64) (Int64, Int64)\ndivModStatement =\n  [TH.singletonStatement|\n    select\n
+  \     (($1 :: int8) / ($2 :: int8)) :: int8,\n      (($1 :: int8) % ($2 :: int8))
+  :: int8\n  |]\n```\n"
 description-type: markdown
-hash: af5d3d338a3b46fd7ecdb16c88aa72d132ce0a9dc9352525ebd997946c08b52f
+hash: f623917c00d809321a56e0788293ab8eb7e964e95860553327939e9b53d8a9f4
 homepage: https://github.com/nikita-volkov/hasql
-latest: 1.9.3.2
+latest: '1.10'
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Fast PostgreSQL driver with a flexible mapping API
 test-bench-deps:
   QuickCheck: '>=0'
-  contravariant-extras: '>=0.3.5.2 && <0.4'
+  aeson: '>=0'
+  attoparsec: '>=0.10 && <0.15'
+  base: '>=4.14 && <5'
+  bytestring: '>=0.10 && <0.13'
+  contravariant: '>=1.3 && <2'
   criterion: '>=1.6 && <2'
+  dlist: '>=0.8 && <0.9 || >=1 && <2'
+  hashable: '>=1.2 && <2'
   hasql: '>=0'
-  hspec: '>=0'
+  hspec: '>=2.11.12 && <2.12'
+  iproute: '>=0'
+  mtl: '>=2 && <3'
+  postgresql-libpq: '>=0.10.1 && <0.12'
+  profunctors: '>=5.1 && <6'
   quickcheck-instances: '>=0.3.11 && <0.4'
+  random: '>=1.3.1 && <1.4'
   rerebase: '>=1 && <2'
-  testcontainers-postgresql: '>=0.0.1 && <0.1'
+  scientific: '>=0.3 && <0.4'
+  testcontainers-postgresql: '>=0.2 && <0.3'
+  text: '>=1 && <3'
+  text-builder: '>=1 && <1.1'
+  time: '>=1.9 && <2'
+  transformers: '>=0.5 && <0.7'
+  unordered-containers: '>=0.2 && <0.3'
+  uuid: '>=1.3 && <2'
+  vector: '>=0.10 && <0.14'
+  witherable: '>=0.5 && <0.6'
