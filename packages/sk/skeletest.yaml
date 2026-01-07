@@ -3,6 +3,7 @@ all-versions:
 - 0.1.1
 - 0.2.0
 - 0.2.1
+- 0.3.0
 author: Brandon Chinn <brandonchinn178@gmail.com>
 basic-deps:
   Diff: '>=1.0'
@@ -13,20 +14,40 @@ basic-deps:
   colour: '>=0'
   containers: '>=0'
   directory: '>=0'
+  exceptions: '>=0'
   filepath: '>=0'
-  ghc: ^>=9.8 || ^>=9.10 || ^>=9.12
-  hedgehog: '>=0'
+  ghc: ^>=9.8 || ^>=9.10 || ^>=9.12 || ^>=9.14
+  hedgehog: '>=1.5'
   megaparsec: '>=0'
   ordered-containers: '>=0.2.4'
   parser-combinators: '>=0'
   pretty: '>=0'
+  process: '>=0'
   recover-rtti: '>=0'
   skeletest: '>=0'
   template-haskell: '>=0'
+  terminal-size: '>=0.2.0'
   text: '>=0'
   transformers: '>=0'
   unliftio: '>=0.2.17'
 changelog: |
+  ## v0.3.0
+
+  GHC support:
+  * Support GHC 9.14
+
+  New features:
+  * Automatically capture stdout/stderr ([#1](https://github.com/brandonchinn178/skeletest/issues/1))
+
+  API changes:
+  * Specify order of type variables for `P.anything` so that `P.anything @Int` works
+
+  Runtime changes:
+  * Add location to error messages
+  * Render test failures/errors in more visible box
+  * Display the path of the test file instead of guessing a module name ([#40](https://github.com/brandonchinn178/skeletest/issues/40))
+  * Flush stdout so test name is displayed while test is still running
+
   ## v0.2.1
 
   * Add `P.list`
@@ -173,15 +194,16 @@ description: "# Skeletest\n\n[![GitHub Actions](https://img.shields.io/github/ac
   generating random data with `forAll` and checking properties using the usual `shouldSatisfy`
   assertions. See the [Haddocks](https://hackage.haskell.org/package/skeletest/docs/Skeletest-Prop-Gen.html)
   for the different ways to generate data.\n\n```haskell\nprop \"reverse does not
-  change the length\" $ do\n  xs <- forAll $ Gen.list (Gen.range 0 10) Gen.int\n  length
-  (reverse xs) `shouldBe` length xs\n```\n\nOne common usecase is to verify that two
-  functions are isomorphic. This can be tested with the `P.===` operator:\n\n```haskell\nprop
-  \"decodeUser . encodeUser === pure\" $ do\n  let genUser = User <$> Gen.text (Gen.range
-  0 10) Gen.unicode\n  (decodeUser . encodeUser) P.=== pure `shouldSatisfy` P.isoWith
-  genUser\n```\n\nIf a test fails, it'll say something like `Rerun with --seed=6430645105429331403:9929029875326664391
+  change the length\" $ do\n  xs <- forAll $ Gen.list (Range.linear 0 10) $ Gen.int
+  (Range.linear 1 100)\n  length (reverse xs) `shouldBe` length xs\n```\n\nOne common
+  usecase is to verify that two functions are isomorphic. This can be tested with
+  the `P.===` operator:\n\n```haskell\nprop \"decodeUser . encodeUser === pure\" $
+  do\n  let genUser = User <$> Gen.text (Range.linear 0 10) Gen.unicode\n  (decodeUser
+  . encodeUser) P.=== pure `shouldSatisfy` P.isoWith genUser\n```\n\nIf a test fails,
+  it'll say something like `Rerun with --seed=6430645105429331403:9929029875326664391
   to reproduce`. Rerunning with that flag will generate the same random value for
   debugging.\n\nTo ignore certain values, use `discard`:\n\n```haskell\nx <- Gen.int
-  (Gen.range (-10) 10)\nwhen (x == 0) discard\n...\n```\n\nProperty tests can also
+  (Range.linear (-10) 10)\nwhen (x == 0) discard\n...\n```\n\nProperty tests can also
   be configured with the following functions. These must be called at the very beginning
   of the test, before any `forAll` calls. Values specified with CLI flags take precedence
   over the values in the code.\n\n* `Prop.setDiscardLimit`\n    * The max number of
@@ -222,27 +244,30 @@ description: "# Skeletest\n\n[![GitHub Actions](https://img.shields.io/github/ac
   \   withMarker (MyMarker 10) $ do\n      ...\n    ```\n\n    All tests in the given
   section will be marked with the given marker, which can be selected with `@my-marker`.
   You can see if a test has a marker with `findMarkers` (see the \"Hooks\" section).\n\n###
-  Custom CLI flags\n\nTo register and use your own CLI flags, do the following:\n\n1.
-  Create an instance of `IsFlag`\n\n1. In `Main.hs`, add the following:\n\n    ```haskell\n
-  \   import TestUtils.Flags (MyFlag)\n\n    cliFlags =\n      [ flag @MyFlag\n      ]\n
-  \   ```\n\n1. In a fixture or test, do the following:\n\n    ```haskell\n    MyFlag
-  flagVal <- getFlag\n    ```\n\n### Hooks\n\nSkeletest lets you hook into specific
-  parts of test execution. Skeletest currently supports the following hooks:\n\n*
-  `hookRunTest` - Modify how/if a test is run. Takes the `TestInfo` of the currently
-  running test. `TestInfo` contains `testInfoMarkers`, which you can query with `findMarker`
-  or `hasMarkerNamed`.\n\n### Plugins\n\nSkeletest is fully pluggable; any configuration
-  specified in `Main.hs` (e.g. `cliFlags` or `snapshotRenderer`) can be defined in
-  a `Plugin` that you can import from another module or even another package.\n\n```haskell\nmodule
-  TestUtils.Plugins (myPlugin) where\n\nimport Skeletest.Plugin\n\nmyPlugin :: Plugin\nmyPlugin
-  =\n  defaultPlugin\n    { hooks =\n        defaultHooks\n          { hookRunTest
-  = \\testInfo runTest -> do\n              putStrLn \"before test\"\n              result
+  Output capturing\n\nBy default, Skeletest will capture all output to stdout/stderr
+  that occurs during a test and will only display it if the test fails. To disable
+  this, pass `--capture-output=off`.\n\n### Custom CLI flags\n\nTo register and use
+  your own CLI flags, do the following:\n\n1. Create an instance of `IsFlag`\n\n1.
+  In `Main.hs`, add the following:\n\n    ```haskell\n    import TestUtils.Flags (MyFlag)\n\n
+  \   cliFlags =\n      [ flag @MyFlag\n      ]\n    ```\n\n1. In a fixture or test,
+  do the following:\n\n    ```haskell\n    MyFlag flagVal <- getFlag\n    ```\n\n###
+  Hooks\n\nSkeletest lets you hook into specific parts of test execution. Skeletest
+  currently supports the following hooks:\n\n* `hookRunTest` - Modify how/if a test
+  is run. Takes the `TestInfo` of the currently running test. `TestInfo` contains
+  `testInfoMarkers`, which you can query with `findMarker` or `hasMarkerNamed`.\n\n###
+  Plugins\n\nSkeletest is fully pluggable; any configuration specified in `Main.hs`
+  (e.g. `cliFlags` or `snapshotRenderer`) can be defined in a `Plugin` that you can
+  import from another module or even another package.\n\n```haskell\nmodule TestUtils.Plugins
+  (myPlugin) where\n\nimport Skeletest.Plugin\n\nmyPlugin :: Plugin\nmyPlugin =\n
+  \ defaultPlugin\n    { hooks =\n        defaultHooks\n          { hookRunTest =
+  \\testInfo runTest -> do\n              putStrLn \"before test\"\n              result
   <- runTest\n              putStrLn \"after test\"\n              pure result\n          }\n
   \   }\n```\n\n```haskell\nimport TestUtils.Plugins (myPlugin)\n\nplugins =\n  [
   myPlugin\n  ]\n```\n"
 description-type: markdown
-hash: 9b7452da1e4ce15890ec2e0a2281cea907015632b0428247e367b82df0ce2e78
+hash: 43e3eca938d9a8703a76c727986f4704c729093daee97d7eaf5b26b2cc2f8016
 homepage: https://github.com/brandonchinn178/skeletest#readme
-latest: 0.2.1
+latest: 0.3.0
 license-name: BSD-3-Clause
 maintainer: Brandon Chinn <brandonchinn178@gmail.com>
 synopsis: Batteries-included, opinionated test framework
