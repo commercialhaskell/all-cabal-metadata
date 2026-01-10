@@ -21,6 +21,7 @@ all-versions:
 - 1.3.1.0
 - 1.3.2.0
 - 1.3.3.0
+- 1.4.0.0
 author: funnycat <pujoheadsoft@gmail.com>
 basic-deps:
   base: '>=4.7 && <5'
@@ -35,15 +36,31 @@ basic-deps:
 changelog: "# Changelog for `mockcat`\n\nAll notable changes to this project will
   be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand
   this project adheres to the\n[Haskell Package Versioning Policy](https://pvp.haskell.org/).\n\n##
-  [1.3.3.0] - 2026-01-04\n### Added\n- **Type Families Support**: `deriveMockInstances`
-  now supports type classes containing Associated Type Families.\n- **Improved `withMockIO`**:
-  `withMockIO` now enables direct execution of IO actions within mock contexts without
-  `liftIO`.\n\n## [1.3.2.0] - 2026-01-04\n### Added\n- **New Derivation Macros**:\n
-  \   - `deriveMockInstances`: Automatically derives `MockT` instances for user-defined
-  \"Capability\" type classes (e.g., `MonadLogger`). It lifts operations to the base
-  monad.\n        - *Note*: Type Families are currently not supported.\n    - `deriveNoopInstance`:
-  Generates \"No-op\" instances where methods (returning `m ()`) do nothing. Useful
-  for ignoring specific interactions (e.g., `MonadAuditor`).\n\n### Improved\n- **Compile-Time
+  [1.4.0.0] - 2026-01-10\n### Changed\n- **Breaking Change**: Removed the verify fallback
+  mechanism that searched thread history when `StableName` lookup failed.\n    - **Impact**:
+  Strict verification is now enforced. Tests using `shouldBeCalled` or related matchers
+  will now deterministically fail if the mock function's identity cannot be strictly
+  resolved (e.g., in some HPC/Coverage environments without proper handling), rather
+  than attempting to guess the intent.\n    - **Motivation**: To ensure absolute confidence
+  in test results and support reliable HPC coverage analysis.\n\n### Improved\n- **HPC
+  Code Coverage Support**: The library and test suite are now fully compatible with
+  `stack test --coverage`.\n    - Verification logic has been hardened to handle HPC
+  instrumentation.\n    - The test suite now automatically detects HPC mode and skips
+  only those tests that strictly depend on `StableName` identity (which is inherently
+  unstable under HPC), ensuring the rest of the suite runs safely.\n- **Test Suite
+  Modernization**: Refactored Property-based tests and `WithMockIO` specs to use the
+  `expects` pattern (definition-time expectation). This makes them robust enough to
+  strictly verify behavior even in HPC environments.\n- **Granularity**: Improved
+  module organization in `Spec.hs` for better maintainability.\n\n## [1.3.3.0] - 2026-01-04\n###
+  Added\n- **Type Families Support**: `deriveMockInstances` now supports type classes
+  containing Associated Type Families.\n- **Improved `withMockIO`**: `withMockIO`
+  now enables direct execution of IO actions within mock contexts without `liftIO`.\n\n##
+  [1.3.2.0] - 2026-01-04\n### Added\n- **New Derivation Macros**:\n    - `deriveMockInstances`:
+  Automatically derives `MockT` instances for user-defined \"Capability\" type classes
+  (e.g., `MonadLogger`). It lifts operations to the base monad.\n        - *Note*:
+  Type Families are currently not supported.\n    - `deriveNoopInstance`: Generates
+  \"No-op\" instances where methods (returning `m ()`) do nothing. Useful for ignoring
+  specific interactions (e.g., `MonadAuditor`).\n\n### Improved\n- **Compile-Time
   Verification**: Enhanced robustness of internal verification scripts (`verify_th_errors.sh`)
   to ensure consistent error reporting across GHC versions.\n- **Documentation**:
   Clarified \"Capability vs. Control\" design philosophy and limitations regarding
@@ -139,11 +156,14 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   LTS](http://stackage.org/package/mockcat/badge/lts)](http://stackage.org/lts/package/mockcat)\n[![Build
   Status](https://github.com/pujoheadsoft/mockcat/workflows/Test/badge.svg)](https://github.com/pujoheadsoft/mockcat/actions)\n\n[\U0001F1EF\U0001F1F5
   Japanese (日本語)](README-ja.md)\n\n</div>\n\n**Mockcat** is a lightweight, declarative
-  mocking library for Haskell.  \nBy using the dedicated **Mock Arrow (`~>`)** operator,
-  you can describe mock behavior with the same ease as defining standard functions.\n\n```haskell\n--
-  Define\nf <- mock (\"input\" ~> \"output\")\n\n-- Verify\nf `shouldBeCalled` \"input\"\n```\n\n---\n\n##
-  Concepts & Terminology\n\nMockcat adopts a design where \"verification happens at
-  runtime, but 'conditions to be met' can be declared at definition time.\"\n\n*   **Stub**:\n
+  mocking library for Haskell.  \nIt supports two verification styles:\n\n*   **Declarative
+  Verification (`expects`)**: **[Recommended]** Declaratively state the expected behavior
+  at mock definition time.\n*   **Post-hoc Verification (`shouldBeCalled`)**: Verify
+  call history after test execution.\n\n```haskell\n-- Define and Expect at the same
+  time (\"input\" should be called exactly once)\nf <- mock (\"input\" ~> \"output\")\n
+  \ `expects` called once\n\n-- Execute\nf \"input\"\n```\n\n---\n\n## Concepts &
+  Terminology\n\nMockcat adopts a design where \"verification happens at runtime,
+  but 'conditions to be met' can be declared at definition time.\"\n\n*   **Stub**:\n
   \   Exists solely to keep the test moving by returning values. It does not care
   \"how it was called\".\n    The `stub` function returns a completely pure function.\n\n*
   \  **Mock**:\n    In addition to stubbing, it records and verifies \"was it called
@@ -164,59 +184,63 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   arg\" | <pre>f :: String -> IO String<br />f arg = case arg of<br />  \"a\" -> pure
   \"b\"<br />  _   -> error \"unexpected\"</pre><br />_Even simple branching consumes
   many lines._ | <pre>-- Use stub if verification is unneeded (Pure)<br />let f =
-  stub (\"a\" ~> \"b\")</pre><br />_Behaves as a completely pure function._ |\n| **Verification
-  (Verify)**<br />\"I want to test<br />if it was called correctly\" | <pre>-- Need
-  to implement recording logic<br />ref <- newIORef []<br />let f arg = do<br />      modifyIORef
-  ref (arg:)<br />      ...<br /><br />-- Verification logic<br />calls <- readIORef
-  ref<br />calls `shouldBe` [\"a\"]</pre><br />_※ This is just one example. Real-world
-  setups often require even more boilerplate._ | <pre>-- Use mock if verification
-  is needed (Recorded internally)<br />f <- mock (\"a\" ~> \"b\")<br /><br />-- Just
-  state what you want to verify<br />f `shouldBeCalled` \"a\"</pre><br />_Recording
-  is automatic.<br />Focus on the \"Why\" and \"What\", not the \"How\"._ |\n\n###
-  Key Features\n\n*   **Haskell Native DSL**: No need to memorize redundant data constructors
-  or specialized notation. Write mocks naturally, just like function definitions (`arg
-  ~> return`).\n*   **Architecture Agnostic**: Whether using MTL (Typeclasses), Service
-  Handle (Records), or pure functions—Mockcat adapts to your design choice with minimal
-  friction.\n*   **Verify by \"Condition\", not just Value**: Works even if arguments
-  lack `Eq` instances. You can verify based on \"what properties it should satisfy\"
-  (Predicates) rather than just strict equality.\n*   **Helpful Error Messages**:
-  Shows \"structural diffs\" on failure, highlighting exactly what didn't match.\n
-  \   ```text\n    function was not called with the expected arguments.\n\n      Closest
-  match:\n        expected: Record { name = \"Alice\", age = 20 }\n         but got:
-  Record { name = \"Alice\", age = 21 }\n                                             ^^^\n
+  stub (\"a\" ~> \"b\")</pre><br />_Behaves as a completely pure function._ |\n| **Verify**<br
+  />(Did it get called<br />correctly?) | <pre>-- Need manual recording mechanism<br
+  />ref <- newIORef []<br />let f arg = do<br />      modifyIORef ref (arg:)<br />
+  \     ...<br /><br />-- Verification Logic<br />calls <- readIORef ref<br />calls
+  `shouldBe` [\"a\"]</pre><br />_ This is just one example. Boilerplate often grows._
+  | <pre>withMock $ do<br />  -- Declare expected values at definition<br />  f <-
+  mock (\"a\" ~> \"b\")<br />    &#96;expects&#96; called once<br /><br />  -- Just
+  execute (Automatic verification)</pre><br />_Recording is automatic.<br />Focus
+  on the \"Why\" and \"What\", not the \"How\"._ |\n\n### Key Features\n\n*   **Haskell
+  Native DSL**: No need to memorize redundant data constructors or specialized notation.
+  Write mocks naturally, just like function definitions (`arg ~> return`).\n*   **Architecture
+  Agnostic**: Whether using MTL (Typeclasses), Service Handle (Records), or pure functions—Mockcat
+  adapts to your design choice with minimal friction.\n*   **Verify by \"Condition\",
+  not just Value**: Works even if arguments lack `Eq` instances. You can verify based
+  on \"what properties it should satisfy\" (Predicates) rather than just strict equality.\n*
+  \  **Helpful Error Messages**: Shows \"structural diffs\" on failure, highlighting
+  exactly what didn't match.\n    ```text\n    function was not called with the expected
+  arguments.\n\n      Closest match:\n        expected: Record { name = \"Alice\",
+  age = 20 }\n         but got: Record { name = \"Alice\", age = 21 }\n                                             ^^^\n
   \     Specific difference in `age`:\n        expected: 20\n         but got: 21\n
   \                 ^^\n    ```\n*   **Intent-Driven Types**: Types exist not to restrict
   you, but to naturally guide you in expressing your testing intent.\n\n\n---\n\n##
   Quick Start\n\nCopy and paste the code below to experience Mockcat right now.\n\n###
   Installation\n\n`package.yaml`:\n```yaml\ndependencies:\n  - mockcat\n```\n\nOr
   `.cabal`:\n```cabal\nbuild-depends:\n    mockcat\n```\n\n### First Test (`Main.hs`
-  / `Spec.hs`)\n\n```haskell\n{-# LANGUAGE BlockArguments #-}\n{-# LANGUAGE TypeApplications
-  #-}\nimport Test.Hspec\nimport Test.MockCat\n\nmain :: IO ()\nmain = hspec spec\n\nspec
-  :: Spec\nspec = do\n  it \"Quick Start Demo\" do\n    -- 1. Create a mock (Return
-  42 when receiving \"Hello\")\n    f <- mock (\"Hello\" ~> (42 :: Int))\n\n    --
-  2. Use it as a function\n    let result = f \"Hello\"\n    result `shouldBe` 42\n\n
-  \   -- 3. Verify it was called\n    f `shouldBeCalled` \"Hello\"\n```\n\n---\n\n###
-  At a Glance: Matchers\n| Matcher | Description | Example |\n| :--- | :--- | :---
-  |\n| **`any`** | Matches any value | `f <- mock (any ~> True)` |\n| **`when`** |
-  Matches condition | `f <- mock (when (> 5) \"gt 5\" ~> True)` |\n| **`\"val\"`**
-  | Matches value (Eq) | `f <- mock (\"val\" ~> True)` |\n| **`inOrder`** | Order
-  verification | ``f `shouldBeCalled` inOrderWith [\"a\", \"b\"]`` |\n| **`inPartial`**|
-  Partial order | ``f `shouldBeCalled` inPartialOrderWith [\"a\", \"c\"]`` |\n\n---\n\n##
+  / `Spec.hs`)\n\n```haskell\nimport Test.Hspec\nimport Test.MockCat\n\nspec :: Spec\nspec
+  = do\n  it \"Quick Start Demo\" $ do\n    withMockIO $ do\n      -- 1. Create a
+  mock (Return 42 when receiving \"Hello\")\n      --    Simultaneously declare \"it
+  should be called once\"\n      f <- mock (\"Hello\" ~> (42 :: Int))\n        `expects`
+  called once\n\n      -- 2. Call f \"Hello\" and get 42\n      f \"Hello\" `shouldBe`
+  42\n\n      -- 3. Verification happens automatically when exiting the scope\n```\n\n\n\n##
   User Guide\n\nMockcat supports two verification styles depending on your testing
-  needs and preferences.\n\n1.  **Post-Verification Style (Spy)**:\n    Define mock
-  behavior, run the code, and verify afterwards using `shouldBeCalled`.  \n    Ideal
-  for exploratory testing or simple setups. (Used mainly in Sections 1 & 2 below)\n2.
-  \ **Pre-Expectation Style (Declarative/Expectation)**:\n    Describe \"how it should
-  be called\" at the definition time.  \n    Ideal for strict interaction testing.
-  (Explained in Section 3)\n\n### 1. Function Mocking (`mock`) - [Basic]\n\nThe most
-  basic usage. Creates a function that returns values for specific arguments.\n\n```haskell\n--
-  Function that returns True for \"a\" -> \"b\"\nf <- mock (\"a\" ~> \"b\" ~> True)\n```\n\n**Flexible
-  Matching**:\nYou can specify conditions (predicates) instead of concrete values.\n\n```haskell\n--
-  Arbitrary string (param any)\nf <- mock (any ~> True)\n\n-- Condition (when)\nf
-  <- mock (when (> 5) \"> 5\" ~> True)\n```\n\n### 2. Typeclass Mocking (`makeMock`)\n\nUseful
-  when you want to bring existing typeclasses directly into your tests. Generates
-  mocks from existing typeclasses using Template Haskell.\n\n```haskell\n{-# LANGUAGE
-  TemplateHaskell #-}\n{-# LANGUAGE DataKinds #-}\n{-# LANGUAGE FlexibleInstances
+  needs and preferences.\n\n### 1. Declarative Verification (`withMock` / `expects`)
+  - [Recommended]\n\nA style where you describe expectations at definition time. Verification
+  runs automatically when exiting the scope.\nUseful when you want \"Definition\"
+  and \"Verification\" to be written close together.\n\n```haskell\nimport Test.Hspec\nimport
+  Test.MockCat\nimport Control.Monad.IO.Class (MonadIO(liftIO))\n\nspec :: Spec\nspec
+  = do\n  it \"User Guide (withMock)\" $ do\n    withMock $ do\n      -- Define a
+  mock that returns True for \"Hello\"\n      f <- mock (\"Hello\" ~> True)\n        `expects`
+  called once\n\n      -- Execution\n      let result = f \"Hello\"\n\n      liftIO
+  $ result `shouldBe` True\n```\n\n#### `withMockIO`: Simplified IO Testing\n`withMockIO`
+  is an IO-specialized version of `withMock`. It allows you to run IO actions directly
+  within the mock context without needing `liftIO`.\n\n```haskell\nimport Test.Hspec\nimport
+  Test.MockCat\n\nspec :: Spec\nspec = do\n  it \"User Guide (withMockIO)\" $ do\n
+  \   withMockIO $ do\n      f <- mock (\"Hello\" ~> True)\n        `expects` called
+  once\n\n      let result = f \"Hello\"\n\n      result `shouldBe` True\n```\n\n>
+  [!IMPORTANT]\n> When using `expects` (declarative verification), you MUST wrap the
+  mock definition in **parentheses `(...)`**.\n> The `$` operator pattern used in
+  previous versions (`mock $ ... expected ...`) will cause compilation errors due
+  to precedence changes.\n>\n> ❌ `mock $ any ~> True expects ...`\n> ✅ `mock (any
+  ~> True) expects ...`\n\n> [!NOTE]\n> You can also use `expects` for declarative
+  verification inside `runMockT` blocks.\n> This works seamlessly with generated typeclass
+  mocks as well.\n>\n> ```haskell\n> runMockT do\n>   _readFile (\"config.txt\" ~>
+  pure \"value\")\n>     `expects` called once\n> ```\n\n### 2. Typeclass Mocking
+  (`makeMock`)\n\nUseful when you want to bring existing typeclasses directly into
+  your tests. Generates mocks from existing typeclasses using Template Haskell.\n\n```haskell\n{-#
+  LANGUAGE TemplateHaskell #-}\n{-# LANGUAGE DataKinds #-}\n{-# LANGUAGE FlexibleInstances
   #-}\n{-# LANGUAGE FlexibleContexts #-}\n{-# LANGUAGE TypeApplications #-}\n{-# LANGUAGE
   ScopedTypeVariables #-}\n{-# LANGUAGE TypeFamilies #-}\n\nclass Monad m => FileSystem
   m where\n  readFile :: FilePath -> m String\n  writeFile :: FilePath -> String ->
@@ -234,36 +258,36 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   \"log.txt\" ~> \"start\" ~> pure @IO ()\n\n      -- [Auto-Lift Mode] (if using makeAutoLiftMock)\n
   \     -- _readFile $ \"config.txt\" ~> \"debug=true\"\n\n      -- Run code under
   test (mock injected)\n      myProgram \"config.txt\"\n    \n    result `shouldBe`
-  ()\n```\n\n### 3. Declarative Verification (`withMock` / `expects`)\n\nA style where
-  you describe expectations at definition time. Verification runs automatically when
-  exiting the scope.\nUseful when you want \"Definition\" and \"Verification\" to
-  be written close together.\n\n```haskell\nwithMock $ do\n  -- Write expectations
-  (expects) at definition time\n  f <- mock (any ~> True)\n    `expects` do\n      called
-  once `with` \"arg\"\n\n  -- Execution\n  f \"arg\"\n\n#### `withMockIO`: Simplified
-  IO Testing\n`withMockIO` is an IO-specialized version of `withMock`. It allows you
-  to run IO actions directly within the mock context without needing `liftIO`.\n\n```haskell\nit
-  \"IO test\" $ withMockIO do\n  f <- mock (any ~> pure \"result\")\n  res <- someIOCall
-  f\n  res `shouldBe` \"result\"\n```\n```\n\n> [!IMPORTANT]\n> When using `expects`
-  (declarative verification), you MUST wrap the mock definition in **parentheses `(...)`**.\n>
-  The `$` operator pattern used in previous versions (`mock $ ... expected ...`) will
-  cause compilation errors due to precedence changes.\n>\n> ❌ `mock $ any ~> True
-  expects ...`\n> ✅ `mock (any ~> True) expects ...`\n\n> [!NOTE]\n> You can also
-  use `expects` for declarative verification inside `runMockT` blocks.\n> This works
-  seamlessly with generated typeclass mocks as well.\n>\n> ```haskell\n> runMockT
-  do\n>   _readFile \"config.txt\" ~> pure \"value\"\n>     `expects` called once\n>
-  ```\n\n### 4. Flexible Verification (Matchers)\n\nEven if arguments don't have `Eq`
-  instances, or you don't want to depend on specific values, you can verify based
-  on **intent**—\"what condition should be met\".\nMockcat provides **matchers** to
-  verify properties of functions, not just value equality.\n\n#### Allow Any Value
-  (`any`)\n\n```haskell\n-- Return True regardless of the argument\nf <- mock (any
-  ~> True)\n\n-- Verify that it was called (arguments don't matter)\nf `shouldBeCalled`
-  any\n```\n\n#### Verify with Conditions (`when`)\n\nYou can verify using \"conditions
-  (predicates)\" instead of arbitrary values.\nPowerfully useful for types without
-  `Eq` (like functions) or when checking partial matches.\n\n```haskell\n-- Return
-  False only if the argument starts with \"error\"\nf <- mock do\n  onCase $ when
-  (\\s -> \"error\" `isPrefixOf` s) \"start with error\" ~> False\n  onCase $ any
-  ~> True\n```\n\nIf you don't need a label (description shown on error), you can
-  use `when_`.\n\n```haskell\nf <- mock (when_ (> 5) ~> True)\n```\n\n### 5. Advanced
+  ()\n```\n\n### 3. Function Mocking and Post-Verification (`mock` / `shouldBeCalled`)\n\nThe
+  most basic usage. Creates a function that returns values for specific arguments.\nCombining
+  it with Post-Verification (`shouldBeCalled`) makes it suitable for exploratory testing
+  or prototyping.\n\n```haskell\nimport Test.Hspec\nimport Test.MockCat\n\nspec ::
+  Spec\nspec = do\n  it \"Function Mocking\" $ do\n    -- Define a mock that returns
+  True for \"Hello\" (No 'expects' here)\n    f <- mock (\"Hello\" ~> True)\n    \n
+  \   -- Execution\n    f \"Hello\" `shouldBe` True\n\n    -- Post-Verification (shouldBeCalled)\n
+  \   f `shouldBeCalled` \"Hello\"\n```\n\n> [!WARNING]\n> **Limitation in HPC (Code
+  Coverage) Environments**\n> Do not use `shouldBeCalled` when running tests with
+  `stack test --coverage` or similar.\n> The code coverage instrumentation by GHC
+  wraps functions, which changes their identity and causes verification to fail.\n>
+  If you need code coverage, please use the **`expects`** style (Section 1).\n\n**Flexible
+  Matching**:\nYou can specify conditions (predicates) instead of concrete values.\n\n```haskell\n{-#
+  LANGUAGE TypeApplications #-}\nimport Test.Hspec\nimport Test.MockCat\nimport Prelude
+  hiding (any)\n\nspec :: Spec\nspec = do\n  it \"Matcher Examples\" $ do\n    --
+  Arbitrary string (param any)\n    f <- mock (any @String ~> True)\n    f \"foo\"
+  `shouldBe` True\n\n    -- Condition (when)\n    g <- mock (when (> (5 :: Int)) \">
+  5\" ~> True)\n    g 6 `shouldBe` True\n```\n\n### 4. Flexible Verification (Matchers)\n\nEven
+  if arguments don't have `Eq` instances, or you don't want to depend on specific
+  values, you can verify based on **intent**—\"what condition should be met\".\nMockcat
+  provides **matchers** to verify properties of functions, not just value equality.\n\n####
+  Allow Any Value (`any`)\n\n```haskell\n-- Return True regardless of the argument\nf
+  <- mock (any ~> True)\n\n-- Verify that it was called (arguments don't matter)\nf
+  `shouldBeCalled` any\n```\n\n#### Verify with Conditions (`when`)\n\nYou can verify
+  using \"conditions (predicates)\" instead of arbitrary values.\nPowerfully useful
+  for types without `Eq` (like functions) or when checking partial matches.\n\n```haskell\n--
+  Return False only if the argument starts with \"error\"\nf <- mock do\n  onCase
+  $ when (\\s -> \"error\" `isPrefixOf` s) \"start with error\" ~> False\n  onCase
+  $ any ~> True\n```\n\nIf you don't need a label (description shown on error), you
+  can use `when_`.\n\n```haskell\nf <- mock (when_ (> 5) ~> True)\n```\n\n### 5. Advanced
   Features - [Advanced]\n\n#### mock vs stub vs mockM\n\nIn most cases, **`mock`**
   is all you need.\nConsider other functions only when you need finer control.\n\n|
   Function | Verification (`shouldBeCalled`) | IO Dependency | Characteristics |\n|
@@ -309,7 +333,21 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   1st call\n  onCase $ \"get\" ~> pure @IO 2 -- 2nd call\n```\n\n#### Named Mocks\n\nYou
   can attach labels to display function names in error messages.\n\n```haskell\nf
   <- mock (label \"myAPI\") (\"arg\" ~> True)\n```\n\n---\n\n## Encyclopedia (Feature
-  Reference)\n\n※ Use this section as a dictionary when you get stuck.\n\n### Verification
+  Reference)\n\n※ Use this section as a dictionary when you get stuck.\n\n### Declarative
+  Verification DSL (`expects`)\n\nIn `expects` blocks, you can describe expectations
+  declaratively using a builder-style syntax.\nIt shares the same vocabulary as `shouldBeCalled`.\n\n####
+  Basic Usage\n\nStart with `called` and chain conditions.\n\n```haskell\n-- Call
+  count only\nmock (any ~> True) `expects` called once\n\n-- With arguments\nmock
+  (any ~> True) `expects` (called once `with` \"arg\")\n\n-- Multiple expectations
+  (in do block)\nmock (any ~> True) `expects` do\n  called once `with` \"A\"\n  called
+  once `with` \"B\"\n```\n\n#### Syntax Reference\n\n| Builder | Description | Example
+  |\n| :--- | :--- | :--- |\n| **`called`** | **[Required]** Starts the expectation
+  builder. | `called ...` |\n| **`times n`** | Expects exact call count. | `called
+  . times 2` |\n| **`once`** | Alias for `times 1`. | `called . once` |\n| **`never`**
+  | Expects 0 calls. | `called . never` |\n| **`with arg`** | Expects specific argument(s).
+  | `called `with` \"value\"` |\n| **`with matcher`** | Uses a matcher for argument
+  verification. | `called `with` when (>5) \"gt 5\"` |\n| **`inOrder`** | Verify usage
+  order (when used in a list) | (See \"Order Verification\" section) |\n\n### Verification
   Matchers (`shouldBeCalled`)\n\n| Matcher | Description | Example |\n| :--- | :---
   | :--- |\n| `x` (Value itself) | Was called with that value | ``f `shouldBeCalled`
   (10 :: Int)`` |\n| `times n` | Exact count | ``f `shouldBeCalled` (times 3 `with`
@@ -323,42 +361,30 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   \"c\"]`` |\n\n### Parameter Matchers (Definition)\n\n| Matcher | Description | Example
   |\n| :--- | :--- | :--- |\n| `any` | Any value | `any ~> True` |\n| `when pred label`
   | Condition | `when (>0) \"positive\" ~> True` |\n| `when_ pred` | No label | `when_
-  (>0) ~> True` |\n\n### Declarative Verification DSL (`expects`)\n\nIn `expects`
-  blocks, you can describe expectations declaratively using a builder-style syntax.\nIt
-  shares the same vocabulary as `shouldBeCalled`.\n\n#### Basic Usage\n\nStart with
-  `called` and chain conditions.\n\n```haskell\n-- Call count only\nmock (any ~> True)
-  `expects` called once\n\n-- With arguments\nmock (any ~> True) `expects` (called
-  once `with` \"arg\")\n\n-- Multiple expectations (in do block)\nmock (any ~> True)
-  `expects` do\n  called once `with` \"A\"\n  called once `with` \"B\"\n```\n\n####
-  Syntax Reference\n\n| Builder | Description | Example |\n| :--- | :--- | :--- |\n|
-  **`called`** | **[Required]** Starts the expectation builder. | `called ...` |\n|
-  **`times n`** | Expects exact call count. | `called . times 2` |\n| **`once`** |
-  Alias for `times 1`. | `called . once` |\n| **`never`** | Expects 0 calls. | `called
-  . never` |\n| **`with arg`** | Expects specific argument(s). | `called `with` \"value\"`
-  |\n| **`with matcher`** | Uses a matcher for argument verification. | `called `with`
-  when (>5) \"gt 5\"` |\n| **`inOrder`** | Verify usage order (when used in a list)
-  | (See \"Order Verification\" section) |\n\n### FAQ\n\n<details>\n<summary><strong>Q.
-  How are unevaluated lazy values handled?</strong></summary>\nA. They are not counted.
-  Mockcat records calls only \"when the result is evaluated\" (Honest Laziness). This
-  prevents false positives from unneeded calculations.\n</details>\n\n<details>\n<summary><strong>Q.
+  (>0) ~> True` |\n\n### FAQ\n\n<details>\n<summary><strong>Q. How are unevaluated
+  lazy values handled?</strong></summary>\nA. They are not counted. Mockcat records
+  calls only \"when the result is evaluated\" (Honest Laziness). This prevents false
+  positives from unneeded calculations.\n</details>\n\n<details>\n<summary><strong>Q.
   Can I use it in parallel tests?</strong></summary>\nA. Yes. Internally uses `TVar`
   to count atomically, so it records accurately even when called in parallel via `mapConcurrently`,
   etc.\n</details>\n\n<details>\n<summary><strong>Q. Can I run tests with code coverage
-  (HPC)?</strong></summary>\nA. Yes (since v1.1.0.0). Mockcat natively handles the
-  instability of `StableName` introduced by HPC instrumentation, so you can run `stack
-  test --coverage` without issues.\n</details>\n\n<details>\n<summary><strong>Q. What
-  code does `makeMock` generate?</strong></summary>\nA. It generates a `MockT m` instance
-  for the specified typeclass, and stub generation function definitions named `_methodName`
-  corresponding to each method.\n</details>\n\n<details>\n<summary><strong>Q. Isn't
-  this strictly a Spy?</strong></summary>\nA. Yes, according to definitions like xUnit
-  Patterns, Mockcat's mocks which verify after execution are classified as **Test
-  Spies**.<br>\nHowever, since many modern libraries (Jest, Mockito, etc.) group these
-  under \"Mock\", and to avoid confusion from terminology proliferation, this library
-  unifies them under the term **\"Mock\"**.\n</details>\n\n## Tips and Troubleshooting\n\n###
-  Name collision with `Prelude.any`\nThe `any` parameter matcher from `Test.MockCat`
-  may conflict with `Prelude.any`.\nTo resolve this, hide `any` from Prelude or use
-  a qualified name.\n\n```haskell\nimport Prelude hiding (any)\n-- or\nimport qualified
-  Test.MockCat as MC\n```\n\n### Name collision with `Control.Monad.when`\n`Test.MockCat`
+  (HPC)?</strong></summary>\nA. Yes (since v1.1.0.0). Mockcat's `expects` style is
+  designed to be unaffected by the function wrapping performed by HPC, so it operates
+  safely even under HPC.\nHowever, for the reasons mentioned above, we strongly recommend
+  using the **`expects`** style (or `withMock`).\nThe `shouldBeCalled` style cannot
+  be used because HPC's mechanism makes it impossible to identify mock identity.\n</details>\n\n<details>\n<summary><strong>Q.
+  What code does `makeMock` generate?</strong></summary>\nA. It generates a `MockT
+  m` instance for the specified typeclass, and stub generation function definitions
+  named `_methodName` corresponding to each method.\n</details>\n\n<details>\n<summary><strong>Q.
+  Isn't this strictly a Spy?</strong></summary>\nA. Yes, according to definitions
+  like xUnit Patterns, Mockcat's mocks which verify after execution are classified
+  as **Test Spies**.<br>\nHowever, since many modern libraries (Jest, Mockito, etc.)
+  group these under \"Mock\", and to avoid confusion from terminology proliferation,
+  this library unifies them under the term **\"Mock\"**.\n</details>\n\n## Tips and
+  Troubleshooting\n\n### Name collision with `Prelude.any`\nThe `any` parameter matcher
+  from `Test.MockCat` may conflict with `Prelude.any`.\nTo resolve this, hide `any`
+  from Prelude or use a qualified name.\n\n```haskell\nimport Prelude hiding (any)\n--
+  or\nimport qualified Test.MockCat as MC\n```\n\n### Name collision with `Control.Monad.when`\n`Test.MockCat`
   exports `when` (parameter matcher), which may conflict with `Control.Monad.when`.\nTo
   avoid this, hide `when` from `Test.MockCat` or use qualified import.\n\n```haskell\nimport
   Test.MockCat hiding (when)\n-- or\nimport Control.Monad hiding (when) -- if you
@@ -372,9 +398,9 @@ description: "<div align=\"center\">\n    <img src=\"https://raw.githubuserconte
   | 3.12.1.0 | Ubuntu, macOS, Windows |\n| 9.10.3 | 3.12.1.0 | Ubuntu, macOS, Windows
   |\n| 9.12.2 | 3.12.1.0 | Ubuntu, macOS, Windows |\n\n_Happy Mocking!_ \U0001F431"
 description-type: markdown
-hash: fef7d94cc98b31e68a8d52a173319834c52e5ee93bf30f3dacf881f2ecc894a1
+hash: 1ab4a28fa2d9de1c3537a23e0cc682575df94db3ae0ca97f42615b163671763b
 homepage: https://github.com/pujoheadsoft/mockcat#readme
-latest: 1.3.3.0
+latest: 1.4.0.0
 license-name: MIT
 maintainer: funnycat <pujoheadsoft@gmail.com>
 synopsis: Declarative mocking with a single arrow `~>`.
