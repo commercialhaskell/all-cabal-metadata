@@ -3,17 +3,140 @@ all-versions:
 - 0.1.0.1
 - 0.1.0.2
 - 0.1.0.3
+- 0.1.1.1
 author: Tobias Dammers
 basic-deps:
   base: '>=4.12.0.0 && <5'
   text: '>=1.2 && <3'
 changelog: ''
 changelog-type: ''
-description: ''
-description-type: haddock
-hash: f0d4e77e31dd699aff6cd4b4516a6370fe19f598e3d4d159d4c39ab7026c1625
+description: "# Migrant\n\nOpinionated SQL schema migration management\n\n## Introduction\n\nMigrant
+  instruments SQL schema migrations in a semi-automated way. Writing the\nactual up-
+  and downgrade scripts is still a manual effort; but Migrant takes\ncare of tracking
+  which scripts have been run already and which still need to be\nrun, runs them for
+  you.\n\n## The SQL Schema Migration Problem\n\nDatabases are notoriously difficult
+  to version-control.\n\nVersioning source code is a solved problem: we write code,
+  put it in a\nrepository, and the source control software gives us a unique identifier
+  for\nthat exact version. We can now deploy the code in whichever state we want,
+  and\nas long as we keep code and data separated, we can do this in a fairly\nbrute-force
+  manner: we just delete the old code, copy the new code where it\nneeds to be, and
+  restart what needs to be restarted. Easy. And because we can\ndeploy any version
+  of the code we want on any host we want, we can test our\ncode on one machine (a
+  test server), and then deploy it on another (a\nproduction server), and be reasonably
+  sure that if it works on the test\nenvironment, it will also work in production.
+  We can also, just as easily,\nrevert the code to an older version, if one of our
+  changes turns out to have\nintroduced a fault.\n\nBut with SQL databases, this doesn't
+  work. The schema and the data stored in\nthe database are intertwined; we want to
+  manage the schema, but we want to do\nit such that no data is lost. We cannot simply
+  overwrite the schema: if we\ndelete a schema, we also delete all the data in it,
+  because in an SQL database,\ndata cannot exist without the associated schema. Even
+  small changes, such as\nchanging the type of a column, can be destructive, and so
+  there is a real risk\nof permanently losing data as a result of schema changes.
+  And this means we\nmust be more surgical about our database mutations.\n\nThere
+  are two fundamental approaches to this, which I call \"snapshot-based\" and\n\"delta-based\".\n\nThe
+  \"snapshot-based\" approach stores a snapshot of the schema at a given\nversion
+  in the source control system; to migrate the database to that version,\nit looks
+  at the current schema, and infers the schema changes that are required\nto get the
+  schema into the desired state (or a compatible one). For example, if\nthere is a
+  table `products` in the database that has three columns (`id`,\n`name`, `price`),
+  and the version-controlled schema description says it should\nhave columns `id`,
+  `name`, `price`, `image`, then the migration code infers\nthat the `image` column
+  must be added.\n\nThe \"delta-based\" approach, which is what Migrant uses, stores
+  descriptions of\nthe steps required to arrive at the current schema. A migration
+  run, then,\nfigures out which migration steps have already been executed, and which
+  ones\nare needed to get the schema where we want it, and executes the required steps.\nIn
+  our example above, there may be two upgrade steps: `create-products-table`,\nand
+  `add-product-image`. The migration code detects that only the\n`create-products-table`
+  step has been run, and decides to run the\n`add-product-image` step.\n\n## How Migrant
+  Works\n\nMigrant migrations are implemented using three key parts:\n\n- A `_migrations`
+  table in the database. Migrant creates this table\n  automatically; it is used to
+  track which migrations have been run. Migrant\n  will never inspect the schema itself
+  or make any guesses: if the migrations\n  table says a migration has been run, then
+  Migrant trusts it.\n- A list of migrations that represent the desired state of the
+  database.\n  Migrant takes this as a list of strings (`[MigrationName]`; `MigrationName`\n
+  \ is a newtype over `Text`); you can hard-code that list (which means it will\n
+  \ be committed to source control along with the rest of your code), you can\n  load
+  it dynamically at runtime (which means you can manage migrations\n  independently
+  from the application code), or you can use the `embed-file`\n  package to compile
+  a separate text file into your application code, and\n  commit that text file along
+  with the rest of your code. What matters is that\n  the list is version controlled,
+  and that is lists migrations in the order you\n  want them to be run.\n- A set of
+  `up` and `down` migration actions. Migrant takes two functions that\n  will be used
+  to look up these scripts, both of type `MigrationName ->\n  connection -> IO ()`,
+  where the `connection -> IO ()` part is the function to\n  be run for the \"up\"
+  or \"down\" migration. Note that there is no way to signal\n  a lookup failure other
+  than throwing an exception: this is by design, and\n  works fine, because the migration
+  runner code will respond to a failed query\n  exactly the same way as it responds
+  to a missing migration script: it aborts,\n  and rolls back the entire migration.\n\n##
+  Using Migrant\n\n1. Add `migrant-core` to your project, and one of the backends\n
+  \  (`migrant-sqlite-simple`, `migrant-postgresql-simple`, or `migrant-hdbc`).\n2.
+  Write some glue code to make your application call `migrate`\n3. Write schema migrations
+  as pairs of \"up\" and \"down\" scripts, and write a\n   list that says in which
+  order to run these scripts.\n4. To deploy your migrations, compile the project,
+  and make it run the\n   `migrate` function. Migrant will now look for a `_migrations`
+  table in the\n   database, creating it if necessary, and run \"up\" and \"down\"
+  scripts as\n   needed to get the database into the state that your application expects.\n\nExample:\n\n```haskell\n{-#LANGUAGE
+  OverloadedStrings #-}\n\nimport qualified Database.HDBC as HDBC\nimport Database.Migrant\nimport
+  Data.Text (Text)\n\nrunMigrations :: HDBC.ConnWrapper -> IO ()\nrunMigrations conn
+  =\n  migrate myMigrations migrateUp migrateDown conn\n\nmyMigrations :: [MigrationName]\nmyMigrations
+  =\n  [ \"create-users-table\"\n  , \"user-email\"\n  ]\n\nmigrateUp :: MigrationName
+  -> HDBC.ConnWrapper -> IO ()\nmigrateUp name conn = case name of\n  \"create-users-table\"
+  ->\n    HDBC.quickQuery\n      conn\n      \"CREATE TABLE users (id INTEGER NOT
+  NULL SERIAL, username TEXT NOT NULL, password BLOB NULL)\"\n      []\n  \"user-email\"
+  ->\n    HDBC.quickQuery\n      conn\n      \"ALTER TABLE users ADD COLUMN email
+  TEXT NULL\"\n      []\n\nmigrateDown :: MigrationName -> HDBC.ConnWrapper -> IO
+  ()\nmigrateDown name conn = case name of\n  \"create-users-table\" ->\n    HDBC.quickQuery\n
+  \     conn\n      \"DROP TABLE users\"\n      []\n  \"user-email\" ->\n    HDBC.quickQuery\n
+  \     conn\n      \"ALTER TABLE users DROP COLUMN email\"\n      []\n  \n```\n\n##
+  Suggested Practices\n\n- Never manipulate the database schema manually. Migrant
+  cannot know about\n  manual changes to the database, so anything you do manually
+  may violate the\n  assumptions that the up and down scripts are based on. Any changes
+  you make\n  for development purposes should go in pairs of \"up\" and \"down\" scripts.\n-
+  Test your migrations. A good approach is to clone a production database into\n  a
+  test environment and run the updated migrations code against that, then\n  check
+  if everything works as intended.\n- Also test your \"down\" scripts: after running
+  the \"up\" scripts, revert the\n  code to the previous version, and run another
+  migration. It should undo the\n  upgrade, and the database schema should be in the
+  same (or compatible) state\n  as it was before the upgrade.\n- The migrations list
+  should be considered \"append-only\". To undo changes that\n  have already been
+  deployed, add another script that undoes them, rather than\n  deleting an entry
+  from the migrations list.\n- Likewise, do not change migration scripts once committed
+  (unless they were\n  committed to a branch that isn't integrated with upstream,
+  such as a local\n  WIP branch).\n- Different branches can introduce conflicting
+  changes. This is why it is\n  important to have both the migration scripts and the
+  migrations list in\n  source control: conflicts will appear as merge conflicts,
+  and you can\n  manually resolve them the usual way, deciding on an appropriate ordering
+  of\n  the conflicting scripts.\n- If at all possible, write your \"up\" and \"down\"
+  scripts such that they are\n  reversible and do not lead to data loss. Dropping
+  tables or columns is a\n  prime candidate for data loss, and usually not necessary,
+  at least not\n  immediately.\n- Consider a staged upgrade strategy using three deployment
+  cycles for each\n  change:\n    1. Upgrade the database to add the new feature\n
+  \   2. Upgrade client code to use the new feature\n    3. Once all clients are upgraded,
+  drop support for the old feature from the\n       database.\n- To avoid naming conflicts
+  between independent lines of development, it may be\n  a good idea to tag migration
+  names with a sufficiently entropic identifier,\n  such as a randomized nonce or
+  a fine-grained timestamp.\n\n## Suggested Development Flow\n\n1. In a development
+  environment, write your intended database change, and an\n   \"undo\", as Migrant
+  migration pair, and reference it in your migrations list.\n2. Run migrations on
+  the dev environment.\n3. Verify that the migration does what you want. If it does,
+  proceed; if not,\n   remove the reference from the list, run migrations (this will
+  run the \"undo\"\n   script), and try again. If your \"up\" script failed, there
+  is no need to roll\n   it back. If the \"down\" script doesn't work, reset your
+  database by cloning a\n   production database or starting with a blank database
+  (this will recreate\n   the entire thing from scratch, running all the migrations
+  one by one).\n4. Once you're happy with the migration script, commit it.\n5. When
+  merging, resolve conflicts in the migrations list and test the merged\n   version
+  against a development database. Changing the order of entries in the\n   list and
+  re-running migrations will roll back changes up to the last common\n   situation,
+  and then re-apply the migrations in the order you specified.\n6. As a final test
+  before deploying, clone a production database and run all\n   migrations on it.\n7.
+  To deploy, first install the application code on the server, and then make\n   it
+  run migrations.\n8. To undo a deployment, the procedure is exactly the same: install
+  application\n   code, then run migrations.\n"
+description-type: markdown
+hash: 862c78ff5e56735c7508a88ed87d30328b8433be17865973dd10464ed9aa0768
 homepage: https://github.com/tdammers/migrant
-latest: 0.1.0.3
+latest: 0.1.1.1
 license-name: BSD-3-Clause
 maintainer: tdammers@gmail.com
 synopsis: Semi-automatic database schema migrations
@@ -22,7 +145,7 @@ test-bench-deps:
   QuickCheck: '>=2.14.2 && <2.15'
   base: '>=4.12.0.0 && <5'
   migrant-core: '>=0'
-  tasty: '>=1.4 && <1.5'
+  tasty: '>=1.4 && <1.6'
   tasty-hunit: '>=0.10.0.2 && <0.11'
-  tasty-quickcheck: '>=0.10.1.1 && <0.11'
+  tasty-quickcheck: '>=0.10.1.1 && <0.12'
   text: '>=1.2 && <3'
