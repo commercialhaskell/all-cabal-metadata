@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0
+- 0.2.0
 author: José Nuno Macedo <zenunomacedo@gmail.com>
 basic-deps:
   ZipperAG: '>=1.0.0 && <2'
@@ -13,102 +14,100 @@ basic-deps:
 changelog: ''
 changelog-type: ''
 description: "Ztrategic - A library for Strategic Programming with Attribute Grammars
-  in Haskell\r\n====================\r\n\r\n## This README is a WIP and likely contains
-  outdated information! \r\n\r\nOverview: \r\n\r\n* [Ztrategic](#markdown-header-ztrategic)
-  \r\n    * [What is Ztrategic](#markdown-header-what-is-ztrategic)\r\n    * [Getting
-  Started](#markdown-header-getting-started)\r\n        * [Type-Preserving Strategies](#markdown-header-type-preserving-strategies)\r\n
-  \       * [Type-Unifying Strategies](#markdown-header-type-unifying-strategies)\r\n
-  \       * [Strategic Data](#markdown-header-strategic-data)\r\n        * [API Reference](#markdown-header-api-reference)
-  \ \r\n    * [Repository Layout](#markdown-header-repository-layout)\r\n* [Attribute
-  Grammars](#markdown-header-attribute-grammars)\r\n* [Combining AGs with Strategies](#markdown-header-combining-ags-with-strategies)\r\n\r\n-
-  - -\r\n\r\n# Ztrategic\r\n\r\n## What is Ztrategic\r\n\r\nWe strongly recommend
-  reading our publication \"Zipping Strategies and Attribute Grammars\" regarding
-  this repository for more context and explanation; nevertheless, we provide a tutorial
-  based on previous work in this README. Ztrategic is a library built on top of the
-  `Zipper` data structure, and it allows for data traversal, manipulation and reduction,
-  regardless of the underlying data structure. For more complex transformations, it
-  is possible to integrate Attribute Grammars with Ztrategic. \r\n\r\n\r\nZtrategic
-  is a standalone library and it is intended to be simple to use - just import it,
-  respect any needed boilerplate, and define your transformations. \r\n\r\n## Getting
-  Started\r\n\r\nLet us consider a data type for the representation of `Let` expressions:
-  \r\n\r\n```haskell\r\ndata Let = Let List Exp\r\n\r\ndata  List  \r\n      = NestedLet
-  \ Name Let List\r\n      | Assign     Name Exp List\r\n      | EmptyList\r\n\r\ndata
-  Exp = Add   Exp Exp\r\n         | Sub   Exp Exp\r\n         | Neg   Exp\r\n         |
-  Var   Name\r\n         | Const Int\r\n\r\ntype Name     = String\r\n```\r\n\r\nA
-  `Let` expression contains a `List` of declarations followed by an `Exp` to be evaluated.
-  A `List` can be an `EmptyList` or either a `NestedLet` (that is, another `Let` block
-  nested inside our current block) or an `Assign` (which is a declaration of a variable);
-  any of these are followed by a `List` containing the rest of the declarations. \r\n\r\n\r\nWe
-  denote that this is not an optimal definition of a `Let` block: we could use Haskell
-  lists instead of explicit recursion on `List`, and `Let` values themselves could
-  be inside `Exp`. Nevertheless, this data type is heterogenous (we have data types
-  `Let`, `List` and `Exp` intertwined) and therefore not exactly easy to handle in
-  classic Haskell fashion. \r\n\r\n\r\nThis tutorial will break on your machine because
-  there is no definition of `StrategicData` for data type `Let`. We discuss this later
-  [here](#markdown-header-strategic-data), but in the meanwhile you can skip this
-  problem by adding the following line to your module: \r\n```haskell\r\ninstance
-  StrategicData Let\r\n```\r\n\r\n\r\n### Type-Preserving Strategies\r\n\r\n\r\n\r\nLet
-  us now consider a series of arithmetic expression optimizations: \r\n\r\n```\r\n1)
-  add(e, const(0)) -> e \r\n2) add(const(0), e) -> e\r\n3) add(const(a), const (b))
-  -> const (a+b)\r\n4) sub(a, b) -> add(a, neg(b))\r\n5) neg(neg(e)) -> e\r\n6) neg
-  (const(a)) -> const (-a)\r\n7) var (id) | (id, just(e)) ∈ env -> e\r\n```\r\n\r\nLet
-  us consider only the first 6 rules at first. Using regular Haskell code, these rules
-  are easy to implement but they are burdensome: None of these rules really care about
-  the `Let` and `List` data types, but we would be forced to write code to recurse
-  through them anyway. For now, let us write only a function to handle `Exp` values,
-  returning `Just` the result when appliable and `Nothing` otherwise: \r\n\r\n```haskell\r\nexpr
-  :: Exp -> Maybe Exp\r\nexpr (Add e (Const 0))          = Just e \r\nexpr (Add (Const
-  0) e)          = Just e\r\nexpr (Add (Const a) (Const b))  = Just (Const (a+b))
-  \r\nexpr (Sub a b)                  = Just (Add a (Neg b))    \r\nexpr (Neg (Neg
-  e))              = Just e           \r\nexpr (Neg (Const a))            = Just (Const
-  (-a)) \r\nexpr _                          = Nothing\r\n```\r\n\r\nThis `expr` function
-  contains all the work that is, in fact, relevant for our use case. In regular Haskell
-  code, the rest of the code can be considered boilerplate / copy rules, only recusing
-  through data structures with no real work. Instead, we will be using a **strategy**
-  to apply `expr` to our data type. \r\n\r\n\r\nThere are two types of strategies
-  in our library:\r\n\r\n\r\n* **Type-Preserving (TP)** strategies preserve the type
-  of the data structure, changing only its contents. They are useful for transforming
-  and manipulating data structures. They can be thought of as *map* operations. \r\n*
-  **Type-Unifying (TU)** strategies produce a new value out of data from the input
-  data structure. They are useful for gathering data out of and/or analysing data
-  structures. They can be thought of as *reduce* operations. \r\n\r\n\r\nFor this,
-  we will use a Type-Preserving (TP) strategy. From the several strategies available
-  for this, we will choose the *innermost* strategy. This strategy will apply a transformation
-  as many times as possible until a fixed point is reached. Because applying a transformation
-  in part of an expression can enable new transformations in different parts of expressions,
-  we we might need to re-apply `expr` to previously-processed nodes, so this strategy
-  handles re-application for us. \r\n\r\n\r\nThe full code to apply `expr` with an
-  *innermost* strategy is as follows: \r\n\r\n```haskell\r\nopt :: Zipper Let -> Maybe
-  (Zipper Let)\r\nopt t = applyTP (innermost step) t\r\n      where step = failTP
-  `adhocTP` expr\r\n```\r\n\r\nThere is a lot to unpack here. For starters, our input
-  is a `Zipper Let` and our output is a `Maybe (Zipper Let)`. This is not a problem,
-  as we can convert to and from `Zipper` with the functions `toZipper` and `fromZipper`
-  easily (these are from the `Data.Generics.Zipper` module from the `syz` package).\r\n\r\n\r\nThen,
-  we define a `step` worker function. This will be the function to be applied to every
-  single node on the data type we are traversing. Note that this function can be applied
-  to all nodes, even primitive data types such as `Int` or `Char`. We define this
-  function by defining its default behaviour, which we define as `failTP` here, meaning
-  that by default this worker function fails silently. We add more behaviours to it
-  with the composing function `adhocTP` and its variations. We then add `expr` to
-  our worker function. The resulting `step` function will apply `expr` if possible
-  (when visiting an `Exp` node), otherwise applying `failTP` and therefore failing.
-  \r\n\r\n\r\nWe then define what strategy we intend to use. We opt for `innermost`,
-  and thus our strategy will be `innermost step`, meaning to apply `step` in a `innermost`
-  way. (See more strategies [here](#markdown-header-api-reference)) This means that
-  `step` will be applied as many times as possible, until it fails on all nodes. It
-  is important that the `step` function respects this and fails when no work is to
-  be done; if it does not fail, then the `innermost` strategy has no way to know it
-  should stop, resulting in an endless loop. Choosing to use the failing function
-  `failTP` or the identity function `idTP` as a default behaviour must depend on what
-  kind of strategy is to be used. \r\n\r\n\r\nFinally, we apply this strategy with
+  in Haskell\n====================\n\n## This README is a WIP and likely contains
+  outdated information! \n\nOverview: \n\n* [Ztrategic](#markdown-header-ztrategic)
+  \n    * [What is Ztrategic](#markdown-header-what-is-ztrategic)\n    * [Getting
+  Started](#markdown-header-getting-started)\n        * [Type-Preserving Strategies](#markdown-header-type-preserving-strategies)\n
+  \       * [Type-Unifying Strategies](#markdown-header-type-unifying-strategies)\n
+  \       * [Strategic Data](#markdown-header-strategic-data)\n        * [API Reference](#markdown-header-api-reference)
+  \ \n    * [Repository Layout](#markdown-header-repository-layout)\n* [Attribute
+  Grammars](#markdown-header-attribute-grammars)\n* [Combining AGs with Strategies](#markdown-header-combining-ags-with-strategies)\n\n-
+  - -\n\n# Ztrategic\n\n## What is Ztrategic\n\nWe strongly recommend reading our
+  publication \"Zipping Strategies and Attribute Grammars\" regarding this repository
+  for more context and explanation; nevertheless, we provide a tutorial based on previous
+  work in this README. Ztrategic is a library built on top of the `Zipper` data structure,
+  and it allows for data traversal, manipulation and reduction, regardless of the
+  underlying data structure. For more complex transformations, it is possible to integrate
+  Attribute Grammars with Ztrategic. \n\n\nZtrategic is a standalone library and it
+  is intended to be simple to use - just import it, respect any needed boilerplate,
+  and define your transformations. \n\n## Getting Started\n\nLet us consider a data
+  type for the representation of `Let` expressions: \n\n```haskell\ndata Let = Let
+  List Exp\n\ndata  List  \n      = NestedLet  Name Let List\n      | Assign     Name
+  Exp List\n      | EmptyList\n\ndata Exp = Add   Exp Exp\n         | Sub   Exp Exp\n
+  \        | Neg   Exp\n         | Var   Name\n         | Const Int\n\ntype Name     =
+  String\n```\n\nA `Let` expression contains a `List` of declarations followed by
+  an `Exp` to be evaluated. A `List` can be an `EmptyList` or either a `NestedLet`
+  (that is, another `Let` block nested inside our current block) or an `Assign` (which
+  is a declaration of a variable); any of these are followed by a `List` containing
+  the rest of the declarations. \n\n\nWe denote that this is not an optimal definition
+  of a `Let` block: we could use Haskell lists instead of explicit recursion on `List`,
+  and `Let` values themselves could be inside `Exp`. Nevertheless, this data type
+  is heterogenous (we have data types `Let`, `List` and `Exp` intertwined) and therefore
+  not exactly easy to handle in classic Haskell fashion. \n\n\nThis tutorial will
+  break on your machine because there is no definition of `StrategicData` for data
+  type `Let`. We discuss this later [here](#markdown-header-strategic-data), but in
+  the meanwhile you can skip this problem by adding the following line to your module:
+  \n```haskell\ninstance StrategicData Let\n```\n\n\n### Type-Preserving Strategies\n\n\n\nLet
+  us now consider a series of arithmetic expression optimizations: \n\n```\n1) add(e,
+  const(0)) -> e \n2) add(const(0), e) -> e\n3) add(const(a), const (b)) -> const
+  (a+b)\n4) sub(a, b) -> add(a, neg(b))\n5) neg(neg(e)) -> e\n6) neg (const(a)) ->
+  const (-a)\n7) var (id) | (id, just(e)) ∈ env -> e\n```\n\nLet us consider only
+  the first 6 rules at first. Using regular Haskell code, these rules are easy to
+  implement but they are burdensome: None of these rules really care about the `Let`
+  and `List` data types, but we would be forced to write code to recurse through them
+  anyway. For now, let us write only a function to handle `Exp` values, returning
+  `Just` the result when appliable and `Nothing` otherwise: \n\n```haskell\nexpr ::
+  Exp -> Maybe Exp\nexpr (Add e (Const 0))          = Just e \nexpr (Add (Const 0)
+  e)          = Just e\nexpr (Add (Const a) (Const b))  = Just (Const (a+b)) \nexpr
+  (Sub a b)                  = Just (Add a (Neg b))    \nexpr (Neg (Neg e))              =
+  Just e           \nexpr (Neg (Const a))            = Just (Const (-a)) \nexpr _
+  \                         = Nothing\n```\n\nThis `expr` function contains all the
+  work that is, in fact, relevant for our use case. In regular Haskell code, the rest
+  of the code can be considered boilerplate / copy rules, only recusing through data
+  structures with no real work. Instead, we will be using a **strategy** to apply
+  `expr` to our data type. \n\n\nThere are two types of strategies in our library:\n\n\n*
+  **Type-Preserving (TP)** strategies preserve the type of the data structure, changing
+  only its contents. They are useful for transforming and manipulating data structures.
+  They can be thought of as *map* operations. \n* **Type-Unifying (TU)** strategies
+  produce a new value out of data from the input data structure. They are useful for
+  gathering data out of and/or analysing data structures. They can be thought of as
+  *reduce* operations. \n\n\nFor this, we will use a Type-Preserving (TP) strategy.
+  From the several strategies available for this, we will choose the *innermost* strategy.
+  This strategy will apply a transformation as many times as possible until a fixed
+  point is reached. Because applying a transformation in part of an expression can
+  enable new transformations in different parts of expressions, we we might need to
+  re-apply `expr` to previously-processed nodes, so this strategy handles re-application
+  for us. \n\n\nThe full code to apply `expr` with an *innermost* strategy is as follows:
+  \n\n```haskell\nopt :: Zipper Let -> Maybe (Zipper Let)\nopt t = applyTP (innermost
+  step) t\n      where step = failTP `adhocTP` expr\n```\n\nThere is a lot to unpack
+  here. For starters, our input is a `Zipper Let` and our output is a `Maybe (Zipper
+  Let)`. This is not a problem, as we can convert to and from `Zipper` with the functions
+  `toZipper` and `fromZipper` easily (these are from the `Data.Generics.Zipper` module
+  from the `syz` package).\n\n\nThen, we define a `step` worker function. This will
+  be the function to be applied to every single node on the data type we are traversing.
+  Note that this function can be applied to all nodes, even primitive data types such
+  as `Int` or `Char`. We define this function by defining its default behaviour, which
+  we define as `failTP` here, meaning that by default this worker function fails silently.
+  We add more behaviours to it with the composing function `adhocTP` and its variations.
+  We then add `expr` to our worker function. The resulting `step` function will apply
+  `expr` if possible (when visiting an `Exp` node), otherwise applying `failTP` and
+  therefore failing. \n\n\nWe then define what strategy we intend to use. We opt for
+  `innermost`, and thus our strategy will be `innermost step`, meaning to apply `step`
+  in a `innermost` way. (See more strategies [here](#markdown-header-api-reference))
+  This means that `step` will be applied as many times as possible, until it fails
+  on all nodes. It is important that the `step` function respects this and fails when
+  no work is to be done; if it does not fail, then the `innermost` strategy has no
+  way to know it should stop, resulting in an endless loop. Choosing to use the failing
+  function `failTP` or the identity function `idTP` as a default behaviour must depend
+  on what kind of strategy is to be used. \n\n\nFinally, we apply this strategy with
   the `applyTP` function. This strategy will apply the optimization rules we have
   defined as many times as possible until no optimizations are left. We only express
   transformations on the `Exp` data type, and we ignore the `Let` and `List` datatypes
-  entirely, instead letting the strategic machinery handle them for us. \r\n\r\n\r\n###
-  Type-Unifying Strategies\r\n\r\nLet us now take a look at Type-Unifying strategies.
+  entirely, instead letting the strategic machinery handle them for us. \n\n\n###
+  Type-Unifying Strategies\n\nLet us now take a look at Type-Unifying strategies.
   These traverse a data structure and produce a new result out of it, and therefore
   they are perfect for reduce operations. We will define a function to count the number
-  of assigned variables in a `Let`.\r\n\r\n\r\nThere is a **very important** consideration
+  of assigned variables in a `Let`.\n\n\nThere is a **very important** consideration
   when using Type-Unifying strategies. We can produce any result using them, but it
   must be an instance of the ~~`Semigroup`~~ `Monoid` class so that intermediate results
   can be concatenated into a single result. If you also need to select only part of
@@ -119,31 +118,31 @@ description: "Ztrategic - A library for Strategic Programming with Attribute Gra
   as an output for the former behaviour only or a `Maybe [a]` for the latter (the
   alternative behaviour for lists is concatenation, not selection of a sublist, while
   the alternative behaviour for `Maybe` values is the selection of the left element).
-  If you are also unsure of this, always use `Maybe [a]`. \r\n\r\n\r\nReturning to
-  our example, let us define the worker function. It will gather all the *declared*
-  variables in a list, keeping the considerations above in mind: \r\n\r\n```haskell\r\ncountAssigns
-  :: List -> Maybe [String]\r\ncountAssigns (Assign s _ _)    = Just [s]\r\ncountAssigns
-  (NestedLet s _ _) = Just [s]\r\ncountAssigns _                 = Nothing \r\n```\r\n\r\nThere
+  If you are also unsure of this, always use `Maybe [a]`. \n\n\nReturning to our example,
+  let us define the worker function. It will gather all the *declared* variables in
+  a list, keeping the considerations above in mind: \n\n```haskell\ncountAssigns ::
+  List -> Maybe [String]\ncountAssigns (Assign s _ _)    = Just [s]\ncountAssigns
+  (NestedLet s _ _) = Just [s]\ncountAssigns _                 = Nothing \n```\n\nThere
   is not much to unpack here. We count both `Assign` and `NestedLet` nodes, as they
   are both declarations of variables. For each, we return the name of the variable
   itself. As per the considerations above, we could return only a `[String]`, with
-  no real difference for this example. \r\n\r\n\r\nNext, we apply `countAssigns` to
-  all nodes of our data. For this, we will be using a `full_tdTU` strategy, meaning
-  full, top-down, type-unifying (See more strategies [here](#markdown-header-api-reference).
+  no real difference for this example. \n\n\nNext, we apply `countAssigns` to all
+  nodes of our data. For this, we will be using a `full_tdTU` strategy, meaning full,
+  top-down, type-unifying (See more strategies [here](#markdown-header-api-reference).
   This will traverse the data structure exactly once, from the top to the bottom,
-  applying our worker function whenever possible: \r\n\r\n```haskell\r\ndeclarations
-  :: Zipper Let -> Int \r\ndeclarations t = let result = applyTU (full_tdTU step)
-  t \r\n                     step   = failTU `adhocTU` countAssigns\r\n                 in
-  case result of \r\n                      Nothing -> 0\r\n                      Just
-  l  -> length l      \r\n```\r\n\r\nAs before, we define a `step` function, failing
-  by default and applying `countAssigns` whenever possible. Note the `TU` suffix on
-  the `fail` and `adhoc` functions. Our `result` will be of type `Maybe [String]`,
-  which will be `Nothing` if we do not gather any results, or `Just l` in which `l`
-  is a list of declared names; we count them with `length`. \r\n\r\n\r\n### Strategic
-  Data \r\n\r\nThe `StrategicData` module is an optimization baked into the  `Ztrategic`
-  library. For a data structure to be traversable by this library, it must be an instance
-  of `StrategicData`, and for most cases it is enough to use the default implementation.
-  For this, we just include the line\r\n\r\n```haskell\r\ninstance StrategicData <datatype>\r\n```\r\n\r\nanywhere
+  applying our worker function whenever possible: \n\n```haskell\ndeclarations ::
+  Zipper Let -> Int \ndeclarations t = let result = applyTU (full_tdTU step) t \n
+  \                    step   = failTU `adhocTU` countAssigns\n                 in
+  case result of \n                      Nothing -> 0\n                      Just
+  l  -> length l      \n```\n\nAs before, we define a `step` function, failing by
+  default and applying `countAssigns` whenever possible. Note the `TU` suffix on the
+  `fail` and `adhoc` functions. Our `result` will be of type `Maybe [String]`, which
+  will be `Nothing` if we do not gather any results, or `Just l` in which `l` is a
+  list of declared names; we count them with `length`. \n\n\n### Strategic Data \n\nThe
+  `StrategicData` module is an optimization baked into the  `Ztrategic` library. For
+  a data structure to be traversable by this library, it must be an instance of `StrategicData`,
+  and for most cases it is enough to use the default implementation. For this, we
+  just include the line\n\n```haskell\ninstance StrategicData <datatype>\n```\n\nanywhere
   in our code. However, we can instead decide we want to skip certain nodes in our
   traversal. Let us recall the `declarations` strategy we define above. We are counting
   declarations, but we are traversing all nodes - even nodes we know are completely
@@ -154,120 +153,118 @@ description: "Ztrategic - A library for Strategic Programming with Attribute Gra
   strings in it, specifically `Test`, `est`, `st`, `t` and the empty string, and it
   also contains each of the characters that make up the string, totalling 9 actual
   nodes visited by a strategy when the `Test` string is found (We prove this in module
-  `Examples.Let.LetMisc`).\r\n\r\n**TODO**: continue this\r\n\r\n\r\n\r\n### API Reference\r\n\r\n####
-  Type-Preserving \r\n\r\n\r\n**Strategies:** \r\n\r\n\r\n* **full_tdTP** - Full,
-  top-down, type-preserving strategy. Will fail if any node fails, so take care to
-  only fail if the strategy needs to be interrupted. Use `idTP` to signal no changes
-  on a node. \r\n* **full_buTP** - Full, bottom-up, type-preserving strategy. Will
-  fail if any node fails, so take care to only fail if the strategy needs to be interrupted.
-  Use `idTP` to signal no changes on a node. \r\n* **once_tdTP** - Once, top-down,
-  type-preserving strategy. Will traverse through fails until it succeeds in applying
-  a worker function once, then it will stop. Use `failTP` to signal a node is not
-  changed by default. \r\n* **once_buTP** - Once, bottom-up, type-preserving strategy.
+  `Examples.Let.LetMisc`).\n\n**TODO**: continue this\n\n\n\n### API Reference\n\n####
+  Type-Preserving \n\n\n**Strategies:** \n\n\n* **full_tdTP** - Full, top-down, type-preserving
+  strategy. Will fail if any node fails, so take care to only fail if the strategy
+  needs to be interrupted. Use `idTP` to signal no changes on a node. \n* **full_buTP**
+  - Full, bottom-up, type-preserving strategy. Will fail if any node fails, so take
+  care to only fail if the strategy needs to be interrupted. Use `idTP` to signal
+  no changes on a node. \n* **once_tdTP** - Once, top-down, type-preserving strategy.
   Will traverse through fails until it succeeds in applying a worker function once,
-  then it will stop. Use `failTP` to signal a node is not changed by default. \r\n*
-  **stop_tdTP** - Stop, top-down, type-preserving strategy. Will stop traversing into
-  the subtrees when it succeeds in applying a worker function once. This is different
-  from the `once_` strategies as several subtrees can be branched into and traversed
-  partially - it does not compute only once, instead it stops traversing downwards
-  when it succeeds. Use `failTP` to signal a node is not changed by default. \r\n*
-  **stop_buTP** - Stop, bottom-up, type-preserving strategy. Will stop traversing
-  into the subtrees when it succeeds in applying a worker function once. This is different
-  from the `once_` strategies as several subtrees can be branched into and traversed
-  partially - it does not compute only once, instead it stops traversing downwards
-  when it succeeds. Use `failTP` to signal a node is not changed by default. \r\n*
-  **innermost** - Applies the given worker function as many times as possible, starting
-  from the innermost node. This will loop infinitely if we do not signal fail properly
-  when no changes are to be made. Use `failTP` to signal a node is not changed by
-  default.\r\n* **outermost** - Applies the given worker function as many times as
-  possible, starting from the outermost node. This will loop infinitely if we do not
-  signal fail properly when no changes are to be made. Use `failTP` to signal a node
-  is not changed by default.\r\n* **breadthFirst** - Full, top-down, type-preserving
-  strategy. It traverses breadth-first instead of the depth-first behaviour of the
-  previous strategies. Use it with caution as this strategy is particularly *volatile*,
-  and changing the shape of the data structure being traversed breaks this strategy.
-  Use `idTP` to signal no changes on a node.\r\n* **full_uptdTP** - Full, top-down,
-  type-preserving strategy. Similar to `full_tdTP` but it makes use of the advantages
-  of *Zippers* to only affect nodes above the starting node. \r\n* **full_upbuTP**
-  - Full, bottom-up, type-preserving strategy. Similar to `full_buTP` but it makes
-  use of the advantages of *Zippers* to only affect nodes above the starting node.
-  \r\n* **once_uptdTP** - Full, top-down, type-preserving strategy. Similar to `once_tdTP`
-  but it makes use of the advantages of *Zippers* to only affect nodes above the starting
-  node. \r\n* **once_upbuTP** - Full, bottom-up, type-preserving strategy. Similar
-  to `once_buTP` but it makes use of the advantages of *Zippers* to only affect nodes
-  above the starting node. \r\n* **mutations** - Given a function `tr` that changes
-  one node on a data structure, generates all possible combinations of data structures
-  similar to the input, in which one node was changed by `tr`. The type of this strategy
-  is an outlier and it reads `mutations :: a -> (n -> Maybe n) -> [a]`, meaning the
-  input is a data structure and the aforementioned `tr` function, and the output is
-  a list of variations of the input. \r\n\r\n\r\n**Composition:**\r\n\r\n\r\n* **adhocTP**
-  - Compose two functions. Apply the rightmost if possible, and if the types don't
-  match, apply the leftmost one. \r\n* **adhocTPSeq** - Compose two functions. Apply
-  the rightmost and then the leftmost in sequence. This combinator makes it possible
-  to compose two functions that operate on the same type, but this is generally less
-  efficient (but possibly more expressive) than using `adhocTP` and a single worker
-  function.   \r\n* **adhocTPZ** - Similar to `adhocTP`, but the worker function has
-  access to a `Zipper` pointing to the current node. This enables the usage of Attribute
-  Grammars and/or nested strategies. \r\n* **adhocTPZSeq** - Similar to `adhocTPSeq`,
-  but the worker function has access to a `Zipper` pointing to the current node. This
-  enables the usage of Attribute Grammars and/or nested strategies. \r\n\r\n\r\n####
-  Type-Unifying \r\n\r\n\r\n**Strategies:** \r\n\r\n\r\n* **full_tdTU** - Full, top-down,
+  then it will stop. Use `failTP` to signal a node is not changed by default. \n*
+  **once_buTP** - Once, bottom-up, type-preserving strategy. Will traverse through
+  fails until it succeeds in applying a worker function once, then it will stop. Use
+  `failTP` to signal a node is not changed by default. \n* **stop_tdTP** - Stop, top-down,
+  type-preserving strategy. Will stop traversing into the subtrees when it succeeds
+  in applying a worker function once. This is different from the `once_` strategies
+  as several subtrees can be branched into and traversed partially - it does not compute
+  only once, instead it stops traversing downwards when it succeeds. Use `failTP`
+  to signal a node is not changed by default. \n* **stop_buTP** - Stop, bottom-up,
+  type-preserving strategy. Will stop traversing into the subtrees when it succeeds
+  in applying a worker function once. This is different from the `once_` strategies
+  as several subtrees can be branched into and traversed partially - it does not compute
+  only once, instead it stops traversing downwards when it succeeds. Use `failTP`
+  to signal a node is not changed by default. \n* **innermost** - Applies the given
+  worker function as many times as possible, starting from the innermost node. This
+  will loop infinitely if we do not signal fail properly when no changes are to be
+  made. Use `failTP` to signal a node is not changed by default.\n* **outermost**
+  - Applies the given worker function as many times as possible, starting from the
+  outermost node. This will loop infinitely if we do not signal fail properly when
+  no changes are to be made. Use `failTP` to signal a node is not changed by default.\n*
+  **breadthFirst** - Full, top-down, type-preserving strategy. It traverses breadth-first
+  instead of the depth-first behaviour of the previous strategies. Use it with caution
+  as this strategy is particularly *volatile*, and changing the shape of the data
+  structure being traversed breaks this strategy. Use `idTP` to signal no changes
+  on a node.\n* **full_uptdTP** - Full, top-down, type-preserving strategy. Similar
+  to `full_tdTP` but it makes use of the advantages of *Zippers* to only affect nodes
+  above the starting node. \n* **full_upbuTP** - Full, bottom-up, type-preserving
+  strategy. Similar to `full_buTP` but it makes use of the advantages of *Zippers*
+  to only affect nodes above the starting node. \n* **once_uptdTP** - Full, top-down,
+  type-preserving strategy. Similar to `once_tdTP` but it makes use of the advantages
+  of *Zippers* to only affect nodes above the starting node. \n* **once_upbuTP** -
+  Full, bottom-up, type-preserving strategy. Similar to `once_buTP` but it makes use
+  of the advantages of *Zippers* to only affect nodes above the starting node. \n*
+  **mutations** - Given a function `tr` that changes one node on a data structure,
+  generates all possible combinations of data structures similar to the input, in
+  which one node was changed by `tr`. The type of this strategy is an outlier and
+  it reads `mutations :: a -> (n -> Maybe n) -> [a]`, meaning the input is a data
+  structure and the aforementioned `tr` function, and the output is a list of variations
+  of the input. \n\n\n**Composition:**\n\n\n* **adhocTP** - Compose two functions.
+  Apply the rightmost if possible, and if the types don't match, apply the leftmost
+  one. \n* **adhocTPSeq** - Compose two functions. Apply the rightmost and then the
+  leftmost in sequence. This combinator makes it possible to compose two functions
+  that operate on the same type, but this is generally less efficient (but possibly
+  more expressive) than using `adhocTP` and a single worker function.   \n* **adhocTPZ**
+  - Similar to `adhocTP`, but the worker function has access to a `Zipper` pointing
+  to the current node. This enables the usage of Attribute Grammars and/or nested
+  strategies. \n* **adhocTPZSeq** - Similar to `adhocTPSeq`, but the worker function
+  has access to a `Zipper` pointing to the current node. This enables the usage of
+  Attribute Grammars and/or nested strategies. \n\n\n#### Type-Unifying \n\n\n**Strategies:**
+  \n\n\n* **full_tdTU** - Full, top-down, type-unifying strategy. Will traverse all
+  nodes on a data structure, collecting whichever data we require and storing it into
+  a structure. Use `failTP` to skip irrelevant nodes.\n* **full_buTU** - Full, bottom-up,
   type-unifying strategy. Will traverse all nodes on a data structure, collecting
   whichever data we require and storing it into a structure. Use `failTP` to skip
-  irrelevant nodes.\r\n* **full_buTU** - Full, bottom-up, type-unifying strategy.
-  Will traverse all nodes on a data structure, collecting whichever data we require
-  and storing it into a structure. Use `failTP` to skip irrelevant nodes.\r\n* **once_tdTU**
-  - Once, top-down, type-unifying strategy. Will traverse all nodes on a data structure,
-  until a node succeeds in producing data, in which case the traversal stops and said
-  data is returned. Use `failTP` to skip irrelevant nodes.\r\n* **once_buTU** - Once,
-  bottom-up, type-unifying strategy. Will traverse all nodes on a data structure,
-  until a node succeeds in producing data, in which case the traversal stops and said
-  data is returned. Use `failTP` to skip irrelevant nodes.\r\n* **stop_tdTU** - Stop,
-  top-down, type-unifying strategy. Will stop traversing into the subtrees when it
-  succeeds in applying a worker function once. This is different from the `once_`
-  strategies as several subtrees can be branched into and traversed partially - it
-  does not compute only once, instead it stops traversing downwards when it succeeds.
-  Use `failTP` to skip irrelevant nodes.\r\n* **stop_buTU** - Stop, bottom-up, type-unifying
-  strategy. Will stop traversing into the subtrees when it succeeds in applying a
-  worker function once. This is different from the `once_` strategies as several subtrees
-  can be branched into and traversed partially - it does not compute only once, instead
-  it stops traversing downwards when it succeeds. Use `failTP` to skip irrelevant
-  nodes.\r\n* **full_uptdTU** - Full, top-down, type-unifying strategy. Similar to
-  `full_tdTU` but it makes use of the advantages of *Zippers* to only affect nodes
-  above the starting node. \r\n* **full_upbuTU** - Full, bottom-up, type-unifying
-  strategy. Similar to `full_buTU` but it makes use of the advantages of *Zippers*
-  to only affect nodes above the starting node. \r\n* **once_uptdTU** - Once, top-down,
-  type-unifying strategy. Similar to `once_tdTU` but it makes use of the advantages
-  of *Zippers* to only affect nodes above the starting node. \r\n* **once_upbuTU**
-  - Once, bottom-up, type-unifying strategy. Similar to `once_buTU` but it makes use
-  of the advantages of *Zippers* to only affect nodes above the starting node. \r\n*
-  **foldr1TU** - Folds relevant nodes right-to-left into a single result. Shorthand
-  for `foldr1` after a strategy. \r\n* **foldl1TU** - Folds relevant nodes left-to-right
-  into a single result. Shorthand for `foldl1` after a strategy.\r\n* **foldrTU**
-  - Folds relevant nodes right-to-left into a single result, using supplied value
-  as a starting value. Shorthand for `foldr` after a strategy. \r\n* **foldlTU** -
-  Folds relevant nodes left-to-right into a single result. using supplied value as
-  a starting value. Shorthand for `foldl` after a strategy.\r\n\r\n\r\n**Composition:**\r\n\r\n\r\n*
+  irrelevant nodes.\n* **once_tdTU** - Once, top-down, type-unifying strategy. Will
+  traverse all nodes on a data structure, until a node succeeds in producing data,
+  in which case the traversal stops and said data is returned. Use `failTP` to skip
+  irrelevant nodes.\n* **once_buTU** - Once, bottom-up, type-unifying strategy. Will
+  traverse all nodes on a data structure, until a node succeeds in producing data,
+  in which case the traversal stops and said data is returned. Use `failTP` to skip
+  irrelevant nodes.\n* **stop_tdTU** - Stop, top-down, type-unifying strategy. Will
+  stop traversing into the subtrees when it succeeds in applying a worker function
+  once. This is different from the `once_` strategies as several subtrees can be branched
+  into and traversed partially - it does not compute only once, instead it stops traversing
+  downwards when it succeeds. Use `failTP` to skip irrelevant nodes.\n* **stop_buTU**
+  - Stop, bottom-up, type-unifying strategy. Will stop traversing into the subtrees
+  when it succeeds in applying a worker function once. This is different from the
+  `once_` strategies as several subtrees can be branched into and traversed partially
+  - it does not compute only once, instead it stops traversing downwards when it succeeds.
+  Use `failTP` to skip irrelevant nodes.\n* **full_uptdTU** - Full, top-down, type-unifying
+  strategy. Similar to `full_tdTU` but it makes use of the advantages of *Zippers*
+  to only affect nodes above the starting node. \n* **full_upbuTU** - Full, bottom-up,
+  type-unifying strategy. Similar to `full_buTU` but it makes use of the advantages
+  of *Zippers* to only affect nodes above the starting node. \n* **once_uptdTU** -
+  Once, top-down, type-unifying strategy. Similar to `once_tdTU` but it makes use
+  of the advantages of *Zippers* to only affect nodes above the starting node. \n*
+  **once_upbuTU** - Once, bottom-up, type-unifying strategy. Similar to `once_buTU`
+  but it makes use of the advantages of *Zippers* to only affect nodes above the starting
+  node. \n* **foldr1TU** - Folds relevant nodes right-to-left into a single result.
+  Shorthand for `foldr1` after a strategy. \n* **foldl1TU** - Folds relevant nodes
+  left-to-right into a single result. Shorthand for `foldl1` after a strategy.\n*
+  **foldrTU** - Folds relevant nodes right-to-left into a single result, using supplied
+  value as a starting value. Shorthand for `foldr` after a strategy. \n* **foldlTU**
+  - Folds relevant nodes left-to-right into a single result. using supplied value
+  as a starting value. Shorthand for `foldl` after a strategy.\n\n\n**Composition:**\n\n\n*
   **adhocTU** - Compose two functions. Apply the rightmost if possible, and if the
-  types don't match, apply the leftmost one. \r\n* **adhocTUZ** - Similar to `adhocTU`,
+  types don't match, apply the leftmost one. \n* **adhocTUZ** - Similar to `adhocTU`,
   but the worker function has access to a `Zipper` pointing to the current node. This
-  enables the usage of Attribute Grammars and/or nested strategies.\r\n\r\n\r\n\r\n\r\n**TODO**:
-  Finish small tutorial.\r\n\r\n\r\n\r\n## Repository Layout\r\n\r\nHere we showcase
-  the different files in our repository and how they are organized.\r\n\r\n### Library\r\n\r\nThis
-  folder contains all the relevant files of the core Ztrategic library - these are
-  what makes Ztrategic work, and will be imported throughout any relevant examples
-  using this library. \r\n\r\n#### Ztrategic.hs\r\n\r\nThe main Ztrategic module.
-  There are similar implementations for memoized versions in the Memo folder. \r\n\r\n####
-  StrategicData.hs\r\n\r\nA module that defines the `StrategicData` class, which is
-  mandatory for the main data type being traversed by Ztrategic. We use it to define
-  terminal symbols that can be skipped by the traversals. A correct usage of this
-  class can net relevant performance improvements. \r\n\r\n**TODO**: add 2 examples,
-  one for *never skip*, one for *skip strings*. \r\n\r\n\r\n# Attribute Grammars\r\n\r\n#
-  Combining AGs with Strategies\r\n\r\n\r\n"
+  enables the usage of Attribute Grammars and/or nested strategies.\n\n\n\n\n**TODO**:
+  Finish small tutorial.\n\n\n\n## Repository Layout\n\nHere we showcase the different
+  files in our repository and how they are organized.\n\n### Library\n\nThis folder
+  contains all the relevant files of the core Ztrategic library - these are what makes
+  Ztrategic work, and will be imported throughout any relevant examples using this
+  library. \n\n#### Ztrategic.hs\n\nThe main Ztrategic module. There are similar implementations
+  for memoized versions in the Memo folder. \n\n#### StrategicData.hs\n\nA module
+  that defines the `StrategicData` class, which is mandatory for the main data type
+  being traversed by Ztrategic. We use it to define terminal symbols that can be skipped
+  by the traversals. A correct usage of this class can net relevant performance improvements.
+  \n\n**TODO**: add 2 examples, one for *never skip*, one for *skip strings*. \n\n\n#
+  Attribute Grammars\n\n# Combining AGs with Strategies\n\n\n"
 description-type: markdown
-hash: d5cfeda22e6cd0acb86adec86cb15c1e735454b53a075b19cd2c3cf557b875b1
+hash: 38abbb4edc145b5e25a6eb9b217c72c89b809654b1d971ceeb58c4c954c93a1e
 homepage: https://github.com/SLE-Laboratory/Ztrategic#readme
-latest: 0.1.0
+latest: 0.2.0
 license-name: MIT
 maintainer: José Nuno Macedo <zenunomacedo@gmail.com>
 synopsis: Zipper-based library for strategic programming and attribute grammars.
