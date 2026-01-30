@@ -1,0 +1,180 @@
+all-versions:
+- 0.1.0.0
+author: Marco Zocca
+basic-deps:
+  aeson: '>=2.0 && <3'
+  base: '>=4.14 && <5'
+  benchpress: '>=0.2 && <0.3'
+  boxes: '>=0.1 && <0.2'
+  bytestring: '>=0.10 && <0.13'
+  directory: '>=1.3 && <2'
+  filepath: '>=1.4 && <2'
+  hspec-core: '>=2.10 && <3'
+  process: '>=1.6 && <2'
+  statistics: '>=0.16 && <0.17'
+  text: '>=1.2 && <3'
+  time: '>=1.9 && <2'
+  vector: '>=0.12 && <0.14'
+changelog: ''
+changelog-type: ''
+description: "# golds-gym \U0001F3CB️\n\n[![CI](https://github.com/ocramz/golds-gym/actions/workflows/ci.yml/badge.svg)](https://github.com/ocramz/golds-gym/actions/workflows/ci.yml)\n\nA
+  Haskell golden testing framework for performance benchmarks.\n\n## Overview\n\n`golds-gym`
+  allows you to define timing benchmarks that are saved to golden files the first
+  time they run. On subsequent runs, new benchmark results are compared against the
+  golden baselines using configurable tolerance thresholds.\n\n**Key Features:**\n-
+  Architecture-specific golden files (different baselines per CPU/OS)\n- Configurable
+  tolerance for mean time comparison\n- **Robust statistics** mode (trimmed mean,
+  MAD, outlier detection)\n- Optional variance (stddev) warnings\n- Configurable warm-up
+  iterations\n- JSON-based golden files for easy inspection\n- Seamless integration
+  with hspec\n\n\n## Usage\n\n```haskell\nimport Test.Hspec\nimport Test.Hspec.BenchGolden\n\nmain
+  :: IO ()\nmain = hspec $ do\n  describe \"Performance\" $ do\n    -- Simple benchmark
+  with defaults (100 iterations, 15% tolerance)\n    benchGolden \"list append\" $\n
+  \     return $ [1..1000] ++ [1..1000]\n\n    -- Benchmark with custom configuration\n
+  \   benchGoldenWith defaultBenchConfig\n      { iterations = 500\n      , tolerancePercent
+  = 10.0\n      , warmupIterations = 10\n      , warnOnVarianceChange = True\n      }\n
+  \     \"sorting\" $\n      return $ sort [1000, 999..1]\n\n    -- Robust statistics
+  mode (outlier detection, trimmed mean)\n    benchGoldenWith defaultBenchConfig\n
+  \     { useRobustStatistics = True\n      , trimPercent = 10.0\n      , outlierThreshold
+  = 3.0\n      , tolerancePercent = 10.0\n      }\n      \"robust benchmark\" $\n
+  \     return $ expensiveComputation input\n\n    -- IO benchmark\n    benchGolden
+  \"file operations\" $ do\n      writeFile \"/tmp/test\" \"hello\"\n      readFile
+  \"/tmp/test\"\n```\n\n## Golden Files\n\nGolden files are stored in `.golden/<architecture>/`
+  with the following structure:\n\n```\n.golden/\n├── aarch64-darwin-Apple_M1/\n│
+  \  ├── list-append.golden\n│   ├── list-append.actual\n│   └── sorting.golden\n└──
+  x86_64-linux-Intel_Core_i7/\n    └── list-append.golden\n```\n\nEach `.golden` file
+  contains JSON with timing statistics:\n\n```json\n{\n  \"mean\": 1.234,\n  \"stddev\":
+  0.056,\n  \"median\": 1.201,\n  \"min\": 1.100,\n  \"max\": 1.456,\n  \"percentiles\":
+  [[50, 1.201], [90, 1.350], [99, 1.440]],\n  \"architecture\": \"aarch64-darwin-Apple_M1\",\n
+  \ \"timestamp\": \"2026-01-30T12:00:00Z\",\n  \"trimmedMean\": 1.220,\n  \"mad\":
+  0.042,\n  \"iqr\": 0.085,\n  \"outliers\": [1.456]\n}\n```\n\n## Updating Baselines\n\nTo
+  regenerate golden files (after intentional performance changes):\n\n```bash\nGOLDS_GYM_ACCEPT=1
+  cabal test\n# Or with stack:\nGOLDS_GYM_ACCEPT=1 stack test\n```\n\n## Configuration\n\n###
+  BenchConfig Options\n\n| Field | Default | Description |\n|-------|---------|-------------|\n|
+  `iterations` | 100 | Number of benchmark iterations |\n| `warmupIterations` | 5
+  | Warm-up runs (discarded) |\n| `tolerancePercent` | 15.0 | Allowed mean time deviation
+  (%) |\n| `absoluteToleranceMs` | Just 0.01 | Minimum absolute tolerance in milliseconds
+  (hybrid tolerance) |\n| `warnOnVarianceChange` | True | Warn if stddev changes significantly
+  |\n| `varianceTolerancePercent` | 50.0 | Allowed stddev deviation (%) |\n| `outputDir`
+  | \".golden\" | Directory for golden files |\n| `failOnFirstRun` | False | Fail
+  if no baseline exists |\n| `useRobustStatistics` | False | Use robust statistics
+  (trimmed mean, MAD) |\n| `trimPercent` | 10.0 | Percentage to trim from each tail
+  (%) |\n| `outlierThreshold` | 3.0 | MAD multiplier for outlier detection |\n\n###
+  Hybrid Tolerance Strategy\n\n**New in v0.2.0**: Hybrid tolerance prevents false
+  failures from measurement noise.\n\nThe framework uses BOTH percentage and absolute
+  tolerance by default:\n\n```\nBenchmark passes if:\n  (mean_change <= ±15%) OR (abs_time_diff
+  <= 0.01ms)\n```\n\n#### Why Hybrid Tolerance?\n\nFor extremely fast operations (<
+  1ms), tiny measurement noise causes huge percentage variations:\n\n- **Baseline**:
+  0.001 ms\n- **Actual**: 0.0015 ms  \n- **Percentage difference**: +50% ❌ (fails
+  with 15% tolerance)\n- **Absolute difference**: +0.0005 ms ✅ (negligible, within
+  0.01ms tolerance)\n\nThe hybrid approach automatically handles this:\n\n- **Fast
+  operations (< 1ms)**: Absolute tolerance dominates → noise ignored\n- **Slow operations
+  (> 1ms)**: Percentage tolerance dominates → regressions caught\n\n#### Configuration
+  Examples\n\n**Default (hybrid tolerance)**:\n```haskell\nbenchGolden \"fast operation\"
+  $ do\n  return $ sum [1..100]\n```\nPasses if within ±15% **or** ±0.01ms (10 microseconds).\n\n**Percentage-only
+  (disable absolute tolerance)**:\n```haskell\nbenchGoldenWith defaultBenchConfig\n
+  \ { absoluteToleranceMs = Nothing\n  , tolerancePercent = 20.0\n  }\n  \"long operation\"
+  $ do\n  return $ expensiveComputation input\n```\nTraditional percentage-only comparison.\n\n**Strict
+  absolute tolerance**:\n```haskell\nbenchGoldenWith defaultBenchConfig\n  { absoluteToleranceMs
+  = Just 0.001  -- 1 microsecond\n  , tolerancePercent = 10.0\n  }\n  \"performance-critical\"
+  $ do\n  return $ criticalPath data\n```\nVery strict for performance-critical code.\n\n**Relaxed
+  tolerance for noisy CI**:\n```haskell\nbenchGoldenWith defaultBenchConfig\n  { absoluteToleranceMs
+  = Just 0.1  -- 100 microseconds\n  , tolerancePercent = 25.0\n  }\n  \"ci benchmark\"
+  $ do\n  return $ computation input\n```\nMore forgiving for shared CI runners.\n\n##
+  Architecture Detection\n\nThe framework automatically detects:\n- CPU architecture
+  (x86_64, aarch64)\n- Operating system (darwin, linux, windows)\n- CPU model (Apple
+  M1, Intel Core i7, etc.)\n\nThis ensures benchmarks are only compared against baselines
+  from equivalent hardware.\n\n## Robust Statistics\n\n**New in 0.1.0**: Robust statistical
+  methods for more reliable benchmark comparisons.\n\n### Why Use Robust Statistics?\n\nStandard
+  mean and standard deviation are sensitive to outliers. A single anomalous timing
+  (e.g., from GC, OS scheduling) can skew results. Robust statistics provide:\n\n-
+  **Trimmed Mean**: Removes extreme values before averaging\n- **MAD (Median Absolute
+  Deviation)**: Outlier-resistant measure of variance\n- **Outlier Detection**: Identifies
+  and reports anomalous timings\n- **IQR (Interquartile Range)**: Spread of the middle
+  50% of data\n\n### Enabling Robust Mode\n\n```haskell\nbenchGoldenWith defaultBenchConfig\n
+  \ { useRobustStatistics = True  -- Enable robust statistics\n  , trimPercent = 10.0
+  \         -- Trim 10% from each tail\n  , outlierThreshold = 3.0      -- Outliers
+  are 3+ MADs from median\n  , tolerancePercent = 10.0     -- Compare trimmed means\n
+  \ }\n  \"my benchmark\" $ do\n  -- your code here\n```\n\n### How It Works\n\n1.
+  **Trimmed Mean**: Sorts all timing measurements, removes the top and bottom `trimPercent`,
+  then computes the mean of remaining values.\n\n2. **MAD Calculation**: Computes
+  `median(|x - median(x)|)` - more robust than standard deviation.\n\n3. **Outlier
+  Detection**: Any measurement where `|x - median| > outlierThreshold * MAD` is flagged
+  as an outlier.\n\n4. **Comparison**: When enabled, uses trimmed mean instead of
+  mean for regression detection, and MAD instead of stddev for variance checks.\n\n###
+  Outlier Warnings\n\nWhen outliers are detected, you'll see warnings in test output:\n\n```\nWarnings:\n
+  \ ⚠ 3 outlier(s) detected: 2.1ms 2.3ms 2.5ms\n```\n\nOutliers are reported but **not
+  removed** - they're preserved in golden files for analysis.\n\n### When to Use Robust
+  Statistics\n\n✅ **Use robust statistics when:**\n- Benchmarking in noisy environments
+  (shared CI runners)\n- Operations subject to GC pauses or OS scheduling variability\n-
+  Fast operations (< 1ms) with high relative variance (CV > 50%)\n- Sorting already-sorted
+  data or other operations with occasional slowdowns\n- You see large max/stddev values
+  with small mean times\n- You need more stable baselines across runs\n\n❌ **Standard
+  statistics may be better when:**\n- Benchmarking isolated, long-running operations\n-
+  You have dedicated benchmark hardware\n- Outliers are legitimate and should be tracked\n\n##
+  Integration with CI\n\nIn CI environments, you may want to:\n\n1. **Skip benchmarks**
+  (if CI is too noisy):\n   ```bash\n   GOLDS_GYM_SKIP=1 cabal test\n   ```\n\n2.
+  **Use relaxed tolerance** (for shared CI runners):\n   ```haskell\n   benchGoldenWith
+  defaultBenchConfig\n     { tolerancePercent = 25.0\n     , absoluteToleranceMs =
+  Just 0.1  -- 100 microseconds\n     }\n     \"benchmark\" $ ...\n   ```\n\n3. **Enable
+  robust statistics** (outlier detection):\n   ```haskell\n   benchGoldenWith defaultBenchConfig\n
+  \    { useRobustStatistics = True\n     , tolerancePercent = 20.0\n     }\n     \"benchmark\"
+  $ ...\n   ```\n\n## Troubleshooting\n\n### Random Test Failures Due to Measurement
+  Noise\n\n**Symptom**: Tests fail intermittently with small percentage increases
+  despite negligible absolute time differences:\n\n```\nMean time increased by 35.5%
+  (tolerance: 15.0%)\n\nMetric    Actual  Baseline    Diff\n------    ------  --------
+  \   ----\nMean    0.001 ms  0.000 ms  +35.5%\n```\n\n**Root Cause**: Operations
+  taking < 1ms have high relative measurement noise. A 0.0005ms difference is negligible
+  but represents 50% variation.\n\n**Solutions**:\n\n1. **Use hybrid tolerance (default
+  since v0.2.0)**:\n   ```haskell\n   benchGolden \"fast operation\" $ ...\n   ```\n
+  \  The default `absoluteToleranceMs = Just 0.01` prevents these failures.\n\n2.
+  **Adjust absolute tolerance threshold**:\n   ```haskell\n   benchGoldenWith defaultBenchConfig\n
+  \    { absoluteToleranceMs = Just 0.001  -- Stricter: 1 microsecond\n     }\n     \"very
+  fast operation\" $ ...\n   ```\n\n3. **Increase iterations for stability**:\n   ```haskell\n
+  \  benchGoldenWith defaultBenchConfig\n     { iterations = 500  -- More samples
+  reduce noise\n     }\n     \"noisy operation\" $ ...\n   ```\n\n4. **Use robust
+  statistics**:\n   ```haskell\n   benchGoldenWith defaultBenchConfig\n     { useRobustStatistics
+  = True  -- Outlier-resistant\n     , trimPercent = 10.0\n     }\n     \"operation
+  with outliers\" $ ...\n   ```\n\n### High Variance Warnings\n\n**Symptom**: Warnings
+  about variance changes despite passing benchmarks:\n\n```\nWarnings:\n  ⚠ Variance
+  increased by 65.2% (0.001 ms -> 0.002 ms, tolerance: 50.0%)\n```\n\n**Solutions**:\n\n1.
+  **Disable variance warnings** (if not critical):\n   ```haskell\n   benchGoldenWith
+  defaultBenchConfig\n     { warnOnVarianceChange = False\n     }\n     \"benchmark\"
+  $ ...\n   ```\n\n2. **Increase variance tolerance**:\n   ```haskell\n   benchGoldenWith
+  defaultBenchConfig\n     { varianceTolerancePercent = 100.0  -- Allow ±100% stddev
+  change\n     }\n     \"benchmark\" $ ...\n   ```\n\n3. **Use robust statistics**
+  (MAD instead of stddev):\n   ```haskell\n   benchGoldenWith defaultBenchConfig\n
+  \    { useRobustStatistics = True  -- Uses MAD, more stable\n     }\n     \"benchmark\"
+  $ ...\n   ```\n\n### Outlier Warnings\n\n**Symptom**: Outliers detected in benchmark
+  runs:\n\n```\nWarnings:\n  ⚠ 3 outlier(s) detected: 2.1ms 2.3ms 2.5ms\n```\n\n**Causes**:\n-
+  Garbage collection pauses\n- OS scheduling interruptions\n- CPU thermal throttling\n-
+  Background processes\n\n**Solutions**:\n\n1. **Increase outlier threshold** (less
+  sensitive):\n   ```haskell\n   benchGoldenWith defaultBenchConfig\n     { useRobustStatistics
+  = True\n     , outlierThreshold = 5.0  -- More forgiving (default: 3.0)\n     }\n
+  \    \"benchmark\" $ ...\n   ```\n\n2. **Increase warm-up iterations**:\n   ```haskell\n
+  \  benchGoldenWith defaultBenchConfig\n     { warmupIterations = 20  -- Stabilize
+  before measurement\n     }\n     \"benchmark\" $ ...\n   ```\n\n3. **Minimize system
+  load**:\n   - Close background applications\n   - Disable system services during
+  benchmarking\n   - Use dedicated benchmark hardware\n\n### Benchmarks Pass Locally
+  But Fail in CI\n\n**Cause**: Different architecture or noisier environment.\n\n**Solutions**:\n\n1.
+  **Architecture-specific baselines**: Golden files are already per-architecture.
+  Check that your CI architecture ID matches:\n   ```bash\n   GOLDS_GYM_ARCH=custom-ci-id
+  cabal test\n   ```\n\n2. **Relaxed CI configuration**:\n   ```haskell\n   #ifdef
+  CI_BUILD\n   ciConfig :: BenchConfig\n   ciConfig = defaultBenchConfig\n     { tolerancePercent
+  = 30.0\n     , absoluteToleranceMs = Just 0.2\n     , useRobustStatistics = True\n
+  \    }\n   #endif\n   ```\n\n3. **Skip benchmarks in CI**:\n   ```yaml\n   # .github/workflows/ci.yml\n
+  \  - name: Run tests\n     run: GOLDS_GYM_SKIP=1 stack test\n   ```\n\n### Regenerating
+  Golden Files\n\n**When to regenerate**:\n- Intentional performance improvements/changes\n-
+  Compiler upgrades affecting code generation\n- Architecture changes\n\n**How**:\n```bash\nGOLDS_GYM_ACCEPT=1
+  stack test\n```\n\n**Warning**: Only regenerate when you've verified the performance
+  change is expected!\n\n## License\n\nMIT\n"
+description-type: markdown
+hash: eed73eaeac33c155a76cc396234ec83e569b349f13bd31aa73be249e38d178d1
+homepage: ''
+latest: 0.1.0.0
+license-name: MIT
+maintainer: '@ocramz'
+synopsis: Golden testing framework for performance benchmarks
+test-bench-deps:
+  base: '>=4.14 && <5'
+  golds-gym: '>=0'
+  hspec: '>=2.10 && <3'
