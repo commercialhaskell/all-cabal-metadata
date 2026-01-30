@@ -1,0 +1,81 @@
+all-versions:
+- 0.1.0.0
+author: ''
+basic-deps:
+  base: ^>=4.20.0.0
+  bifunctors: '>=5.0 && <6'
+changelog: ''
+changelog-type: ''
+description: "# Known Lists\n\nThis library is intended to make basic operations with
+  type-level lists easy.\nIn particular, it's for situations in which membership of
+  a type-level symbol\n(often, but not necessarily, a `Symbol`)\nin a list is a critical
+  property to enforce. \n\n`Data.Known.Knowable` generalises the idea of a \"known\"
+  type-level symbol;\na `Known` constraint can be used on `Symbol`s, `Nat`s, _etc_,\nand
+  on lists of such `Known` types.  \n`Data.Known.Membership` contains the key structures
+  and logic for enforcing\nmembership constraints;\nthe naive class-based solution
+  (which is also included)\nfails in polymorphic code;\nthis system allows more robust
+  and explicit handling.  \n`Data.Known.TypeIndexed` introduces `TIndexed`,\nheterogeneous
+  lists indexed by type-level symbols.\n\nThis library is an adaptation for general
+  use of an _ad hoc_ system originally used in\n[MultiChor](https://hackage.haskell.org/package/MultiChor).\nVery
+  likely everything in this library can, should, and eventually will be replaced by
+  some correct\ncombination of [singletons](https://hackage.haskell.org/package/singletons),\n[spo](https://hackage.haskell.org/package/sop-core),\nand
+  related libraries,\nbut until there's good documentation showing new users how to
+  do that, this library will be useful.\n\n## Examples\n\nThe entire\n[MultiChor](https://hackage.haskell.org/package/MultiChor)\nlibrary
+  can be viewed as an example use-case.\nHere we show a less involved example which
+  relies on the (morally incidental) fact that `Member` objects\nare effectively finite
+  Nats.\n\nTo begin with, consider the traditional Haskell fixed-length (length-indexed)
+  vector:\n\n```haskell\ndata VecN (n :: GHC.TypeLits.Nat) a where\n  NNil  :: VecN
+  0 a\n  NCons :: a -> VecN n a -> VecN (n + 1) a\n\nindexN :: VecN n a -> Int ->
+  a  -- UNSAFE: Partial!\nindexN (NCons x _) 0          = x\nindexN (NCons _ xs) i
+  | 0 < i = indexN xs (i - 1)\nindexN _ _                    = error \"indexN: Out
+  of bounds.\"\n```\n\nUsing a partial function for indexing isn't satisfying.\nWe
+  can improve on this situation by using lists of Unit and corresponding `Member`
+  values\nas Nats and Finite Nats:\n\n```haskell\ntype Nat = [()]\n\ndata VecU (n
+  :: Nat) a where\n  UNil  :: VecU '[] a\n  UCons :: a -> VecU n a -> VecU ('() ':
+  n) a\n\nindexU :: VecU n a -> Member '() n -> a\nindexU (UCons x _) First = x\nindexU
+  (UCons _ xs) (Later i) = indexU xs i\nindexU UNil i = case i of {}  -- This index
+  function is safe; GHC knows there is no such `i`.\n```\n\nBut there's no need to
+  actually write out this simple example like that; `known-lists` gives such a type
+  out-of-the-box:\n\n```haskell\ntype Vec (n :: Nat) a = TVec n a\n```\n\nWe can extend
+  this example to ragged matrices or arrays.\nNote that `RaggedMatrix` can't be expressed
+  using just `TVec`;\nthe rows have different lengths and the length is encoded in
+  the type, so each row actually has a distinct type.\n\n```haskell\nnewtype RaggedMatrix
+  (rows :: [Nat]) a = Ragged {\n    raggedIndexes :: TIndexed rows (Flip TVec a)\n
+  \ }\n\n(!!!) :: (Known Nat row)\n      => RaggedMatrix rows a\n      -> (Member
+  row rows, Member '() row)\n      -> a\n(!!!) (Ragged TIndexed{tindex}) (row, i)
+  = runFlip (tindex row) ! i\n```\n\nFlattening a `RaggedMatrix` into a list is short
+  and sweet.\nPopulating a `RaggedMatrix` from a flat list demonstrates the use of
+  `tySpine`.\n\n```haskell\nraggedToList :: forall rows a. (Known [Nat] rows)\n             =>
+  RaggedMatrix rows a -> [a]\nraggedToList (Ragged (TIndexed f)) = concat lists\n
+  \ where lists :: TVec rows [a]\n        lists = pack (toList . runFlip . f)\n\nraggedFromList
+  :: forall rows a. (Known [Nat] rows)\n               => [a] -> RaggedMatrix rows
+  a\nraggedFromList xs = case tySpine @Nat @rows of\n  TyNil -> Ragged $ TIndexed
+  \\case{}\n  TyCons (_ :: Proxy r1) (_ :: Proxy rows') ->\n                let (xs1,
+  xsTail) = splitAt (knownLength $ allOf @r1) xs\n                    -- This is where
+  it will crash if the list isn't big enough:\n                    r1 :: TVec r1 a\n
+  \                   r1 = EXTS.fromList $ zip (repeat ()) xs1\n                    f
+  :: TIndex rows' (Flip TVec a)\n                    Ragged TIndexed{tindex=f} = raggedFromList
+  xsTail\n                in Ragged $ TIndexed \\case\n                    First ->
+  Flip r1\n                    Later i -> f i\n```\n\n`sequenceT` allows us to sequence
+  uniform monadic effects over heterogeneous `TIndexed` structures.\nIn this example,
+  instead of building the `RaggedMatrix` from a list, we read the elements from `stdIn`
+  one at a time.\nSince the exact type of the `IO` action needed for each `row` is
+  different, we use `sequenceT`.\n\n```haskell\nraggedFromStdIn :: forall rows a.
+  (Read a, Known [Nat] rows)\n                => IO (RaggedMatrix rows a)\nraggedFromStdIn
+  = Ragged <$> rfsi\n  where rfsi :: IO (TIndexed rows (Flip TVec a))\n        rfsi
+  = sequenceT $ TIndexed $ Compose <$> rows\n        rows :: forall row. (Known Nat
+  row)\n             => Member row rows -> IO (Flip TVec a row)\n        rows _ =
+  Flip <$> row\n        row :: forall row. (Known Nat row) => IO (TVec row a)\n        row
+  = fmap TVec $ sequenceT $ TIndexed $\n                  Compose . fmap Const <$>
+  item\n        item :: forall i row. Member i row -> IO a\n        item = const readLn\n```\n\n"
+description-type: markdown
+hash: 14295e45da36f6d283e33fe32f1bf76cbf3e541c75fcdf7cc900ccd17d442b3e
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: shapeofmatter@pm.me
+synopsis: Easy type-level lists with term-level membership proofs.
+test-bench-deps:
+  base: ^>=4.20.0.0
+  bifunctors: '>=5.0 && <6'
+  known-lists: '>=0'
