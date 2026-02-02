@@ -1,0 +1,162 @@
+all-versions:
+- 0.1.0.0
+author: Jeremy Nuttall
+basic-deps:
+  base: '>=4.7 && <5'
+  half: '>=0.3 && <0.5'
+  hashable: '>=1.3 && <1.6'
+  linear: '>=1.20 && <1.24'
+  unliftio: '>=0.2 && <0.3'
+  vector: '>=0.12.3.0 && <0.14'
+  vector-sized: '>=1.4 && <1.7'
+changelog: |
+  # Changelog for `heph-aligned-storable`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## Unreleased
+
+  ## 0.1.0.0 - 2026-02-02
+
+  ### Added
+
+  - Initial release. Generic derivation of `AlignedStorable` for GPU memory layouts.
+  - Provided instances for `Std140`, `Std430`, and `Scalar` layout rules.
+  - Added support for SPIR-V primitives, vectors, and matrices.
+  - Included `AlignedArray` for opt-in `memcpy` of fixed-size arrays.
+  - Added marshaling helpers (`withPacked`, `allocaPacked`) with guaranteed zero-initialized padding.
+  - Tested via property-based tests, unit tests verified against GLSL compiler output, and inspection tests.
+changelog-type: markdown
+description: |
+  # heph-aligned-storable
+
+  Generically derive `Storable` instances for GPU memory layouts (`std140`, `std430`, `scalar`).
+
+  [![CI](https://github.com/jtnuttall/heph/actions/workflows/haskell.yml/badge.svg)](https://github.com/jtnuttall/heph/actions/workflows/haskell.yml)
+
+  <!-- [![Hackage](https://img.shields.io/hackage/v/heph-aligned-storable.svg)](https://hackage.haskell.org/package/heph-aligned-storable) -->
+
+  ## Quick Start
+
+  **IMPORTANT**: Be sure to use `layout(row_major)` if you are using `linear` with this library.
+
+  GLSL:
+
+  ```glsl
+  layout(std140, row_major, binding = 0) uniform myuniforms {
+    mat4 modelViewProjection;
+    vec3 cameraPosition;
+    float time;
+  };
+  ```
+
+  Haskell:
+
+  ```haskell
+  {-# LANGUAGE DeriveGeneric #-}
+  {-# LANGUAGE DataKinds #-}
+  {-# LANGUAGE TypeApplications #-}
+
+  import Foreign.GPU.Storable.Aligned
+  import Foreign.GPU.Marshal.Aligned
+  import GHC.Generics (Generic)
+  import Linear (M44, V3, V4(..))
+
+  data Uniforms = Uniforms
+    { modelViewProjection :: M44 Float
+    , cameraPosition      :: V3 Float
+    , time                :: Float
+    } deriving (Generic, Show, Eq)
+
+  instance AlignedStorable Std140 Uniforms
+
+  main :: IO ()
+  main = do
+    let uniforms = Uniforms
+          { modelViewProjection = V4 (V4 1 0 0 0) (V4 0 1 0 0) (V4 0 0 1 0) (V4 0 0 0 1)
+          , cameraPosition = V3 0 0 5
+          , time = 0
+          }
+    withPacked @Std140 uniforms $ \ptr -> do
+      -- ptr is ready for vkCmdPushConstants, memcpy to mapped buffer, etc.
+      pure ()
+  ```
+
+  ## Features
+
+  - Correct, spec-compliant padding for `Std140`, `Std430`, and `Scalar` layouts
+  - Single `memcpy` for arrays via `AlignedArray`
+  - Type-level layout witnesses prevent mismatched layouts at compile time
+  - Zero runtime overhead—generic machinery fully eliminated by GHC
+
+  ## The Contract
+
+  **`alignedPoke` writes member data only. Padding bytes are untouched.**
+
+  Use the helpers in `Foreign.GPU.Marshal.Aligned` (`withPacked`, `allocaPacked`, etc.) for guaranteed zero-initialized padding. If you allocate memory yourself, use `calloc` or zero the buffer before poking.
+
+  ## Arrays
+
+  By default, arrays are poked element-by-element. For a single `memcpy`, wrap in `AlignedArray`:
+
+  ```haskell
+  data MyStruct (layout :: MemoryLayout) = MyStruct
+    { meta   :: Float
+    , pixels :: AlignedArray layout 64 (V4 Float)  -- memcpy'd as a block
+    } deriving Generic
+
+  instance AlignedStorable Std140 (MyStruct Std140)
+  ```
+
+  ## Gotchas
+
+  ### Matrix naming conventions
+
+  `linear` uses `Mnm` for n rows × m columns. GLSL uses `matNxM` for N columns of M-vectors.
+
+  - `M32 Float` (3 rows, 2 cols) → `mat2x3`
+  - `M24 Double` (2 rows, 4 cols) → `dmat4x2`
+
+  ### `row_major`
+
+  GLSL's `layout(row_major)` affects memory layout, not matrix semantics. Matrices are still column-major for arithmetic. This library implements the memory layout correctly. You don't need to transpose before upload.
+
+  ### `vec3` and `mat3` are cursed
+
+  Driver handling of the round-up rules for these types has historically been inconsistent. Consider padding to `vec4`/`mat4` and pretending the 3-element variants don't exist.
+
+  ## Why not `derive-storable`?
+
+  `derive-storable` produces FFI-compatible layouts (C struct ABI), not GPU layouts. GPU alignment rules differ:
+
+  - `std140` rounds struct alignment to 16 bytes
+  - `scalar` layout requires 4-byte booleans, not 1-byte
+description-type: markdown
+hash: 9579b0004c7b3150839c2e7d937a17ce7d27fcb4c74b8985149b2d967cd42dbd
+homepage: https://github.com/jtnuttall/heph/tree/main/heph-aligned-storable#readme
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: jeremy@jeremy-nuttall.com
+synopsis: Generically derive Storable instances suitable for CPU-GPU transfer
+test-bench-deps:
+  base: '>=4.7 && <5'
+  bytestring: '>=0.10 && <0.13'
+  half: '>=0.3 && <0.5'
+  hashable: '>=1.3 && <1.6'
+  hedgehog: '>=1.0.4 && <1.6'
+  heph-aligned-storable: '>=0'
+  lifted-base: '>=0.2 && <0.3'
+  linear: '>=1.20 && <1.24'
+  monad-control: '>=1.0 && <1.1'
+  tasty: '>=1.4.1 && <1.6'
+  tasty-discover: '>=4.2.1 && <6'
+  tasty-hedgehog: '>=1.1 && <1.5'
+  tasty-hunit: '>=0.10 && <0.11'
+  tasty-inspection-testing: '>=0.1 && <0.3'
+  unliftio: '>=0.2 && <0.3'
+  vector: '>=0.12.3.0 && <0.14'
+  vector-sized: '>=1.4 && <1.7'
