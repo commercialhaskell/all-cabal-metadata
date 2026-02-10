@@ -1,13 +1,16 @@
 all-versions:
 - 0.1.0.0
 - 0.1.1.0
+- 0.2.0.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.16 && <5'
   bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.8'
   crc32c: '>=0.2 && <0.3'
+  crypton: '>=1.0 && <2'
   deepseq: '>=1.4 && <1.6'
+  memory: '>=0.18 && <1'
   mtl: '>=2.2 && <2.4'
   network: '>=3.1 && <3.3'
   optics: '>=0.4.2 && <0.5'
@@ -19,7 +22,24 @@ basic-deps:
 changelog: |
   # Changelog
 
-  ## Unreleased
+  ## 0.2.0.0
+
+  ### Breaking Changes
+
+  - `NetworkConfig` gains `ncEncryptionKey :: !(Maybe EncryptionKey)` field (defaults to `Nothing`)
+  - `NetworkStats` gains `nsDecryptionFailures :: !Word64` field
+  - `TestNetConfig` gains `tncDuplicateChance` and `tncOutOfOrderChance` fields
+  - `Connection` gains `connEncryptionKey`, `connSendNonce`, `connRecvNonceMax` fields
+
+  ### New Features
+
+  - **ChaCha20-Poly1305 AEAD encryption** (`GBNet.Crypto` module): pre-shared key encryption for post-handshake packets with anti-replay nonce tracking
+  - **IPv6 socket support**: `newUdpSocket` now detects address family from `SockAddr`; new helpers `localhost6`, `ipv6`, `anyAddr6`
+  - **TestNet simulation**: packet duplication (`tncDuplicateChance`) and out-of-order delivery (`tncOutOfOrderChance`)
+
+  ### Internal
+
+  - New dependency: `crypton` (ChaCha20-Poly1305), `memory` (ByteArray conversion)
 
   ## 0.1.1.0
 
@@ -67,10 +87,12 @@ description: |
 
   - **Zero-copy serialization** — Storable-based, C-level speed (14ns per type)
   - **Reliable UDP** — Connection-oriented with ACKs, retransmits, and ordering
+  - **AEAD encryption** — Optional ChaCha20-Poly1305 with anti-replay nonce tracking
   - **Unified Peer API** — Same code for client, server, or P2P mesh
   - **Effect abstraction** — `MonadNetwork` typeclass enables pure deterministic testing
   - **Congestion control** — Dual-layer: binary mode + TCP New Reno window, with application-level backpressure
   - **Zero-poll receive** — Dedicated receive thread via GHC IO manager (epoll/kqueue), STM TQueue delivery
+  - **IPv4 and IPv6** — Automatic address family detection
   - **Connection migration** — Seamless IP address change handling
 
   ---
@@ -182,6 +204,7 @@ description: |
         , ncMtu = 1200
         , ncEnableConnectionMigration = True
         , ncChannelConfigs = [unreliableChannel, reliableChannel]
+        , ncEncryptionKey = Just (EncryptionKey myKey)  -- optional AEAD encryption
         }
   ```
 
@@ -280,6 +303,45 @@ description: |
 
   -- 10% packet loss
   simulateLoss 0.1
+
+  -- Packet duplication and out-of-order delivery
+  let testCfg = defaultTestNetConfig
+        { tncDuplicateChance = 0.05    -- 5% chance of duplicating packets
+        , tncOutOfOrderChance = 0.1    -- 10% chance of reordering
+        }
+  ```
+
+  ---
+
+  ## Encryption
+
+  Optional ChaCha20-Poly1305 AEAD encryption for post-handshake packets:
+
+  ```haskell
+  import GBNet
+
+  -- Pre-shared key (32 bytes) — both sides must use the same key
+  let key = EncryptionKey mySharedKey
+  let config = defaultNetworkConfig { ncEncryptionKey = Just key }
+
+  -- Handshake packets remain plaintext; all data packets are encrypted
+  -- Anti-replay: monotonic nonce counter rejects duplicate/old packets
+  ```
+
+  Wire overhead: 24 bytes per encrypted packet (8-byte nonce + 16-byte auth tag).
+
+  ## IPv6
+
+  IPv6 works out of the box — address family is detected automatically:
+
+  ```haskell
+  -- IPv4 (existing)
+  let addr4 = anyAddr 7777
+
+  -- IPv6
+  let addr6 = anyAddr6 7777           -- bind to [::]:7777
+  let local = localhost6 7777          -- bind to [::1]:7777
+  let custom = ipv6 (0,0,0,1) 7777    -- specific address
   ```
 
   ---
@@ -317,6 +379,8 @@ description: |
   | `GBNet.Net` | `NetT` monad transformer with receive thread + TQueue |
   | `GBNet.Net.IO` | `initNetState` — create real UDP socket and start receive thread |
   | `GBNet.Peer` | `NetPeer`, `peerTick`, connection management |
+  | `GBNet.Crypto` | ChaCha20-Poly1305 AEAD encryption and decryption |
+  | `GBNet.Security` | CRC32C integrity, rate limiting, connect tokens |
   | `GBNet.Congestion` | Dual-layer congestion control and backpressure |
   | `GBNet.TestNet` | Pure test network, `TestWorld` for multi-peer |
   | `GBNet.Serialize.TH` | `deriveStorable` TH for zero-copy serialization |
@@ -332,6 +396,7 @@ description: |
   import GBNet.Net.IO (initNetState)
   import GBNet.Peer (NetPeer, peerTick, PeerEvent(..))
   import GBNet.Config (NetworkConfig(..), defaultNetworkConfig)
+  import GBNet.Crypto (EncryptionKey(..), NonceCounter(..))  -- optional encryption
   ```
 
   ---
@@ -458,10 +523,12 @@ description: |
   ### Benchmarks
 
   ```
-  storable/vec3/serialize      18.98 ns   (52M ops/sec)  -- user types
-  storable/transform/serialize 20.80 ns  (48M ops/sec)  -- nested types
-  packetheader/serialize      16.49 ns   (60M ops/sec)
-  packetheader/deserialize    15.95 ns   (62M ops/sec)
+  storable/vec3/serialize       18.98 ns   (52M ops/sec)  -- user types
+  storable/transform/serialize  20.80 ns   (48M ops/sec)  -- nested types
+  packetheader/serialize        16.49 ns   (60M ops/sec)
+  packetheader/deserialize      15.95 ns   (62M ops/sec)
+  crypto/encrypt/64B             1.9 us   (526K ops/sec)  -- ChaCha20-Poly1305
+  crypto/decrypt/1KB             4.2 us   (238K ops/sec)
   ```
 
   Run with `cabal bench --enable-benchmarks`.
@@ -481,6 +548,8 @@ description: |
   - [x] Connection migration
   - [x] Hardware-accelerated CRC32C validation (SSE4.2/ARMv8/software fallback)
   - [x] Self-cleaning rate limiter
+  - [x] ChaCha20-Poly1305 AEAD encryption with anti-replay
+  - [x] IPv4 and IPv6 support
 
   ### Congestion Control
   - [x] Binary mode (Good/Bad with AIMD recovery)
@@ -495,6 +564,7 @@ description: |
   - [x] `NetT` monad transformer with dedicated receive thread + STM TQueue
   - [x] `TestNet` pure deterministic network
   - [x] `TestWorld` multi-peer simulation
+  - [x] TestNet packet duplication and out-of-order simulation
 
   ### Replication Helpers
   - [x] Delta compression
@@ -516,9 +586,9 @@ description: |
     <sub>MIT License · <a href="https://github.com/gondola-bros-entertainment">Gondola Bros Entertainment</a></sub>
   </p>
 description-type: markdown
-hash: d2d1d72aa572a23358ac406debdd09f7420db50e1c917be36631cbfc907f7b8c
+hash: 1d44f54aad98d91df0648254d501e69dc6020f72823e001135bfc3d63d223153
 homepage: https://github.com/Gondola-Bros-Entertainment/gbnet-hs
-latest: 0.1.1.0
+latest: 0.2.0.0
 license-name: MIT
 maintainer: devon.tomlin@novavero.ai
 synopsis: Transport-level networking library with zero-copy Storable serialization
