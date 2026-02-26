@@ -2,6 +2,12 @@ all-versions:
 - 0.1.0.0
 - 0.1.1.0
 - 0.2.0.0
+- 0.2.1.0
+- 0.2.2.0
+- 0.2.3.0
+- 0.2.4.0
+- 0.2.5.0
+- 0.2.6.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.16 && <5'
@@ -21,6 +27,68 @@ basic-deps:
   vector: '>=0.12 && <0.14'
 changelog: |
   # Changelog
+
+  ## 0.2.6.0
+
+  ### Bug Fixes
+
+  - **Reset transport metrics on connection migration**: When a peer migrates to a new address, stale RTT/congestion state from the old network path was carried over. `handleMigration` now calls `resetTransportMetrics` which clears RTT estimation, congestion controller, bandwidth trackers, and network stats while preserving sequence numbers and channel state for packet continuity.
+  - **Full reliability reset on disconnect-recycle**: `resetConnection` now also resets the `ReliableEndpoint` to prevent stale reliability state from leaking across connection lifecycles.
+
+  ### API
+
+  - `GBNet.Reliability`: new `resetReliabilityMetrics` — resets RTT/loss window while preserving sequence numbers and buffers.
+  - `GBNet.Connection`: new `resetTransportMetrics` — resets congestion, bandwidth, stats, and reliability metrics for a new network path.
+
+  ## 0.2.5.0
+
+  ### Bug Fixes
+
+  - **Retransmissions now respect congestion control**: Retransmitted reliable messages previously bypassed all flow control (`ccCanSend`/`ccDeductBudget` and CWND), allowing unbounded retransmit traffic during congestion. Now gated by the same congestion budget as new sends.
+
+  ### Internal
+
+  - Extract `encodeChannelWire` and `enqueuePayload` shared helpers, eliminating duplicated wire encoding between `processChannelMessages` and `processRetransmissions`.
+
+  ## 0.2.4.0
+
+  ### Bug Fixes
+
+  - **Wire reliable channel retransmission**: `Channel.getRetransmitMessages` was implemented and exported but never called from the connection tick loop. Reliable messages that were lost on the wire were never retransmitted, causing silent data loss on any packet drop. Now called from `updateConnectedPure` after processing outgoing messages — expired unacked messages are re-queued as new Payload packets with fresh sequence numbers.
+
+  ## 0.2.3.0
+
+  ### Bug Fixes
+
+  - **Fix keepalive regression**: `drainAllConnectionQueues` unconditionally called `recordBytesSent` even when zero bytes were sent, resetting `connLastSendTime` every tick. This prevented the keepalive timer from ever triggering, causing connections to silently die on any single packet loss (no ACK feedback, no retransmission). Now only records when actual bytes are sent.
+
+  ## 0.2.2.0
+
+  ### Bug Fixes
+
+  - **Bandwidth tracking now functional**: `recordBytesSent` and `recordBytesReceived` were implemented in `Connection` but never called. Wired into `peerTick`: outgoing bytes recorded after encryption in `drainAllConnectionQueues`, incoming bytes recorded per-packet in `handlePacket`. `BandwidthTracker` and `NetworkStats` byte counters now report real values.
+  - **Fix O(n^2) list appending** in `encryptOutgoing` and `processPacketsPure`: replaced `acc ++ [x]` with reverse-accumulator pattern.
+  - **Fix migration cooldowns leak**: `npMigrationCooldowns` map now swept of stale entries in `updateConnections`, preventing unbounded growth on long-running servers.
+  - **Total function compliance**: replaced partial `Seq.index` with `Seq.lookup` in delta encoding/baseline management.
+
+  ### Internal
+
+  - Codebase-wide elimination of prime-mark variable naming (`x'`, `x''`) in favour of descriptive names and optics composition across all 31 source files, tests, and benchmarks.
+  - README and EXAMPLES: removed all prime-mark variables, added optics-based configuration examples, fixed section numbering, added `LambdaCase` pragma.
+
+  ## 0.2.1.0
+
+  ### Bug Fixes
+
+  - **Congestion bypass for small reliable packets**: Small reliable messages (<= 64 bytes) now bypass the congestion window, preventing upgrade/command stalls when heavy unreliable traffic fills the cwnd. Binary rate limit still applies to all traffic.
+
+  ### New
+
+  - `smallReliableThreshold` constant exported from `GBNet.Config`
+
+  ### Internal
+
+  - Refactored `processChannelMessages` from nested if/else to guards + Maybe-monadic pipeline with named where-helpers
 
   ## 0.2.0.0
 
@@ -109,6 +177,7 @@ description: |
   ### Simple Game Loop
 
   ```haskell
+  {-# LANGUAGE LambdaCase #-}
   import GBNet
   import Control.Monad.IO.Class (liftIO)
 
@@ -129,12 +198,12 @@ description: |
   gameLoop peer = do
     -- Single call: receive, process, broadcast, send
     let outgoing = [(ChannelId 0, encodeMyState myState)]
-    (events, peer') <- peerTick outgoing peer
+    (events, updated) <- peerTick outgoing peer
 
     -- Handle events
     liftIO $ mapM_ handleEvent events
 
-    gameLoop peer'
+    gameLoop updated
 
   handleEvent :: PeerEvent -> IO ()
   handleEvent = \case
@@ -148,7 +217,7 @@ description: |
 
   ```haskell
   -- Initiate connection (handshake happens automatically)
-  let peer' = peerConnect (peerIdFromAddr remoteAddr) now peer
+  let connecting = peerConnect (peerIdFromAddr remoteAddr) now peer
 
   -- The PeerConnected event fires when handshake completes
   ```
@@ -196,16 +265,20 @@ description: |
 
   ### Configuration
 
+  All config types have [optics](https://hackage.haskell.org/package/optics) labels via `OverloadedLabels`:
+
   ```haskell
+  {-# LANGUAGE OverloadedLabels #-}
+  import Optics ((&), (.~), (?~))
+
   let config = defaultNetworkConfig
-        { ncMaxClients = 32
-        , ncConnectionTimeoutMs = 10000.0
-        , ncKeepaliveIntervalMs = 1000.0
-        , ncMtu = 1200
-        , ncEnableConnectionMigration = True
-        , ncChannelConfigs = [unreliableChannel, reliableChannel]
-        , ncEncryptionKey = Just (EncryptionKey myKey)  -- optional AEAD encryption
-        }
+        & #ncMaxClients .~ 32
+        & #ncConnectionTimeoutMs .~ 10000.0
+        & #ncKeepaliveIntervalMs .~ 1000.0
+        & #ncMtu .~ 1200
+        & #ncEnableConnectionMigration .~ True
+        & #ncChannelConfigs .~ [unreliableChannel, reliableChannel]
+        & #ncEncryptionKey ?~ EncryptionKey myKey  -- optional AEAD encryption
   ```
 
   ---
@@ -304,11 +377,10 @@ description: |
   -- 10% packet loss
   simulateLoss 0.1
 
-  -- Packet duplication and out-of-order delivery
+  -- Packet duplication and out-of-order delivery (optics)
   let testCfg = defaultTestNetConfig
-        { tncDuplicateChance = 0.05    -- 5% chance of duplicating packets
-        , tncOutOfOrderChance = 0.1    -- 10% chance of reordering
-        }
+        & #tncDuplicateChance  .~ 0.05    -- 5% chance of duplicating packets
+        & #tncOutOfOrderChance .~ 0.1     -- 10% chance of reordering
   ```
 
   ---
@@ -439,7 +511,7 @@ description: |
   let acc = register npcId 2.0
           $ register playerId 10.0
             newPriorityAccumulator
-  let (selected, acc') = drainTop 1200 entitySize acc
+  let (selected, drained) = drainTop 1200 entitySize acc
   ```
 
   ### Snapshot Interpolation
@@ -449,8 +521,8 @@ description: |
   ```haskell
   import GBNet.Replication.Interpolation
 
-  let buffer' = pushSnapshot serverTime state buffer
-  case sampleSnapshot renderTime buffer' of
+  let updated = pushSnapshot serverTime state buffer
+  case sampleSnapshot renderTime updated of
     Nothing -> waitForMoreSnapshots
     Just interpolated -> render interpolated
   ```
@@ -483,9 +555,11 @@ description: |
   Applications can query congestion pressure and adapt:
 
   ```haskell
+  import Optics (view)
+
   case peerStats peerId peer of
     Nothing -> pure ()  -- Peer not connected
-    Just stats -> case nsCongestionLevel stats of
+    Just stats -> case view #nsCongestionLevel stats of
       CongestionNone     -> sendFreely
       CongestionElevated -> reduceNonEssential
       CongestionHigh     -> dropLowPriority
@@ -586,9 +660,9 @@ description: |
     <sub>MIT License · <a href="https://github.com/gondola-bros-entertainment">Gondola Bros Entertainment</a></sub>
   </p>
 description-type: markdown
-hash: 1d44f54aad98d91df0648254d501e69dc6020f72823e001135bfc3d63d223153
+hash: 522a54e1536877b0662cf079dabbf3a3b918e08b12ce9f9445b1689e016db3a7
 homepage: https://github.com/Gondola-Bros-Entertainment/gbnet-hs
-latest: 0.2.0.0
+latest: 0.2.6.0
 license-name: MIT
 maintainer: devon.tomlin@novavero.ai
 synopsis: Transport-level networking library with zero-copy Storable serialization

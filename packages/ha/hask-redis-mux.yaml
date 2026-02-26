@@ -1,0 +1,211 @@
+all-versions:
+- 0.1.0.0
+- 0.1.0.1
+author: Seth Speaks
+basic-deps:
+  base: '>=4.19 && <4.22'
+  hask-redis-mux: '>=0'
+changelog: |
+  # Revision history for redis-client
+
+  ## 0.6.0.0 -- 2026-02-13
+
+  *   **Multiplexing Now Default**
+      *   Cluster mode (`ClusterConfig`) now uses multiplexing by default (`clusterUseMultiplexing = True`).
+        Set `clusterUseMultiplexing = False` to opt out.
+  *   **New: Standalone Multiplexed Client**
+      *   Added `StandaloneClient` module for pipelined throughput on a single (non-cluster) Redis server.
+      *   Provides `createStandaloneClient`, `createStandaloneClientFromConfig`, `closeStandaloneClient`,
+        and `runStandaloneClient` lifecycle functions.
+      *   `StandaloneConfig` allows tuning multiplexer count and toggling multiplexing on/off.
+      *   Implements `RedisCommands` typeclass — all existing commands work transparently.
+      *   Re-exported from the top-level `Redis` module.
+  *   **Testing**
+      *   Added `MultiplexerSpec` — 14 unit tests for multiplexer internals (slot pool, response slot, lifecycle).
+      *   Added `MultiplexPoolSpec` — 8 unit tests for per-node multiplexer management and round-robin routing.
+      *   Added standalone E2E tests for all command families (string, hash, list, set, sorted set).
+      *   Added concurrency stress tests (50+ threads, submit-after-destroy, multi-multiplexer distribution).
+
+  ## 0.5.0.0 -- 2026-02-05
+
+  *   **Major Feature: Redis Cluster Support**
+      *   Implemented full cluster support including topology management, connection pooling, and slot routing.
+      *   Added smart routing with automatic `MOVED` and `ASK` redirection handling.
+      *   Updated `fill`, `cli`, and `tunnel` modes to work seamlessly with Redis Cluster.
+      *   Added "Pinned Proxy" mode to support specific cluster proxy configurations.
+      *   Fixed hostname rewriting for cluster nodes in tunnel mode.
+  *   **Infrastructure & Testing**
+      *   Added comprehensive End-to-End (E2E) tests for Cluster scenarios (Basic, Fill, Tunnel, CLI).
+      *   Updated build system to prefer `nix-build` and `make test`.
+      *   Added GitHub Actions workflows for automated testing and bootstrapping.
+  *   **Fill Operation Enhancements**
+      *   Added configurable `--key-size` and `--value-size` support for realistic workload simulation.
+      *   Added `--pipeline` configuration for explicit batch size control.
+      *   Removed `REDIS_CLIENT_FILL_CHUNK_KB` environment variable in favor of explicit flags.
+      *   Fixed fill calculation logic to ensure exact data generation matching requested sizes.
+  *   **Improvements**
+      *   Fixed various race conditions and unsafe head usage.
+      *   Improved error handling for `CROSSSLOT` operations.
+      *   Refactored codebase for better maintainability (Cluster separation).
+
+  ## 0.4.0.0 -- 2026-02-02
+
+  *   **Azure Integration**
+      *   Added `azure-redis-connect` python script for Azure Redis Cache discovery and connectivity.
+      *   Added support for Entra authentication (username/OID retrieval from JWT).
+  *   **Performance Optimization**
+      *   Optimized data filling with parallel noise generation strategies.
+      *   Optimized connection handling (parallel connections adjustment).
+  *   **DevOps**
+      *   Added agent testing infrastructure.
+
+  ## 0.3.0.0 -- 2025-10-15
+
+  *   **Command Expansion**
+      *   Added support for Geo commands.
+      *   Expanded standard Redis command set support.
+  *   **Build System**
+      *   Added `flake.nix` for modern Nix support.
+      *   Fixed inefficient store usage in build.
+  *   **Testing**
+      *   Added tunneling tests.
+
+  ## 0.2.0.0 -- 2025-03-28
+
+  *   **New Architectures**
+      *   Added "Tunnel mode" for proxying Redis connections.
+      *   Added TLS client support.
+      *   Added Pipelining support for improved throughput.
+  *   **CLI & Usability**
+      *   Added argument parsing for the CLI application.
+      *   Added support for arrow key navigation in CLI.
+      *   Added DNS resolution support.
+  *   **Core Improvements**
+      *   Refactored RESP parsing logic.
+      *   Improved Incremental network reading (State monad refactor).
+      *   Added basic E2E testing framework.
+
+  ## 0.1.0.0 -- 2025-02-11
+
+  *   First version.
+  *   Basic RESP data types.
+  *   Simple plaintext client implementation.
+changelog-type: markdown
+description: |
+  # hask-redis-mux
+
+  [![Hackage](https://img.shields.io/hackage/v/hask-redis-mux.svg)](https://hackage.haskell.org/package/hask-redis-mux)
+  [![CI](https://github.com/sspeaks/redis-client/actions/workflows/ci.yml/badge.svg)](https://github.com/sspeaks/redis-client/actions)
+
+  A multiplexed Redis client library for Haskell with full RESP protocol support,
+  Redis Cluster topology discovery, connection pooling, and TLS.
+
+  ## Features
+
+  - **Standalone & Cluster** — works with single-node Redis and Redis Cluster
+  - **Multiplexed pipelining** — concurrent commands share a single TCP connection
+  - **Typed returns** via `FromResp` — parse responses as `ByteString`, `Integer`, `Text`, `Bool`, or custom types
+  - **TLS support** — connect over TLS with `crypton`
+  - **Bracket-style resource management** — `withStandaloneClient` / `withClusterClient` for exception-safe cleanup
+  - **Connection pooling** — automatic pool management for cluster nodes
+
+  ## Installation
+
+  Add to your `.cabal` file:
+
+  ```cabal
+  build-depends: hask-redis-mux >= 0.1 && < 0.2
+  ```
+
+  ## Quick Start
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+  import Database.Redis
+
+  main :: IO ()
+  main = do
+    -- Connect to localhost:6379, run commands, auto-close
+    result <- runRedis defaultStandaloneConfig $ do
+      set "greeting" "hello"
+      (val :: ByteString) <- get "greeting"
+      return val
+    print result  -- "hello"
+  ```
+
+  ## Typed Returns with FromResp
+
+  Commands return polymorphic types via the `FromResp` typeclass. Just add a
+  type annotation and the response is parsed automatically:
+
+  ```haskell
+  runRedis defaultStandaloneConfig $ do
+    set "counter" "42"
+
+    (n :: Integer)      <- get "counter"   -- 42
+    (bs :: ByteString)  <- get "counter"   -- "42"
+    (mt :: Maybe Text)  <- get "missing"   -- Nothing
+    (ok :: Bool)        <- set "k" "v"     -- True (from +OK)
+  ```
+
+  ## Bracket Pattern (Recommended)
+
+  Use bracket-style functions for exception-safe resource management:
+
+  ```haskell
+  -- Standalone
+  withStandaloneClient config $ \client ->
+    runStandaloneClient client $ do
+      set "key" "value"
+      get "key"
+
+  -- Cluster
+  withClusterClient clusterConfig connector $ \client ->
+    runClusterCommandClient client $ do
+      set "key" "value"
+      get "key"
+  ```
+
+  ## Custom Configuration
+
+  ```haskell
+  import Database.Redis
+
+  main :: IO ()
+  main = do
+    let config = StandaloneConfig
+          { standaloneNodeAddress     = NodeAddress "redis.example.com" 6379
+          , standaloneConnector       = clusterPlaintextConnector
+          , standaloneMultiplexerCount = 4  -- 4 multiplexed connections
+          }
+    withStandaloneClient config $ \client ->
+      runStandaloneClient client $ do
+        set "key" "value"
+  ```
+
+  ## Documentation
+
+  - [Haddock API docs](https://hackage.haskell.org/package/hask-redis-mux)
+  - [GitHub repository](https://github.com/sspeaks/redis-client)
+
+  ## License
+
+  MIT — see [LICENSE](LICENSE) for details.
+description-type: markdown
+hash: 1fb48095db137ea27c19a9374a18be840c6b1a241ddff7174810561dcf1d2bf7
+homepage: https://github.com/sspeaks/redis-client
+latest: 0.1.0.1
+license-name: MIT
+maintainer: sspeaks610@gmail.com
+synopsis: A RESP protocol implementation and multiplexed Redis client library
+test-bench-deps:
+  attoparsec: '>=0.14 && <0.15'
+  base: '>=4.19 && <4.22'
+  bytestring: '>=0.12 && <0.13'
+  containers: '>=0.6 && <0.8'
+  hask-redis-mux: '>=0'
+  hspec: '>=2.11 && <2.12'
+  stm: '>=2.5 && <2.6'
+  text: '>=2.1 && <2.2'
+  time: '>=1.12 && <1.13'
+  vector: '>=0.13 && <0.14'

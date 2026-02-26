@@ -1,0 +1,521 @@
+all-versions:
+- 0.1.0.0
+- 0.2.0.0
+- 0.2.0.1
+- 0.2.1.0
+author: Nadeem Bitar
+basic-deps:
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11 && <0.13'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  hashable: '>=1.4 && <1.6'
+  hasql: '>=1.10 && <1.11'
+  network: '>=3.1 && <3.3'
+  process: '>=1.6 && <1.8'
+  temporary: '>=1.3 && <1.4'
+  text: '>=2.0 && <2.2'
+  transformers: '>=0.5 && <0.7'
+  typed-process: '>=0.2.12 && <0.3'
+  unix: '>=2.8 && <2.9'
+changelog: |
+  # Changelog
+
+  ## 0.2.1.0
+
+  ### Bug Fixes
+
+  - Fix `stop` and `restart` ignoring configured shutdown mode and timeout — they
+    were hardcoding `ShutdownGraceful` with a 30-second timeout instead of using
+    the config values, causing `with`/`withCached` to block unnecessarily on shutdown
+
+  ### Other Changes
+
+  - Change default shutdown mode to `ShutdownFast` (SIGINT) with a 5-second
+    timeout, which is more appropriate for a testing library
+
+  ## 0.2.0.1
+
+  ### Bug Fixes
+
+  - Suppress pg_isready stdout/stderr during connection polling
+
+  ## 0.2.0.0
+
+  ### Breaking Changes
+
+  - Remove Hungarian-style field prefixes from all record types using
+    `NoFieldSelectors`, `DuplicateRecordFields`, and `OverloadedRecordDot`
+    - `Config`: `configPort` → `port`, `configDatabaseName` → `databaseName`, etc.
+    - `Database`: `dbPort` → `port`, `dbDataDirectory` → `dataDirectory`, etc.
+    - `PostgresProcess`: `postgresProcess` → `process`, `postgresPid` → `pid`
+    - `DumpOptions`: `dumpFormat` → `format`, `dumpCreateDb` → `createDb`, etc.
+    - `Snapshot`: `snapshotPath` → `path`, `snapshotTemporary` → `temporary`
+    - `CacheKey`: `cacheKeyPgVersion` → `pgVersion`, `cacheKeyConfigHash` → `configHash`
+    - `CacheConfig`: `cacheConfigRoot` → `root`, `cacheConfigCow` → `cow`, `cacheConfigEnabled` → `enabled`
+    - Error types: all prefixed fields renamed similarly
+  - Remove accessor functions from `Database` module (`dataDirectory`, `socketDirectory`,
+    `port`, `databaseName`, `user`); use dot syntax instead (e.g., `db.port`)
+  - `Database` is now exported with `(..)` from `EphemeralPg` for `HasField` resolution
+  - Consumers should enable `OverloadedRecordDot` to access record fields
+
+  ## 0.1.0.0
+
+  - Initial release
+  - Core functionality: `with`, `withConfig`, `start`, `stop`
+  - Hasql integration via `connectionSettings`
+  - initdb caching support
+  - Copy-on-write support for macOS and Linux
+  - Snapshot support
+changelog-type: markdown
+description: |
+  # ephemeral-pg
+
+  A modern Haskell library for creating temporary PostgreSQL databases for testing.
+
+  ## Features
+
+  - Native hasql integration
+  - initdb caching for fast startup
+  - Copy-on-write support (macOS/Linux)
+  - Filesystem snapshots
+  - No shell injection vulnerabilities
+  - Type-safe configuration
+
+  ## Requirements
+
+  - GHC 9.6+
+  - PostgreSQL 14+
+
+  ## Installation
+
+  Add to your `cabal` file:
+
+  ```cabal
+  build-depends:
+    ephemeral-pg
+  ```
+
+  Or with Stack, add to your `package.yaml`:
+
+  ```yaml
+  dependencies:
+    - ephemeral-pg
+  ```
+
+  ## Quick Start
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+  import Hasql.Connection qualified as Connection
+
+  main :: IO ()
+  main = do
+    result <- Pg.with \db -> do
+      Right conn <- Connection.acquire (Pg.connectionSettings db)
+      -- Use the connection...
+      Connection.release conn
+    case result of
+      Left err -> putStrLn $ "Error: " <> Pg.renderStartError err
+      Right () -> putStrLn "Success!"
+  ```
+
+  ## Usage Examples
+
+  ### Basic Usage
+
+  The simplest way to use ephemeral-pg is with the `with` function, which creates
+  a temporary database, runs your action, and cleans up automatically:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+  import Hasql.Connection qualified as Connection
+  import Hasql.Session qualified as Session
+  import Hasql.Statement qualified as Statement
+
+  testQuery :: IO ()
+  testQuery = do
+    result <- Pg.with \db -> do
+      Right conn <- Connection.acquire (Pg.connectionSettings db)
+
+      -- Run a simple query
+      result <- Session.run (Session.statement () selectOne) conn
+
+      Connection.release conn
+      pure result
+
+    case result of
+      Left err -> putStrLn $ "Startup error: " <> Pg.renderStartError err
+      Right (Left sessionErr) -> putStrLn $ "Query error: " <> show sessionErr
+      Right (Right value) -> putStrLn $ "Result: " <> show value
+    where
+      selectOne = Statement.Statement "SELECT 1" mempty decoder True
+      decoder = Decoders.singleRow (Decoders.column (Decoders.nonNullable Decoders.int4))
+  ```
+
+  ### Custom Configuration
+
+  You can customize the database configuration:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+  import EphemeralPg.Config qualified as Config
+
+  customTest :: IO ()
+  customTest = do
+    let config = Pg.defaultConfig
+          { Config.databaseName = "mytest"
+          , Config.postgresSettings =
+              [ ("log_statement", "'all'")
+              , ("log_min_duration_statement", "0")
+              ]
+          }
+
+    result <- Pg.withConfig config \db -> do
+      -- Database name is "mytest"
+      -- All statements are logged
+      pure ()
+
+    case result of
+      Left err -> putStrLn $ Pg.renderStartError err
+      Right () -> putStrLn "Done!"
+  ```
+
+  ### Using Verbose Configuration
+
+  For debugging, use the pre-configured verbose settings:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+
+  debugTest :: IO ()
+  debugTest = do
+    result <- Pg.withConfig Pg.verboseConfig \db -> do
+      -- All statements logged with duration
+      pure ()
+    pure ()
+  ```
+
+  ### Using auto_explain
+
+  For query plan analysis:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+
+  analyzeQueries :: IO ()
+  analyzeQueries = do
+    result <- Pg.withConfig Pg.autoExplainConfig \db -> do
+      -- Query plans automatically logged for slow queries
+      pure ()
+    pure ()
+  ```
+
+  ### Caching for Fast Startup
+
+  For faster test suite execution, use caching. The first run initializes the
+  cache, and subsequent runs copy from it (using CoW if available):
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+
+  cachedTest :: IO ()
+  cachedTest = do
+    -- First call: ~2s (runs initdb and caches result)
+    -- Subsequent calls: ~200ms (copies from cache)
+    result <- Pg.withCached \db -> do
+      -- Use the database...
+      pure ()
+    pure ()
+  ```
+
+  ### Manual Lifecycle Management
+
+  For more control, use `start` and `stop` directly:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+  import Control.Exception (bracket)
+
+  manualLifecycle :: IO ()
+  manualLifecycle = do
+    result <- Pg.start Pg.defaultConfig
+    case result of
+      Left err -> putStrLn $ Pg.renderStartError err
+      Right db -> do
+        -- Use the database...
+        putStrLn $ "Database running on port: " <> show db.port
+
+        -- Clean up when done
+        Pg.stop db
+  ```
+
+  Or with bracket for exception safety:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+  import Control.Exception (bracket)
+
+  bracketExample :: IO ()
+  bracketExample = do
+    result <- Pg.start Pg.defaultConfig
+    case result of
+      Left err -> putStrLn $ Pg.renderStartError err
+      Right db ->
+        bracket (pure db) Pg.stop \db' -> do
+          -- Use the database...
+          pure ()
+  ```
+
+  ### Restarting the Database
+
+  You can restart the database to apply configuration changes or test recovery:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+
+  restartTest :: IO ()
+  restartTest = do
+    result <- Pg.with \db -> do
+      let port1 = db.port
+
+      -- Restart the server
+      restartResult <- Pg.restart db
+      case restartResult of
+        Left err -> fail $ "Restart failed: " <> show err
+        Right db' -> do
+          -- Server restarted, data preserved
+          let port2 = db'.port
+          -- Port remains the same
+          pure (port1 == port2)
+
+    case result of
+      Left err -> putStrLn $ Pg.renderStartError err
+      Right same -> putStrLn $ "Ports same: " <> show same
+  ```
+
+  ### Snapshots
+
+  Create filesystem snapshots for fast test isolation:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+  import EphemeralPg.Snapshot qualified as Snapshot
+
+  snapshotTest :: IO ()
+  snapshotTest = do
+    result <- Pg.with \db -> do
+      -- Set up initial state
+      -- ... create tables, insert data ...
+
+      -- Create a snapshot
+      Right snapshot <- Snapshot.createSnapshot db
+
+      -- Run a destructive test
+      -- ... delete everything ...
+
+      -- Restore to the snapshot
+      Right () <- Snapshot.restoreSnapshot snapshot db
+
+      -- Data is restored
+
+      -- Clean up snapshot when done
+      Snapshot.deleteSnapshot snapshot
+
+      pure ()
+
+    pure ()
+  ```
+
+  ### Dump and Restore
+
+  Export and import database contents:
+
+  ```haskell
+  import EphemeralPg qualified as Pg
+  import EphemeralPg.Dump qualified as Dump
+
+  dumpTest :: IO ()
+  dumpTest = do
+    result <- Pg.with \db -> do
+      -- Set up data
+      -- ...
+
+      -- Dump to file
+      Right () <- Dump.dump db "/tmp/backup.sql"
+
+      pure ()
+
+    -- Later, restore to a new database
+    result2 <- Pg.with \db2 -> do
+      Right () <- Dump.restore db2 "/tmp/backup.sql"
+      -- Data is now in db2
+      pure ()
+
+    pure ()
+  ```
+
+  ## Configuration Reference
+
+  ### Config Fields
+
+  | Field | Type | Default | Description |
+  |-------|------|---------|-------------|
+  | `databaseName` | `Text` | `"postgres"` | Name of the database to create |
+  | `user` | `Text` | Current user | PostgreSQL username |
+  | `password` | `Maybe Text` | `Nothing` | PostgreSQL password (`Nothing` = trust auth) |
+  | `port` | `Last Word16` | Auto-assigned | Port number (finds free port if not specified) |
+  | `dataDirectory` | `DirectoryConfig` | Temporary | Data directory location |
+  | `socketDirectory` | `DirectoryConfig` | Temporary | Unix socket directory |
+  | `temporaryRoot` | `Last FilePath` | System temp | Root for temporary directories |
+  | `postgresSettings` | `[(Text, Text)]` | Optimized defaults | postgresql.conf settings |
+  | `initDbArgs` | `[Text]` | `[]` | Additional initdb arguments |
+
+  ### Pre-configured Configs
+
+  - `defaultConfig` - Basic configuration with optimized defaults
+  - `verboseConfig` - All statements logged with duration
+  - `autoExplainConfig` - Query plans logged for slow queries
+
+  ### PostgreSQL Settings Defaults
+
+  The default configuration includes these optimized settings for testing:
+
+  ```
+  shared_buffers = 12MB
+  fsync = off
+  synchronous_commit = off
+  full_page_writes = off
+  log_min_duration_statement = 0
+  log_connections = on
+  log_disconnections = on
+  random_page_cost = 1.0
+  ```
+
+  ## API Reference
+
+  ### Core Functions
+
+  ```haskell
+  -- Bracket-style (recommended)
+  with :: (Database -> IO a) -> IO (Either StartError a)
+  withConfig :: Config -> (Database -> IO a) -> IO (Either StartError a)
+
+  -- With caching
+  withCached :: (Database -> IO a) -> IO (Either StartError a)
+
+  -- Manual lifecycle
+  start :: Config -> IO (Either StartError Database)
+  stop :: Database -> IO ()
+  restart :: Database -> IO (Either StartError Database)
+  ```
+
+  ### Database Handle
+
+  Access database fields using dot syntax (requires `OverloadedRecordDot`):
+
+  ```haskell
+  db.port             :: Word16       -- Port number
+  db.databaseName     :: Text         -- Database name
+  db.user             :: Text         -- Username
+  db.dataDirectory    :: FilePath     -- Data directory path
+  db.socketDirectory  :: FilePath     -- Socket directory path
+  ```
+
+  Computed connection helpers:
+
+  ```haskell
+  connectionSettings :: Database -> Settings  -- hasql Settings
+  connectionString :: Database -> Text         -- libpq connection string
+  ```
+
+  ### Cache Management
+
+  ```haskell
+  clearCache :: IO ()      -- Clear current user's cache
+  clearAllCaches :: IO ()  -- Clear all cached data
+  ```
+
+  ## Benchmarks
+
+  Measured with [tasty-bench](https://hackage.haskell.org/package/tasty-bench) in wall-clock mode on Apple Silicon.
+
+  | Benchmark | Time | vs baseline |
+  |---|---|---|
+  | **Lifecycle** | | |
+  | `defaultConfig` | 796 ms | -- |
+  | `defaultConfig <> verboseConfig` | 812 ms | 1.02x |
+  | `defaultConfig <> autoExplainConfig 100` | 769 ms | 0.97x |
+  | **Caching** | | |
+  | `withConfig` (uncached) | 755 ms | -- |
+  | `withCached` | 434 ms | 0.58x |
+  | **Snapshot** | | |
+  | lifecycle only | 761 ms | -- |
+  | lifecycle + `createSnapshot` | 1.13 s | 1.48x |
+  | lifecycle + `createSnapshot` + `restoreSnapshot` | 1.39 s | 1.83x |
+  | **Connection** | | |
+  | hasql `acquire` + `release` | 1.64 ms | -- |
+
+  Highlights:
+  - Cached startup is ~42% faster than uncached (CoW copy vs full initdb)
+  - `verboseConfig` and `autoExplainConfig` add negligible overhead
+  - Snapshot create adds ~365 ms, restore adds ~265 ms
+  - Connection acquire/release is ~1.6 ms once the database is running
+
+  ## Comparison with tmp-postgres
+
+  ephemeral-pg is a modern replacement for tmp-postgres, addressing several issues:
+
+  | Feature | tmp-postgres | ephemeral-pg |
+  |---------|-------------|--------------|
+  | Shell injection | Vulnerable | Safe (typed-process) |
+  | Windows support | Partial | Unix-only (explicit) |
+  | Socket path length | Can fail | Validated |
+  | GHC version | 8.0+ | 9.6+ |
+  | hasql integration | Via options | Native |
+  | initdb caching | Yes | Yes (improved) |
+  | Copy-on-write | Yes | Yes |
+  | PostgreSQL version | 9.3+ | 14+ |
+
+  ## Troubleshooting
+
+  ### "initdb not found"
+
+  Ensure PostgreSQL binaries are in your PATH:
+
+  ```bash
+  # macOS (Homebrew)
+  export PATH="/opt/homebrew/opt/postgresql@14/bin:$PATH"
+
+  # Linux (Debian/Ubuntu)
+  export PATH="/usr/lib/postgresql/14/bin:$PATH"
+  ```
+
+  ### Socket path too long
+
+  Unix sockets have a path length limit (~104 bytes). ephemeral-pg uses short
+  paths to avoid this, but if you specify a custom socket directory, ensure
+  the full path is under 90 characters.
+
+  ### Permission denied
+
+  Ensure you have write access to the temporary directory. By default, the
+  system temp directory is used.
+
+  ## License
+
+  BSD-3-Clause
+description-type: markdown
+hash: 25d8025d6e0c0414a3cb64d601dfe3caffb54a9e2294b6b3c70c0ddedaca7350
+homepage: ''
+latest: 0.2.1.0
+license-name: BSD-3-Clause
+maintainer: Nadeem Bitar
+synopsis: Temporary PostgreSQL databases for testing
+test-bench-deps:
+  QuickCheck: '>=2.14 && <2.16'
+  base: '>=0'
+  ephemeral-pg: '>=0'
+  hasql: '>=0'
+  hspec: '>=2.11 && <2.12'
+  text: '>=0'

@@ -1,0 +1,531 @@
+all-versions:
+- 0.1.0.0
+- 0.2.0.0
+- 0.2.1.0
+- 0.2.2.0
+- 0.2.3.0
+- 0.2.4.0
+author: Devon Tomlin
+basic-deps:
+  base: '>=4.16 && <5'
+  base64-bytestring: '>=1.2 && <1.3'
+  bytestring: '>=0.11 && <0.13'
+  containers: '>=0.6 && <0.8'
+  crypton: '>=1.0 && <2'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  http-types: '>=0.12 && <0.13'
+  lzma: '>=0.0.1 && <0.1'
+  memory: '>=0.18 && <1'
+  nova-cache: '>=0'
+  text: '>=2.0 && <2.2'
+  vector: '>=0.12 && <0.14'
+  wai: '>=3.2 && <3.3'
+  warp: '>=3.3 && <3.5'
+changelog: |
+  # Changelog
+
+  ## 0.2.4.0 — 2026-02-25
+
+  - New module: `NovaCache.Base64` — base64 encode/decode re-exported for
+    downstream consumers (nova-nix) so they don't need a direct
+    `base64-bytestring` dependency
+  - No changes to existing modules
+
+  ## 0.2.3.0 — 2026-02-23
+
+  - Drop `unix` dependency — `checkExecutable` now uses cross-platform
+    `System.Directory.getPermissions` instead of `System.Posix.Files`
+  - Fixes Windows build (the `unix` package is not available on Windows)
+  - No API changes
+
+  ## 0.2.2.0 — 2026-02-23
+
+  - Gate `NovaCache.Compression` and `lzma` dependency behind a `compression`
+    cabal flag (default on, backwards compatible)
+  - Consumers that only need hashing/NAR/narinfo can build with `-compression`
+    to avoid the system `liblzma` C dependency
+  - Compression tests moved to separate test suite (`nova-cache-compression-test`)
+  - No changes to any library source modules
+
+  ## 0.2.1.0 — 2026-02-22
+
+  - Server: `validateNarInfo` wired into PUT handler — rejects malformed uploads
+    with 400 Bad Request and collected validation errors
+  - Server: `Cache-Control: public, max-age=31536000, immutable` on narinfo and
+    NAR GET responses for CDN edge caching
+  - Store: default priority changed from 30 to 50 (community cache fallback
+    behind cache.nixos.org at 40)
+  - Seed action: fix round-trip validation to account for server-side signing;
+    now verifies StorePath field, signature presence, and NAR fetchability
+  - Public binary cache documented with key and nix.conf instructions
+
+  ## 0.2.0.0 — 2026-02-22
+
+  - New module: `NovaCache.Validate` — pure protocol validation layer
+  - `ValidationError` sum type with 10 constructors covering sizes, store paths,
+    hash formats, content hashes, and Ed25519 signatures
+  - `validateNarInfo` — field semantic validation (non-negative sizes, parseable
+    store paths/hashes/references), collects all errors instead of short-circuiting
+  - `validateNarHash` / `validateFileHash` — SHA-256 content hash verification
+    against declared narinfo values
+  - `validateSignature` — Ed25519 signature verification against a trusted public
+    key (at-least-one semantics, matching Nix behaviour)
+  - `validateFull` — composes all four stages, collecting errors across all
+  - 17 new tests (74 total across 9 groups)
+  - No new dependencies
+
+  ## 0.1.0.0 — 2026-02-21
+
+  - Initial release (renamed from gb-nix-cache)
+  - Nix-base32 encoding/decoding
+  - SHA-256 hashing with Nix hash formatting
+  - Store path parsing and rendering
+  - NAR binary format serialization/deserialization
+  - NarInfo text format parsing/rendering
+  - Ed25519 signing and verification
+  - xz compression/decompression
+  - Filesystem storage backend
+  - Optional WAI cache server (behind `server` flag)
+  - Path traversal protection on all store operations
+  - Total port parsing (no partial `read`)
+  - 54 tests across 8 modules
+changelog-type: markdown
+description: |
+  <div align="center">
+  <h1>nova-cache</h1>
+  <p><strong>Nix Binary Cache Protocol for Haskell</strong></p>
+  <p>Pure-first implementation of the complete Nix binary cache protocol — base32, NAR, narinfo, Ed25519 signing, store paths — with an optional WAI server.</p>
+  <p><a href="#quick-start">Quick Start</a> · <a href="#modules">Modules</a> · <a href="#server">Server</a> · <a href="#api-reference">API Reference</a></p>
+  <p>
+
+  [![CI](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml)
+  [![Hackage](https://img.shields.io/hackage/v/nova-cache.svg)](https://hackage.haskell.org/package/nova-cache)
+  ![Haskell](https://img.shields.io/badge/haskell-GHC%209.6-purple)
+  ![License](https://img.shields.io/badge/license-MIT-blue)
+
+  </p>
+  </div>
+
+  ---
+
+  ## What is nova-cache?
+
+  A focused, minimal library implementing the full Nix binary cache protocol:
+
+  - **Base32** — Nix-specific encoding with the custom `0123456789abcdfghijklmnpqrsvwxyz` alphabet, O(n) ST-based decode
+  - **Hash** — SHA-256 hashing with `sha256:<nix-base32>` formatting, composition pipeline over crypton
+  - **StorePath** — Store path parsing, validation, and hash extraction with enforced invariants via newtypes
+  - **NAR** — Binary serialization and deserialization of the Nix ARchive format using `Builder` monoid composition
+  - **NarInfo** — Parse and render the key-value narinfo text format
+  - **Signing** — Ed25519 fingerprint signing and verification for binary cache trust
+  - **Compression** — xz compress/decompress for NAR transport (behind `compression` cabal flag, default on)
+  - **Store** — Filesystem storage backend for narinfo and NAR files
+  - **Validate** — Pure protocol validation: field semantics, content hashes, Ed25519 signatures — all errors collected, not short-circuited
+  - **Server** — Optional WAI/Warp HTTP server implementing the cache protocol (behind `server` cabal flag)
+
+  Every module is pure by default. IO lives at the boundaries only.
+
+  ---
+
+  ## Quick Start
+
+  Add to your `.cabal` file:
+
+  ```cabal
+  build-depends: nova-cache
+  ```
+
+  ### Hash a Store Path
+
+  ```haskell
+  import NovaCache.Hash (hashBytes, formatNixHash)
+  import qualified Data.ByteString as BS
+
+  main :: IO ()
+  main = do
+    contents <- BS.readFile "/nix/store/abc123-hello/bin/hello"
+    let nixHash = hashBytes contents
+    putStrLn (show (formatNixHash nixHash))
+    -- "sha256:0m6g5r7c..."
+  ```
+
+  ### Parse a NarInfo
+
+  ```haskell
+  import NovaCache.NarInfo (parseNarInfo, niStorePath, niNarHash)
+
+  main :: IO ()
+  main = do
+    let raw = "StorePath: /nix/store/abc...-hello\n\
+              \URL: nar/abc....nar.xz\n\
+              \Compression: xz\n\
+              \FileHash: sha256:...\n\
+              \FileSize: 1234\n\
+              \NarHash: sha256:...\n\
+              \NarSize: 5678\n\
+              \References: \n"
+    case parseNarInfo raw of
+      Left err -> putStrLn ("Parse error: " ++ err)
+      Right ni -> do
+        putStrLn ("Store path: " <> show (niStorePath ni))
+        putStrLn ("NAR hash:   " <> show (niNarHash ni))
+  ```
+
+  ### Sign and Verify
+
+  ```haskell
+  import NovaCache.Signing (parseSecretKey, parsePublicKey, sign, verify)
+
+  main :: IO ()
+  main = do
+    let Right sk = parseSecretKey "mykey:base64secretkey..."
+        Right pk = parsePublicKey "mykey:base64pubkey..."
+    case sign sk narinfo of
+      Left err  -> putStrLn ("Sign error: " ++ err)
+      Right sig -> putStrLn ("Verified: " <> show (verify pk narinfo sig))
+  ```
+
+  ### Validate an Upload
+
+  ```haskell
+  import NovaCache.Validate (validateFull, ValidationError)
+  import NovaCache.Signing (parsePublicKey)
+
+  -- Pure validation — no IO needed
+  validateUpload :: PublicKey -> NarInfo -> ByteString -> ByteString -> IO ()
+  validateUpload pk narinfo narBytes fileBytes =
+    case validateFull pk narinfo narBytes fileBytes of
+      Right ()   -> putStrLn "Upload valid"
+      Left errs  -> mapM_ (putStrLn . ("  " ++) . show) errs
+
+  -- Individual checks compose too
+  import NovaCache.Validate (validateNarInfo, validateNarHash)
+
+  checkNarInfo :: NarInfo -> Either [ValidationError] NarInfo
+  checkNarInfo = validateNarInfo  -- collects ALL errors, not just the first
+  ```
+
+  ---
+
+  ## Modules
+
+  ### NovaCache.Base32
+
+  Nix uses a non-standard base32 alphabet that omits `e`, `o`, `u`, `t` and encodes in reverse byte order. The encoder extracts 5-bit groups from descending positions; the decoder uses an O(n) ST-based bit scatter with mutable vectors.
+
+  ```haskell
+  import NovaCache.Base32 (encode, decode)
+
+  encode "\xff"       -- "8z"
+  decode "0z"         -- Right "\x1e"
+  decode (encode bs)  -- Right bs  (roundtrip)
+  ```
+
+  ### NovaCache.Hash
+
+  SHA-256 via crypton, formatted as `sha256:<nix-base32>`:
+
+  ```haskell
+  import NovaCache.Hash (hashBytes, hashFile, formatNixHash, parseNixHash)
+
+  formatNixHash (hashBytes "hello")
+  -- "sha256:0m6g5r7c..."
+
+  nixHash <- hashFile "/nix/store/abc123-hello"
+  ```
+
+  ### NovaCache.StorePath
+
+  Newtypes enforce invariants — store path hashes are always 32 characters, names are validated against the Nix character set:
+
+  ```haskell
+  import NovaCache.StorePath
+
+  let Right sp = parseStorePath defaultStoreDir "/nix/store/abc123...-hello-1.0"
+  storePathHashString sp  -- "abc123..."
+  storePathBaseName sp    -- "abc123...-hello-1.0"
+  renderStorePath defaultStoreDir sp  -- "/nix/store/abc123...-hello-1.0"
+  ```
+
+  ### NovaCache.NAR
+
+  The NAR tree ADT with `Builder`-based serialization:
+
+  ```haskell
+  import NovaCache.NAR
+
+  let entry = NarRegular False "file contents"
+  let bytes = serialise entry
+  deserialise bytes  -- Right entry (roundtrip)
+
+  -- Hash a NAR directly (serialise + SHA-256)
+  narHash entry  -- NixHash
+
+  -- Build from filesystem
+  tree <- serialiseFromPath "/nix/store/abc123-hello"
+  ```
+
+  ### NovaCache.Signing
+
+  Ed25519 signing and verification of narinfo fingerprints. Keys are `name:base64` pairs:
+
+  ```haskell
+  import NovaCache.Signing
+
+  -- Fingerprint format: 1;<StorePath>;<NarHash>;<NarSize>;<refs>
+  fingerprint narinfo
+  -- "1;/nix/store/abc...;sha256:...;5678;"
+  ```
+
+  ### NovaCache.Validate
+
+  Pure protocol validation — field semantics, content hashes, and signatures. All validators collect every error instead of short-circuiting:
+
+  ```haskell
+  import NovaCache.Validate
+
+  -- Validate narinfo fields (sizes, store path, hash formats, references)
+  case validateNarInfo narinfo of
+    Right ni   -> processUpload ni
+    Left errs  -> rejectWith errs  -- [InvalidStorePath ..., NegativeFileSize ...]
+
+  -- Verify content hashes match declared values
+  validateNarHash narinfo rawNarBytes       -- Either ValidationError ()
+  validateFileHash narinfo compressedBytes  -- Either ValidationError ()
+
+  -- Full pipeline: fields + nar hash + file hash + signatures
+  validateFull publicKey narinfo narBytes fileBytes
+  -- Either [ValidationError] ()
+  ```
+
+  ---
+
+  ## Server
+
+  Enable the WAI server with the `server` cabal flag:
+
+  ```bash
+  cabal build --flag server
+  cabal run nova-cache-server -- --port 5000 --store ./nix-cache
+  ```
+
+  Or via environment variables:
+
+  ```bash
+  PORT=5000 NIX_CACHE_DIR=./nix-cache nova-cache-server
+  ```
+
+  ### Endpoints
+
+  | Method | Path | Description |
+  |--------|------|-------------|
+  | `GET` | `/nix-cache-info` | Cache metadata (StoreDir, WantMassQuery, Priority) |
+  | `GET` | `/<hash>.narinfo` | Fetch narinfo by store path hash |
+  | `GET` | `/nar/<file>` | Fetch compressed NAR file |
+  | `PUT` | `/<hash>.narinfo` | Upload narinfo |
+  | `PUT` | `/nar/<file>` | Upload NAR file |
+
+  ### Public Binary Cache
+
+  A free, public binary cache is available at `cache.novavero.ai`. Add it to
+  your Nix configuration:
+
+  ```nix
+  # nix.conf or /etc/nix/nix.conf
+  extra-substituters = https://cache.novavero.ai
+  extra-trusted-public-keys = cache.novavero.ai-1:2yJK0UZWlDDTpThzEdqfGWaj+j3ljOCGoA50Ims47dM=
+  ```
+
+  Or use it directly:
+
+  ```bash
+  nix build --substituters "https://cache.nixos.org https://cache.novavero.ai" \
+            --trusted-public-keys "cache.nixos.org-1:DLD/YGKmo6OceLp6RsiGCbi5FwMExRzJcoJKanMPe/Q= cache.novavero.ai-1:2yJK0UZWlDDTpThzEdqfGWaj+j3ljOCGoA50Ims47dM="
+  ```
+
+  ### Self-Hosted Cache
+
+  Run your own instance:
+
+  ```bash
+  # Push to your cache
+  nix copy --to http://cache.example.com /nix/store/abc123-hello
+
+  # Pull from your cache
+  nix build --substituters http://cache.example.com --trusted-public-keys "mykey:base64..."
+  ```
+
+  ---
+
+  ## Architecture
+
+  ```
+                      Pure Core (no IO)
+    ┌──────────────────────────────────────────┐
+    │                                          │
+    │  Base32 ──→ Hash ──→ StorePath           │
+    │                         │                │
+    │                      NarInfo ──→ Signing │
+    │                         │         │      │
+    │                        NAR    Validate   │
+    │                                          │
+    └──────────────────────────────────────────┘
+                         │
+                IO Boundary (thin)
+    ┌──────────────────────────────────────────────────────┐
+    │  Compression (flag)    Store    Server (flag)       │
+    └──────────────────────────────────────────────────────┘
+  ```
+
+  - **9 modules**, 7 pure + 2 at the IO boundary (Compression optional via flag)
+  - **54 core tests + 3 compression tests**, hand-rolled harness, no framework dependencies
+  - **Zero partial functions** — total by construction
+  - **Strict by default** — bang patterns on all data fields
+
+  ---
+
+  ## API Reference
+
+  ### Base32
+
+  ```haskell
+  encode :: ByteString -> Text
+  decode :: Text -> Either String ByteString
+  ```
+
+  ### Hash
+
+  ```haskell
+  hashBytes     :: ByteString -> NixHash
+  hashFile      :: FilePath -> IO NixHash
+  formatNixHash :: NixHash -> Text
+  parseNixHash  :: Text -> Either String NixHash
+  ```
+
+  ### StorePath
+
+  ```haskell
+  parseStorePath      :: StoreDir -> Text -> Either String StorePath
+  renderStorePath     :: StoreDir -> StorePath -> Text
+  storePathHashString :: StorePath -> Text
+  storePathBaseName   :: StorePath -> Text
+  ```
+
+  ### NAR
+
+  ```haskell
+  serialise         :: NarEntry -> ByteString
+  deserialise       :: ByteString -> Either String NarEntry
+  narHash           :: NarEntry -> NixHash
+  serialiseFromPath :: FilePath -> IO NarEntry
+  ```
+
+  ### NarInfo
+
+  ```haskell
+  parseNarInfo  :: Text -> Either String NarInfo
+  renderNarInfo :: NarInfo -> Text
+  ```
+
+  ### Signing
+
+  ```haskell
+  parseSecretKey :: Text -> Either String SecretKey
+  parsePublicKey :: Text -> Either String PublicKey
+  fingerprint    :: NarInfo -> Text
+  sign           :: SecretKey -> NarInfo -> Either String Text
+  verify         :: PublicKey -> NarInfo -> Text -> Bool
+  ```
+
+  ### Validate
+
+  ```haskell
+  validateNarInfo  :: NarInfo -> Either [ValidationError] NarInfo
+  validateNarHash  :: NarInfo -> ByteString -> Either ValidationError ()
+  validateFileHash :: NarInfo -> ByteString -> Either ValidationError ()
+  validateSignature :: PublicKey -> NarInfo -> Either [ValidationError] ()
+  validateFull     :: PublicKey -> NarInfo -> ByteString -> ByteString -> Either [ValidationError] ()
+  ```
+
+  ### Compression
+
+  ```haskell
+  compressXz   :: ByteString -> ByteString
+  decompressXz :: ByteString -> ByteString
+  ```
+
+  ### Store
+
+  ```haskell
+  newFileStore  :: FilePath -> IO FileStore
+  readNarInfo   :: FileStore -> Text -> IO (Maybe ByteString)
+  writeNarInfo  :: FileStore -> Text -> ByteString -> IO ()
+  readNar       :: FileStore -> Text -> IO (Maybe ByteString)
+  writeNar      :: FileStore -> Text -> ByteString -> IO ()
+  getCacheInfo  :: FileStore -> (Text, Bool, Int)
+  ```
+
+  Full Haddock documentation is available on [Hackage](https://hackage.haskell.org/package/nova-cache).
+
+  ---
+
+  ## GitHub Action — CI Cache Seeding
+
+  A reusable composite action is included for pushing Nix store paths to a nova-cache server from CI:
+
+  ```yaml
+  - uses: Novavero-AI/nova-cache/.github/actions/seed@main
+    with:
+      cache-url: https://cache.example.com
+      api-key: ${{ secrets.CACHE_API_KEY }}
+  ```
+
+  | Input | Required | Description |
+  |-------|----------|-------------|
+  | `cache-url` | yes | Base URL of the nova-cache server |
+  | `api-key` | yes | Bearer token for authenticating uploads |
+  | `paths` | no | Explicit store paths (space-separated). Defaults to all paths from `shell.nix` / `default.nix` |
+
+  The action resolves Nix store path closures, exports them to a local binary cache, and uploads all narinfo + NAR files to the server. Works with any CI that has Nix installed.
+
+  ---
+
+  ## Build & Test
+
+  ```bash
+  cabal build                              # Build library (compression on by default)
+  cabal build -f-compression               # Build without lzma C dependency
+  cabal test                               # Run all tests
+  cabal build --ghc-options="-Werror"      # Warnings as errors
+  cabal build --flag server                # Build with WAI server
+  cabal haddock                            # Generate docs
+  ```
+
+  Consumers that only need hashing, NAR, or narinfo can disable the `compression` flag to avoid the system `liblzma` dependency:
+
+  ```cabal
+  constraints: nova-cache -compression
+  ```
+
+  ---
+
+  <p align="center">
+    <sub>MIT License · <a href="https://github.com/Novavero-AI">Novavero AI</a></sub>
+  </p>
+description-type: markdown
+hash: 770d1ef4c08d6c99034fd40b48c336fba5d5cafbc8846dd60cca69a35aca140c
+homepage: https://github.com/Novavero-AI/nova-cache
+latest: 0.2.4.0
+license-name: MIT
+maintainer: devon.tomlin@novavero.ai
+synopsis: Pure Nix binary cache protocol library
+test-bench-deps:
+  base: '>=4.16 && <5'
+  base64-bytestring: '>=1.2 && <1.3'
+  bytestring: '>=0.11 && <0.13'
+  crypton: '>=1.0 && <2'
+  directory: '>=1.3 && <1.4'
+  memory: '>=0.18 && <1'
+  nova-cache: '>=0'
+  text: '>=2.0 && <2.2'

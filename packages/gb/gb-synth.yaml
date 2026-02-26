@@ -1,0 +1,409 @@
+all-versions:
+- 0.1.0.0
+- 0.2.0.0
+- 0.2.0.1
+author: Devon Tomlin
+basic-deps:
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11 && <0.13'
+  containers: '>=0.6 && <0.8'
+changelog: |
+  # Changelog
+
+  ## 0.2.0.1
+
+  - Fix Haddock cross-references in Effects and Pattern modules.
+  - Fix README chord progression descriptions and missing Pattern import.
+  - Remove `-O2` from library and test ghc-options (consumers set their own optimization).
+
+  ## 0.2.0.0
+
+  ### New Modules
+
+  - **GBSynth.SFX**: 13 ready-to-use sound effect presets (laser, explosion, impact, alert, click, powerup, coin, jump, heal, defeat) plus pre-rendered drum samples (kickSample, snareSample, hihatSample). All built from synthesis primitives, no sample files.
+  - **GBSynth.Chord**: Programmatic chord construction. `Quality` type (Major, Minor, Diminished, Augmented, Sus2, Sus4), `chord` / `inversion` / `chordProgression` builders, and built-in progressions (pop1564, blues145, minorClassic).
+  - **GBSynth.Effects**: Post-processing effects — `bitCrush`, `echo`, `fadeIn`, `fadeOut`, `reverseSignal`, `mix`.
+
+  ### Bug Fixes
+
+  - Eliminate partial functions: `tail` → `drop 1` in Oscillator and Synthesis, `maximum` / `foldl1` → safe `foldl'` with empty list guards in Render.
+
+  ### Internal
+
+  - 109 pure tests (up from 60)
+  - Metadata: cabal-version 3.0, stability experimental, CHANGELOG.md
+
+  ## 0.1.0.0
+
+  Initial release.
+
+  ### Synthesis Engine
+  - Oscillators: sine, square, saw, triangle, noise, pulse with configurable duty cycle
+  - ADSR envelope generator with attack, decay, sustain, release stages
+  - Instrument definition with oscillator type, envelope, and harmonics
+  - Multi-channel pattern sequencer with note events and rests
+  - Song structure: sections, tempo, time signature, instrument assignment
+
+  ### Rendering
+  - Pure PCM rendering pipeline: Song → sections → patterns → samples
+  - Multi-layer signal mixing with per-channel gain
+  - Signal normalization with configurable output level
+  - 16-bit mono PCM at 22050 Hz
+
+  ### WAV Export
+  - Native WAV file writer (RIFF/WAVE format)
+  - 16-bit signed PCM encoding
+  - No external audio dependencies
+changelog-type: markdown
+description: |
+  <div align="center">
+  <h1>gb-synth</h1>
+  <p><strong>Procedural Music & Sound Effect Synthesis</strong></p>
+  <p>Pure Haskell — no audio files, no samples, no DAW. Just math.</p>
+  <p><a href="#overview">Overview</a> · <a href="#architecture">Architecture</a> · <a href="#usage">Usage</a> · <a href="#api">API</a> · <a href="#example">Example</a></p>
+  <p>
+
+  [![CI](https://github.com/Gondola-Bros-Entertainment/gb-synth/actions/workflows/ci.yml/badge.svg)](https://github.com/Gondola-Bros-Entertainment/gb-synth/actions/workflows/ci.yml)
+  [![Hackage](https://img.shields.io/hackage/v/gb-synth.svg)](https://hackage.haskell.org/package/gb-synth)
+  ![Haskell](https://img.shields.io/badge/haskell-GHC%209.6-purple)
+
+  </p>
+  </div>
+
+  ---
+
+  ## Overview
+
+  gb-synth is a synthesis engine with a tracker-style song DSL for generating retro game music and sound effects. Define songs declaratively — chords, patterns, sections, instruments — and render to 16-bit mono PCM WAV at 22050 Hz.
+
+  Companion to [gb-sprite](https://github.com/Gondola-Bros-Entertainment/gb-sprite) (procedural 2D graphics).
+
+  **Features:**
+  - 5 waveforms — sine, square, triangle, sawtooth, noise
+  - ADSR envelopes with 4 presets (percussive, shortPluck, longPad, organ)
+  - Tracker-style step patterns with note sustain across rests
+  - Structured songs with sections (intro/verse/chorus/outro) and repeats
+  - 13 ready-to-use SFX presets (laser, explosion, coin, powerup, etc.)
+  - Programmatic chord construction and progressions
+  - Post-processing effects (bitCrush, echo, fade, reverse, mix)
+  - Pre-rendered drum samples (kick, snare, hihat)
+  - 16-bit mono PCM WAV output
+
+  ---
+
+  ## Architecture
+
+  ```
+  src/GBSynth/
+  ├── Oscillator.hs   Sine, square, triangle, sawtooth, noise
+  ├── Envelope.hs     ADSR (attack/decay/sustain/release)
+  ├── Instrument.hs   Synth (oscillator+ADSR) or Sample (pre-rendered buffer)
+  ├── Pattern.hs      Tracker-style step grid (MOD/XM/IT inspired)
+  ├── Song.hs         Sections + arrangement (intro/verse/chorus/outro)
+  ├── Synthesis.hs    Reusable SFX building blocks (sweeps, bursts, decays)
+  ├── SFX.hs          13 ready-to-use sound effect presets
+  ├── Chord.hs        Programmatic chord construction and progressions
+  ├── Effects.hs      Post-processing (bitCrush, echo, fade, reverse, mix)
+  ├── Render.hs       Song → [Int16] pipeline
+  └── WAV.hs          16-bit mono PCM writer (22050 Hz)
+  ```
+
+  ### Pipeline
+
+  ```
+  Song → Sections → Tracks → Patterns → Notes → Oscillator + Envelope → SampleMap → Mix → Normalize → [Int16] → WAV
+  ```
+
+  1. Each `Section` contains parallel `Track`s
+  2. Each `Track` pairs an `Instrument` with a `Pattern`
+  3. `Pattern` steps are rendered: `NoteOn` triggers `renderNote`, `Rest` sustains the previous note, `NoteOff` silences
+  4. Track audio is mixed into a sparse `SampleMap` for efficient random-access
+  5. Tracks are layered with per-track gain
+  6. Section is repeated `secRepeats` times
+  7. All sections concatenated, normalized, converted to `[Int16]`
+
+  ---
+
+  ## Usage
+
+  ### As a dependency
+
+  Add to your `.cabal` file:
+
+  ```cabal
+  build-depends: gb-synth >= 0.2
+  ```
+
+  ### Generating WAVs
+
+  ```haskell
+  import GBSynth.Render (renderSong)
+  import GBSynth.WAV (writeWav)
+
+  main :: IO ()
+  main = writeWav "music.wav" (renderSong mySong)
+  ```
+
+  ### Quick SFX
+
+  ```haskell
+  import GBSynth.SFX (laser, explosion, coin)
+  import GBSynth.WAV (writeWav)
+
+  main :: IO ()
+  main = do
+    writeWav "laser.wav" laser
+    writeWav "explosion.wav" explosion
+    writeWav "coin.wav" coin
+  ```
+
+  ---
+
+  ## API
+
+  ### Oscillator
+
+  ```haskell
+  data Waveform = Sine | Square | Triangle | Sawtooth | Noise
+
+  oscillate :: Waveform -> Double -> Int -> [Double]  -- waveform, freq Hz, duration samples
+  noteFreq  :: Int -> Double                           -- MIDI note → Hz (A4 = 440)
+  ```
+
+  ### Envelope
+
+  ```haskell
+  data ADSR = ADSR
+    { adsrAttack  :: !Double   -- seconds, linear 0→1
+    , adsrDecay   :: !Double   -- seconds, 1→sustain
+    , adsrSustain :: !Double   -- hold level (0.0–1.0)
+    , adsrRelease :: !Double   -- seconds, sustain→0
+    }
+
+  renderEnvelope :: ADSR -> Int -> Int -> [Double]  -- noteOn samples, total samples → curve
+
+  -- Presets
+  percussive :: ADSR   -- drums, clicks
+  shortPluck :: ADSR   -- bass, arpeggios
+  longPad    :: ADSR   -- pads, ambient
+  organ      :: ADSR   -- sustained tones
+  ```
+
+  ### Instrument
+
+  ```haskell
+  data Instrument
+    = Synth !Waveform !ADSR !Double        -- oscillator + envelope + gain
+    | Sample ![Double] !Double              -- pre-rendered buffer + gain
+
+  renderNote :: Instrument -> Int -> Int -> [Double]  -- instrument, MIDI note, duration
+
+  -- Presets
+  bass :: Instrument   -- square + shortPluck
+  lead :: Instrument   -- sine + shortPluck
+  pad  :: Instrument   -- sine + longPad
+  ```
+
+  ### Pattern
+
+  ```haskell
+  data NoteEvent = NoteOn !Int !Double | NoteOff | Rest
+
+  data Pattern = Pattern { patSteps :: !Int, patEvents :: ![NoteEvent] }
+
+  fromNotes :: [Maybe Int] -> Pattern   -- Nothing = rest, Just n = note on
+  fromHits  :: Int -> [Int] -> Pattern  -- percussion: total steps + hit positions
+  ```
+
+  ### Song
+
+  ```haskell
+  data Track   = Track   { trkInstrument :: !Instrument, trkPattern :: !Pattern, trkGain :: !Double }
+  data Section = Section { secName :: !String, secRepeats :: !Int, secTracks :: ![Track] }
+  data Song    = Song    { songTempo :: !Int, songStepsPerBeat :: !Int, songSections :: ![Section] }
+  ```
+
+  ### Render
+
+  ```haskell
+  renderSong    :: Song -> [Int16]                          -- full song pipeline
+  renderSfx     :: Double -> [(Double, [Double])] -> [Int16] -- layer + normalize SFX
+  layerWeighted :: [(Double, [Double])] -> [Double]          -- mix with per-signal gain
+  ```
+
+  ### Synthesis
+
+  Reusable SFX building blocks — combine these to create any sound effect:
+
+  ```haskell
+  sineSweep      :: Double -> Double -> Double -> Int -> [Double]         -- freq sweep
+  sineSweepAD    :: Double -> Double -> Double -> Double -> Int -> [Double] -- sweep + decay
+  noiseBurst     :: Double -> Int -> [Double]                             -- noise with decay
+  squareWaveDecay :: Double -> Double -> Int -> [Double]                  -- square + decay
+  expDecay       :: Double -> Double -> Double                            -- exponential decay
+  attackDecay    :: Double -> Double -> Double -> Double                  -- attack-decay curve
+  silence        :: Int -> [Double]                                       -- zero-filled gap
+  ```
+
+  ### SFX
+
+  13 ready-to-use sound effect presets, pre-rendered as `[Int16]`:
+
+  ```haskell
+  laser     :: [Int16]   -- fire/shoot
+  explosion :: [Int16]   -- kill/death
+  impact    :: [Int16]   -- structural hit
+  alert     :: [Int16]   -- wave start / alarm
+  click     :: [Int16]   -- UI button
+  powerup   :: [Int16]   -- upgrade/collect
+  coin      :: [Int16]   -- pickup/reward
+  jump      :: [Int16]   -- platformer jump
+  heal      :: [Int16]   -- healing/restore
+  defeat    :: [Int16]   -- game over
+
+  -- Drum samples
+  kickSample  :: [Int16]
+  snareSample :: [Int16]
+  hihatSample :: [Int16]
+  ```
+
+  ### Chord
+
+  Programmatic chord construction from MIDI root notes:
+
+  ```haskell
+  data Quality = Major | Minor | Diminished | Augmented | Sus2 | Sus4
+
+  chord            :: Int -> Quality -> [Int]              -- root MIDI + quality → note list
+  inversion        :: Int -> [Int] -> [Int]                -- nth inversion
+  chordProgression :: [(Int, Quality)] -> [(Int, [Int])]   -- build full progression
+
+  -- Built-in progressions
+  pop1564      :: [(Int, [Int])]   -- I-V-vi-IV in C
+  blues145     :: [(Int, [Int])]   -- I-IV-V in C
+  minorClassic :: [(Int, [Int])]   -- i-iv-V in Am
+  ```
+
+  ### Effects
+
+  Post-processing for rendered audio signals:
+
+  ```haskell
+  bitCrush      :: Int -> [Double] -> [Double]       -- reduce bit depth for lo-fi crunch
+  echo          :: Int -> Double -> [Double] -> [Double]  -- delay line with decay
+  fadeIn         :: Int -> [Double] -> [Double]       -- linear fade in (N samples)
+  fadeOut        :: Int -> [Double] -> [Double]       -- linear fade out (N samples)
+  reverseSignal :: [Double] -> [Double]              -- reverse audio
+  mix           :: [[Double]] -> [Double]            -- sum multiple signals
+  ```
+
+  ### WAV
+
+  ```haskell
+  sampleRate  :: Int                    -- 22050
+  msToSamples :: Int -> Int             -- milliseconds → samples
+  toSample    :: Double -> Int16        -- [-1,1] → Int16
+  writeWav    :: FilePath -> [Int16] -> IO ()
+  ```
+
+  ---
+
+  ## Example
+
+  A complete song using the Chord module for progressions:
+
+  ```haskell
+  import GBSynth.Chord (Quality (..), chord, chordProgression)
+  import GBSynth.Instrument (Instrument (..), bass, lead, pad)
+  import GBSynth.Pattern (Pattern, fromNotes, fromHits)
+  import GBSynth.Render (renderSong)
+  import GBSynth.SFX (kickSample)
+  import GBSynth.Song (Section (..), Song (..), Track (..))
+  import GBSynth.WAV (writeWav)
+
+  main :: IO ()
+  main = writeWav "song.wav" (renderSong mySong)
+
+  mySong :: Song
+  mySong = Song
+    { songTempo = 120
+    , songStepsPerBeat = 4
+    , songSections = [intro, verse, chorus]
+    }
+
+  -- Am - F - C - G using Chord module
+  progression :: [(Int, [Int])]
+  progression = chordProgression [(57, Minor), (53, Major), (48, Major), (55, Major)]
+
+  -- Bass: root note sustained per chord (8 steps each)
+  bassPat :: Pattern
+  bassPat = fromNotes $ concatMap
+    (\(root, _) -> Just root : replicate 7 Nothing)
+    progression
+
+  -- Arpeggio: root, 3rd, 5th, 3rd
+  arpPat :: Pattern
+  arpPat = fromNotes $ concatMap
+    (\(_, notes) -> case notes of
+      (n0 : n1 : n2 : _) ->
+        [Just n0, Nothing, Just n1, Nothing,
+         Just n2, Nothing, Just n1, Nothing]
+      _ -> replicate 8 Nothing)
+    progression
+
+  -- Kick on beats 1 and 3
+  kickPat :: Pattern
+  kickPat = fromHits 32 [0, 8, 16, 24]
+
+  -- Pre-rendered kick from SFX module
+  kickInstr :: Instrument
+  kickInstr = Sample (map (\s -> fromIntegral s / 32768.0) kickSample) 1.0
+
+  intro :: Section
+  intro = Section "intro" 2
+    [ Track bass bassPat 0.35 ]
+
+  verse :: Section
+  verse = Section "verse" 4
+    [ Track bass bassPat 0.35
+    , Track lead arpPat 0.30
+    ]
+
+  chorus :: Section
+  chorus = Section "chorus" 4
+    [ Track bass bassPat 0.35
+    , Track lead arpPat 0.35
+    , Track pad  bassPat 0.20
+    , Track kickInstr kickPat 0.30
+    ]
+  ```
+
+  ---
+
+  ## Build & Test
+
+  Requires [GHCup](https://www.haskell.org/ghcup/) with GHC >= 9.6.
+
+  ```bash
+  cabal build                              # Build library
+  cabal test                               # Run all tests (109 pure tests)
+  cabal build --ghc-options="-Werror"      # Warnings as errors
+  cabal haddock                            # Generate docs
+  ```
+
+  ---
+
+  <p align="center">
+    <sub>MIT License · <a href="https://github.com/Gondola-Bros-Entertainment">Gondola Bros Entertainment</a></sub>
+  </p>
+description-type: markdown
+hash: 8ffa538eb0e2754233fa915be63f84a1688c316a34bfbd6a5826238609557c84
+homepage: https://github.com/Gondola-Bros-Entertainment/gb-synth
+latest: 0.2.0.1
+license-name: MIT
+maintainer: devon.tomlin@novavero.ai
+synopsis: Procedural music and sound effect synthesis
+test-bench-deps:
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11 && <0.13'
+  gb-synth: '>=0'

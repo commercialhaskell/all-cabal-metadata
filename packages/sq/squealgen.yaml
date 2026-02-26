@@ -1,0 +1,241 @@
+all-versions:
+- 0.2.0.0
+author: Mark Wotton
+basic-deps:
+  base: '>=4.7 && <5'
+  process: '>=1.6 && <2'
+changelog: |
+  # Changelog for squealgen
+
+  ## 0.2.0.0 (2026-02-16)
+
+  ### Breaking Changes
+
+  **Overloaded function naming now uses disambiguated labels.**
+
+  Previously, when a PostgreSQL function was overloaded, squealgen would emit only one overload (undefined which one). Now, all representable overloads are emitted with disambiguated labels.
+
+  **Function label format:** `name__argtype1__argtype2`
+
+  Example for `my_func(int4)` and `my_func(int8)`:
+  ```haskell
+  type Functions =
+    '[ "my_func__int4" ::: Function '[Null PGint4] :=> 'Returns ('Null PGint4)
+     , "my_func__int8" ::: Function '[Null PGint8] :=> 'Returns ('Null PGint8)
+     ]
+  ```
+
+  **Compatibility aliases** are emitted when exactly one overload is representable (others have pseudotype arguments). For example, if `legacy_func(int8)` is representable but `legacy_func(anyelement)` is not:
+  ```haskell
+  type Functions =
+    '[ "legacy_func" ::: Function '[Null PGint8] :=> ...      -- compatibility alias
+     , "legacy_func__int8" ::: Function '[Null PGint8] :=> ... -- disambiguated label
+     ]
+  ```
+
+  ### Migration Guide
+
+  1. **Find affected functions**: Regenerate your schema and compare to previous version:
+     ```bash
+     squealgen mydb Schema public > Schema.hs.new
+     diff Schema.hs Schema.hs.new
+     ```
+
+  2. **Update call sites**: Replace simple function names with disambiguated labels:
+     - Before: `#"my_func"` → After: `#"my_func__int8"` (or appropriate type suffix)
+     - Use grep to find usages: `grep -r '#"my_func"' src/`
+
+  3. **No action needed if**:
+     - The function is not overloaded in PostgreSQL
+     - Only one overload is representable (compatibility alias preserved)
+
+  ### Other Changes
+
+  - Generator hardening:
+    - `chosen_schema` is treated as a comma-separated `search_path` fragment and applied safely (quoted identifiers, no raw psql substitution).
+    - The generated `type DB` targets the first schema in the fragment.
+    - Views list output is deterministic (explicit ordering inside `string_agg`).
+  - Extensions:
+    - Extension-owned types are emitted as `UnsafePGType` aliases only when referenced.
+    - Generated output includes a comment block listing detected required extensions when extension-owned types are present.
+    - Added an end-to-end `ltree` fixture (`test/Extensions`) and CI installs `postgresql-contrib`.
+  - CI/testing:
+    - Dropped the coverage gate (coverage is not meaningful for this generator-only repo).
+    - `make ci` runs `cabal test` with reduced falsify cases (`--falsify-tests 25`) to keep CI runtime bounded.
+
+  ## Unreleased changes
+
+  - Generator hardening:
+    - `chosen_schema` is treated as a comma-separated `search_path` fragment and applied safely (quoted identifiers, no raw psql substitution).
+    - The generated `type DB` targets the first schema in the fragment.
+    - Views list output is deterministic (explicit ordering inside `string_agg`).
+  - Extensions:
+    - Extension-owned types are emitted as `UnsafePGType` aliases only when referenced.
+    - Generated output includes a comment block listing detected required extensions when extension-owned types are present.
+    - Added an end-to-end `ltree` fixture (`test/Extensions`) and CI installs `postgresql-contrib`.
+  - CI/testing:
+    - Dropped the coverage gate (coverage is not meaningful for this generator-only repo).
+    - `make ci` runs `cabal test` with reduced falsify cases (`--falsify-tests 25`) to keep CI runtime bounded.
+changelog-type: markdown
+description: "# squealgen\n\nGenerate squeal types from a running database.\n\n![CI](https://github.com/mwotton/squealgen/actions/workflows/ci.yml/badge.svg)\n\n##
+  Breaking Changes (v0.2.0.0)\n\n### Overloaded Function Naming\n\nStarting with v0.2.0.0,
+  overloaded PostgreSQL functions now use **disambiguated labels** to ensure type-safe
+  calling:\n\n```haskell\n-- Old (v1.x): Only one overload could be represented, using
+  simple name\ntype Functions = '[ \"my_func\" ::: Function ... ]\n\n-- New (v2.0):
+  All representable overloads use disambiguated labels\ntype Functions = '[ \"my_func__int4\"
+  ::: Function '[Null PGint4] :=> ...\n                  , \"my_func__int8\" ::: Function
+  '[Null PGint8] :=> ... ]\n```\n\n**Migration Guide:**\n\n1. **Search for simple
+  function names** in your codebase that may have been overloaded:\n   ```bash\n   #
+  Find usages of function labels in your code\n   grep -r '#\"my_func\"' src/\n   ```\n\n2.
+  **Replace with disambiguated labels**:\n   - Before: `#\"my_func\"` → After: `#\"my_func__int4\"`
+  or `#\"my_func__int8\"` (as appropriate)\n\n3. **Compatibility aliases**: If only
+  ONE overload of a function is representable (others have pseudotype arguments),
+  a compatibility alias is emitted:\n   ```haskell\n   -- Both labels work when only
+  one overload is representable:\n   type Functions = '[ \"legacy_func\" ::: Function
+  ...      -- compatibility alias\n                     , \"legacy_func__int8\" :::
+  Function ... -- disambiguated label\n                     ]\n   ```\n   In this
+  case, existing code using the simple name will continue to work.\n\n4. **Pseudotype
+  functions** (using `anyelement`, `anyarray`, etc.) are not representable and are
+  omitted with a comment—this behavior is unchanged.\n\n## why?\n\n[Squeal](https://hackage.haskell.org/package/squeal-postgresql)
+  is a lovely way to interact with a database, but setting up the initial schema is
+  a struggle.\nBy default, it assumes you will be managing and migrating your database
+  with Squeal, and if you are starting\nfrom scratch, that works great, but if you're
+  managing it some other way, or even just want to test out Squeal\non an existing
+  database, it's tedious to have to set up the database types and keep them up to
+  date.\n\n## how?\n\n1. clone the repo and change into the directory\n2. Install
+  the executable (recommended):\n\n   ```bash\n   cabal install exe:squealgen --installdir=$HOME/.local/bin
+  --overwrite-policy=always\n   ```\n\n   If you prefer the generated script (dev
+  convenience), you can also run:\n\n   ```bash\n   make prefix=$HOME/.local install\n
+  \  ```\n3. If my database is `cooldb`, my Haskell module is `Schema` (file `Schema.hs`),
+  and I want to generate from the `public` schema,\n   I would run `squealgen cooldb
+  Schema public > ~/myproject/src/Schema.hs`.\n\n   Notes:\n\n   - `DBNAME` is passed
+  to `psql -d`, so it can be a database name *or* a libpq connection string/URL.\n
+  \  - `MODULENAME` is the Haskell module name (not a file path).\n   - `IMPORTS`
+  (optional) is inserted into the generated module; a convenient pattern is `\"...
+  $(cat extra_imports.txt)\"`.\n   - `PSQLCMD` can be set to use a non-default `psql`
+  binary.\n\n   `SCHEMA` is treated as a comma-separated `search_path` fragment, so
+  you can pass `public,ext` if you also need `ext` on the path (e.g. for extension-owned
+  types).\n\nYou could integrate this in various ways: perhaps just as an initial
+  scaffold, or perhaps integrated as part\nof your build process. A true madman could
+  integrate this into a TH call, but I suspect this would be slow and\nprone to failing
+  (for instance, better never compile any code if you don't have access to the right
+  version\nof psql or a way of spinning up an empty database.)\n\nI highly recommend
+  having a scripted way to bring up a temporary database and run all migrations first.
+  I use\nJonathan Fischoff's [tmp-postgres](https://hackage.haskell.org/package/tmp-postgres)
+  library and\nrecommend it if you're running migrations through Haskell.\n\n## hacking?\n\nMy
+  workflow looks like this:\n\n```bash\nmake testwatch\n```\n\n`squealgen` is generated
+  from `squealgen.sql` via `./mksquealgen.sh`.\nTreat `squealgen.sql` as the source
+  of truth and do not edit `squealgen` directly.\n\n`./check_squealgen_drift.sh` is
+  run by `make test` and CI to enforce that the checked-in `./squealgen` script matches
+  `squealgen.sql`.\n\nValidation contract:\n\n- Local validation (`make test`): enforce
+  `squealgen` drift parity, regenerate fixture modules, then run `cabal test`.\n-
+  CI validation (`make ci`): enforce drift parity, regenerate fixture modules, then
+  run `cabal test` with reduced falsify cases (`--falsify-tests 25`) to keep runtime
+  bounded.\n\n`SCHEMA` is treated as a comma-separated `search_path` fragment.\nThe
+  generator targets only the first schema in the fragment for emitted types, but sets
+  the full `search_path` safely (quoted identifiers).\n\nExtension story:\n\n- If
+  the schema references extension-owned types, squealgen emits opaque `UnsafePGType`
+  aliases (e.g. `type PGltree = UnsafePGType \"ltree\"`) only when needed.\n- When
+  any extension-owned types are present, generated output includes a comment block
+  listing detected required extensions.\n- Users are responsible for installing extensions
+  via migrations/DDL; CI enforces this via the `test/Extensions` ltree fixture.\n\nFunction-overload
+  compatibility notes:\n\n- Generated output always includes deterministic disambiguated
+  overloaded labels (`name__argtokens`).\n- When an overloaded base name has exactly
+  one representable signature, a compatibility alias using the legacy simple name
+  (`name`) is also emitted.\n- When two or more representable overloads remain, no
+  legacy alias is emitted; callers must use the disambiguated labels.\n\n## you'll
+  need\n\n- PostgreSQL client/server tools on your `PATH`: `psql`, `initdb`, `pg_ctl`,
+  `createdb` (used by tests and vendored `vendor/pg_tmp`). On Ubuntu, these are often
+  under `/usr/lib/postgresql/<version>/bin` (e.g. `/usr/lib/postgresql/16/bin`); if
+  `pg_config` is available: `export PATH=\"$(pg_config --bindir):$PATH\"`.\n- make\n-
+  cabal-install\n- `inotifywait` (from `inotify-tools`) if you want to use `make testwatch`.\n\n##
+  what next?\n\n- Remove string-hacking, generate in a more principled way.\n- Improve
+  function-label ergonomics while preserving overload safety and readability.\n- Investigate
+  richer type-level trigger/check representations while preserving current metadata
+  fallback behavior.\n\n## Architecture\n\n```\n┌─────────────────────────────────────────────────────────────────────────────┐\n│
+  \                             squealgen flow                                  │\n├─────────────────────────────────────────────────────────────────────────────┤\n│
+  \                                                                            │\n│
+  \  ┌──────────────┐    ┌────────────────┐    ┌──────────────────────────┐   │\n│
+  \  │ PostgreSQL   │    │ squealgen.sql  │    │ Generated Schema.hs      │   │\n│
+  \  │ Database     │───▶│ (psql script)  │───▶│ (Squeal types)           │   │\n│
+  \  │              │    │                │    │                          │   │\n│
+  \  │ - tables     │    │ - CTE queries  │    │ - type DB                │   │\n│
+  \  │ - views      │    │ - type mapping │    │ - type Schema            │   │\n│
+  \  │ - enums      │    │ - emit logic   │    │ - type Tables/Views/...  │   │\n│
+  \  │ - functions  │    │                │    │ - function definitions   │   │\n│
+  \  └──────────────┘    └────────────────┘    └──────────────────────────┘   │\n│
+  \                                                                            │\n│
+  \  Input: DBNAME, MODULENAME, SCHEMA                                         │\n│
+  \  Output: Haskell module with Squeal type definitions                      │\n│
+  \                                                                            │\n└─────────────────────────────────────────────────────────────────────────────┘\n```\n\nThe
+  generator queries PostgreSQL system catalogs (`pg_catalog`, `information_schema`)
+  to extract schema metadata, then emits Haskell type definitions compatible with
+  Squeal's type-level DSL.\n\n### Triggers Metadata\n\nThe generated output includes
+  a `Triggers` type that provides metadata about PostgreSQL triggers defined on tables
+  in the schema:\n\n```haskell\n-- Example generated output:\n-- triggers\n-- Trigger
+  contract: Triggers is generated metadata and is not composed into Schema.\ntype
+  Triggers = \n  '[ \"users_insert_trigger\" ::: 'TriggerMetadata\n       '[\"table\"
+  ::: \"users\", \"event\" ::: \"INSERT\", \"timing\" ::: \"BEFORE\"]\n   ]\n```\n\n**Important**:
+  The `Triggers` type is **metadata-only** and is NOT composed into the `Schema` type.
+  It cannot be used in Squeal queries. Its purpose is to document what triggers exist
+  in the database for developer reference. Squeal does not provide type-level trigger
+  support.\n\n## Type Mappings\n\n| PostgreSQL Type | Squeal Type |\n|-----------------|-------------|\n|
+  `boolean` | `PGbool` |\n| `int2` / `smallint` | `PGint2` |\n| `int4` / `integer`
+  | `PGint4` |\n| `int8` / `bigint` | `PGint8` |\n| `float4` / `real` | `PGfloat4`
+  |\n| `float8` / `double precision` | `PGfloat8` |\n| `numeric` | `PGnumeric` |\n|
+  `text` | `PGtext` |\n| `varchar` | `PGtext` or `(PGvarchar n)` |\n| `char` | `PGchar`
+  or `(PGvarchar n)` |\n| `bytea` | `PGbytea` |\n| `date` | `PGdate` |\n| `time` |
+  `PGtime` |\n| `timestamp` | `PGtimestamp` |\n| `timestamptz` | `PGtimestamptz` |\n|
+  `interval` | `PGinterval` |\n| `uuid` | `PGuuid` |\n| `inet` | `PGinet` |\n| `json`
+  | `PGjson` |\n| `jsonb` | `PGjsonb` |\n| `oid` | `PGoid` |\n| `array[]` | `(PGvararray
+  ...)` |\n| `enum` | `'PGenum '[\"label1\", \"label2\", ...]` |\n| `composite` |
+  `'PGcomposite '[...]` |\n| `domain` | Alias to base type |\n\n**Extension types**
+  (ltree, hstore, etc.) are emitted as `UnsafePGType \"typename\"` aliases.\n\n##
+  Troubleshooting\n\n### \"squealgen drift detected\"\n\nRun `./mksquealgen.sh` to
+  regenerate the `squealgen` script from `squealgen.sql`, then commit both files.
+  The CI enforces that these stay in sync.\n\n### \"initdb: command not found\"\n\nPostgreSQL
+  binaries may not be on your PATH. On Ubuntu, try:\n\n```bash\nexport PATH=\"/usr/lib/postgresql/$(ls
+  /usr/lib/postgresql | tail -1)/bin:$PATH\"\n```\n\nOr use `pg_config`:\n\n```bash\nexport
+  PATH=\"$(pg_config --bindir):$PATH\"\n```\n\n### Generated code doesn't compile\n\n1.
+  Ensure you're using compatible versions of `squeal-postgresql` and GHC.\n2. Check
+  for pseudotype arguments/returns in functions - these are omitted with a comment.\n3.
+  Extension types require `UnsafePGType` - ensure extensions are installed in the
+  database.\n\n### Functions are omitted from output\n\nFunctions with pseudotype
+  arguments (e.g., `anyelement`) or returns are not representable in Squeal's type
+  system. Check the generated output for comments like:\n\n```haskell\n-- Omitted
+  function signatures:\n--   my_func(anyelement): pseudotype argument is not representable\n```\n\n###
+  \"Croaked: chosen_schema is empty\"\n\nThe schema argument is required. Provide
+  a valid schema name:\n\n```bash\nsquealgen mydb MySchema public > Schema.hs\n```\n\n###
+  Multiple schemas / extensions\n\nUse comma-separated search_path for extensions:\n\n```bash\nsquealgen
+  mydb MySchema public,extensions > Schema.hs\n```\n\nTypes are generated only for
+  the first schema (`public`), but extension-owned types referenced by it will emit
+  `UnsafePGType` aliases.\n"
+description-type: markdown
+hash: 053aca8000376c50b402a243d7d835e2ad941b8e054124cdf80b6119efecd44e
+homepage: https://github.com/mwotton/squealgen#readme
+latest: 0.2.0.0
+license-name: BSD-3-Clause
+maintainer: mwotton@gmail.com
+synopsis: generate squeal types from an existing database
+test-bench-deps:
+  base: '>=4.7 && <5'
+  bytestring: '>=0'
+  containers: '>=0'
+  directory: '>=0'
+  falsify: '>=0'
+  filepath: '>=0'
+  generics-sop: '>=0'
+  hspec: '>=0'
+  hspec-expectations-lifted: '>=0'
+  iproute: '>=0'
+  mtl: '>=0'
+  network-ip: '>=0'
+  postgresql-binary: '>=0'
+  process: '>=0'
+  squeal-postgresql: '>=0.9.2.0'
+  tasty: '>=0'
+  tasty-hspec: '>=0'
+  temporary: '>=0'
+  text: '>=0'
+  tmp-postgres: '>=1.34.1.0'
+  unliftio: '>=0'
