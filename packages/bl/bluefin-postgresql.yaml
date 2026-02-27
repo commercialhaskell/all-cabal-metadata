@@ -1,0 +1,144 @@
+all-versions:
+- 0.1.0.0
+author: Frederick Pringle
+basic-deps:
+  base: '>=4 && <5'
+  bluefin: '>=0.0.11 && <0.0.18'
+  postgresql-simple: '>=0.7 && <0.8'
+  unliftio-pool: '>=0.4.1 && <0.5'
+changelog: |
+  # Changelog
+
+  All notable changes to `bluefin-postgresql` will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+  and this project adheres to [Haskell Package Versioning Policy](https://pvp.haskell.org).
+
+  ## [Unreleased]
+
+  ## [0.1.0.0] - 27.02.2026
+
+  ### Added
+
+  - First edition of the package, ready for feedback.
+  - 100% documentation coverage.
+  - Reasonably detailed READMEs.
+  - CI that builds and tests the packages for each version of GHC in the `tested-with` field.
+
+  [unreleased]: https://github.com/fpringle/bluefin-postgresql/compare/bluefin-postgresql-0.1.0.0...HEAD
+  [0.1.0.0]: https://github.com/fpringle/bluefin-postgresql/releases/tag/bluefin-postgresql-0.1.0.0
+changelog-type: markdown
+description: |
+  # bluefin-postgresql
+
+  This package provides a `bluefin` effect for [postgresql-simple](https://hackage.haskell.org/package/postgresql-simple)'s `Connection` type.
+
+  It defines a dynamic effect to allow effectful functions to use a `Connection`, without worrying about where that `Connection` comes from.
+
+  For a higher-level effect library using [Opaleye](https://hackage.haskell.org/package/opaleye), see [bluefin-opaleye](https://github.com/fpringle/bluefin-postgresql/blob/main/bluefin-opaleye#readme).
+
+  ## Effectful functions
+
+  In the `WithConnection` effect we can always request a `Connection` and use it as we normally
+  would:
+
+  ```haskell
+  import Bluefin.PostgreSQL as BP
+  import qualified Database.PostgreSQL.Simple as PSQL
+
+  insertAndList ::
+    (e :> es, e1 :> es) =>
+    WithConnection e ->
+    IOE e1 ->
+    Eff es [User]
+  insertAndList wc ioe = BP.withConnection wc $ \conn -> do
+    effIO ioe $ PSQL.execute conn "insert into users (first_name) values (?)" ["Nuala"]
+    effIO ioe $ PSQL.query conn "select * from users where first_name in ?" $ PSQL.Only $ PSQL.In ["Anna", "Boris", "Carla"]
+  ```
+
+  In fact, for convenience we also define lifted versions of all of the query/execute
+  functions from `postgresql-simple`, so we can completely forget about `Connection` and rewrite the above to:
+
+  ```haskell
+
+  import Bluefin.PostgreSQL
+
+  insertAndList ::
+    (e :> es, e1 :> es) =>
+    WithConnection e ->
+    IOE e1 ->
+    Eff es [User]
+  insertAndList wc ioe = do
+    BP.execute wc ioe "insert into users (first_name) values (?)" ["Nuala"]
+    BP.query wc ioe "select * from users where first_name in ?" $ PSQL.Only $ PSQL.In ["Anna", "Boris", "Carla"]
+  ```
+
+  The same goes for other functions:
+
+  ```haskell
+  -- use a transaction
+  insertAndListCarefully ::
+    (e :> es, e1 :> es) =>
+    WithConnection e ->
+    IOE e1 ->
+    Eff es [User]
+  insertAndListCarefully wc ioe = BP.withTransaction wc ioe $ insertAndList wc ioe
+
+  -- stream + fold over results (in Eff)
+  countUsersIneffeciently ::
+    (e :> es, e1 :> es) =>
+    WithConnection e ->
+    IOE e1 ->
+    Eff es Int
+  countUsersIneffeciently wc ioe =
+    BP.fold_ wc ioe "select * from users" 0 $ \acc (row :: User) -> do
+      effIO ioe . putStrLn $ "User: " <> show row
+      pure $ acc + 1
+  ```
+
+  ## Interpreters
+
+  The simplest way of running the `WithConnection` effect is by just providing a `Connection`, which we can get in the normal ways:
+
+  ```haskell
+  import Bluefin.PostgreSQL as BP
+  import qualified Database.PostgreSQL.Simple as PSQL
+
+  usingConnection :: IO ()
+  usingConnection =
+    runEff $ \ioe ->
+      bracket (effIO ioe $ PSQL.connectPostgreSQL "") (effIO ioe . PSQL.close) $ \conn ->
+        BP.runWithConnection conn $ \wc -> insertAndListCarefully wc ioe >>= effIO ioe . print
+
+  usingConnectInfo :: IO ()
+  usingConnectInfo =
+    runEff $ \ioe ->
+      BP.runWithConnectInfo ioe PSQL.defaultConnectInfo $ \wc ->
+        insertAndListCarefully wc ioe >>= effIO ioe . print
+  ```
+
+  Alternatively, we can use a connection pool (from [resource-pool](https://hackage.haskell.org/package/resource-pool)
+  and [unliftio-pool](https://hackage.haskell.org/package/unliftio-pool)), which is much better suited to
+  long-running processes like servers.
+
+  ```haskell
+  import Bluefin.PostgreSQL as BP
+  import qualified Database.PostgreSQL.Simple as PSQL
+  import qualified UnliftIO.Pool as P
+
+  usingConnectionPool :: IO ()
+  usingConnectionPool = do
+    poolCfg <- P.mkDefaultPoolConfig (PSQL.connectPostgreSQL "") PSQL.close 5.0 10
+    pool <- P.newPool poolCfg
+    runEff $ \ioe ->
+      BP.runWithConnectionPool ioe pool $ \wc ->
+        insertAndListCarefully wc ioe >>= effIO ioe . print
+  ```
+description-type: markdown
+hash: c0c4b11ae6b81c9dacbe36ca6e957aab4b59d074f3d0a577af18c7f0bc704eb2
+homepage: https://github.com/fpringle/bluefin-postgresql
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: frederick.pringle@fpringle.com
+synopsis: bluefin support for mid-level PostgreSQL operations.
+test-bench-deps: {}
