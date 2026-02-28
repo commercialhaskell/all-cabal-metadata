@@ -6,6 +6,7 @@ all-versions:
 - 0.2.3.0
 - 0.2.4.0
 - 0.2.4.1
+- 0.3.0.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.16 && <5'
@@ -25,6 +26,47 @@ basic-deps:
   warp: '>=3.3 && <3.5'
 changelog: |
   # Changelog
+
+  ## 0.3.0.0 — 2026-02-28
+
+  ### Breaking changes
+
+  - **`decompressXz`** signature changed from `ByteString -> ByteString` to
+    `ByteString -> IO (Either String ByteString)` — catches lzma exceptions
+    instead of crashing on malformed input
+  - **`writeNarInfo`** / **`writeNar`** now return `IO Bool` instead of `IO ()` —
+    `False` indicates a rejected path (traversal, empty)
+
+  ### Security
+
+  - **Request body size limit** — PUT endpoints reject bodies over 100 MB with
+    413 Payload Too Large (prevents memory exhaustion)
+  - **Constant-time auth comparison** — API key check uses `constEq` from
+    `Data.ByteArray` instead of `==` (prevents timing side-channel)
+
+  ### Bug fixes
+
+  - **Safe UTF-8 decoding in NAR deserializer** — `decodeUtf8` replaced with
+    `decodeUtf8'`; malformed UTF-8 in symlink targets or directory entry names
+    now returns a parse error instead of throwing
+
+  ### New features
+
+  - **`GET /narinfo-hashes`** endpoint — returns all cached narinfo hashes as
+    newline-delimited text, enabling efficient cache diffing
+  - **`listNarInfoHashes`** function added to `NovaCache.Store`
+
+  ### Improvements
+
+  - Server logs warnings to stderr when narinfo signing fails (parse error or
+    sign error) instead of silently returning unsigned body
+  - Server returns 400 Bad Request when PUT paths fail sanitization instead of
+    silently discarding the upload
+  - README: license badge and footer corrected from MIT to BSD-3-Clause
+  - README: `parallel` input documented in seed action table
+  - README: `CACHE_API_KEY` and `SIGNING_KEY_FILE` env vars documented
+  - Seed action: replaced per-path HEAD checks with single `GET /narinfo-hashes`
+    call and local diff for dramatically faster cache seeding
 
   ## 0.2.4.1 — 2026-02-26
 
@@ -106,7 +148,7 @@ description: |
   [![CI](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml)
   [![Hackage](https://img.shields.io/hackage/v/nova-cache.svg)](https://hackage.haskell.org/package/nova-cache)
   ![Haskell](https://img.shields.io/badge/haskell-GHC%209.6-purple)
-  ![License](https://img.shields.io/badge/license-MIT-blue)
+  ![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)
 
   </p>
   </div>
@@ -320,11 +362,21 @@ description: |
   PORT=5000 NIX_CACHE_DIR=./nix-cache nova-cache-server
   ```
 
+  ### Environment Variables
+
+  | Variable | Description |
+  |----------|-------------|
+  | `PORT` | Server listen port (default: 5000) |
+  | `NIX_CACHE_DIR` | Store directory (default: `./nix-cache`) |
+  | `CACHE_API_KEY` | Bearer token required for PUT requests. Omit for open writes. |
+  | `SIGNING_KEY_FILE` | Path to Ed25519 secret key file for server-side narinfo signing. |
+
   ### Endpoints
 
   | Method | Path | Description |
   |--------|------|-------------|
   | `GET` | `/nix-cache-info` | Cache metadata (StoreDir, WantMassQuery, Priority) |
+  | `GET` | `/narinfo-hashes` | All cached narinfo hashes (newline-delimited) |
   | `GET` | `/<hash>.narinfo` | Fetch narinfo by store path hash |
   | `GET` | `/nar/<file>` | Fetch compressed NAR file |
   | `PUT` | `/<hash>.narinfo` | Upload narinfo |
@@ -383,7 +435,7 @@ description: |
   ```
 
   - **9 modules**, 7 pure + 2 at the IO boundary (Compression optional via flag)
-  - **54 core tests + 3 compression tests**, hand-rolled harness, no framework dependencies
+  - **58 core tests + 4 compression tests**, hand-rolled harness, no framework dependencies
   - **Zero partial functions** — total by construction
   - **Strict by default** — bang patterns on all data fields
 
@@ -456,18 +508,19 @@ description: |
 
   ```haskell
   compressXz   :: ByteString -> ByteString
-  decompressXz :: ByteString -> ByteString
+  decompressXz :: ByteString -> IO (Either String ByteString)
   ```
 
   ### Store
 
   ```haskell
-  newFileStore  :: FilePath -> IO FileStore
-  readNarInfo   :: FileStore -> Text -> IO (Maybe ByteString)
-  writeNarInfo  :: FileStore -> Text -> ByteString -> IO ()
-  readNar       :: FileStore -> Text -> IO (Maybe ByteString)
-  writeNar      :: FileStore -> Text -> ByteString -> IO ()
-  getCacheInfo  :: FileStore -> (Text, Bool, Int)
+  newFileStore      :: FilePath -> IO FileStore
+  readNarInfo       :: FileStore -> Text -> IO (Maybe ByteString)
+  writeNarInfo      :: FileStore -> Text -> ByteString -> IO Bool
+  readNar           :: FileStore -> Text -> IO (Maybe ByteString)
+  writeNar          :: FileStore -> Text -> ByteString -> IO Bool
+  listNarInfoHashes :: FileStore -> IO [Text]
+  getCacheInfo      :: FileStore -> (Text, Bool, Int)
   ```
 
   Full Haddock documentation is available on [Hackage](https://hackage.haskell.org/package/nova-cache).
@@ -490,6 +543,7 @@ description: |
   | `cache-url` | yes | Base URL of the nova-cache server |
   | `api-key` | yes | Bearer token for authenticating uploads |
   | `paths` | no | Explicit store paths (space-separated). Defaults to all paths from `shell.nix` / `default.nix` |
+  | `parallel` | no | Max concurrent uploads (default: 32) |
 
   The action resolves Nix store path closures, exports them to a local binary cache, and uploads all narinfo + NAR files to the server. Works with any CI that has Nix installed.
 
@@ -515,12 +569,12 @@ description: |
   ---
 
   <p align="center">
-    <sub>MIT License · <a href="https://github.com/Novavero-AI">Novavero AI</a></sub>
+    <sub>BSD-3-Clause · <a href="https://github.com/Novavero-AI">Novavero AI</a></sub>
   </p>
 description-type: markdown
-hash: 9bb34a3e7a52aaa113a2b7b0f8fc8bbd168a676b85e56336fb379cedaf99c0aa
+hash: b3b5c90b529ee7d138d800ed5f9faf5bd92feeecfbd32742753e5e9481f9a025
 homepage: https://github.com/Novavero-AI/nova-cache
-latest: 0.2.4.1
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: devon.tomlin@novavero.ai
 synopsis: Pure Nix binary cache protocol library
