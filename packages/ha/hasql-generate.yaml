@@ -1,0 +1,172 @@
+all-versions:
+- 1.0.0
+author: dneaves
+basic-deps:
+  aeson: '>=2.1 && <2.3'
+  base: '>=4.19 && <4.22'
+  bytestring: '>=0.11.5 && <0.13'
+  data-default-class: '>=0.1 && <0.2'
+  hasql: '>=1.6 && <1.9'
+  postgresql-libpq: '>=0.10 && <0.12'
+  scientific: '>=0.3.7 && <0.4'
+  template-haskell: '>=2.21 && <2.24'
+  text: '>=2.0.2 && <2.2'
+  time: '>=1.12 && <1.15'
+  uuid: '>=1.3 && <1.4'
+  vector: '>=0.13 && <0.14'
+changelog: |
+  # Changelog
+
+  1.0.0: Hello, world! The README is probably a better source for what this is
+changelog-type: markdown
+description: "# Hasql.Generate\nA library for compile-time generation of datatypes
+  from Postgres introspection. Inspired by the relational-query-HDBC library's defineTableFromDB
+  functions, but expanded to use Hasql, support more than just tables, and using the
+  features of Postgres.\nAims to eliminate most of the boilerplate with using Hasql,
+  the duplicate-definitions and need to ensure database-definitions match code-definitions,
+  and be simple enough to use and understand. \n\n---\n\n## Developing Hasql.Generate\n\nAll
+  the tools I use are available in the `nix-shell`.\nThat will give you `just`, and
+  `justfile` (run with `just help`) will have all the commands you would need.\nTo
+  run the tests, you will need to have postgres running, which again there's a `just`
+  recipe for (`just pg-start`), since the tests revolve around the generation of types
+  and functions. The `just test` command will setup the database, run the tests, and
+  clean itself up afterwards. When done, just stop the database (`just pg-stop`).\nPlease
+  format and lint your work (`just format`/`just lint`).\n\n## Using Hasql.Generate\n\n###
+  BYOD (Bring Your Own Data/Database)\nTo start with this library, you'll need a pre-existing
+  PostgreSQL database with tables, views, or types.\n\n### Config\nFrom there, you
+  should make a `Config` that all the TH splices will generate with. This config should
+  be made in a file that you will _import_ into files that generate types (this is
+  a TemplateHaskell requirement, not mine).\n```haskell\ndata Config\n    = Config\n
+  \     { connection                 :: ConnectionInfo\n      , allowDuplicateRecordFields
+  :: Bool\n      , newtypePrimaryKeys         :: Bool\n      , globalOverrides            ::
+  [(String, Name)]\n      }\n```\nYou will need to make a `ConnectionInfo`, with either
+  the `PgSimpleInfo` for \"simple\" info that's then formed into the connection string,
+  or you can make the libpq connection string yourself (with all the advanced options)
+  with `PgConnectionString` for full control, but you should know what you're doing
+  for this case.\n```haskell\ndata ConnectionInfo\n    = PgSimpleInfo\n      { pgHost
+  \    :: Maybe String\n      , pgPort     :: Maybe String\n      , pgUser     ::
+  Maybe String\n      , pgPassword :: Maybe String\n      , pgDatabase :: Maybe String\n
+  \     }\n    | PgConnectionString String\n```\nIf you set any `PgSimpleInfo` field
+  as `Nothing` it will use the libpq defaults. If you will be using the default libpq
+  connection details for all of it, you can use `Data.Default.def` for the `ConnectionInfo`.
+  If you will not be using DuplicateRecordFields, are fine with the primary keys being
+  \"regular\" types (ex.: `Int` instead of a wrapped-newtype `TypeNamePk {getTypeNamePk
+  :: Int}`), and have no global type-overrides, you can use `Data.Default.def` for
+  the entire `Config`.\n\n### Generate Haskell Datatypes\nOnce that's setup, we can
+  use that to generate our data. In a file where you want this type to be generated:\n```haskell\nmodule
+  MyApp.MySqlDatatypes where\n\nimport Hasql.Generate (generate, fromTable, fromView,
+  fromType)\n-- You made this in the last step!\nimport MyApp.MyHasqlGenerateConfig
+  (config)\n\n$(generate config $ fromType \"public\" \"user_type\")\n\n$(generate
+  config $ fromTable \"public\" \"users\")\n\n$(generate config $ fromView \"public\"
+  \"users_view\")\n```\nIf you need to override types on a per-table level:\n```haskell\nimport
+  Data.Function ((&))\nimport Hasql.Generate (generate, fromTable, withOverrides)\nimport
+  MyApp.MyHasqlGenerateConfig (config)\n\n$( generate config\n    ( fromTable \"public\"
+  \"users\"\n      & withOverrides [ (\"text\", ''String) ]\n    )\n )\n```\nOr if
+  you want to generically-derive types:\n```haskell\nimport Data.Aeson ( FromJSON,
+  ToJSON)\nimport Data.Function ((&))\nimport GHC.Generics (Generic)\nimport Hasql.Generate
+  (generate, fromTable, withDerivations)\nimport MyApp.MyHasqlGenerateConfig (config)\n\n$(
+  generate config\n    ( fromTable \"public\" \"users\"\n      & withDerivations [''Show,
+  ''Eq, ''Generic, ''ToJSON, ''FromJSON] \n    )\n )\n```\n(or you can do both, just
+  chain them)\n\n### Use Generated Tables\nGiven the following SQL:\n```sql\nCREATE
+  TYPE public.user_role AS ENUM ('admin', 'important', 'regular');\n\nCREATE TABLE
+  public.users\n  ( id     UUID      NOT NULL PRIMARY KEY DEFAULT uuidv7()\n  , name
+  \  TEXT      NOT NULL\n  , \"role\" user_role NOT NULL DEFAULT 'regular'\n  , email
+  \ TEXT\n  , age    INT4\n  );\n```\n`$( generate def $ fromTable \"public\" \"users\")`
+  will generate the following Haskell datatype:\n```haskell\ndata Users\n  = Users\n
+  \   { usersId    :: !UUID\n    , usersName  :: !Text\n    , usersRole  :: !UserRole\n
+  \   , usersEmail :: !(Maybe Text)\n    , usersAge   :: !(Maybe Int32)\n    }\n```\n\\*you
+  are responsible for adding an unqualified import for all types for your database.
+  In the above example, you will need\n```haskell\nimport Data.Int (Int32)\nimport
+  Data.Text (Text)\nimport Data.UUID (UUID)\n-- See important note on Postgres types
+  below, in \"Use Generated Types\"\nimport MyApp.MyUserRoleLocation (UserRole)\n```\n\nIt
+  will also generate:\n- `usersDecoder`\n- `usersEncoder`\n- `insertUsers`\n- `insertManyUsers`\n-
+  a `HasInsert` instance\n\nAnd when it has a Primary Key defined, it will also generate:\n-
+  `selectUsers`\n- `selectManyUsers`\n- `updateUsers`\n- `updateManyUsers`\n- `deleteUsers`\n-
+  `deleteManyUsers`\n- a `HasPrimaryKey` instance\n- a `HasSelect` instance\n- a `HasUpdate`
+  instance\n- a `HasDelete` instance\n\nIf your Primary Key has a DEFAULT and you
+  want to defer to the database to generate PK values on INSERT, add `withholdPk`
+  to the `fromTable` generator. Without `withholdPk`, the primary key you supply in
+  Haskell will be included in the INSERT, and the Postgres DEFAULT will not be used.
+  You still need to create the record with a primary key value, but it can be a dummy
+  value, like `0` for any Int-based type, or `UUID.nil` for a `UUID`:\n```haskell\nimport
+  Data.Function ((&))\nimport Hasql.Generate (generate, fromTable, withholdPk)\nimport
+  MyApp.MyHasqlGenerateConfig (config)\n\n$(generate config (fromTable \"public\"
+  \"users\" & withholdPk))\n```\n\n### Use Generated Views\nGiven the following SQL:\n```sql\nCREATE
+  VIEW public.users_view AS\n  SELECT (name, \"role\", email, age)\n  FROM public.users\n
+  \ WHERE \"role\" = 'regular'\n;\n```\n`$( generate def $ fromView \"public\" \"users_view\")`
+  will generate the following Haskell datatype:\n```haskell\ndata UsersView\n  = UsersView\n
+  \   { usersViewName  :: !(Maybe Text)\n    , usersViewRole  :: !(Maybe UserRole)\n
+  \   , usersViewEmail :: !(Maybe Text)\n    , usersViewAge   :: !(Maybe Int32)\n
+  \   }\n```\n\\*All field types are Maybes in views because that's how Postgres reports
+  the types on-introspection, even if the underlying table's column is `NOT NULL`.\n\nIt
+  will also generate:\n- `usersViewDecoder`\n- `selectUsersView`\n- a `HasView` instance\n\n###
+  Use Generated Types\nGiven the following SQL:\n```sql\nCREATE TYPE public.user_role\n
+  \ AS ENUM ('admin', 'important', 'regular');\n```\n`$( generate def $ fromType \"public\"
+  \"user_role\")` will generate the following Haskell datatype:\n```haskell\ndata
+  UserRole\n  = Admin\n  | Important\n  | Regular\n```\nIt will also generate:\n-
+  a `PgCodec` instance\n- a `PgColumn` instance\n- a `HasEnum` instance\n\nIMPORTANT:
+  If you define a type in Postgres, then use that type in a table you generate with
+  `fromTable`, you must supply a matching type to the file containing the table's
+  generator splice. You can either generate it with the `fromType` function as outlined
+  above, or you can make it yourself. If you choose to write your own, you _must_
+  define `PgCodec` and `PgColumn` instances for the type written yourself, and the
+  file generating the table mentioned previously _must_ have those instances in-scope.\n\nThe
+  generated `PgColumn` instance triggers `-Worphans` because the functional\ndependency's
+  determining types are `Symbol` literals. Suppress with:\n```haskell\n{-# OPTIONS_GHC
+  -Wno-orphans #-}\n```\n\n### Config Options\n\n#### allowDuplicateRecordFields\nPairs
+  with the DuplicateRecordFields Haskell pragma/language-extension. When active, we
+  drop the camelCase table-name from the front of fields of generated table and view
+  datatypes.\n\nSo this:\n```haskell\ndata Users\n  = Users\n    { usersId    :: !UUID\n
+  \   , usersName  :: !Text\n    , usersRole  :: !UserRole\n    , usersEmail :: !(Maybe
+  Text)\n    , usersAge   :: !(Maybe Int32)\n    }\n```\n...would instead be this
+  (with `allowDuplicateRecordFields = True`):\n```haskell\ndata Users\n  = Users\n
+  \   { id    :: !UUID\n    , name  :: !Text\n    , role' :: !UserRole\n    , email
+  :: !(Maybe Text)\n    , age   :: !(Maybe Int32)\n    }\n```\nIf you noticed, in
+  this second example, there is an `id` field. This may conflict with the `id` function
+  in Prelude, so you may wish to hide the `id` from Prelude, or name your columns
+  accordingly. The `role` column is also named `role'` in Haskell, since `role` is
+  a reserved keyword (`role` is also a reserved word in Postgres, hence why we've
+  been double-quoting it in this README). Any Haskell-keywords will append an apostrophe
+  as such.\n\n#### newtypePrimaryKeys\nWhen active, we generate newtype-wrappers for
+  primary keys of tables.\n\nSo this:\n```haskell\ndata Users\n  = Users\n    { usersId
+  \   :: !UUID\n    , usersName  :: !Text\n    , usersRole  :: !UserRole\n    , usersEmail
+  :: !(Maybe Text)\n    , usersAge   :: !(Maybe Int32)\n    }\n```\n...would instead
+  be this (with `newtypePrimaryKeys = True`):\n```haskell\nnewtype UsersPk = UsersPk
+  { getUsersPk :: UUID }\n\ndata Users\n  = Users\n    { usersId    :: !UsersPk\n
+  \   , usersName  :: !Text\n    , usersRole  :: !UserRole\n    , usersEmail :: !(Maybe
+  Text)\n    , usersAge   :: !(Maybe Int32)\n    }\n```\n\nWe also support composite
+  primary keys:\n```sql\nCREATE TABLE public.user_items (\n    user_id     UUID     NOT
+  NULL,\n    item_id     INT4     NOT NULL,\n    json_data   JSONB    NOT NULL,\n
+  \   PRIMARY KEY (user_id, item_id)\n);\n```\n```haskell\nimport Data.Aeson (Value)\n\ndata
+  UserItemsPk\n  = UserItemsPk\n    { userItemsPkUserId :: !UUID\n    , userItemsPkItemId
+  :: !Int32\n    }\n  deriving stock (Show, Eq)\n\ndata UserItems\n  = UserItems\n
+  \   { userItemsUserId   :: !UUID\n    , userItemsItemId   :: !Int32\n    , userItemsJsonData
+  :: !Value\n    }\n```\nbut note we don't replace a field's type with a newtype wrapper,
+  since it's multiple fields and it gets a little weird.\n\n#### globalOverrides\nThis
+  allows overrides for all generators using the config. For example, with the Postgres
+  `TEXT` type, we generate `Data.Text.Text` by default. If you wanted to use `String`
+  instead, you would add to the globalOverrides:\n```haskell\nimport Data.Default
+  (Default(def))\nimport Hasql.Generate (Config(..))\n\n{- In `(\"text\", ''String)`:
+  `\"text\"` is the PG type (must be lowercase),\n   and `''String` is obviously the
+  type you want it to map to\n-}\nmyConfig :: Config\nmyConfig = def { globalOverrides
+  = [(\"text\", ''String)] }\n```\n\nIf you only want to override a type just for
+  for a table/view generator, see `withOverrides`, as these take precedence over the
+  global ones.\n"
+description-type: markdown
+hash: 3397553800ed22a36db0b50c6d3e5e608e91cb5bd94ba3f3f2cadb85f6f105e2
+homepage: https://code.dneaves.com/dneaves/hasql-generate
+latest: 1.0.0
+license-name: MIT
+maintainer: dneavesdev@pm.me
+synopsis: Compile-time PostgreSQL data generation for hasql
+test-bench-deps:
+  aeson: '>=2.1 && <2.3'
+  base: '>=4.19 && <4.22'
+  bytestring: '>=0.11.5 && <0.13'
+  data-default-class: '>=0.1 && <0.2'
+  hasql: '>=1.6 && <1.9'
+  hasql-generate: '>=0'
+  scientific: '>=0.3.7 && <0.4'
+  text: '>=2.0.2 && <2.2'
+  time: '>=1.12 && <1.15'
+  uuid: '>=1.3 && <1.4'
