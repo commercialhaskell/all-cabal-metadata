@@ -6,17 +6,57 @@ all-versions:
 - 0.3.1.0
 - 0.3.2.0
 - 0.3.2.1
+- 0.4.0.0
 author: Shaun Sharples
 basic-deps:
+  aeson: '>=1.4 && <2.3'
+  attoparsec: '>=0.13 && <0.15'
   base: '>=4.12 && <4.22'
-  bytestring: '>=0.11.1.0 && <0.13'
+  bytestring: '>=0.10.8 && <0.13'
   http-media: '>=0.7.1.3 && <0.9'
   lens: '>=4.17 && <5.4'
+  servant: '>=0.15 && <0.21'
+  servant-client-core: '>=0.15 && <0.21'
   servant-foreign: '>=0.15 && <0.17'
   servant-server: '>=0.15 && <0.21'
   text: '>=1.2.3 && <2.2'
 changelog: |
   # Revision history for servant-event-stream
+
+  ## 0.4.0.0 -- 2026-02-27
+
+  * **Breaking**: Add `eventComment` and `eventRetry` fields to `ServerEvent`.
+    Existing code using the `ServerEvent` constructor must add the new fields,
+    e.g. `ServerEvent typ eid dat Nothing Nothing`.
+  * **Breaking**: Drop `charset=utf-8` from the `Accept` instance. The content
+    type is now `text/event-stream` (no parameters), matching the WHATWG spec.
+  * **New dependency**: `aeson` (for JSON helpers).
+  * **New dependency**: `servant-client-core` (for `HasClient` instances).
+  * Add `serverEvent` convenience constructor matching the old 3-field API for easy migration.
+  * Add `dataEvent` convenience constructor for simple data-only events.
+  * Add `commentEvent` convenience constructor for heartbeat keepalives.
+  * Add `retryEvent` convenience constructor for setting client reconnection delay.
+  * Export `encodeServerEvent` for direct use outside of Servant.
+  * Add `FromServerEvent` typeclass and `decodeServerEvent` for parsing SSE events.
+  * Add `MimeUnrender EventStream` and `FramingUnrender ServerEventFraming` instances
+    for consuming SSE streams.
+  * Add `HasClient` instances for `ServerSentEvents` and `PostServerSentEvents`,
+    enabling client-side SSE consumption via `servant-client`.
+  * Add `PostServerSentEvents` combinator for POST SSE endpoints (e.g. OpenAI's
+    streaming API), with `HasServer`, `HasClient`, and `HasForeign` instances.
+  * Add `JsonData` newtype for deriving `ToServerEvent` and `FromServerEvent` via
+    JSON encoding using `DerivingVia`.
+  * Add `jsonEvent` helper to construct events with JSON-encoded data payloads.
+  * Add `jsonData` helper to decode JSON from an event's data field.
+  * Strip leading UTF-8 BOM from SSE input, per the WHATWG spec.
+  * Export `ServerEventFraming` (needed for `StreamPost` SSE endpoints).
+  * Always emit at least one `data:` field, even when `eventData` is empty.
+    Previously, empty data produced no output and the event was silently
+    dropped by clients.
+  * Sanitize `eventType`, `eventId`, and `eventComment` by stripping CR and LF
+    characters to prevent malformed SSE output.
+  * Strip NULL characters from `eventId` (the SSE spec silently ignores ids
+    containing NULL).
 
   ## 0.3.2.1 -- 2026-02-27
 
@@ -72,36 +112,105 @@ changelog: |
   * First version. Released on an unsuspecting world.
 changelog-type: markdown
 description: |
-  servant-event-stream
-  ====================
+  # servant-event-stream
 
-  This library adds necessary type combinators to support [Server Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)
-  within [Servant ecosystem](https://github.com/haskell-servant/).
+  [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events) (SSE) support for [Servant](https://github.com/haskell-servant/). Stream events from your server to connected clients, or consume third-party SSE streams (such as [OpenAI](https://platform.openai.com/docs/api-reference/streaming)) from Haskell.
 
-  Development Environment
-  -----------------------
+  ## Quick start
 
-  Development environment uses [Nix](https://nixos.org) flakes.
+  Define a domain type and a `ToServerEvent` instance. Use `jsonEvent` to JSON-encode the data payload, or `serverEvent` for raw bytestrings:
 
-  To enter the dev shell, run
-  ```bash
-  nix develop
+  ```haskell
+  data ChatEvent
+    = ContentDelta Text
+    | ContentDone Text
+    | ChatDone
+
+  type MyApi = "chat" :> ServerSentEvents (SourceIO ChatEvent)
+
+  instance ToServerEvent ChatEvent where
+    toServerEvent (ContentDelta d) = jsonEvent (Just "response.content.delta") Nothing d
+    toServerEvent (ContentDone t) = jsonEvent (Just "response.content.done") Nothing t
+    toServerEvent ChatDone = jsonEvent (Just "response.done") Nothing ()
+
+  server :: Server MyApi
+  server = pure $ source
+    [ContentDelta "Hel", ContentDelta "lo!", ContentDone "Hello!", ChatDone]
   ```
 
-  You can build the project with
+  For POST endpoints (e.g. OpenAI chat completions), use `PostServerSentEvents`:
+
+  ```haskell
+  type MyApi = "chat" :> ReqBody '[JSON] ChatRequest
+                      :> PostServerSentEvents (SourceIO ChatEvent)
+  ```
+
+  To consume an SSE stream, provide a `FromServerEvent` instance. Use `jsonData` to decode JSON from the data field:
+
+  ```haskell
+  instance FromServerEvent ChatEvent where
+    fromServerEvent ev = case eventType ev of
+      Just "response.content.delta" -> ContentDelta <$> jsonData ev
+      Just "response.content.done"  -> ContentDone <$> jsonData ev
+      Just "response.done"          -> Right ChatDone
+      _                             -> Left "unknown event"
+  ```
+
+  For types that serialise entirely as JSON (no event type dispatch), use `DerivingVia`:
+
+  ```haskell
+  data Temperature = Temperature { celsius :: Double }
+    deriving (Generic, ToJSON, FromJSON)
+    deriving (ToServerEvent, FromServerEvent) via JsonData Temperature
+  ```
+
+  See the [Haddock documentation](https://hackage.haskell.org/package/servant-event-stream/docs/Servant-API-EventStream.html) for the full API reference, or the [upgrading guide](docs/upgrading-from-0.3.md) if you're coming from 0.3.
+
+  ## Coming from servant's built-in SSE
+
+  Servant 0.20.3.0 introduced its own `ServerSentEvents` type in
+  `Servant.API.ServerSentEvents`. If you'd like to try this library instead,
+  here's how the concepts map:
+
+  | servant built-in | servant-event-stream |
+  |---|---|
+  | `Servant.API.ServerSentEvents` | `Servant.API.EventStream` |
+  | `ServerSentEvents 'JsonEvent MyEvent` | `ServerSentEvents (SourceIO MyEvent)` |
+  | `EventKind` (`RawEvent` / `JsonEvent`) | `ToServerEvent` / `FromServerEvent` typeclasses |
+
+  This library takes a typeclass approach: `ToServerEvent` and `FromServerEvent`
+  control how your domain types map to SSE fields, giving you access to event
+  names, ids, comments, and retry directives in a single `ServerEvent` record.
+  It also provides `PostServerSentEvents` for POST endpoints, and JSON helpers
+  (`jsonEvent`, `jsonData`, `JsonData`) for APIs that encode payloads as JSON.
+
+  The built-in module focuses on client-side consumption (`HasClient` instances),
+  while this library provides both `HasServer` and `HasClient` instances.
+  See the [side-by-side examples](docs/coming-from-servant-sse.md) for a more
+  detailed walkthrough.
+
+  ## Development
+
+  Uses [Nix](https://nixos.org) flakes for the development environment.
+
   ```bash
-  nix build
+  nix develop       # enter dev shell
+  nix build         # full build
+  nix flake check   # CI-equivalent check
+  cabal test        # run tests (inside dev shell)
   ```
 description-type: markdown
-hash: bd03e05980284fb54dd7f5d9d61c171dce9e93d0d404aabd0832fe62d6f6f95e
+hash: 4890339f493cc0d6a8967c861d6e1283679b853bd61ea933ccfe960341ba969f
 homepage: https://github.com/bflyblue/servant-event-stream
-latest: 0.3.2.1
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: shaun.sharples@gmail.com
 synopsis: Servant support for Server-Sent events
 test-bench-deps:
+  QuickCheck: '>=2.12 && <2.16'
+  aeson: '>=1.4 && <2.3'
   base: '>=4.12 && <4.22'
-  bytestring: '>=0.11.1.0 && <0.13'
+  bytestring: '>=0.10.8 && <0.13'
   hspec: '>=2.7 && <2.12'
   servant: '>=0.15 && <0.21'
   servant-event-stream: '>=0'
