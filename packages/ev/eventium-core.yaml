@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0
+- 0.2.1
 author: ''
 basic-deps:
   aeson: '>=1.5 && <2.3'
@@ -8,108 +9,264 @@ basic-deps:
   contravariant: '>=1.5 && <1.6'
   http-api-data: '>=0.4 && <0.7'
   path-pieces: '>=0.2 && <0.3'
-  template-haskell: '>=2.16 && <2.22'
+  template-haskell: '>=2.20 && <2.23'
   text: '>=1.2 && <2.2'
+  time: '>=1.9 && <1.14'
   transformers: '>=0.5 && <0.7'
   uuid: '>=1.3 && <1.4'
-  x-sum-type-boilerplate: '>=0.1 && <0.2'
-changelog: ''
+changelog: |
+  # eventium-core Changelog
+
+  ## 0.2.1 (Unreleased)
+
+  ### Additions
+
+  - `snapshotEventHandler` -- `EventHandler` that auto-updates a `VersionedProjectionCache` on each event.
+  - `snapshotGlobalEventHandler` -- same for `GlobalProjectionCache`.
+  - `applyCommandHandlerWithCache` -- like `applyCommandHandler` but loads from cache and updates after write.
+  - `Eventium.ReadModel` module:
+    - `ReadModel` record type for queryable persistent views driven by the global event stream.
+    - `runReadModel`, `rebuildReadModel`, `combineReadModels` combinators.
+
+  ## 0.2.0 (Unreleased)
+
+  See the [root changelog](../CHANGELOG.md) for full details.
+
+  ### Breaking changes
+
+  - Record field prefixes removed from all core types. Fields accessed via
+    `OverloadedRecordDot` (e.g. `projection.seed`, `event.metadata`).
+    `NoFieldSelectors` and `DuplicateRecordFields` enabled as default extensions.
+  - `StreamEvent` now has 4 fields (added `EventMetadata`).
+  - `CommandHandler` gained an `err` type parameter; `commandHandlerHandler` renamed to `decide`.
+  - `ProcessManager` is now pure: `react` returns `[ProcessManagerEffect]`. `ProcessManagerEffect` only supports `IssueCommand` (removed `EmitEvent`).
+  - `EventPublisher`: removed `synchronousEventBusWrapper`; added `publishingEventStoreWriter` and `synchronousPublisher`.
+  - `PollingPeriodSeconds` (Double) replaced by `PollingIntervalMillis` (Int).
+  - Codec wrapper argument order changed (codec comes first).
+  - Removed `Eventium.ReadModel.Memory`.
+
+  ### Internal
+
+  - Absorbed `x-sum-type-boilerplate` into `Eventium.TH.SumType`.
+  - Dropped `persistent-template` dependency.
+
+  ### Additions
+
+  - `Eventium.TH.SumType` module: `constructSumType`, `sumTypeConverter`,
+    `partialSumTypeConverter` (previously from `x-sum-type-boilerplate`).
+  - `NoFieldSelectors`, `DuplicateRecordFields`, `OverloadedRecordDot` default extensions.
+  - `EventMetadata`, `emptyMetadata`.
+  - `lenientCodecEventStoreReader`, `lenientCodecProjection`.
+  - `runProjectionSubscription`, `eventHandlerMapMaybe`.
+  - `CommandDispatcher` newtype with `mkCommandDispatcher` and `fireAndForgetDispatcher`.
+  - `CommandDispatchResult` (`CommandSucceeded` | `CommandFailed Text`).
+  - `IssueCommandWithCompensation` effect for saga compensation workflows.
+  - `processManagerEventHandler` for wiring a `ProcessManager` to an `EventHandler`.
+  - `Eventium.CommandDispatcher` module: `AggregateHandler`, `mkAggregateHandler`,
+    `commandHandlerDispatcher` for list-based multi-aggregate command routing.
+  - `embeddedCommandHandler` returns `Right []` for non-matching commands
+    (was `DecodeError` exception).
+
+  ## 0.1.0
+
+  Initial release.
 changelog-type: markdown
 description: |
   # Eventium Core
 
-  Core abstractions and utilities for building event sourcing systems in Haskell.
+  Core abstractions for building event-sourced applications in Haskell.
 
   ## Overview
 
-  `eventium-core` is the foundational package of the Eventium event sourcing framework. It provides all the essential abstractions, interfaces, and utilities needed to build event-sourced applications with CQRS patterns.
+  `eventium-core` is the foundational package of the Eventium framework. It defines storage-agnostic interfaces and pure types -- no database drivers, no I/O beyond what the caller provides via monad parameters.
 
-  ## Key Components
+  ## Key Types
 
-  ### Event Store (`Eventium.Store.Class`)
-  - **`EventStoreReader`** - Read events from streams (versioned and global)
-  - **`EventStoreWriter`** - Append events with optimistic concurrency control
-  - **`StreamEvent`** - Event metadata wrapper with stream keys and positions
+  ### StreamEvent
 
-  ### Projection (`Eventium.Projection`)
-  Pure event fold for rebuilding state from events. Used for both domain aggregates (write model) and read models (query side).
+  ```haskell
+  data StreamEvent key position event = StreamEvent
+    { key      :: key
+    , position :: position
+    , metadata :: EventMetadata
+    , payload  :: event
+    }
+  ```
+
+  Every stored event carries a stream key, a position, metadata (event type, correlation/causation IDs, timestamp), and the domain payload.
+
+  ### EventStoreReader / EventStoreWriter
+
+  ```haskell
+  newtype EventStoreReader key position m event = EventStoreReader
+    { getEvents :: QueryRange key position -> m [event] }
+
+  newtype EventStoreWriter key position m event = EventStoreWriter
+    { storeEvents :: key -> ExpectedPosition position -> [event]
+                  -> m (Either (EventWriteError position) EventVersion) }
+  ```
+
+  Polymorphic over key, position, monad, and event types. `runEventStoreReaderUsing` / `runEventStoreWriterUsing` lift between monads. `codecEventStoreReader` / `codecEventStoreWriter` wrap with a `Codec`.
+
+  ### Projection
 
   ```haskell
   data Projection state event = Projection
-    { projectionSeed :: state
-    , projectionEventHandler :: state -> event -> state
+    { seed         :: state
+    , eventHandler :: state -> event -> state
     }
   ```
 
-  ### Command Handler (`Eventium.CommandHandler`)
-  Implements the aggregate pattern from DDD/Event Sourcing. Processes commands, validates against current state, and emits events.
+  Pure fold for rebuilding state from events. Used for both aggregates (write side) and read models (query side). `getLatestStreamProjection` loads events from a reader and applies them.
+
+  ### CommandHandler
 
   ```haskell
-  data CommandHandler state event command = CommandHandler
-    { commandHandlerHandler :: state -> command -> [event]
-    , commandHandlerProjection :: Projection state event
+  data CommandHandler state event command err = CommandHandler
+    { decide     :: state -> command -> Either err [event]
+    , projection :: Projection state event
     }
   ```
 
-  ### Process Manager (`Eventium.ProcessManager`)
-  Coordinates long-running business processes across multiple aggregates. Implements the Saga pattern for complex workflows.
+  Validates a command against current state, returning either a domain error or new events. `applyCommandHandler` orchestrates the full load-decide-write cycle.
 
-  ### Read Model (`Eventium.ReadModel.Class`)
-  Builds denormalized views optimized for queries. Tracks processed events for eventual consistency with the write side.
+  ### ProcessManager
 
-  ### Serializer (`Eventium.Serializer`)
-  Type-safe event serialization/deserialization with JSON support and Template Haskell utilities for automatic boilerplate generation.
+  ```haskell
+  data ProcessManager state event command = ProcessManager
+    { projection :: Projection state (VersionedStreamEvent event)
+    , react      :: state -> VersionedStreamEvent event
+                 -> [ProcessManagerEffect command]
+    }
 
-  ### Template Haskell Utilities (`Eventium.TH`)
-  - **`deriveJSON`** - Generate JSON instances
-  - **`deriveSumTypeSerializer`** - Generate serializers for sum types (event polymorphism)
-  - **`makeProjection`** - Generate projection boilerplate
+  data ProcessManagerEffect command
+    = IssueCommand UUID command
+    | IssueCommandWithCompensation UUID command (Text -> [ProcessManagerEffect command])
+  ```
 
-  ## Features
+  Coordinates cross-aggregate workflows. `react` is pure; `runProcessManagerEffects` dispatches the resulting commands via a `CommandDispatcher`. `IssueCommandWithCompensation` triggers compensation effects when a command fails.
 
-  - ✅ Type-safe event sourcing abstractions
-  - ✅ Optimistic concurrency control with `ExpectedPosition`
-  - ✅ CQRS pattern support (command/query separation)
-  - ✅ Process Manager (Saga) pattern
-  - ✅ Projection caching for performance
-  - ✅ Template Haskell for reducing boilerplate
-  - ✅ Storage backend agnostic (memory, SQL, NoSQL)
+  ### CommandDispatcher
+
+  ```haskell
+  newtype CommandDispatcher m command = CommandDispatcher
+    { dispatchCommand :: UUID -> command -> m CommandDispatchResult }
+
+  data CommandDispatchResult = CommandSucceeded | CommandFailed Text
+  ```
+
+  Routes commands to aggregates and reports outcomes. Construct with `mkCommandDispatcher`, or use `fireAndForgetDispatcher` for legacy callbacks. `commandHandlerDispatcher` (from `Eventium.CommandDispatcher`) builds a dispatcher from a list of `AggregateHandler`s for multi-aggregate routing.
+
+  `processManagerEventHandler` wires a `ProcessManager` to a global reader and dispatcher, producing a ready-to-use `EventHandler`.
+
+  ### ProjectionCache
+
+  ```haskell
+  data ProjectionCache key position encoded m = ProjectionCache
+    { storeSnapshot :: key -> position -> encoded -> m ()
+    , loadSnapshot  :: key -> m (Maybe (position, encoded))
+    }
+  ```
+
+  Snapshot store for aggregate state, avoiding full event replay on every load. Two flavors:
+
+  - **VersionedProjectionCache** -- keyed by `UUID` + `EventVersion`, one snapshot per aggregate instance.
+  - **GlobalProjectionCache** -- keyed by `()` + `SequenceNumber`, singleton snapshot for global projections.
+
+  Wiring helpers:
+
+  - `snapshotEventHandler` -- `EventHandler` that auto-updates a `VersionedProjectionCache` on each event. Compose with `publishingEventStoreWriter` for transparent snapshotting.
+  - `snapshotGlobalEventHandler` -- same for `GlobalProjectionCache`.
+  - `applyCommandHandlerWithCache` -- like `applyCommandHandler` but loads from cache and updates after write.
+
+  ### ReadModel
+
+  ```haskell
+  data ReadModel m event = ReadModel
+    { initialize     :: m ()
+    , eventHandler   :: EventHandler m (GlobalStreamEvent event)
+    , checkpointStore :: CheckpointStore m SequenceNumber
+    , reset          :: m ()
+    }
+  ```
+
+  Abstraction for queryable persistent views driven by the global event stream. Users define their own schema and event handler; the library manages the event pipeline and checkpointing. ReadModels always consume the global stream (cross-aggregate views need total ordering).
+
+  - `runReadModel` -- polling subscription that keeps the view updated (runs forever).
+  - `rebuildReadModel` -- reset + replay all events (one-shot rebuild).
+  - `combineReadModels` -- fan-out events to multiple read models.
+
+  ### EventHandler / EventPublisher / EventSubscription
+
+  - **EventHandler** -- composable event consumer (`Contravariant`, `Semigroup`, `Monoid`).
+  - **EventPublisher** -- decouples post-write dispatch. `publishingEventStoreWriter` wraps a writer for auto-publish.
+  - **EventSubscription** -- push-based delivery. `pollingSubscription` polls the global stream with a `CheckpointStore`.
+
+  ### Codec
+
+  ```haskell
+  data Codec a b = Codec
+    { encode :: a -> b
+    , decode :: b -> Maybe a
+    }
+  ```
+
+  Value-level bidirectional conversion. Composable via `composeCodecs`. `Eventium.TH` generates sum-type codecs and JSON instances.
+
+  ### TypeEmbedding
+
+  ```haskell
+  data TypeEmbedding a b = TypeEmbedding
+    { embed   :: a -> b
+    , extract :: b -> Maybe a
+    }
+  ```
+
+  Embeds one sum type into another (e.g. aggregate events into an application-wide event type). Separate from `Codec` to distinguish type-level subset relationships from wire-format encoding.
+
+  ## Modules
+
+  | Module | Purpose |
+  |--------|---------|
+  | `Eventium.Store.Class` | Reader/Writer interfaces, monad lifting, codec wrappers |
+  | `Eventium.Store.Types` | `StreamEvent`, `EventMetadata`, `EventVersion`, `SequenceNumber`, `ExpectedPosition` |
+  | `Eventium.Store.Queries` | `QueryRange` builders (`allEvents`, `eventsStartingAt`, etc.) |
+  | `Eventium.Projection` | `Projection`, `StreamProjection`, `getLatestStreamProjection` |
+  | `Eventium.CommandHandler` | `CommandHandler`, `applyCommandHandler`, `applyCommandHandlerWithCache` |
+  | `Eventium.ProcessManager` | `ProcessManager`, `ProcessManagerEffect`, `CommandDispatcher`, `CommandDispatchResult`, `runProcessManagerEffects`, `processManagerEventHandler` |
+  | `Eventium.CommandDispatcher` | `AggregateHandler`, `mkAggregateHandler`, `commandHandlerDispatcher` |
+  | `Eventium.EventHandler` | `EventHandler`, `handleEvents` |
+  | `Eventium.EventPublisher` | `EventPublisher`, `publishingEventStoreWriter`, `synchronousPublisher` |
+  | `Eventium.EventSubscription` | `EventSubscription`, `pollingSubscription`, `CheckpointStore` |
+  | `Eventium.ReadModel` | `ReadModel`, `runReadModel`, `rebuildReadModel`, `combineReadModels` |
+  | `Eventium.ProjectionCache.Cache` | `ProjectionCache` helpers: `snapshotEventHandler`, `snapshotGlobalEventHandler`, `getLatestVersionedProjectionWithCache`, `updateVersionedProjectionCache` |
+  | `Eventium.ProjectionCache.Types` | `ProjectionCache`, `VersionedProjectionCache`, `GlobalProjectionCache` |
+  | `Eventium.Codec` | `Codec`, `jsonCodec`, `jsonTextCodec`, `composeCodecs` |
+  | `Eventium.UUID` | UUID utilities (`uuidNextRandom`, `uuidFromText`, `uuidFromInteger`) |
+  | `Eventium.TH` | Template Haskell: `deriveJSON`, `mkSumTypeCodec`, `mkSumTypeEmbedding`, `makeProjection` |
 
   ## Usage
 
-  Add `eventium-core` to your package dependencies:
-
   ```yaml
   dependencies:
-    - eventium-core
+    - eventium-core >= 0.1.0
   ```
 
-  Then choose a storage backend:
-  - `eventium-memory` - In-memory (development/testing)
-  - `eventium-sqlite` - SQLite (single-process apps)
-  - `eventium-postgresql` - PostgreSQL (production systems)
-
-  ## Design Principles
-
-  1. **Type Safety** - Phantom types prevent mixing concerns
-  2. **Functional Purity** - Projections are pure folds
-  3. **Abstraction** - Backend-agnostic core types
-  4. **CQRS** - Clear command/query separation
-  5. **Standard Patterns** - Aggregates, Sagas, Read Models
+  Then pick a storage backend: `eventium-memory`, `eventium-sqlite`, or `eventium-postgresql`.
 
   ## Documentation
 
-  - [Main README](../README.md) - Project overview
-  - [Design Documentation](../DESIGN.md) - Detailed architecture
-  - [Examples](../examples/) - Working applications
+  - [Main README](../README.md)
+  - [Design](../DESIGN.md)
+  - [Examples](../examples/)
 
   ## License
 
-  MIT - see [LICENSE.md](LICENSE.md)
+  MIT -- see [LICENSE.md](LICENSE.md)
 description-type: markdown
-hash: c0c745b62f43510b1c9c37b0c32bd78308a66db5a960a3651d014d3902646d0b
+hash: 1d98f0c71f53a984bf6210c2b578dc65ab86a0e00cfd439adb8d2d3f144b471b
 homepage: https://github.com/aleks-sidorenko/eventium#readme
-latest: 0.1.0
+latest: 0.2.1
 license-name: MIT
 maintainer: Alexander Sidorenko
 synopsis: Core module for eventium
@@ -122,8 +279,8 @@ test-bench-deps:
   hspec: '>=0'
   http-api-data: '>=0.4 && <0.7'
   path-pieces: '>=0.2 && <0.3'
-  template-haskell: '>=2.16 && <2.22'
+  template-haskell: '>=2.20 && <2.23'
   text: '>=1.2 && <2.2'
+  time: '>=1.9 && <1.14'
   transformers: '>=0.5 && <0.7'
   uuid: '>=1.3 && <1.4'
-  x-sum-type-boilerplate: '>=0.1 && <0.2'
