@@ -1,0 +1,171 @@
+all-versions:
+- 0.1.0.0
+author: philippedev101
+basic-deps:
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11 && <0.13'
+  deepseq: '>=1.4 && <1.6'
+  hashable: '>=1.4 && <1.6'
+  int-cast: '>=0.2 && <0.3'
+  persist: '>=1.0 && <1.1'
+  text: '>=2.0 && <2.2'
+  text-show: '>=3.10 && <3.12'
+  time: '>=1.11 && <1.15'
+  unordered-containers: '>=0.2 && <0.3'
+  vector: '>=0.13 && <0.14'
+changelog: |
+  # Changelog for `packstream`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.1.0.0
+
+  - Initial release
+  - PackStream binary format encoding and decoding
+  - Support for all PackStream types: Null, Bool, Integer, Float, String, Bytes, List, Map, Structure
+  - Persist-based serialization backend
+  - TextShow instances for all types
+changelog-type: markdown
+description: |
+  # packstream
+
+  Haskell implementation of the [PackStream](https://neo4j.com/docs/bolt/current/packstream/) binary serialization format, used as the wire format by Neo4j's BOLT protocol.
+
+  PackStream is similar to [MessagePack](https://msgpack.org/) but adds a `Structure` type for encoding typed graph objects (nodes, relationships, temporal values, spatial points, etc.).
+
+  > **Note:** Most users should depend on [bolty](https://github.com/philippedev101/bolty) instead, which provides a full Neo4j driver. This package is useful if you need to work with the PackStream wire format directly.
+
+  ## Types
+
+  PackStream defines 9 value types, represented by the `Ps` algebraic data type:
+
+  | PackStream type | Haskell constructor | Description |
+  |---|---|---|
+  | Null | `PsNull` | Missing or empty value |
+  | Boolean | `PsBoolean !Bool` | True or false |
+  | Integer | `PsInteger !PSInteger` | Signed integer (up to 64-bit) |
+  | Float | `PsFloat !Double` | 64-bit IEEE 754 float |
+  | Bytes | `PsBytes !ByteString` | Raw byte array |
+  | String | `PsString !Text` | UTF-8 text |
+  | List | `PsList !(Vector Ps)` | Ordered collection |
+  | Dictionary | `PsDictionary !(HashMap Text Ps)` | Key-value map (text keys) |
+  | Structure | `PsStructure !Tag !(Vector Ps)` | Tagged composite (tag byte + positional fields) |
+
+  Integers use a variable-width encoding: values in `[-16, 127]` are encoded in a single byte (no tag), with `INT_8`, `INT_16`, `INT_32`, and `INT_64` for larger values.
+
+  ## The `PackStream` type class
+
+  Convert between Haskell types and `Ps` values:
+
+  ```haskell
+  class PackStream a where
+    toPs   :: a -> Ps           -- encode to Ps AST
+    toBinary :: a -> Put        -- encode directly to wire format (optional, defaults to putPs . toPs)
+    fromPs :: Ps -> Result a    -- decode from Ps AST
+  ```
+
+  Built-in instances exist for `Bool`, `Int`, `Int64`, `Word8`, `Word16`, `Word32`, `Double`, `Text`, `ByteString`, `Vector`, `HashMap Text`, `Maybe`, tuples (up to 9), and more.
+
+  ## Quick start
+
+  ### Encoding and decoding `Ps` values
+
+  ```haskell
+  import Data.PackStream (pack, unpack)
+  import Data.PackStream.Ps (Ps(..))
+  import qualified Data.HashMap.Lazy as H
+
+  -- Encode a dictionary to binary
+  let ps = PsDictionary $ H.fromList
+        [ ("name", PsString "Alice")
+        , ("age",  PsInteger 30)
+        ]
+  let bytes = pack ps  -- :: Lazy ByteString
+
+  -- Decode binary back to a Ps value
+  case unpack bytes of
+    Right val -> print (val :: Ps)
+    Left err  -> putStrLn $ "Decode error: " <> show err
+  ```
+
+  ### Custom types
+
+  ```haskell
+  import Data.PackStream.Ps (PackStream(..), Ps(..), (.:), withDictionary)
+  import Data.PackStream.Result (Result(..))
+  import qualified Data.HashMap.Lazy as H
+
+  data Person = Person { name :: Text, age :: Int64 }
+
+  instance PackStream Person where
+    toPs Person{name, age} = PsDictionary $ H.fromList
+      [ ("name", toPs name)
+      , ("age",  toPs age)
+      ]
+
+    fromPs = withDictionary "Person" $ \m -> do
+      name <- m .: "name"  -- uses (.:) operator for key lookup + decode
+      age  <- m .: "age"
+      pure $ Person name age
+  ```
+
+  ### Structures
+
+  Structures are the key differentiator from MessagePack. They carry a tag byte identifying the type and positional fields:
+
+  ```haskell
+  import Data.PackStream.Ps (Ps(..), PackStream(..))
+  import qualified Data.Vector as V
+
+  -- A Date structure (tag 0x44) with one field: days since Unix epoch
+  let date = PsStructure 0x44 (V.singleton (PsInteger 19737))
+
+  -- Define a custom structure type
+  data MyDate = MyDate { days :: Int64 }
+
+  instance PackStream MyDate where
+    toPs (MyDate d) = PsStructure 0x44 (V.singleton (toPs d))
+    fromPs (PsStructure 0x44 fs) | V.length fs == 1 = MyDate <$> fromPs (fs V.! 0)
+    fromPs other = typeMismatch "MyDate" other
+  ```
+
+  Neo4j uses structures for graph types (Node `0x4E`, Relationship `0x52`, Path `0x50`), temporal types (Date `0x44`, Time `0x54`, DateTime `0x49`, Duration `0x45`), and spatial types (Point2D `0x58`, Point3D `0x59`).
+
+  ## Module structure
+
+  **Public API:**
+
+  - `Data.PackStream` — top-level `pack`/`unpack` + re-exports
+  - `Data.PackStream.Ps` — core `Ps` type, `PackStream` class, operators
+  - `Data.PackStream.Result` — `Result` type (`Success`/`Error`)
+  - `Data.PackStream.Tags` — wire format tag constants
+  - `Data.PackStream.Timestamp` — helpers for epoch-based temporal conversions
+
+  **Internal modules** (exposed but not part of the stable API):
+
+  - `Data.PackStream.Get` / `Data.PackStream.Get.Internal` — binary decoding primitives
+  - `Data.PackStream.Put` — binary encoding primitives
+  - `Data.PackStream.Integer` — variable-width integer encoding
+  - `Data.PackStream.Generic` — GHC.Generics-based deriving (experimental)
+  - `Data.PackStream.Assoc` — ordered association lists
+  - `Compat.Binary` / `Compat.Prelude` — compatibility wrappers
+
+  ## Supported GHC versions
+
+  9.6.7, 9.8.4, 9.10.3, 9.12.3
+
+  ## License
+
+  Apache-2.0
+description-type: markdown
+hash: 4773576f8d8ac67d8ab6bb1114b2bc39632ae6d4a85ffebf7d24bf2a8065e413
+homepage: https://github.com/philippedev101/packstream#readme
+latest: 0.1.0.0
+license-name: Apache-2.0
+maintainer: philippedev101@gmail.com
+synopsis: PackStream binary serialization format
+test-bench-deps: {}
