@@ -1,0 +1,236 @@
+all-versions:
+- 0.7.0.0
+author: Thodoris Papakonstantinou
+basic-deps:
+  Unique: '>=0.4.7.9 && <0.5'
+  base: '>=4.8 && <4.21'
+  binary: '>=0.8.6.0 && <0.9'
+  containers: '>=0.5.10.2 && <0.8'
+  either-unwrap: '>=1.1 && <1.2'
+  mtl: '>=2.2.1 && <2.4'
+  text: '>=1.2.2.2 && <2.2'
+changelog: |
+  # Changelog for algraph
+
+  - 0.7.0.0
+    - Fix source BFS adjacency key mismatch in `residualDistances` — incorrect
+      heights on cyclic graphs caused premature termination
+    - Replace `Map Edge Int` with `IntMap`-based `resEdgeIndex` for O(log V)
+      edge lookup in the hot path (was O(log E))
+    - Add skip-globalRelabel optimization: skip BFS when residual topology is
+      unchanged (1.25--1.6x speedup)
+    - Add QuickCheck test: Tide vs FGL max-flow on 10,000 random graphs
+    - Add comprehensive Haddock documentation to all Tide algorithm modules
+    - Rewrite README for Hackage submission
+
+  - 0.6.0.2
+    Updated ghc
+
+  - 0.6.0.1
+    Updated ghc - removed Data.Natural
+
+  - 0.3.2.1
+    Documentation on the Push-Relabel Tide algorithm
+
+  - 0.3.2.0
+    Binary instance of [Edge] so can deserialize Graphs
+
+  - 0.3.1.0
+    fixed minimum/maximum bug in empty list (Metrics.hs)
+
+  - 0.3.0.0
+    moved graphviz interface to new package
+
+  - 0.2.3.0
+    Distance metrics and plot function using graphviz
+
+  - 0.2.2.0
+    ``DFS`` Added depth first search algorithm
+
+  - 0.2.1.1
+    ``bfs`` returns empty BFS when source not in graph
+changelog-type: markdown
+description: |
+  # algraph
+
+  A pure Haskell graph library using adjacency list representation, featuring
+  the **Tide algorithm** — a level-synchronous push-pull-relabel solver for the
+  maximum flow problem.
+
+  ## Quick start
+
+  ```haskell
+  import Data.Graph.AdjacencyList
+  import Data.Graph.AdjacencyList.Network
+  import Data.Graph.AdjacencyList.PushRelabel.Pure
+  import Data.Graph.AdjacencyList.PushRelabel.Internal (netFlow, stCut)
+  import qualified Data.Map.Strict as M
+
+  main :: IO ()
+  main = do
+    -- Build a directed graph: 1 -> 2 -> 4
+    --                         1 -> 3 -> 4
+    let g = graphFromEdges [Edge 1 2, Edge 1 3, Edge 2 4, Edge 3 4]
+        caps = M.fromList [ (Edge 1 2, 10), (Edge 1 3, 5)
+                          , (Edge 2 4, 8),  (Edge 3 4, 7) ]
+        net = Network { graph = g, source = 1, sink = 4
+                      , capacities = caps, flow = M.empty }
+    case pushRelabel net of
+      Left err -> putStrLn $ "Error: " ++ err
+      Right rg -> do
+        putStrLn $ "Max flow: " ++ show (netFlow rg)       -- 13
+        putStrLn $ "Min cut:  " ++ show (stCut rg)         -- s-t cut edges
+  ```
+
+  ## Features
+
+  - **Maximum flow** via the Tide algorithm — the only push-relabel
+    implementation in the Haskell ecosystem, and the only sub-O(VE^2) pure
+    functional max-flow solver available
+  - **Exact arithmetic** — capacities and flows use `Rational`, guaranteeing
+    correct results for arbitrary inputs (no floating-point rounding)
+  - **s-t minimum cut** extracted directly from the max-flow residual graph
+  - **BFS and DFS** with level maps, parent maps, spanning trees, topological
+    sort, longest path, and connectivity queries
+  - **Floyd-Warshall** all-pairs shortest paths (weighted and unweighted)
+  - **Graph metrics** — eccentricity, radius, diameter, density
+  - **d-dimensional lattice generator** — cubic lattices with periodic boundary
+    conditions (toroidal topology) in arbitrary dimension
+  - **QuickCheck-verified** — Tide tested against FGL on 10,000 random graphs
+
+  ## Modules
+
+  | Module | Description |
+  |--------|-------------|
+  | `Data.Graph.AdjacencyList` | Core types (`Vertex`, `Edge`, `Graph`, `Neighbors`, `EdgeMap`) and graph constructors |
+  | `Data.Graph.AdjacencyList.Network` | Flow network type (`Network`, `Capacities`, `Capacity = Rational`) |
+  | `Data.Graph.AdjacencyList.PushRelabel.Pure` | **Tide algorithm** — `pushRelabel :: Network -> Either String ResidualGraph` |
+  | `Data.Graph.AdjacencyList.PushRelabel.Internal` | Residual graph types, `netFlow`, `stCut`, push/pull primitives |
+  | `Data.Graph.AdjacencyList.BFS` | Breadth-first search |
+  | `Data.Graph.AdjacencyList.DFS` | Depth-first search, topological sort, longest path |
+  | `Data.Graph.AdjacencyList.WFI` | Floyd-Warshall all-pairs shortest paths |
+  | `Data.Graph.AdjacencyList.Metrics` | Eccentricity, radius, diameter, density |
+  | `Data.Graph.AdjacencyList.Grid` | d-dimensional cubic lattices with periodic boundary conditions |
+
+  ## The Tide algorithm
+
+  Each iteration ("tide") performs three global sweeps on the residual graph:
+
+  1. **globalRelabel** — BFS from sink (and source) to recompute vertex heights
+  2. **globalPull** — right fold over active vertices: pull flow on reverse edges
+  3. **globalPush** — left fold over active vertices: push flow on forward edges
+
+  The algorithm terminates when both the net flow and the set of overflowing
+  vertices stabilize. A **skip-globalRelabel** optimization tracks whether any
+  edge crosses a saturation boundary during push/pull; when none do, the BFS
+  is skipped (1.25--1.6x speedup in practice).
+
+  ### Complexity
+
+  | | Worst case | Practical |
+  |---|---|---|
+  | **Tides** | O(V^2) | O(V) |
+  | **Per-tide** | O((V+E) log V) | O((V+E) log V) |
+  | **Total** | O(V^2 (V+E) log V) | O(V(V+E) log V) |
+
+  The log V factor comes from `IntMap` lookups in the pure Haskell
+  implementation. The O(V^2) worst case requires exponentially-varying
+  capacities; on graphs with polynomially-bounded capacity ratios (covering
+  virtually all practical inputs), the tide count is empirically O(V).
+
+  ### How it compares
+
+  | Algorithm | Best known complexity |
+  |---|---|
+  | Edmonds-Karp (FGL) | O(VE^2) |
+  | Dinic | O(V^2 E) |
+  | Highest-label push-relabel | O(V^2 sqrt(E)) |
+  | **Tide (as implemented)** | **O(V(V+E) log V)** practical |
+
+  A companion Rust implementation ([tide-maxflow](https://github.com/tpapak/tide-maxflow))
+  achieves O(VE) practical complexity using O(1) array-based data structures and
+  has been benchmarked against Hi-PR, Google OR-Tools, LEMON, and Boost on 63
+  DIMACS graph instances.
+
+  ## Context in the Haskell graph ecosystem
+
+  | Library | Max flow | Shortest paths | Metrics | Generators |
+  |---|---|---|---|---|
+  | **containers** | -- | -- | -- | -- |
+  | **fgl** | Edmonds-Karp O(VE^2) | Dijkstra, BF | -- | -- |
+  | **algebraic-graphs** | -- | -- | -- | -- |
+  | **algraph** | **Tide O(V(V+E) log V)** | **Floyd-Warshall APSP** | eccentricity, radius, diameter, density | d-dim lattices (PBC) |
+
+  Key differences from fgl:
+
+  - **Faster max flow** — Tide is asymptotically better than fgl's Edmonds-Karp
+    at all graph densities (O(V(V+E) log V) vs O(VE^2))
+  - **Exact arithmetic** — fgl uses `Double` for max flow; algraph uses
+    `Rational`, guaranteeing correct results for arbitrary capacity values
+  - **Faster traversals** — algraph's BFS/DFS are O((V+E) log V) vs fgl's
+    O(V^2) due to fgl's O(V)-per-vertex `match` decomposition
+  - **APSP** — Floyd-Warshall is built in; fgl only offers single-source
+    algorithms
+
+  fgl has broader algorithm coverage (SCC, dominators, MST, Dijkstra,
+  transitive closure) and supports labeled nodes/edges.
+
+  ### BFS performance vs fgl
+
+  fgl's BFS uses `match` at each vertex, making it O(V^2) instead of the
+  textbook O(V+E). algraph's BFS is O((V+E) log V) using IntMap/IntSet. The
+  gap widens with graph size:
+
+  | Graph | V | E | algraph | fgl | fgl/algraph |
+  |---|---|---|---|---|---|
+  | Grid 100x100 | 10K | 20K | 51 ms | 53 ms | 1.0x |
+  | Grid 200x200 | 40K | 80K | 258 ms | 337 ms | 1.3x |
+  | Grid 500x500 | 250K | 500K | 1675 ms | 2848 ms | **1.7x** |
+  | Grid 1000x1000 | 1M | 2M | 6956 ms | 24316 ms | **3.5x** |
+  | Layered 20x50 | 1K | 48K | 60 ms | 296 ms | **5.0x** |
+  | Layered 50x100 | 5K | 490K | 695 ms | 1487 ms | **2.1x** |
+
+  ## Building
+
+  Requires [Stack](https://docs.haskellstack.org/en/stable/):
+
+  ```
+  git clone https://github.com/tpapak/algraph
+  cd algraph
+  stack build
+  ```
+
+  ## Testing
+
+  ```
+  stack test
+  ```
+
+  The test suite includes:
+
+  - Unit tests for graph construction, BFS, DFS, grid lattices, Floyd-Warshall,
+    and graph metrics
+  - Tide max-flow correctness test against FGL on a reference network
+  - QuickCheck property: Tide vs FGL max-flow agreement on 10,000 random graphs
+
+  ## License
+
+  LGPL-3 -- see [LICENSE](LICENSE).
+description-type: markdown
+hash: 0094aa899e2a70f128a2921616182b677b13a0e6d3defae23b5cf3400ff90dcf
+homepage: https://github.com/tpapak/algraph#readme
+latest: 0.7.0.0
+license-name: LGPL-3.0-only
+maintainer: dev@tpapak.com
+synopsis: Graph library using adjacency list representation
+test-bench-deps:
+  QuickCheck: '>=2.14'
+  Unique: '>=0'
+  algraph: '>=0'
+  ansi-terminal: '>=0'
+  base: '>=4.7'
+  binary: '>=0.8.6.0'
+  containers: '>=0.5.10.2'
+  fgl: '>=5.5.3.1'
+  tesths: '>=0.2.2.1'
+  vector: '>=0'
