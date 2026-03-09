@@ -1,0 +1,117 @@
+all-versions:
+- 0.0.1
+author: Daniil Iaitskov
+basic-deps:
+  aeson: <3
+  base: '>=4.7 && <5'
+  deepseq: <2
+  directory: <2
+  ghc-typelits-natnormalise: <1
+  mtl: <3
+  safecopy: <1
+  time: <2
+changelog: |
+  # non-negative-time-diff changelog
+
+  ## Version 0.0.1 2026-02-26
+    * init
+changelog-type: markdown
+description: |-
+  Both arguments of @diffUTCTime@ function from @time@ package have the
+  same type. It is easy to mix them.
+
+  > f = do
+  >   started <- getCurrentTime
+  >   threadDelay 10_000_000
+  >   ended <- getCurrentTime
+  >   pure $ started `diffUTCTime` ended
+
+  This package provides a stricter @diffUTCTime@ that significantly
+  reduces possibility of mixing its arguments by an accident.
+
+  > import Data.Time.Clock.NonNegativeTimeDiff
+  > f = do
+  >   started <- getCurrentTime
+  >   threadDelay 10_000_000
+  >   ended <- getTimeAfter started
+  >   pure $ ended `diffUTCTime` started
+
+  == STM use case
+  #stm-use-case#
+
+  The STM package is shipped without a function to get current time. Let’s
+  consider a situtation like this:
+
+  > data Ctx
+  >   = Ctx { m :: Map Int UTCTime
+  >         , s :: TVar NominalDiffTime
+  >         , q :: TQueue Int
+  >         }
+  >
+  > f (c :: Ctx) = do
+  >   now <- getCurrentTime
+  >   atomically $ do
+  >     i <- readTQueue q
+  >     lookup i c.m >>= \case
+  >       Nothing -> pure ()
+  >       Just t -> modifyTVar' c.s (+ diffUTCTime now t)
+
+  @now@ might be less than @t@ because the queue might be empty by the
+  time @f@ is invoked. The package API can correct the above snippet as
+  follows:
+
+  > data Ctx
+  >   = Ctx { m :: Map Int UtcBox
+  >         , s :: TVar NominalDiffTime
+  >         , q :: TQueue Int
+  >         }
+  >
+  > f (c :: Ctx) = do
+  >   atomically $ do
+  >     i <- readTQueue q
+  >     lookup i c.m >>= \case
+  >       Nothing -> pure ()
+  >       Just t ->
+  >         doAfter tb \t -> do
+  >           now <- getTimeAfter t
+  >           modifyTVar' c.s (+ diffUTCTime now t)
+
+  == File access time
+  #file-access-time#
+
+  Another popular usecase where original @diffUTCTime@ might be misused.
+
+  > isFileOlderThan :: FilePath -> NominalDiffTime -> IO Bool
+  > isFileOlderThan fp maxAge = do
+  >   now <- getCurrentTime
+  >   mt <- getModificationTime fp
+  >   when (mt `diffUTCTime` now > maxAge) $ do
+  >     removeFile fp
+
+  File age is always negative in the above example - this eventually would
+  cause a space leak on disk.
+
+  Corrected version:
+
+  > isFileOlderThan :: FilePath -> NominalDiffTime -> IO Bool
+  > isFileOlderThan fp maxAge =
+  >   getModificationTime fp >>= (`doAfter` \mt -> do
+  >     now <- getTimeAfter mt
+  >     when (now `diffUTCTime` mt > maxAge) $ do
+  >       removeFile fp)
+
+  == Requirements
+  #requirements#
+
+  Unboxing @UtcBox@ values requires a GHC
+  <https://hackage.haskell.org/package/ghc-typelits-natnormalise natnormalise plugin>:
+
+  > {-# GHC_OPTIONS -fplugin GHC.TypeLits.Normalise #-}
+description-type: haddock
+hash: a6f85e4aa05f637a7b49c1ac90821f240aa14301c40793cd70f5d9bac474691e
+homepage: http://github.com/yaitskov/non-negative-time-diff
+latest: 0.0.1
+license-name: BSD-3-Clause
+maintainer: dyaitskov@gmail.com
+synopsis: type safe diffUTCTime
+test-bench-deps: {}
