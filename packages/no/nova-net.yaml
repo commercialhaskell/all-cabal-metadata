@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.19 && <5'
@@ -13,13 +14,53 @@ basic-deps:
 changelog: |
   # Changelog
 
+  ## 0.2.0.0
+
+  Feature complete release.
+
+  ### Protocol Core
+
+  - Jacobson/Karels RTT estimation (RFC 6298) in C
+  - ACK bitfield processing with 256-entry ring buffers and 256-bit loss window in C
+  - Dual-layer congestion control: AIMD bandwidth + CWND packet window with slow start, congestion avoidance, and fast recovery in C
+  - Reliable endpoint with send/receive tracking and ACK generation
+  - Five delivery modes: unreliable, unreliable sequenced, reliable unordered, reliable ordered, reliable sequenced
+  - Connection four-state FSM with timeout, keepalive, and graceful disconnect
+
+  ### Subsystems
+
+  - Fragment split/reassemble with LRU eviction and timeout cleanup
+  - Binary search path MTU discovery
+  - Per-source rate limiting, connect tokens with replay detection, FNV-1a address hashing
+  - Quality/congestion/traffic counters
+
+  ### Peer Layer
+
+  - SipHash-2-4 in C, OS CSPRNG via getentropy/BCryptGenRandom in C
+  - Four-way HMAC-cookie handshake with challenge-response
+  - Address migration with cooldown and encryption gate
+  - Wire protocol with little-endian encoding, CRC32C integrity, ChaCha20-Poly1305 AEAD
+  - Real UDP socket backend via MonadNetwork
+
+  ### Replication
+
+  - NetworkDelta typeclass (diff/apply) with sender-side DeltaTracker and receiver-side BaselineManager
+  - Interest management: radius (squared distance) and grid (cell-based with distance weighting)
+  - Priority accumulator with budget-constrained drain
+  - Snapshot interpolation with playback delay and clamped lerp
+
+  ### Testing Infrastructure
+
+  - Pure deterministic TestNet (State monad, xorshift64 RNG, MonadTime/MonadNetwork instances)
+  - Network simulator with token bucket bandwidth, configurable loss/latency/jitter/duplicates/reordering
+
+  ### Port Fixes
+
+  Fourteen fixes carried over from the gbnet-hs audit: loss window feedback, CWND recovery exit, ring buffers (wraparound fix), single RTT sample per ACK, double precision, HMAC-bound cookies, migration encryption gate, max pending limit, simultaneous connect, disconnect reason codes, protocol ID validation, squared distance interest, grid weighting, double precision priority.
+
   ## 0.1.0.0
 
-  ### Initial Release
-
-  - Project scaffold: Cabal package, CI/CD (HLint, Ormolu, 3-platform matrix build, Hackage publish), BSD-3-Clause license.
-  - Haskell protocol brain module structure (stub).
-  - C99 hot path module structure planned: `nn_packet`, `nn_serialize`, `nn_socket`, `nn_reliability`, `nn_congestion`, `nn_crypto`, `nn_security`, `nn_channel`.
+  Initial release. Project scaffold, C99 hot path (8 modules), Haskell FFI bindings (9 modules), three-platform CI, Hackage name secured.
 changelog-type: markdown
 description: |
   <div align="center">
@@ -41,34 +82,60 @@ description: |
 
   ## What is nova-net?
 
-  A general-purpose reliable UDP networking library. C99 handles the hot path (serialization, send/recv, ack processing, crypto). Haskell handles the protocol logic (connection state machines, congestion control, replication).
+  A general-purpose reliable UDP networking library. C99 handles the hot path (serialization, send/recv, ack processing, crypto). Haskell handles the protocol logic (connection state machines, congestion control, replication). Successor to [gbnet-hs](https://hackage.haskell.org/package/gbnet-hs).
 
-  - **C99 hot path** — packet serialization, socket I/O, ACK bitfield processing, CRC32C, ChaCha20-Poly1305. No heap allocation on the hot path.
+  - **C99 hot path** — packet serialization, CRC32C (hardware-accelerated), ChaCha20-Poly1305 AEAD, ring buffers, fragmentation, message batching. Zero heap allocation on the hot path.
   - **Haskell protocol brain** — connection state machines, handshake orchestration, congestion control, replication. Pure, testable, correct-by-construction.
-  - **Unsafe FFI boundary** — Haskell calls C with zero marshalling overhead. Just a function pointer jump.
+  - **Unsafe FFI boundary** — flat scalar arguments, no Storable marshalling. Just a function pointer jump.
   - **Any platform** — C99 core compiles everywhere. Link from Haskell, Swift, Kotlin, Python, Zig, anything.
   - **Effect abstraction** — `MonadNetwork` typeclass enables pure deterministic testing with no real sockets.
+  - **Zero external crypto deps** — ChaCha20-Poly1305 implemented from scratch (RFC 8439). CRC32C with SSE4.2/ARMv8 hardware acceleration and software fallback.
 
   ---
 
   ## Architecture
 
   ```
-  ┌─────────────────────────────────────────┐
-  │           User Application              │
-  ├─────────────────────────────────────────┤
-  │  Haskell Protocol Brain                 │
-  │  Connection, Peer, Handshake,           │
-  │  Congestion, Replication                │
-  ├─────────────────────────────────────────┤
-  │  Unsafe FFI Boundary                    │
-  │  foreign import ccall unsafe            │
-  ├─────────────────────────────────────────┤
-  │  C99 Hot Path                           │
-  │  nn_packet, nn_serialize, nn_socket,    │
-  │  nn_reliability, nn_crypto, nn_channel  │
-  └─────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────┐
+  │           User Application                  │
+  ├─────────────────────────────────────────────┤
+  │  Haskell Protocol Brain (38 modules)        │
+  │  Peer, Connection, Channel, Reliability,    │
+  │  Congestion, Handshake, Migration,          │
+  │  Replication, TestNet, Simulator            │
+  ├─────────────────────────────────────────────┤
+  │  FFI Boundary (unsafe ccall, flat args)     │
+  │  NovaNet.FFI.{Packet,CRC32C,Seq,...}        │
+  ├─────────────────────────────────────────────┤
+  │  C99 Hot Path (13 modules)                  │
+  │  nn_packet  nn_crc32c  nn_seq  nn_rtt       │
+  │  nn_fragment  nn_batch  nn_crypto           │
+  │  nn_bandwidth  nn_congestion                │
+  │  nn_ack_process  nn_siphash  nn_random      │
+  │  nn_wire  nn_ffi                            │
+  └─────────────────────────────────────────────┘
   ```
+
+  ---
+
+  ## C99 Modules
+
+  | Module | Purpose |
+  |--------|---------|
+  | `nn_wire.h` | Little-endian helpers, byte swap, buffer bounds (header-only) |
+  | `nn_packet` | 9-byte packet header (68-bit wire format, 8 packet types) |
+  | `nn_crc32c` | CRC32C integrity — SSE4.2, ARMv8 CRC hardware accel, software fallback |
+  | `nn_seq` | Sequence numbers (wraparound-safe), 256-entry ring buffers, ACK bitfield, loss window |
+  | `nn_rtt` | Jacobson/Karels RTT estimation (RFC 6298) |
+  | `nn_ack_process` | ACK bitfield processing against sent buffer and loss window |
+  | `nn_congestion` | Dual-layer: AIMD bandwidth + CWND packet window |
+  | `nn_fragment` | Fragment header (6 bytes LE), message splitting |
+  | `nn_batch` | Message batching/unbatching (count + length-prefixed) |
+  | `nn_crypto` | ChaCha20-Poly1305 AEAD (RFC 8439, from scratch, constant-time tag comparison) |
+  | `nn_bandwidth` | Sliding window bandwidth tracker |
+  | `nn_siphash` | SipHash-2-4 for HMAC cookies |
+  | `nn_random` | OS CSPRNG (getentropy/arc4random_buf/BCryptGenRandom) |
+  | `nn_ffi` | Flat-argument FFI entry points for Haskell |
 
   ---
 
@@ -77,11 +144,19 @@ description: |
   - 68-bit packet headers (4-bit type + 16-bit seq + 16-bit ack + 32-bit ack bitfield)
   - 5 delivery modes (Unreliable, UnreliableSequenced, ReliableUnordered, ReliableOrdered, ReliableSequenced)
   - Dual-layer congestion control (binary mode + TCP New Reno window)
-  - ChaCha20-Poly1305 AEAD encryption with anti-replay
+  - ChaCha20-Poly1305 AEAD encryption with anti-replay nonce tracking
+  - Hardware-accelerated CRC32C (SSE4.2 on x86, ARMv8 CRC on aarch64)
   - Jacobson/Karels RTT estimation with adaptive retransmit
   - Large message fragmentation and reassembly
   - Connection migration
   - Delta compression, interest filtering, priority accumulation, snapshot interpolation
+  - All multi-byte wire fields are little-endian
+
+  ---
+
+  ## Status
+
+  **Feature complete.** Builds clean with `-Werror` on Linux, macOS, and Windows.
 
   ---
 
@@ -110,9 +185,9 @@ description: |
     <sub>BSD-3-Clause · <a href="https://github.com/Novavero-AI">Novavero AI</a></sub>
   </p>
 description-type: markdown
-hash: 00d9bdf53cc03f75322d649d8e3d3abc2b1b6969f55307e7beccb09f5ff5f387
+hash: a7c46b8aa91ab539558d7ec9605cfd8c484e55bbd7fab1cfb248653a4da473c4
 homepage: https://github.com/Novavero-AI/nova-net
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: devon.tomlin@novavero.ai
 synopsis: General-purpose reliable UDP with C99 hot path and Haskell protocol logic
@@ -120,6 +195,8 @@ test-bench-deps:
   QuickCheck: '>=2.14 && <2.16'
   base: '>=4.19 && <5'
   bytestring: '>=0.11 && <0.13'
+  containers: '>=0.6 && <0.8'
   criterion: '>=1.5 && <1.7'
   deepseq: '>=1.4 && <1.6'
+  network: '>=3.1 && <3.3'
   nova-net: '>=0'
