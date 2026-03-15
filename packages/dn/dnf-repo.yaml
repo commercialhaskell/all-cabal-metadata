@@ -12,6 +12,7 @@ all-versions:
 - 0.5.6
 - '0.6'
 - 0.6.1
+- 0.6.2
 author: Jens Petersen <petersen@redhat.com>
 basic-deps:
   Glob: '>=0'
@@ -21,11 +22,29 @@ basic-deps:
   extra: '>=0'
   filepath: '>=0'
   http-directory: '>=0.1.9'
+  safe: '>=0'
   simple-cmd: '>=0.2.2'
   simple-cmd-args: '>=0.1.8'
   simple-prompt: '>=0.2'
 changelog: |
   # dnf-repo releases
+
+  ## 0.6.2 (2026-03-15)
+  - `--save` now works without dnf using sed
+  - munge "libNAME.so.X" to "libNAME.so.X()(64bit)" (hardcoded)
+  - State: base-4.21 exports foldl'
+  - only look for programs in /usr/bin and /bin
+  - avoid head and last with safe
+  - `--save`: use dnf5 unless --dnf4
+  - disambiguate `-releasever`s to `--copr-releasever` and `--repo-releasever`
+  - add `--timestamp`: required big refactor to carry repourl
+  - fix `--koji` for other archs (.repo was hardcoded x86_64)
+  - `-4` short option for `--dnf4`
+  - move addCoprRepo to CoprRepo.hs
+  - move addKojiRepo to KojiRepo.hs
+  - use dnf-3 for `--dnf4`
+  - simplify koji template
+  - mark expiry options as dnf4-only
 
   ## 0.6.1 (2024-06-14)
   - add `--add-repofile URL` action
@@ -116,195 +135,83 @@ changelog: |
     --disable repo, --enable repo, --enable/disable-{testing,modular}
     and --save & --expire
 changelog-type: markdown
-description: |
-  # dnf-repo
-
-  A wrapper of the dnf package manager for fine control of
-  enabled/disabled yum repos (eg Copr repos).
-
-  dnf is the package manager used by Fedora Linux, Centos Stream, and RHEL.
-
-  DNF can get slower with many repos enabled because it attempts
-  to refresh its cached repodata frequently. So it can be advantageous
-  to disable some small repos by default and only enable them periodically
-  as needed.
-
-  This tool can temporarily enable/disable repo(s) selected by substring(s).
-  Changes to repos' enabled states can be saved too.
-  It is also possible to expire repo caches individually.
-
-  There are also smart options to enable/disable testing repos
-  (and even source/debuginfo repos),
-  and also to add Copr repo or Koji repo file.
-
-  ## Help
-
-  `$ dnf-repo --version`
-
-  ```
-  0.6.1
-  ```
-  `$ dnf-repo --help`
-
-  ```
-  DNF wrapper repo tool
-
-  Usage: dnf-repo [--version] [-n|--dryrun] [-q|--quiet] [-D|--debug] [-l|--list]
-                  [-s|--save] [--dnf4] [(-w|--weak-deps) | (-W|--no-weak-deps)]
-                  [--exact]
-                  [(-d|--disable REPOPAT) | (-e|--enable REPOPAT) |
-                    (-o|--only REPOPAT) | (-x|--expire REPOPAT) |
-                    (-X|--clear-expires) | (-E|--delete-repofile REPOPAT) |
-                    (-t|--enable-testing) | (-T|--disable-testing) |
-                    (-m|--enable-modular) | (-M|--disable-modular) |
-                    --enable-debuginfo | --disable-debuginfo | --enable-source |
-                    --disable-source | (-c|--add-copr [SERVER/]COPR/PROJECT|URL)
-                    [--osname OSNAME] [--releasever RELEASEVER] |
-                    (-k|--add-koji REPO) | (-r|--add-repofile REPOFILEURL)
-                    [--releasever RELEASEVER] |
-                    (-u|--repourl URL)] [DNFARGS]
-
-    see https://github.com/juhp/dnf-repo#readme
-
-  Available options:
-    -h,--help                Show this help text
-    --version                Show version
-    -n,--dryrun              Dry run
-    -q,--quiet               Suppress necessary output
-    -D,--debug               Debug output
-    -l,--list                List all repos
-    -s,--save                Save the repo enable/disable state
-    --dnf4                   Use dnf4 (if dnf5 available)
-    -w,--weak-deps           Use weak dependencies
-    -W,--no-weak-deps        Disable weak dependencies
-    --exact                  Match repo names exactly
-    -d,--disable REPOPAT     Disable repos
-    -e,--enable REPOPAT      Enable repos
-    -o,--only REPOPAT        Only use matching repos
-    -x,--expire REPOPAT      Expire repo cache
-    -X,--clear-expires       Undo cache expirations
-    -E,--delete-repofile REPOPAT
-                             Remove unwanted .repo file
-    -t,--enable-testing      Enable testing repos
-    -T,--disable-testing     Disable testing repos
-    -m,--enable-modular      Enable modular repos
-    -M,--disable-modular     Disable modular repos
-    --enable-debuginfo       Enable debuginfo repos
-    --disable-debuginfo      Disable debuginfo repos
-    --enable-source          Enable source repos
-    --disable-source         Disable source repos
-    -c,--add-copr [SERVER/]COPR/PROJECT|URL
-                             Install copr repo file (defaults to fedora server)
-    --osname OSNAME          Specify OS Name to override (eg epel)
-    --releasever RELEASEVER  Specify OS Release Version to override (eg rawhide)
-    -k,--add-koji REPO       Create repo file for a Fedora koji repo (f40-build,
-                             rawhide, epel9-build, etc)
-    -r,--add-repofile REPOFILEURL
-                             Install repo file
-    --releasever RELEASEVER  Specify OS Release Version to override (eg rawhide)
-    -u,--repourl URL         Use temporary repo from a baseurl
-  ```
-
-  ## Usage examples
-  List repos:
-  ```shellsession
-  $ dnf-repo [--list]
-  ```
-
-  Update with testing repos enabled:
-  ```shellsession
-  $ dnf-repo -t update
-  ```
-
-  Note that sudo is used implicitly when needed:
-  there is no need to run dnf-repo with sudo.
-
-  ### Copr
-  List disabled copr repos (ie lists copr repos that would be enabled):
-  ```shellsession
-  $ dnf-repo -e copr
-  ```
-
-  Disable active copr repos for update:
-  ```shellsession
-  $ dnf-repo -d copr update
-  ```
-
-  Install a package directly from a new copr:
-  ```shellsession
-  $ dnf-repo -c varlad/helix install helix
-  ```
-  (note the copr repo is not permanently enabled).
-
-  Also you can use the equivalent abbreviation: `dnf-repo -c varlad/helix install` if the package and repo have the same name.
-
-  Later update with the copr:
-  ```shellsession
-  $ dnf-repo -e helix update
-  ```
-
-  ### Changing system repo config
-  Disable fedora updates-testing and cisco openh264 repos permanently:
-  ```shellsession
-  $ dnf-repo -T -d h264 --save
-  ```
-
-  ### Use only source repos
-  ```shellsession
-  $ dnf-repo -d \* --enable-source
-  with enabled 'fedora-source'
-  with enabled 'updates-source'
-  with disabled 'fedora'
-  with disabled 'updates'
-  ```
-
-  ### Switch system from rawhide
-  Switch a system from Rawhide to F40:
-  ```shellsession
-  $ dnf-repo -d rawhide -e fedora distrosync --releasever 40 fedora-\*
-  with disabled 'rawhide'
-  with enabled 'fedora'
-
-  :
-  ```
-
-  ### Repo patterns
-  By default repo patterns are matched as infix substrings
-  (unless you use `--exact`).
-
-  But you can also prepend `^`/append `$` (or both) to match a repo name
-  from its beginning/end (or exactly).
-
-  You can also use glob patterns to match one or more repo names:
-  see the [supported Glob syntax](https://hackage.haskell.org/package/Glob/docs/System-FilePath-Glob.html#v:compile).
-
-  Without a glob (eg '*') a shortest common repo match will be sought,
-  otherwise all matching repos will be considered.
-
-  An initial `^` (final `$`) in a glob pattern prevents
-  the automatic prepending (appending) of `*` before (after) the pattern.
-
-  Repo actions expand to a sequence of `--enablerepo=`, `--disablerepo=`,
-  `--repo=`, etc, so as usual later settings will overrule conflicting
-  earlier settings.
-
-  ## Installation
-  A copr repo is available:
-  <https://copr.fedorainfracloud.org/coprs/petersen/dnf-repo/>
-
-  ## Building
-  Use {cabal,stack,cabal-rpm} install.
-
-  ## Contributing
-  dnf-repo is distributed under the GPL license version 3 or later.
-
-  The source repository is https://github.com/juhp/dnf-repo/
-
-  Contributions including reports and suggestions for improvement are welcome.
+description: "# dnf-repo\n\nA wrapper of the dnf package manager for fine control
+  of\nenabled/disabled yum repos (eg Copr repos).\n\ndnf is the package manager used
+  by Fedora Linux, Centos Stream, and RHEL.\n\nDNF can get slower with many repos
+  enabled because it attempts\nto refresh its cached repodata frequently. So it can
+  be advantageous\nto disable some small repos by default and only enable them periodically\nas
+  needed.\n\nThis tool can temporarily enable/disable repo(s) selected by substring(s).\nChanges
+  to repos' enabled states can be saved too.\n\nThere are also smart options to enable/disable
+  testing repos\n(and even source/debuginfo repos),\nand also to add Copr repo or
+  Koji repo file.\n\n## Help\n\n`$ dnf-repo --version`\n\n```\n0.6.2\n```\n`$ dnf-repo
+  --help`\n\n```\nDNF wrapper repo tool\n\nUsage: dnf-repo [--version] [-n|--dryrun]
+  [-q|--quiet] [-D|--debug] [-l|--list] \n                [-s|--save] [-4|--dnf4]
+  [(-w|--weak-deps) | (-W|--no-weak-deps)]\n                [--exact] \n                [(-d|--disable
+  REPOPAT) | (-e|--enable REPOPAT) | \n                  (-o|--only REPOPAT) | (-x|--expire
+  REPOPAT) | \n                  (-X|--clear-expires) | (-E|--delete-repofile REPOPAT)
+  | \n                  (-z|--timestamp REPOPAT) | (-t|--enable-testing) | \n                  (-T|--disable-testing)
+  | (-m|--enable-modular) | \n                  (-M|--disable-modular) | --enable-debuginfo
+  | \n                  --disable-debuginfo | --enable-source | --disable-source |
+  \n                  (-c|--add-copr [SERVER/]COPR/PROJECT|URL) [--osname OSNAME]
+  \n                  [--copr-releasever RELEASEVER] |\n                  (-k|--add-koji
+  REPO) | (-r|--add-repofile REPOFILEURL) \n                  [--repo-releasever RELEASEVER]
+  |\n                  (-u|--repourl URL)] [DNFARGS]\n\n  see https://github.com/juhp/dnf-repo#readme\n\nAvailable
+  options:\n  -h,--help                Show this help text\n  --version                Show
+  version\n  -n,--dryrun              Dry run\n  -q,--quiet               Suppress
+  necessary output\n  -D,--debug               Debug output\n  -l,--list                List
+  all repos\n  -s,--save                Save the repo enable/disable state\n  -4,--dnf4
+  \               Use older dnf-3 (if available)\n  -w,--weak-deps           Use weak
+  dependencies\n  -W,--no-weak-deps        Disable weak dependencies\n  --exact                  Match
+  repo names exactly\n  -d,--disable REPOPAT     Disable repos\n  -e,--enable REPOPAT
+  \     Enable repos\n  -o,--only REPOPAT        Only use matching repos\n  -x,--expire
+  REPOPAT      Expire repo cache (dnf4)\n  -X,--clear-expires       Undo cache expirations
+  (dnf4)\n  -E,--delete-repofile REPOPAT\n                           Remove unwanted
+  .repo file\n  -z,--timestamp REPOPAT   Show repodata timestamps\n  -t,--enable-testing
+  \     Enable testing repos\n  -T,--disable-testing     Disable testing repos\n  -m,--enable-modular
+  \     Enable modular repos\n  -M,--disable-modular     Disable modular repos\n  --enable-debuginfo
+  \      Enable debuginfo repos\n  --disable-debuginfo      Disable debuginfo repos\n
+  \ --enable-source          Enable source repos\n  --disable-source         Disable
+  source repos\n  -c,--add-copr [SERVER/]COPR/PROJECT|URL\n                           Install
+  copr repo file (defaults to fedora server)\n  --osname OSNAME          Specify OS
+  Name to override (eg epel)\n  --copr-releasever RELEASEVER\n                           Specify
+  OS Release Version to override (eg rawhide)\n  -k,--add-koji REPO       Create repo
+  file for a Fedora koji repo (f40-build,\n                           rawhide, epel9-build,
+  etc)\n  -r,--add-repofile REPOFILEURL\n                           Install repo file\n
+  \ --repo-releasever RELEASEVER\n                           Specify OS Release Version
+  to override (eg rawhide)\n  -u,--repourl URL         Use temporary repo from a baseurl\n```\n\n##
+  Usage examples\nList repos:\n```shellsession\n$ dnf-repo [--list]\n```\n\nUpdate
+  with testing repos enabled:\n```shellsession\n$ dnf-repo -t update\n```\n\nNote
+  that sudo is used implicitly when needed:\nthere is no need to run dnf-repo with
+  sudo.\n\n### Copr\nList disabled copr repos (ie lists copr repos that would be enabled):\n```shellsession\n$
+  dnf-repo -e copr\n```\n\nDisable active copr repos for update:\n```shellsession\n$
+  dnf-repo -d copr update\n```\n\nInstall a package directly from a new copr:\n```shellsession\n$
+  dnf-repo -c varlad/helix install helix\n```\n(note the copr repo is not permanently
+  enabled).\n\nAlso you can use the equivalent abbreviation: `dnf-repo -c varlad/helix
+  install` if the package and repo have the same name.\n\nLater update with the copr:\n```shellsession\n$
+  dnf-repo -e helix update\n```\n\n### Changing system repo config\nDisable fedora
+  updates-testing and cisco openh264 repos permanently:\n```shellsession\n$ dnf-repo
+  -T -d h264 --save\n```\n\n### Use only source repos\n```shellsession\n$ dnf-repo
+  -d \\* --enable-source\nwith enabled 'fedora-source'\nwith enabled 'updates-source'\nwith
+  disabled 'fedora'\nwith disabled 'updates'\n```\n\n### Switch system from rawhide\nSwitch
+  a system from Rawhide to F40:\n```shellsession\n$ dnf-repo -d rawhide -e fedora
+  distrosync --releasever 40 fedora-\\*\nwith disabled 'rawhide'\nwith enabled 'fedora'\n\n:\n```\n\n###
+  Repo patterns\nBy default repo patterns are matched as infix substrings\n(unless
+  you use `--exact`).\n\nBut you can also prepend `^`/append `$` (or both) to match
+  a repo name\nfrom its beginning/end (or exactly).\n\nYou can also use glob patterns
+  to match one or more repo names:\nsee the [supported Glob syntax](https://hackage.haskell.org/package/Glob/docs/System-FilePath-Glob.html#v:compile).\n\nWithout
+  a glob (eg '*') a shortest common repo match will be sought,\notherwise all matching
+  repos will be considered.\n\nAn initial `^` (final `$`) in a glob pattern prevents\nthe
+  automatic prepending (appending) of `*` before (after) the pattern.\n\nRepo actions
+  expand to a sequence of `--enablerepo=`, `--disablerepo=`,\n`--repo=`, etc, so as
+  usual later settings will overrule conflicting\nearlier settings.\n\n## Installation\n`dnf-repo`
+  is packaged in Fedora and EPEL\n\n## Building\nUse {cabal,stack,cabal-rpm} install.\n\n##
+  Contributing\ndnf-repo is distributed under the GPL license version 3 or later.\n\nThe
+  source repository is https://github.com/juhp/dnf-repo/\n\nContributions including
+  reports and suggestions for improvement are welcome.\n"
 description-type: markdown
-hash: a1564884448b0c4c21ad0e2a8d9f852043b4f3cc904860292acbd5e41bd3def3
+hash: 55d58e676e6bfada84a059ef2df317b24e63742f8f07247d9cdb9a45d0fd9c0a
 homepage: https://github.com/juhp/dnf-repo
-latest: 0.6.1
+latest: 0.6.2
 license-name: GPL-3.0-only
 maintainer: Jens Petersen <petersen@redhat.com>
 synopsis: A dnf wrapper with fine control of enabled repos
