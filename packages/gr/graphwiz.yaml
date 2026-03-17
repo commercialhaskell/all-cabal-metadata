@@ -1,6 +1,7 @@
 all-versions:
 - 1.0.0
 - 2.0.0
+- 3.0.0
 author: Antoine Leblanc
 basic-deps:
   base: '>=4.16 && <5'
@@ -21,6 +22,12 @@ changelog: |
   2.0.0
   -----
   * Upgrade text-builder to 1.0
+
+  3.0.0
+  -----
+  * Add node anchoring: edges can be created by referring to an entity's name, even if that name hasn't been registered yet, allowing for cycles and reducing the amount of manual bookkeeping
+  * Remove `subgraphWith` and `clusterWith` functions, as the subgraph or cluster's entity is always accessible via `its` or `itsID`
+  * Resolve `lhead` and `ltail` as late possible, fixing a rare edge case where an edge pointing to a cluster would not set the attributes properly.
 changelog-type: markdown
 description: |
   # :mage_woman: GraphWiz
@@ -56,9 +63,43 @@ description: |
       b --> c
   ```
 
+  ### Node anchoring
+
+  To avoid having to keep track of entities manually, it's possible to register any `Entity` under a given name, and to create edges by referring to that name. As names are resolved when the graph is complete, it is possible to make reference to a name that hasn't been registered yet, allowing for cycles:
+
+  ```haskell
+  digraph do
+    cluster do
+      its label ?= "function entry"
+      n1 <- node "jump"
+      n1 --> retrieve "while condition"
+
+    cluster do
+      its label ?= "while condition"
+      registerItAs "while condition"
+      n1 <- node "test EQ"
+      n2 <- node "branch"
+      n1 --> n2
+      n2 --> retrieve "while body"
+      n2 --> retrieve "function end"
+
+    cluster do
+      its label ?= "while body"
+      registerItAs "while body"
+      n1 <- node "increment variable"
+      n2 <- node "jump"
+      n1 --> n2
+      n2 --> retrieve "while condition"
+
+    cluster do
+      its label ?= "function end"
+      registerItAs "function end"
+      node "return"
+  ```
+
   ### Attributes
 
-  You can set default attributes for an entity type with `defaults`. You can access the attributes of a specific entity with `attributes`, and the latest created entity's attributes are accessible with `its`. All of those give you lenses to values within the underlying state; you can manipulate them with the `=` [lens operators](https://hackage.haskell.org/package/lens-5.3.3/docs/Control-Lens-Setter.html#g:5).
+  Default attributes for an entity type can be set  with `defaults`, attributes of a specific entity with `attributes`. The latest created entity's attributes are accessible with `its`. All of those give you lenses to values within the underlying state; you can manipulate them with the `=` [lens operators](https://hackage.haskell.org/package/lens-5.3.3/docs/Control-Lens-Setter.html#g:5).
 
   Attributes are represented as a simple mapping from `Text` to `Text`, to avoid being too restrictive. There is, however, one lens per attribute listed in the [Graphviz documentation](https://graphviz.org/doc/info/attrs.html), allowing you to avoid strings in attributes declarations.
 
@@ -104,11 +145,11 @@ description: |
   ##### Haskell source
   ```haskell
   main =
-    TB.putLnToStdOut $
+    T.putStrLn $ TB.toText $
       digraph do
         defaults Node . style ?= "filled"
 
-        ast <- cluster_ do
+        ast <- cluster do
           its label ?= "front end"
 
           source <- node "source code"
@@ -126,18 +167,27 @@ description: |
           its label ?= "middle end"
 
           ir <- node "IR"
-          its shape     ?= "diamond"
+          its shape   ?= "diamond"
           its fillcolor ?= "salmon"
 
           ast --> ir
           its label ?= "lowering"
           its style ?= "dotted"
+
+          ir --> retrieve "backend"
+
+        cluster do
+          its label ?= "back end"
+          registerItAs "backend"
+          node "{%1 = cmp %0,0 | br i1 i2 %1}"
+          its shape ?= "record"
   ```
 
   #### Resulting DOT file
 
   ```DOT
   digraph {
+    compound="true";
     subgraph cluster0 {
       label="front end";
       node1 [label="source code",style="filled",fillcolor="#c3ffd8"]
@@ -149,6 +199,11 @@ description: |
       node5 [label="IR",style="filled",fillcolor="salmon",shape="diamond"]
       node2 -> node5 [label="lowering",style="dotted"]
     }
+    subgraph cluster8 {
+      label="back end";
+      node9 [label="{%1 = cmp %0,0 | br i1 i2 %1}",style="filled",shape="record"]
+    }
+    node5 -> node9 [lhead="cluster8"]
   }
   ```
 
@@ -156,9 +211,9 @@ description: |
 
   ![example of a generated PNG](example/output.png)
 description-type: markdown
-hash: 6a892b20c650954c5a9455cc282e8aa2f10a62ab88de0e2f01ed945d92aa9b0a
+hash: 438e8ebf9a83b568d5267049f18defd98cb38d3f09960b3ddfc7cb59f082eabf
 homepage: https://github.com/nicuveo/graphwiz#readme
-latest: 2.0.0
+latest: 3.0.0
 license-name: BSD-3-Clause
 maintainer: nicuveo@gmail.com
 synopsis: Monadic DOT graph builder DSL
