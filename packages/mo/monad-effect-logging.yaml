@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0.0
+- 0.3.0.0
 author: Eiko
 basic-deps:
   aeson: <2.3
@@ -10,6 +11,7 @@ basic-deps:
   lens: <5.4
   monad-effect: '>=0.2.1 && <0.3'
   monad-logger: '>=0.3 && <0.4'
+  optparse-applicative: <0.20
   primitive: <0.10
   stm: '>=2.5 && <2.6'
   template-haskell: '>=2.20 && <2.24'
@@ -22,238 +24,64 @@ changelog: |
 
   * First version. Released on an unsuspecting world.
 changelog-type: markdown
-description: |
-  # Flexible Logging with Monad-Effect
-
-  `monad-effect-logging` is a flexible logging system utilizing the `monad-effect` effect system for Haskell, it gives you very fine control over the logging behavior.
-
-  Main features include:
-
-  * (Optional) Separation of log generation and rendering
-
-  * Pure logging
-
-  * Extensible log categories
-
-  * Compatible with `monad-logger`
-
-  * `TraceId` support
-
-  ## Type Definition
-
-  ```haskell
-  import qualified Control.Monad.Logger as ML
-
-  data Logging m a
-
-  instance Module (Logging m (a :: Type)) where
-    newtype ModuleRead  (Logging m a) = LoggingRead
-      { logging :: Logger m a
-      }
-    data    ModuleState (Logging m a) = LoggingState
-
-  data Log a = Log
-    { _logType    :: [LogCat]
-    , _logContent :: a
-    } deriving (Functor)
-
-  data LogMsg a = LogMsg
-    { _logLoc    :: Maybe ML.Loc
-    , _logSource :: Maybe ML.LogSource
-    , _logMsg    :: a
-    }
-  ```
-
-  A `Logger m a` is just a function that takes a `Log a` and produces an effect in `m ()`.
-
-  ```haskell
-  type Logger :: (Type -> Type) -> Type -> Type
-  newtype Logger m a = Logger
-    { _runLogger :: Log a -> m ()
-    }
-  ```
-
-  ## Features
-
-  I developed it by using it and changing it to meet my needs. It solves the following problems:
-
-  ### Separation Of Logs and Rendering
-
-  Sometimes I want to write logs to different files, or sending logs to stdout and files at the same time. I wish I can use the `pretty-simple` pretty print with color in the terminal, but no color in the log files.
-
-  This means we have to separate log generation and log rendering, we can do exactly that: we provide two default Loggings styles in `Module.Logging.LogS` which uses `Logger m (LogMsg LogStr)` and `Module.Logging.LogB` which uses `Logger m (LogMsg LogBuilder)` (allows you to separate log generation and rendering).
-
-  See `Module.Logging.LogB` for relevant functions and types. Here is an example:
-
-  ```haskell
-  import Control.Monad.Effect
-  import Module.RS
-  import Module.Logging
-  import Module.Logging.LogB
-  import Module.Logging.Logger
-  import Text.Pretty.Simple (pShow, pShowNoColor)
-
-  runApp :: EffT '[RModule ProxyState, RModule ProxySettings, LoggingModuleB] NoError IO () -> IO ()
-  runApp app = do
-    opts :: ProxyOptions Unwrapped <- unwrapRecord "Haskell Proxy Server" -- read command line options
-    case optionsToSettings opts of
-      Nothing -> putStrLn "Invalid options provided."
-      Just settings -> do
-        baseStdLogger <- useBaseLogger (logWithRendering (renderUsing (toLogStr . pShow)) . simpleLogger True)
-          <$> createSimpleConcurrentStdoutBaseLogger
-        baseFileLogger <- useBaseLogger (logWithRendering (renderUsing (toLogStr . pShowNoColor)) . simpleLogger True)
-          <$> createFileLogger "proxy.log"
-        let logger = baseStdLogger <> baseFileLogger :: LoggerWithCleanup IO LogB
-        runEffT00 $ withLoggerCleanup logger $ do
-          state <- initializeState settings
-          runRModule settings $ runRModule state app
-
-  main :: IO ()
-  main = runApp $ do
-    activeConnections <- liftIO $ newTVarIO M.empty
-    $(logTH Info) "Launching OwO"
-    settings <- askR @ProxySettings
-    $(logTH Info) $ "Options:" <> logShow settings
-    traceId <- liftIO $ newTVarIO (0 :: Word64)
-    -- | A Socket is a communication endpoint.
-    bracketEffT (liftIO $ socket AF_INET Stream defaultProtocol)
-      (\s -> do
-        liftIO $ close s
-        $(logTH Info) "Main Socket Closed."
-        threadIds <- liftIO $ M.elems <$> readTVarIO activeConnections
-        forM_ threadIds $ \t -> do
-          liftIO $ killThread t
-          $(logTH Info) $ "Killed thread: " <> logShow t
-      )
-      $ \sock -> do
-      -- ... Rest of the code
-  ```
-
-  Those `logShow` does not immediately show anything, they are only rendered when the log is actually written to the output, using the specified rendering function.
-
-  ### Pure Logging
-
-  Logging typically works in `IO`, but sometimes I need a complex pure function state machine that outputs diagnostics. It would be great if I don't need to change anything inside the function, using the same logging utilities. The parametrized monad field of the logging effect allows you to use a pure monad (for example writer or state monads) to collect the logs, without needing to change anything inside the function (only need to change how you run it).
-
-  ```haskell
-  eventHandler
-    :: (Monad pureMonad)
-    => InputEvent
-    -> EffT
-        [ Logging pureMonad LogData -- ^ We will use logging to generate diagnostics
-        , EventState                -- ^ We need to read and update the state
-        ]
-        [ ErrorText "not-allowed"
-        ]
-        pureMonad
-        [OutputCommands]      -- ^ Output commands from the event module
-  ```
-
-  ### Extensible Log Categories
-
-  You can easily define your own log categories, not just `Debug`, `Info`, `Warn`, `Error`. A log message can have multiple categories, you can add category at anytime using `effAddLogCat`, these types can be used to filter logs later.
-
-  ```haskell
-  -- | An exsitential type that wraps all logging categories, it is easy to define a new instance
-  data LogCat where
-    LogCat :: forall sub. IsLogCat sub => sub -> LogCat
-
-  -- | So every module can have its own logging category type, for example
-  -- Database module can have `data Database` used as a log type
-  --
-  -- and have a subtype
-  -- @
-  -- data DatabaseSubType = ConnectionPool | Query | Migration | Cursor deriving (Show, Eq)
-  -- @
-  --
-  -- you can then write instance
-  --
-  -- @
-  -- instance IsLogCat DatabaseSubType where
-  --   severity _    = Nothing
-  --   logTypeDisplay _ = "DB"
-  -- @
-  class Typeable sub => IsLogCat (sub :: Type) where
-    severity :: sub -> Maybe LogSeverity
-    severity _ = Nothing
-    {-# INLINE severity #-}
-    -- | This is used for display only
-    logTypeDisplay :: sub -> ML.LogStr
-    {-# MINIMAL logTypeDisplay #-}
-  ```
-
-  Here is an example of defining your own log category `ProxyLog`:
-
-  ```haskell
-  import Module.Logging as L
-  import Language.Haskell.TH.Syntax (Lift)
-
-  data ProxyLog = Bytes | Logic deriving (Show, Eq, Lift)
-  instance IsLogCat ProxyLog where
-    severity Bytes = severity L.Debug
-    severity Logic = severity L.Info
-    logTypeDisplay Bytes = "BYTES"
-    logTypeDisplay Logic = "LOGIC"
-  ```
-
-  The `Lift` class is only necessary if you want to use them inside `logTH` template haskell utilities, otherwise you can remove it.
-
-  To use them, using functions in `Module.Logging.LogS` or `Module.Logging.LogB`, under corresponding logging context:
-
-  ```haskell
-  import Module.Logging
-  import Module.Logging.LogS
-
-  example :: (In (Logging m LogS) mods, Monad m) => EffT mods es m ()
-  example = do
-    sendBytesToClient 1024
-    $(logTH Bytes) "Sent 1024 bytes to client"
-    processUserLogin
-    $(logTH Logic) "User logged in successfully"
-  ```
-
-  ### Compatible With `monad-logger`
-
-  You can use all utilities from `monad-logger` inside the `Logging m LogS` effect here since we implement the `MonadLogger` and `MonadLoggerIO` class for it. Although we recommend using the logging utilities provided in `Module.Logging.LogS` and `Module.Logging.LogB`.
-
-  ```haskell
-  botInstanceToModule :: BotInstance -> EffT '[LoggingModule] NoError IO BotModules
-  botInstanceToModule bot@(BotInstance runFlag identityFlags commandFlags mode proxyFlags logFlags watchDogFlags _) = do
-      $(logInfo) $ "\n### Starting bot instance: " <> tshow bot
-      $(logInfo) $ "Running mode: "   <> tshow mode
-      $(logInfo) $ "Running flags: "  <> tshow runFlag
-      $(logInfo) $ "Identity flags: " <> tshow identityFlags
-      $(logInfo) $ "Command flags: "  <> tshow commandFlags
-      $(logInfo) $ "Proxy flags: "    <> tshow proxyFlags
-      $(logInfo) $ "Log flags: "      <> tshow logFlags
-      $(logInfo) $ "WatchDog flags: " <> tshow watchDogFlags
-      let mGlobalSysMsg = listToMaybe [ pack sysMsg | UseSysMsg sysMsg <- identityFlags ]
-          withDefault def [] = def
-          withDefault _ xs = xs
-          botModules = BotModules
-            { canUseGroupCommands   = withDefault (identifier <$> allGroupCommands)   (coerce commandFlags)
-            , canUsePrivateCommands = withDefault (identifier <$> allPrivateCommands) (coerce commandFlags)
-            , nameOfBot = BotName $ listToMaybe [ nameBot | UseName nameBot <- identityFlags ]
-            , botId = fromMaybe 0 $ listToMaybe [ idBot | UseId idBot <- identityFlags ]
-            , globalSysMsg = mGlobalSysMsg
-            , proxyTChans = []
-            , logFile = [ logFile | LogFlag logFile <- logFlags ]
-            , botInstance = bot
-            }
-      return botModules
-  ```
-
-  ### `TraceId` Support
-
-  In complex applications, it is often useful to trace the flow of a request or operation across multiple log entries. Use `withTraceId` to attach a `TraceId` to a block of codes, all logger inside that block will automatically include the `TraceId` in their log categories.
-
-  We also included some optional trace id generation utilities.
-
-  See `Module.Logging.TraceId` for relevant functions and types.
+description: "# Flexible Logging with Monad-Effect\n\n`monad-effect-logging` is a
+  pure structured logging library for the `monad-effect` ecosystem.\n\nThe current
+  API is centered on one unified message payload `LogDoc`.\n\n## Highlights\n\n* You
+  build one `LogDoc` value and decide at the boundary how to render it:\n\n  - plain
+  text\n  - ANSI colored text\n  - different `Show` strategies\n  - custom logger
+  pipelines\n  \n* Color stays semantic until rendering time. A file logger can ignore
+  color while a console logger can emit ANSI codes from the exact same log event.\n\n*
+  Excellent `TraceId` support\n\n* Open log categories, extensible\n\n* Easy JSON
+  logging by tagging `loggerJson`\n\nThis enables you to easily add JSON logging to
+  your files while keeping the console output colorful and readable: you can write
+  no-color json logging to a file while use `pSho` and color constructors to display
+  stuff on the screen at the same time.\n\n## Core types\n\n- `LogEvent` for the event
+  envelope\n- `LogWithSourceMeta` for source-location metadata\n- `LogDoc` for the
+  structured log message\n- `Logger` for the sink\n- `LogEffect` for the installed
+  effect\n\n```haskell\ndata LogEvent a = LogEvent\n  { logEventCats :: [LogCat]\n
+  \ , logEventPayload :: a\n  }\n\ndata LogWithSourceMeta a = LogWithSourceMeta\n
+  \ { logMetaLoc :: Maybe Loc\n  , logMetaSource :: Maybe LogSource\n  , logMetaDoc
+  :: a\n  }\n\nnewtype Logger m a = Logger\n  { runLogger :: LogEvent a -> m ()\n
+  \ }\n\ndata LogEffect m a\n\ndata LogDoc\n```\n\nThe default installed logging effect
+  is:\n\n```haskell\ntype Logging = LogEffect IO LogDoc\n```\n\n## Building messages\n\nString
+  literals work through `IsString`, and deferred values use `logShow`.\n\n```haskell\nimport
+  Module.Logging\n\nexample :: (Monad m, In (LogEffect m LogDoc) mods) => EffT mods
+  es m ()\nexample = do\n  $(logTH Info) $ \"starting request \" <> logShow (42 ::
+  Int)\n  $(logTH Warn) $ logFg Yellow \"slow query: \" <> toLog (\"SELECT ...\" ::
+  String)\n```\n\nUseful helpers:\n\n- `logRaw`\n- `logShow`\n- `logFg`\n- `logBg`\n-
+  `logBold`\n- `toLog`\n\nLiteral strings can be directly typed in using `IsString`
+  class, no need to convert using helpers.\n\n## Rendering and base loggers\n\nMost
+  applications should use one options-based helper from `Module.Logging.Logger`:\n\n```haskell\nimport
+  Module.Logging\nimport Module.Logging.Logger\n\nrunApp :: EffT '[LogEffect IO LogDoc]
+  NoError IO () -> IO ()\nrunApp app = do\n  stdoutBase <- createSimpleConcurrentStdoutBaseLogger\n
+  \ fileBase <- createFileLogger \"app.log\"\n\n  let stdoutLogger = makeLoggerFromBase
+  ( buildLoggerStyle loggerUseAnsi                ) stdoutBase\n  let fileLogger   =
+  makeLoggerFromBase ( buildLoggerStyle (loggerJson . loggerNoStyle) ) fileBase\n\n
+  \ runEffT00 $ withLoggerCleanup (stdoutLogger <> fileLogger) app\n```\n\nHere each
+  style is a builder function `LoggerOptions -> LoggerOptions`, and the `buildLoggerStyle`
+  function is just a composition of them on the `defaultLoggerStyle`.\n\nFor custom
+  pipelines, use the lower-level building blocks:\n\n- `renderLogEvent`\n- `loggerFromRenderer`\n-
+  your own `Logger`\n\nStyles compose as normal functions:\n\n```haskell\nverboseConsole
+  :: LoggerOptions\nverboseConsole =\n  buildLoggerStyle\n    $ loggerUseAnsi\n    .
+  loggerOrder [LogTimeChunk, LogCatChunk, LogLocChunk, LogDocChunk]\n```\n\n## Categories\n\nCategories
+  are open and extensible:\n\n```haskell\ndata ProxyLog = Bytes | Logic deriving (Lift)\n--
+  The `Lift` class is only necessary if you want to use them inside `logTH` template
+  haskell\n-- utilities, otherwise you can remove it.\n\ninstance IsLogCat ProxyLog
+  where\n  severity Bytes = severity Debug\n  severity Logic = severity Info\n  logTypeName
+  Bytes = \"BYTES\"\n  logTypeName Logic = \"LOGIC\"\n```\n\nYou can add local categories
+  with `effAddLogCat`, and filter them with the existing combinators.\n\n## `MonadLogger`
+  compatibility\n\n`MonadLogger` and `MonadLoggerIO` are implemented for `LogEffect
+  m LogDoc`.\n\nIncoming `monad-logger` messages are wrapped as `logRaw`, so compatibility
+  fits directly into the unified payload model.\n\n## `TraceId`\n\nThis library also
+  provides a super convenient `TraceId` mechanism that can attach scoped trace IDs
+  to log events.\n`TraceId` is just a log category. Use `withTraceId` or one of the
+  provided generators from `Module.Logging.TraceId`.\n\n## Status\n\nThis release
+  presents the library around `LogDoc`, options-based logger construction, open categories,
+  and boundary-driven rendering.\n"
 description-type: markdown
-hash: 8d1d73253517e7c4fd979d7cdcb2c661caed2bf2121f57cc7c482594802f71a3
+hash: 2180b435f82476ec8433f9053b8c5dd3e4381152dacd9ec81caa9d638e84eb4c
 homepage: ''
-latest: 0.1.0.0
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: eikochanowo@outlook.com
 synopsis: A flexible logging system utilizing the `monad-effect` effect system.
