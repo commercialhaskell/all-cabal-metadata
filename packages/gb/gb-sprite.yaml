@@ -9,6 +9,7 @@ all-versions:
 - 0.4.0.0
 - 0.5.0.0
 - 0.5.1.0
+- 0.5.2.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.18 && <5'
@@ -16,6 +17,34 @@ basic-deps:
   zlib: '>=0.6 && <0.8'
 changelog: |
   # Changelog
+
+  ## 0.5.2.0
+
+  ### Performance
+
+  Library-wide optimization pass targeting large canvas rendering (4K / procedural generation). Drawing primitives are now **orders of magnitude faster** on large canvases.
+
+  - **Canvas: copy-and-poke drawing** (`Canvas`): All drawing primitives (`drawLine`, `drawRect`, `fillRect`, `drawCircle`, `fillCircle`, `hLine`, `floodFill`) now copy the pixel buffer once and write directly into the copy. Previously, each pixel write copied the entire buffer via `ByteString` split/concat. A `fillCircle` of radius 100 on a 1000×1000 canvas went from ~31,000 full buffer copies to 1.
+  - **Canvas: `mapPixels` calls function once per pixel** — was 4× (once per RGBA channel). Functions like `grayscale`, `adjustBrightness`, `shiftHue`, `applyLUT`, etc. all benefit.
+  - **Canvas: `getPixel` uses `unsafeIndex`** — eliminates 4 redundant bounds checks per read (after `inBounds` check). Benefits bilinear sampling in scaling/rotation.
+  - **Canvas: `pixelFold` tracks coordinates directly** — eliminates `div`/`mod` per pixel.
+  - **Canvas: `fromPixels` uses direct pokes** — no intermediate list allocation.
+  - **Draw: single-copy polygon/ellipse/curve rendering** (`Draw`): `fillPolygon`, `fillEllipse`, `drawEllipse`, `drawPolygon`, `drawArc`, `drawBezier`, `drawCubicBezier`, `drawCatmullRom`, `drawAALine`, and `patternFill` now collect all pixels/spans and apply in a single buffer copy via the new bulk APIs.
+  - **Transform: `generateCanvasPixels` eliminates per-byte division** (`Transform`): All transforms (`flipH`/`flipV`, `rotate*`, `scaleNearest`, `scaleBilinear`, `scaleTo`, `shearH`/`shearV`, `outline`, `dropShadow`) now compute one color per pixel instead of dispatching per byte. Eliminates ~16 integer divisions per pixel — significant at 4K (8M+ pixels).
+  - **Noise: bitmask LCG hash** (`Noise`): LCG hash uses bitwise `.&.` instead of `mod 2^31` (~10–20× faster per hash). Perlin gradient index uses `.&.` for power-of-2 table size. All noise generators use `generateCanvasPixels` for the same div/mod elimination.
+  - **VFX: bulk ring drawing** (`VFX`): Ring outlines use `bulkSetPixels` (1 buffer copy) instead of per-pixel `setPixel` chains. LCG uses bitmask.
+  - **Gradient: `generateCanvasPixels`** (`Gradient`): Same per-pixel div/mod elimination.
+  - **Dither: `generateCanvasPixels`** (`Dither`): Same per-pixel div/mod elimination.
+  - **Tilemap: bulk tile stamping** (`Tilemap`): `stampTile` uses `bulkSetPixels` instead of per-pixel `setPixel` loop.
+  - **Text: bulk glyph rendering** (`Text`): Glyph bit-blitting uses `bulkSetPixels` instead of per-bit `setPixel` loop.
+
+  ### New Features
+
+  - **Bulk drawing APIs** (`Canvas`): `generateCanvasPixels`, `bulkSetPixels`, `bulkHSpans`, `bulkBlendPixels` — low-level batch operations for efficient custom drawing. Used internally by all optimized primitives, also exported for user code.
+
+  ### Tests
+
+  - 615 tests (all passing — exact pixel-level output preserved).
 
   ## 0.5.1.0
 
@@ -337,7 +366,7 @@ description: |
   Add to your `.cabal` file:
 
   ```cabal
-  build-depends: gb-sprite >= 0.5
+  build-depends: gb-sprite >= 0.5.2
   ```
 
   ### Generating sprites
@@ -405,11 +434,23 @@ description: |
   drawCircle :: Canvas -> Int -> Int -> Int -> Color -> Canvas
   fillCircle :: Canvas -> Int -> Int -> Int -> Color -> Canvas
   floodFill  :: Canvas -> Int -> Int -> Color -> Canvas
+  hLine      :: Canvas -> Int -> Int -> Int -> Color -> Canvas  -- horizontal line
   crop            :: Int -> Int -> Int -> Int -> Canvas -> Canvas
   trimTransparent :: Canvas -> Canvas
   canvasOpacity   :: Double -> Canvas -> Canvas
+  clearCanvas     :: Canvas -> Color -> Canvas                  -- fill with solid color
   mapPixels       :: (Color -> Color) -> Canvas -> Canvas
   pixelFold       :: (a -> Int -> Int -> Color -> a) -> a -> Canvas -> a
+
+  -- Utilities
+  inBounds   :: Canvas -> Int -> Int -> Bool
+  pixelIndex :: Int -> Int -> Int -> Int                        -- byte offset at (x, y)
+
+  -- Bulk operations (efficient batch drawing)
+  generateCanvasPixels :: Int -> Int -> (Int -> Int -> Color) -> Canvas
+  bulkSetPixels        :: Canvas -> [(Int, Int, Color)] -> Canvas
+  bulkHSpans           :: Canvas -> Color -> [(Int, Int, Int)] -> Canvas
+  bulkBlendPixels      :: Canvas -> [(Int, Int, Color)] -> Canvas
   ```
 
   ### Draw
@@ -553,6 +594,7 @@ description: |
 
   -- Operations
   fromColors     :: [Color] -> Palette
+  paletteSize    :: Palette -> Int
   paletteColor   :: Palette -> Int -> Color
   paletteSwap    :: Palette -> Palette -> Color -> Color
   paletteLerp    :: Double -> Palette -> Palette -> Palette
@@ -563,6 +605,9 @@ description: |
   ### Sprite
 
   ```haskell
+  data BoundingBox = BoundingBox
+    { bbX :: !Int, bbY :: !Int, bbWidth :: !Int, bbHeight :: !Int }
+
   data Sprite = Sprite
     { spriteName :: !String, spriteOriginX :: !Int, spriteOriginY :: !Int
     , spriteFrames :: ![Canvas], spriteBounds :: !(Maybe BoundingBox) }
@@ -726,9 +771,9 @@ description: |
     <sub>BSD-3-Clause License · <a href="https://github.com/Gondola-Bros-Entertainment">Gondola Bros Entertainment</a></sub>
   </p>
 description-type: markdown
-hash: a22ebbcd1252187cc126bf8afa636126d2bfe8aa58663db8b00ca09c0be7a080
+hash: 70fce7a2061c1d466c504676067ed1add236c1a69ef591b0c1a5f22da2a0733e
 homepage: https://github.com/Gondola-Bros-Entertainment/gb-sprite
-latest: 0.5.1.0
+latest: 0.5.2.0
 license-name: BSD-3-Clause
 maintainer: devon.tomlin@novavero.ai
 synopsis: Pure Haskell 2D raster graphics engine
