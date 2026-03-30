@@ -4,6 +4,7 @@ all-versions:
 - 0.2.0.0
 - 0.3.0.0
 - 0.3.1.0
+- 0.5.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.2 && <2.3'
@@ -16,6 +17,7 @@ basic-deps:
   http-api-data: '>=0.6 && <0.7'
   http-client-tls: '>=0.3 && <0.4'
   notion-client: '>=0'
+  scientific: '>=0.3 && <0.4'
   servant: '>=0.20 && <0.21'
   servant-client: '>=0.20 && <0.21'
   servant-multipart-api: '>=0.12 && <0.13'
@@ -27,6 +29,41 @@ basic-deps:
   vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog for notion-client
+
+  ## 0.5.0.0 (2026-03-29)
+
+  ### Breaking Changes
+  * Replace untyped `PropertyValue`/`PropertyItem`/`PropertyValueType` with a proper `PropertyValue` sum type (23 variants) in new `Notion.V1.PropertyValue` module
+  * Remove `SelectOption` from `Notion.V1.Pages` — use `SelectOptionValue` from `Notion.V1.PropertyValue` instead
+  * `PageObject.properties` is now `Map Text PropertyValue` instead of `Map Text PropertyItem`
+  * `CreatePage.properties` and `UpdatePage.properties` are now `Map Text PropertyValue`
+  * `UpdateDataSource.properties` changes from `Maybe (Map Text PropertySchema)` to `Maybe (Map Text (Maybe PropertySchema))` to support property deletion via `null`
+  * `QueryDatabase` and `QueryDataSource` gain a `filterProperties` field
+  * `UpdateDatabase` gains an `isLocked` field
+  * `CreateDataSource` gains `description` and `cover` fields
+
+  ### New Features
+  * **Typed Property Values**: New `Notion.V1.PropertyValue` module with `PropertyValue` sum type for reading page properties via pattern matching, and smart constructors (`titleValue`, `selectValue`, `numberValue`, `checkboxValue`, `dateValue`, `statusValue`, `relationValue`, `peopleValue`, `filesValue`, etc.) for writes
+  * **Page Property Item Endpoint**: Add `retrievePageProperty` method (`GET /v1/pages/{page_id}/properties/{property_id}`) with `PropertyItemResponse` type handling both single and paginated results
+  * **Typed Error Handling**: `NotionError` now has an `Exception` instance. The client automatically parses Notion API errors into typed `NotionError` exceptions. Add `parseNotionError` helper and `ToJSON` instance
+  * **Property Schema Deletion**: Set properties to `Nothing` in `UpdateDataSource` to delete them from the schema (emits `null` in JSON)
+  * **Auto-Pagination**: New `paginateAll` and `paginateCollect` functions in `Notion.V1.Pagination` that follow cursors automatically
+  * Add `publicUrl :: Maybe Text` to `PageObject`
+  * Mark `queryDatabase` as deprecated in favor of `queryDataSource`
+
+  ## 0.4.0.0 (2026-03-29)
+
+  ### Breaking Changes
+  * Replace `properties :: Maybe Value` in `DatabaseObject` with `Maybe (Map Text PropertySchema)`
+  * Replace `properties :: Value` in `DataSourceObject` with `Map Text PropertySchema`
+  * Replace `properties :: Value` / `Maybe Value` in `CreateDataSource`, `UpdateDataSource`, `InitialDataSource` with typed `PropertySchema`
+  * Replace `filter :: Maybe Value` in `QueryDatabase` and `QueryDataSource` with `Maybe Filter`
+  * Replace `sorts :: Maybe [Value]` in `QueryDatabase` and `QueryDataSource` with `Maybe [Sort]`
+
+  ### New Features
+  * **Typed Property Schemas**: New `Notion.V1.Properties` module with `PropertySchema` sum type (23 property types), `SelectColor` enum (10 colors), `NumberFormat` enum (39 formats), `RollupFunction` enum (25 functions), `RelationType`, `SelectOption`, `StatusGroup`
+  * **Typed Query Filters**: New `Notion.V1.Filter` module with `Filter` DSL — compound `And`/`Or` filters, `PropertyFilter` with 22 condition variants (text, number, checkbox, select, multi-select, date, people, files, relation, status, unique ID, verification, formula, rollup), and `TimestampFilter`
+  * **Typed Query Sorts**: `Sort` type with `PropertySort` and `TimestampSort`, `SortDirection` enum
 
   ## 0.3.1.0 (2026-03-29)
 
@@ -153,22 +190,25 @@ description: |-
       print page
   ```
 
-  ### Creating a page
+  ### Creating a page with typed properties
 
   ```haskell
   import Notion.V1
   import Notion.V1.Common (Parent(..))
   import Notion.V1.Pages
+  import Notion.V1.PropertyValue qualified as PV
   import Data.Map qualified as Map
-  import Data.Aeson (toJSON)
+  import Data.Vector qualified as Vector
 
   createNewPage :: Methods -> IO PageObject
   createNewPage Methods{createPage} = do
       let pageProperties = Map.fromList
-              [ ("title", PropertyValue
-                  { type_ = Title
-                  , value = Just $ toJSON [-- rich text objects --]
-                  })
+              [ ("title", PV.titleValue (Vector.singleton titleRichText))
+              , ("Status", PV.selectValue "In Progress")
+              , ("Priority", PV.selectValue "High")
+              , ("Due", PV.dateValue "2024-06-01" Nothing)
+              , ("Score", PV.numberValue 42)
+              , ("Done", PV.checkboxValue False)
               ]
 
           newPage = mkCreatePage
@@ -176,6 +216,18 @@ description: |-
               pageProperties
 
       createPage newPage
+  ```
+
+  ### Reading typed properties
+
+  ```haskell
+  import Notion.V1.PropertyValue
+
+  readPageStatus :: PageObject -> Maybe Text
+  readPageStatus page =
+      case Map.lookup "Status" (properties page) of
+          Just (SelectValue _ (Just opt)) -> Just (name opt)
+          _ -> Nothing
   ```
 
   ### Creating a page with markdown
@@ -214,6 +266,32 @@ description: |-
                   ]
               , allowDeletingContent = Nothing
               }
+  ```
+
+  ### Error handling
+
+  ```haskell
+  import Control.Exception (catch)
+  import Notion.V1.Error (NotionError(..))
+
+  safeRetrieve :: Methods -> PageID -> IO ()
+  safeRetrieve Methods{retrievePage} pageId =
+      retrievePage pageId `catch` \(e :: NotionError) ->
+          putStrLn $ "Notion error: " <> code e <> " - " <> message e
+  ```
+
+  ### Auto-pagination
+
+  ```haskell
+  import Notion.V1.Pagination (paginateAll)
+  import Notion.V1.DataSources (QueryDataSource(..))
+
+  allPages <- paginateAll $ \cursor ->
+      queryDataSource methods dsId QueryDataSource
+          { filter = Nothing, sorts = Nothing
+          , startCursor = cursor, pageSize = Just 100
+          , inTrash = Nothing, filterProperties = Nothing
+          }
   ```
 
   ## API Coverage
@@ -263,9 +341,9 @@ description: |-
 
   MIT
 description-type: markdown
-hash: 718d0c3b2d3e73febe24dba9ad3650aac069444edb78d0112952b02a0e3bca99
+hash: b6f730599dfe264f80c4cd286c21c6604516c565ea9a33086849499249432d99
 homepage: https://github.com/shinzui/notion-client
-latest: 0.3.1.0
+latest: 0.5.0.0
 license-name: MIT
 maintainer: nadeem@gmail.com
 synopsis: Type-safe Haskell client for the Notion API
@@ -277,6 +355,7 @@ test-bench-deps:
   http-client: '>=0'
   http-client-tls: '>=0'
   notion-client: '>=0'
+  scientific: '>=0'
   servant-client: '>=0'
   tasty: '>=0'
   tasty-hunit: '>=0'
