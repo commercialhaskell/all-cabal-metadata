@@ -135,6 +135,7 @@ all-versions:
 - '13.4'
 - '13.5'
 - '13.6'
+- '14.0'
 author: Levent Erkok
 basic-deps:
   QuickCheck: '>=0'
@@ -164,31 +165,122 @@ basic-deps:
   tree-view: '>=0'
   uniplate: '>=0'
 changelog: "* Hackage: <http://hackage.haskell.org/package/sbv>\n* GitHub:  <http://github.com/LeventErkok/sbv>\n\n###
-  Version 13.6, 2026-03-02\n\n  * The `sCase` quasi-quoter now supports nested constructor
-  patterns. Sub-patterns\n    in a constructor match can themselves be constructors,
-  including nullary ones. For example:\n\n    ```haskell\n    normalize f = smtFunction
-  \"normalize\" $ \\f ->\n      [sCase|Formula f of\n        If (If p q r) left right
-  -> normalize (sIf p (sIf q left right) (sIf r left right))\n        If c          left
-  right -> sIf c (normalize left) (normalize right)\n        _                        ->
-  f\n      |]\n    ```\n\n    Nested patterns generate appropriate `isCstr`/`getCstr_i`
-  guards and let-bindings\n    automatically. Pattern guards (`, e1, e2`) may also
-  be used alongside nested patterns.\n    Additionally, `| True` is now accepted as
-  a synonym for `| sTrue` in guards.\n\n  * The `sCase` quasi-quoter now supports
-  integer and string literal patterns in nested\n    positions (and at the top level
-  inside a constructor). For example:\n\n    ```haskell\n    p e = [sCase|Expr e of\n
-  \            Val 0         -> 100          -- fires when the Val field equals 0\n
-  \            Val 1         -> 200          -- fires when the Val field equals 1\n
-  \            Add (Val 0) r -> eval r       -- nested literal: fires when left child
-  is Val 0\n             _             -> eval e\n          |]\n    ```\n\n    A literal
-  sub-pattern desugars to a symbolic equality guard (`getC_i e .== lit`),\n    so
-  the exhaustiveness checker correctly requires a fallback for any constructor\n    that
-  only appears with literal sub-patterns.\n\n  * Add the `pCase` quasi-quoter for
-  proof case-splits. Same syntax as `sCase`, but\n    generates `cases [cond ==> proof,
-  ...]` instead of `ite` chains. Wildcards are\n    allowed as the last arm (with
-  or without guards), generating a negated disjunction\n    of all prior guards to
-  do fall-thru proofs.\n\n  * Add minimum and maximum to Data.SBV.List. If they receive
-  empty list as argument,\n    then the result is underspecified, i.e., can be any
-  value of the element type.\n\n  * Add mapConcat to Documentation.SBV.Examples.TP.Lists,
+  Version 14.0, 2026-04-01\n\n  * [BACKWARDS COMPATIBILITY] The most important change
+  in this release is how SBV treats\n    function definitions via `smtFunction` and
+  its variants. In prior versions, these definitions were\n    directly translated
+  to SMT-lib, without checking that they actually terminate. Starting with\n    this
+  release, SBV now requires all functions to terminate (with an escape hatch where
+  the user\n    explicitly opts out), and it proves it for all functions involved
+  in a proof. SBV guesses\n    and verifies a termination measure, and in case it
+  can't do so will tell the user to supply\n    their own version. This major departure
+  from the old style of ignoring termination is a step\n    towards incorporating
+  a better architecture for much improved (semi-)automated theorem proving\n    in
+  SBV. See below for more details.\n\n  * [BACKWARDS COMPATIBILITY] Major improvements
+  to the `sCase` and `pCase` quasi-quoters:\n    - Type prefix is no longer required;
+  the type is inferred automatically\n      from the patterns. Old syntax: `[sCase|Expr
+  e of ...]`. New syntax: `[sCase| e of ...]`.\n\n    - Wildcard-only patterns are
+  now supported. An unguarded wildcard generates the rhs directly,\n      while guarded
+  wildcards produce an `ite`-chain (for `sCase`) or proof obligations (for `pCase`).\n\n
+  \   - Built-in types are now supported: `Maybe`, `Either`, `List`, and `Tuple2`
+  through `Tuple8`.\n      Nested patterns across built-in types are also supported
+  (e.g., `Just (x:_)`, `Left (a, b)`).\n      For single-constructor types, the generated
+  code omits the redundant constructor tester guard.\n\n    - Primitive types are
+  now supported: `Bool`, `Integer`, `Char`, and `String`. Patterns can use\n      `True`/`False`,
+  integer literals, character literals, string literals, variable bindings,\n      and
+  wildcards.\n\n       ```haskell\n       [sCase| m of         [sCase| x of      [sCase|
+  xs of                [sCase| c of\n          Nothing -> 0         0 -> sTrue        []
+  \     -> 0                 'a' -> 1\n          Just x  -> x + 1     _ -> sFalse
+  \      x : xs' -> x + f xs'         'b' -> 2\n       |]                   |]                |]
+  \                              _   -> 0\n                                                                           |]\n\n
+  \      [sCase| x of                            [sCase| x of\n          _ | x .>
+  0 -> x                         0         -> y\n            | sTrue  -> -x                        _
+  | x .> y -> x\n       |]                                           | sTrue  -> y\n
+  \                                              |]\n       ```\n\n    - As-patterns
+  (`x@pat`) are now supported in both top-level and nested positions.\n      The as-name
+  is bound to the scrutinee (top-level) or accessor (nested) via a\n      let-binding,
+  which is elided when the name is unused. This works with all pattern\n      types:
+  constructors, tuples, lists, wildcards, and in combination with nested `case`\n
+  \     expressions.\n\n       ```haskell\n       [sCase| xs of\n          a : tl@(_
+  : _) -> a + case tl of\n                                   b : _ -> b\n                                   []
+  \   -> 0\n          _ : _           -> 0\n          []              -> 0\n       |]\n
+  \      ```\n\n    - Plain `case` expressions inside `[sCase|...|]` and `[pCase|...|]`
+  are now automatically\n      treated as symbolic case-splits. This works around
+  GHC's quasi-quoter nesting limitation\n      (`[sCase|` cannot contain `|]`), and
+  makes nested symbolic case expressions natural:\n\n       ```haskell\n       [sCase|
+  e of\n          Zero      -> case m of\n                         Nothing -> 0\n
+  \                        Just v  -> v\n          Num k     -> k\n          Add a
+  b   -> t a m + t b m\n       |]\n       ```\n\n      All `case` expressions inside
+  `sCase` and `pCase` become symbolic; use a `let` or helper\n      function for regular
+  Haskell case expressions.\n\n  * Improved documentation for `lambdaArray`, explaining
+  the model-theoretic distinction\n    between the pure array theory (`select`/`store`/`const`)
+  and the richer setting where\n    arrays are identified with function spaces.\n\n
+  \ * [BACKWARDS COMPATIBILITY] `recall` and `recallWith` no longer take a `String`
+  argument.\n    A recalled proof is now automatically cached and reused if the same
+  proposition is\n    encountered again. `tpNoCache` has been removed.\n\n  * SBV
+  now detects conflicting `smtFunction` definitions: if two calls use the same SMT\n
+  \   name but have different bodies, an error is raised. Identical re-registrations
+  (which\n    happen naturally with recursive functions) remain allowed.\n\n  * SBV
+  now automatically checks termination of recursive functions defined via `smtFunction`.\n
+  \   A measure (a non-negative expression that strictly decreases at each recursive
+  call) is\n    guessed automatically from argument types when possible. For functions
+  that need an explicit\n    measure, use `smtFunctionWithMeasure`:\n\n    ```haskell\n
+  \   ld = smtFunctionWithMeasure \"ld\" (\\k n -> (n - k) `smax` 0, [])\n       $
+  \\k n -> ite (n `sMod` k .== 0) k (ld (k+1) n)\n    ```\n\n    When the measure
+  requires inductive properties to verify, supply TP proof actions as helpers\n    via
+  `measureLemma`/`measureLemmaWith`:\n\n    ```haskell\n    normalize = smtFunctionWithMeasure
+  \"normalize\"\n                  ( \\f -> tuple (ifComplexity f, ifDepth f)\n                  ,
+  [measureLemma ifDepthNonNeg, measureLemma ifComplexityPos]\n                  )\n
+  \             $ \\f -> ...\n    ```\n\n  * For nested recursive functions (like
+  McCarthy's 91 function) where the termination argument\n    depends on the function's
+  return value at smaller inputs, use `smtFunctionWithContract`. This\n    takes a
+  measure and a contract (post-condition) that are verified simultaneously via well-founded\n
+  \   induction:\n\n    ```haskell\n    mcCarthy91 = smtFunctionWithContract \"mcCarthy91\"\n
+  \                  ( \\n -> 0 `smax` (101 - n)\n                   , \\n r -> n
+  .<= 100 .=> r .== 91\n                   , []\n                   )\n               $
+  \\n -> ite (n .> 100) (n - 10) (mcCarthy91 (mcCarthy91 (n + 11)))\n    ```\n\n  *
+  Productive (corecursive) functions can now be defined via `smtProductiveFunction`.
+  Unlike\n    terminating functions, productive functions need not have a base case
+  — they may produce\n    infinite output, so long as every recursive call is guarded
+  by a data constructor.\n\n  * New function `smtFunctionNoTermination` for defining
+  recursive SMT functions without any\n    termination check. The function is emitted
+  as `define-fun-rec` and the user takes\n    responsibility for well-definedness.
+  Use this for functions where termination is believed\n    but cannot be proven.
+  Any TP proof that depends on such a function will be marked as\n    `[Modulo: <name>
+  termination]` instead of `[Proven]` in its root of trust.\n\n  * New example `Documentation.SBV.Examples.TP.Countdown`,
+  proving properties of a\n    list-building countdown function using induction.\n\n
+  \ * New example `Documentation.SBV.Examples.TP.NatStream`, demonstrating `smtProductiveFunction`\n
+  \   with the infinite stream `nats n = [n, n+1, n+2, ...]` and proofs about its
+  head, length, and\n    element access.\n\n  * New example `Documentation.SBV.Examples.TP.MutualCorecursion`,
+  demonstrating mutually\n    corecursive productive functions. Two functions `ping`
+  and `pong` take turns producing\n    elements of a stream, and we prove elementwise
+  equality and that the k-th element of\n    `ping n` is `n + k`.\n\n  * New example
+  `Documentation.SBV.Examples.TP.Collatz`, using `smtFunctionNoTermination` to\n    define
+  the Collatz function (whose termination is a famous open problem) and proving that\n
+  \   all powers of two reach 1.\n\n### Version 13.6, 2026-03-02\n\n  * The `sCase`
+  quasi-quoter now supports nested constructor patterns. Sub-patterns\n    in a constructor
+  match can themselves be constructors, including nullary ones. For example:\n\n    ```haskell\n
+  \   normalize f = smtFunction \"normalize\" $ \\f ->\n      [sCase|Formula f of\n
+  \       If (If p q r) left right -> normalize (sIf p (sIf q left right) (sIf r left
+  right))\n        If c          left right -> sIf c (normalize left) (normalize right)\n
+  \       _                        -> f\n      |]\n    ```\n\n    Nested patterns
+  generate appropriate `isCstr`/`getCstr_i` guards and let-bindings\n    automatically.
+  Pattern guards (`, e1, e2`) may also be used alongside nested patterns.\n    Additionally,
+  `| True` is now accepted as a synonym for `| sTrue` in guards.\n\n  * The `sCase`
+  quasi-quoter now supports integer and string literal patterns in nested\n    positions
+  (and at the top level inside a constructor). For example:\n\n    ```haskell\n    p
+  e = [sCase|Formula e of\n             Val 0         -> 100          -- fires when
+  the Val field equals 0\n             Val 1         -> 200          -- fires when
+  the Val field equals 1\n             Add (Val 0) r -> eval r       -- nested literal:
+  fires when left child is Val 0\n             _             -> eval e\n          |]\n
+  \   ```\n\n    A literal sub-pattern desugars to a symbolic equality guard (`getC_i
+  e .== lit`),\n    so the exhaustiveness checker correctly requires a fallback for
+  any constructor\n    that only appears with literal sub-patterns.\n\n  * Add the
+  `pCase` quasi-quoter for proof case-splits. Same syntax as `sCase`, but\n    generates
+  `cases [cond ==> proof, ...]` instead of `ite` chains. Wildcards are\n    allowed
+  as the last arm (with or without guards), generating a negated disjunction\n    of
+  all prior guards to do fall-thru proofs.\n\n  * Add minimum and maximum to Data.SBV.List.
+  If they receive empty list as argument,\n    then the result is underspecified,
+  i.e., can be any value of the element type.\n\n  * Add mapConcat to Documentation.SBV.Examples.TP.Lists,
   which proves the theorem\n    `map f . concat = concat . map (map f)`.\n\n  * Add
   Documentation.SBV.Examples.TP.Kadane, proving the correctness of Kadane's algorithm\n
   \   for computing the maximum segment sum. The proof uses a generalized invariant
@@ -230,7 +322,7 @@ changelog: "* Hackage: <http://hackage.haskell.org/package/sbv>\n* GitHub:  <htt
   is inspired\n    by a midterm exam question for an ACL2-class taught by J Moore
   at UT Austin back in 2011;\n    a minor tribute to J's amazing legacy.\n\n### Version
   13.4, 2026-01-09\n\n  * Remove Eq constraint on readArray, generalizing it to arbitrary
-  types for array-reads.\n\n  * Addded 'freeArray', which creates an array with no
+  types for array-reads.\n\n  * Added 'freeArray', which creates an array with no
   constraints at all. (Compare to 'constArray'.)\n    Note that this is useful for
   expression contexts. If you're in a symbolic context (i.e., in\n    the Symbolic
   monad), you can just use 'free' or 'sArray' as usual.)\n\n  * Add missing instance
@@ -2270,137 +2362,296 @@ changelog: "* Hackage: <http://hackage.haskell.org/package/sbv>\n* GitHub:  <htt
   Versions 0.0.0 - 0.9.6, Mid 2010 through early 2011\n\n  * Basic infrastructure,
   design exploration\n"
 changelog-type: markdown
-description: "# SBV: SMT Based Verification in Haskell\n\n[![Build Status](https://github.com/LeventErkok/sbv/actions/workflows/ci.yml/badge.svg)](https://github.com/LeventErkok/sbv/actions/workflows/ci.yml)\n\nOn
-  Hackage: http://hackage.haskell.org/package/sbv\n\nExpress properties about Haskell
-  programs and automatically prove them using SMT solvers.\n\nOn one end, SBV can
-  be used as a push-button prover over many types:\n\n```haskell\n$ ghci\nghci> :m
-  Data.SBV\nghci> prove $ \\x -> x `shiftL` 2 .== 4 * (x::SWord8)\nQ.E.D.\nghci> prove
-  $ \\x -> x `shiftL` 2 .== 2 * (x::SWord8)\nFalsifiable. Counter-example:\n  s0 =
-  32 :: Word8\n```\n\nOn the other extreme, SBV can be used as an SMT-based proof
-  assistant to prove equational and inductive program properties:\n\n```haskell\nrevApp
-  :: forall a. SymVal a => TP (Proof (Forall \"xs\" [a] -> Forall \"ys\" [a] -> SBool))\nrevApp
-  = induct \"revApp\"\n                 (\\(Forall xs) (Forall ys) -> reverse (xs
-  ++ ys) .== reverse ys ++ reverse xs) $\n                 \\ih (x, xs) ys -> [] |-
-  reverse ((x .: xs) ++ ys)\n                                      =: reverse (x .:
-  (xs ++ ys))\n                                      =: reverse (xs ++ ys) ++ [x]\n
-  \                                     ?? ih\n                                      =:
-  (reverse ys ++ reverse xs) ++ [x]\n                                      =: reverse
-  ys ++ (reverse xs ++ [x])\n                                      =: reverse ys ++
-  reverse (x .: xs)\n                                      =: qed\n```\n\nRunning
-  this proof produces:\n\n```haskell\nghci> runTP $ revApp @Integer\nInductive lemma:
-  revApp\n  Step: Base                            Q.E.D.\n  Step: 1                               Q.E.D.\n
-  \ Step: 2                               Q.E.D.\n  Step: 3                               Q.E.D.\n
-  \ Step: 4                               Q.E.D.\n  Step: 5                               Q.E.D.\n
-  \ Result:                               Q.E.D.\n[Proven] revApp :: Ɐxs ∷ [Integer]
-  → Ɐys ∷ [Integer] → Bool\n```\n\nEstablishing how `reverse` distributes over `++`
-  (at the monomorpic type of list of integers).\n\nThe function `prove` establishes
-  theorem-hood, while `sat` finds a satisfying model if it exists. The `runTP` function\nruns
-  a proof script, establishing theorems with user guidance.\n\nAll satisfying models
-  can be computed using `allSat`.\nSBV can also perform static assertion checks, such
-  as absence of division-by-0, and other user given properties.\nFurthermore, SBV
-  can perform optimization, minimizing/maximizing arithmetic goals for their optimal
-  values.\n\nSBV also allows for an incremental mode: Users are given a handle to
-  the SMT solver as their programs execute, and they can issue SMTLib commands programmatically,
-  query values, and direct the interaction using a high-level typed API. The incremental
-  mode also allows for creation of constraints based on the current model, and access
-  to internals of SMT solvers for advanced users. See the `runSMT` and `query` commands
-  for details.\n\n## Overview\n\n - [Hackage](http://hackage.haskell.org/package/sbv)\n
-  - [Release Notes](http://github.com/LeventErkok/sbv/tree/master/CHANGES.md)\n   \nSBV
-  library provides support for dealing with symbolic values in Haskell. It introduces
-  the types:\n\n - `SBool`: Symbolic Booleans (bits).\n - `SWord8`, `SWord16`, `SWord32`,
-  `SWord64`: Symbolic Words (unsigned).\n - `SInt8`, `SInt16`, `SInt32`, `SInt64`:
-  Symbolic Ints (signed).\n - `SWord N`, `SInt N`, for `N > 0`: Arbitrary sized unsigned/signed
-  bit-vectors, parameterized by the bitsize. (Using DataKinds extension.)\n - `SInteger`:
-  Symbolic unbounded integers (signed).\n - `SReal`: Symbolic infinite precision algebraic
-  reals (signed).\n - `SRational`: Symbolic rationals, ratio of two symbolic integers.
-  (`Rational`.)\n - `SFloat`: IEEE-754 single precision floating point number. (`Float`.)\n
-  - `SDouble`: IEEE-754 double precision floating point number. (`Double`.)\n - `SFloatingPoint`:
-  IEEE-754 floating point number with user specified exponent and significand sizes.
-  (`FloatingPoint`)\n - `SChar`: Symbolic characters, supporting unicode.\n - `SString`:
-  Symbolic strings.\n - `SList`: Symbolic lists. (Which can be nested, i.e., lists
-  of lists.)\n - `STuple`: Symbolic tuples (upto 8-tuples, can be nested)\n - `SEither`:
-  Symbolic sums\n - `SMaybe`: Symbolic optional values\n - `SSet`: Symbolic sets\n
-  - Arrays of symbolic values.\n - Symbolic enumerations, for arbitrary user-defined
-  enumerated types.\n - Symbolic polynomials over GF(2^n ), polynomial arithmetic,
-  and CRCs.\n - Uninterpreted constants and functions over symbolic values, with user
-  defined axioms.\n - Uninterpreted sorts, and proofs over such sorts, potentially
-  with axioms.\n - Algebraic data types, including recursive fields.\n - Ability to
-  define SMTLib functions, generated directly from Haskell versions, including support
-  for recursive and mutually recursive functions.\n - Reasoning with universal and
-  existential quantifiers, including alternating quantifiers.\n   \nThe user can construct
-  ordinary Haskell programs using these types, which behave like ordinary Haskell
-  values when used concretely. However, when used with symbolic arguments, functions
-  built out of these types can also be:\n\n - proven correct via an external SMT solver
-  (the `prove` function),\n - checked for satisfiability (the `sat`, and `allSat`
-  functions),\n - checked for assertion violations (the `safe` function with `sAssert`
-  calls),\n - checked for delta-satisfiability (the `dsat` and `dprove` functions),\n
-  - used in synthesis (the `sat`function with existentials),\n - checked for machine-arithmetic
-  overflow/underflow conditions,\n - optimized with respect to cost functions (the
-  `optimize`, `maximize`, and `minimize` functions),\n - quick-checked,\n - used for
-  generating Haskell and C test vectors (the `genTest` function),\n - compiled down
-  to C, rendered as straight-line programs or libraries (`compileToC` and `compileToCLib`
-  functions).\n   \n## Picking the SMT solver to use\n\nThe SBV library uses third-party
-  SMT solvers via the standard SMT-Lib interface. The following solvers are supported:\n\n
-  - [ABC](http://www.eecs.berkeley.edu/~alanmi/abc) from University of Berkeley\n
-  - [Boolector](http://boolector.github.io/) from Johannes Kepler University\n - [Bitwuzla](http://bitwuzla.github.io/)
-  from Stanford University\n - [CVC4](http://cvc4.github.io/) from Stanford University
-  and the University of Iowa\n - [CVC5](http://cvc5.github.io/) from Stanford University
-  and the University of Iowa\n - [DReal](http://dreal.github.io/) from CMU\n - [MathSAT](http://mathsat.fbk.eu/)
-  from FBK and DISI-University of Trento\n - [OpenSMT](http://verify.inf.usi.ch/opensmt)
-  from Università della Svizzera italiana\n - [Yices](http://github.com/SRI-CSL/yices2)
-  from SRI\n - [Z3](http://github.com/Z3Prover/z3/wiki) from Microsoft\n   \nMost
-  functions have two variants: For instance `prove`/`proveWith`. The former uses the
-  default solver, which is currently Z3. The latter expects you to pass it a configuration
-  that picks the solver.\nThe valid values are `abc`, `boolector`, `bitwuzla`, `cvc4`,
-  `cvc5`, `dReal`, `mathSAT`, `openSMT`, `yices`, and `z3`.\n\nSee [versions](http://github.com/LeventErkok/sbv/blob/master/SMTSolverVersions.md)
-  for a listing of the versions of these tools SBV has been tested with. Please report
-  if you see any discrepancies!\n\nOther SMT solvers can be used with SBV as well,
-  with a relatively easy hook-up mechanism. Please do get in touch if you plan to
-  use SBV with any other solver.\n\n## Using multiple solvers, simultaneously\n\nSBV
-  also allows for running multiple solvers at the same time, either picking the result
-  of the first to complete, or getting results from all.\nSee `proveWithAny`/`proveWithAll`
-  and `satWithAny`/`satWithAll` functions. The function `sbvAvailableSolvers` can
-  be used to query the available solvers at run-time.\n\n## TP: Semi-automated theorem
-  proving\n\nWhile SMT solvers are quite powerful, there is a certain class of problems
-  that they are just not well suited for. In particular, SMT\nsolvers are not good
-  at proofs that require induction, or those that require complex chains of reasoning.
-  Induction is necessary to reason about\nany recursive algorithm, and most such proofs
-  require carefully constructed equational steps.\n\nSBV allows for a style of semi-automated
-  theorem proving, called TP. which can be used to construct such proofs.\nThe documentation
-  includes example proofs for many list functions, and even inductive proofs for\nthe
-  familiar insertion, merge, quick-sort algorithms, along with a proof that the square-root
-  of 2 is irrational.\nWhile a proper theorem prover (such as Lean, Isabelle etc.)
-  is a more appropriate choice for such proofs, with some\nguidance (and acceptance
-  of a much larger trusted code base!), SBV can be used to establish correctness of
-  various mathematical\nclaims and algorithms that are usually beyond the scope of
-  SMT solvers alone. See the documentation under\nthe `Documentation.SBV.Examples.TP`
-  directory.\n\n## Copyright, License\n\nThe SBV library is distributed with the BSD3
-  license. See [COPYRIGHT](http://github.com/LeventErkok/sbv/tree/master/COPYRIGHT)
-  for details.\nThe [LICENSE](http://github.com/LeventErkok/sbv/tree/master/LICENSE)
-  file contains the [BSD3](http://en.wikipedia.org/wiki/BSD_licenses) verbiage.\n\n##
-  Thanks\n\nThe following people made major contributions to SBV, by developing new
-  features and contributing to the design in significant ways: Joel Burget, Brian
-  Huffman, Brian Schroeder, and Jeffrey Young.\n\nThe following people reported bugs,
-  provided comments/feedback, or contributed to the development of SBV in various
-  ways:\nAndreas Abel,\nAra Adkins,\nAndrew Anderson,\nKanishka Azimi,\nMarkus Barenhoff,\nReid
-  Barton,\nBen Blaxill,\nIan Blumenfeld,\nGuillaume Bouchard,\nMartin Brain,\nIan
-  Calvert,\nOliver Charles,\nChristian Conkle,\nMatthew Danish,\nIavor Diatchki,\nAlex
-  Dixon,\nRobert Dockins,\nThomas DuBuisson,\nTrevor Elliott,\nGergő Érdi,\nJohn Erickson,\nRichard
-  Fergie,\nAdam Foltzer,\nJoshua Gancher,\nRemy Goldschmidt,\nJan Grant,\nBrad Hardy,\nTom
-  Hawkins,\nGreg Horn,\nJan Hrcek,\nGeorges-Axel Jaloyan,\nAnders Kaseorg,\nTom Sydney
-  Kerckhove,\nLars Kuhtz,\nPiërre van de Laar,\nPablo Lamela,\nKen Friis Larsen,\nAndrew
-  Lelechenko,\nJoe Leslie-Hurd,\nNick Lewchenko,\nBrett Letner,\nSirui Lu,\nGeorgy
-  Lukyanov,\nMartin Lundfall,\nDaniel Matichuk,\nJohn Matthews,\nCurran McConnell,\nPhilipp
-  Meyer,\nFabian Mitterwallner,\nJoshua Moerman,\nMatt Parker,\nJan Path,\nMatt Peddie,\nLucas
-  Peña,\nMatthew Pickering,\nLee Pike,\nGleb Popov,\nRohit Ramesh,\nGeoffrey Ramseyer,\nBlake
-  C. Rawlings,\nJaro Reinders,\nStephan Renatus,\nDan Rosén,\nRyan Scott,\nEric Seidel,\nAustin
-  Seipp,\nAndrés Sicard-Ramírez,\nDon Stewart,\nGreg Sullivan,\nJosef Svenningsson,\nGeorge
-  Thomas,\nMay Torrence,\nDaniel Wagner,\nSean Weaver,\nRobin Webbers,\nEddy Westbrook,\nNis
-  Wegmann,\nJared Ziegler,\nand Marco Zocca.\n\nThanks!\n"
+description: |
+  # SBV: SMT Based Verification in Haskell
+
+  [![Build Status](https://github.com/LeventErkok/sbv/actions/workflows/ci.yml/badge.svg)](https://github.com/LeventErkok/sbv/actions/workflows/ci.yml)
+
+  ***Express properties about Haskell programs and automatically prove them using SMT solvers.***
+
+  [Hackage](http://hackage.haskell.org/package/sbv) | [Release Notes](http://github.com/LeventErkok/sbv/tree/master/CHANGES.md) | [Documentation](http://hackage.haskell.org/package/sbv/docs/Data-SBV.html)
+
+  SBV provides symbolic versions of Haskell types. Programs written with these types can be automatically verified, checked for satisfiability, optimized, or compiled to C — all via SMT solvers.
+
+  ## SBV in 5 Minutes
+
+  Fire up GHCi with SBV:
+
+  ```
+  $ cabal repl --build-depends sbv
+  ```
+
+  For unbounded integers, `x + 1 .> x` is always true:
+
+  ```haskell
+  ghci> :m Data.SBV
+  ghci> prove $ \x -> x + 1 .> (x :: SInteger)
+  Q.E.D.
+  ```
+
+  But with machine arithmetic, overflow lurks:
+
+  ```haskell
+  ghci> prove $ \x -> x + 1 .> (x :: SInt8)
+  Falsifiable. Counter-example:
+    s0 = 127 :: Int8
+  ```
+
+  IEEE-754 floats break reflexivity of equality:
+
+  ```haskell
+  ghci> prove $ \x -> (x :: SFloat) .== x
+  Falsifiable. Counter-example:
+    s0 = NaN :: Float
+  ```
+
+  What's the multiplicative inverse of 3 modulo 256?
+
+  ```haskell
+  ghci> sat $ \x -> x * 3 .== (1 :: SWord8)
+  Satisfiable. Model:
+    s0 = 171 :: Word8
+  ```
+
+  Use quantifiers for named results:
+
+  ```haskell
+  ghci> sat $ skolemize $ \(Exists @"x" x) (Exists @"y" y) -> x * y .== (96::SInteger) .&& x + y .== 28
+  Satisfiable. Model:
+    x = 24 :: Integer
+    y =  4 :: Integer
+  ```
+
+  Optimize a cost function subject to constraints:
+
+  ```haskell
+  ghci> :{
+  optimize Lexicographic $ do x <- sInteger "x"
+                              y <- sInteger "y"
+                              constrain $ x + y .== 20
+                              constrain $ x .>= 5
+                              constrain $ y .>= 5
+                              minimize "cost" $ x * y
+  :}
+  Optimal in an extension field:
+    x    =  5 :: Integer
+    y    = 15 :: Integer
+    cost = 75 :: Integer
+  ```
+
+  For inductive proofs and equational reasoning, SBV includes a theorem prover:
+
+  ```haskell
+  revApp :: forall a. SymVal a => TP (Proof (Forall "xs" [a] -> Forall "ys" [a] -> SBool))
+  revApp = induct "revApp"
+                   (\(Forall xs) (Forall ys) -> reverse (xs ++ ys) .== reverse ys ++ reverse xs) $
+                   \ih (x, xs) ys -> [] |- reverse ((x .: xs) ++ ys)
+                                        =: reverse (x .: (xs ++ ys))
+                                        =: reverse (xs ++ ys) ++ [x]
+                                        ?? ih
+                                        =: (reverse ys ++ reverse xs) ++ [x]
+                                        =: reverse ys ++ (reverse xs ++ [x])
+                                        =: reverse ys ++ reverse (x .: xs)
+                                        =: qed
+  ```
+
+  ```
+  ghci> runTP $ revApp @Integer
+  Inductive lemma: revApp
+    Step: Base                            Q.E.D.
+    Step: 1                               Q.E.D.
+    Step: 2                               Q.E.D.
+    Step: 3                               Q.E.D.
+    Step: 4                               Q.E.D.
+    Step: 5                               Q.E.D.
+    Result:                               Q.E.D.
+  Functions proven terminating: sbv.reverse
+  [Proven] revApp :: Ɐxs ∷ [Integer] → Ɐys ∷ [Integer] → Bool
+  ```
+
+  ## Features
+
+  **Symbolic types** — Booleans, signed/unsigned integers (8/16/32/64-bit and arbitrary-width), unbounded integers, reals, rationals, IEEE-754 floats, characters, strings, lists, tuples, sums, optionals, sets, enumerations, algebraic data types, and uninterpreted sorts.
+
+  **Verification** — `prove`/`sat`/`allSat` for property checking and model finding, `safe`/`sAssert` for assertion verification, `dsat`/`dprove` for delta-satisfiability, and QuickCheck integration.
+
+  **Optimization** — Minimize/maximize cost functions subject to constraints via `optimize`/`maximize`/`minimize`, with support for lexicographic, independent, and Pareto objectives.
+
+  **Quantifiers and functions** — Universal and existential quantifiers (including alternating), with skolemization for named bindings. Define SMT-level functions directly from Haskell via `smtFunction`, including recursive and mutually recursive definitions with automatic termination checking.
+
+  **Theorem proving (TP)** — Semi-automated inductive proofs (including strong induction) with equational reasoning chains. Includes termination checking, recursive and mutually recursive definitions, productive (co-recursive) functions, and user-defined measures.
+
+  **Code generation** — Compile symbolic programs to C as straight-line programs or libraries (`compileToC`, `compileToCLib`), and generate test vectors (`genTest`).
+
+  **SMT interaction** — Incremental mode via `runSMT`/`query` for programmatic solver interaction with a high-level typed API. Run multiple solvers simultaneously with `proveWithAny`/`proveWithAll`.
+
+  ## Algebraic Data Types
+
+  User-defined algebraic data types — including enumerations, recursive, and parametric types — are supported via `mkSymbolic`, with pattern matching via `sCase` (and its proof counterpart `pCase`):
+
+  ```haskell
+  {-# LANGUAGE QuasiQuotes     #-}
+  {-# LANGUAGE TemplateHaskell #-}
+
+  import Data.SBV
+
+  data Expr a = Val a
+              | Add (Expr a) (Expr a)
+              | Mul (Expr a) (Expr a)
+              deriving Show
+
+  -- Make Expr symbolically available, named SExpr
+  mkSymbolic [''Expr]
+
+  eval :: SymVal a => (SBV a -> SBV a -> SBV a) -> (SBV a -> SBV a -> SBV a) -> SBV (Expr a) -> SBV a
+  eval add mul = smtFunction "eval" $ \e ->
+      [sCase| e of
+         Val v   -> v
+         Add x y -> eval add mul x `add` eval add mul y
+         Mul x y -> eval add mul x `mul` eval add mul y
+      |]
+  ```
+
+  The `sCase` construct supports nested pattern matching, as-patterns, guards, and wildcards, making programming with algebraic data types natural. Plain `case` expressions inside `sCase` are automatically treated as symbolic case-splits. The `pCase` variant provides the same features for proof case-splits in the theorem proving context.
+
+  ## Supported SMT Solvers
+
+  SBV communicates with solvers via the standard SMT-Lib interface:
+
+  | Solver | From | | Solver | From |
+  |--------|------|-|--------|------|
+  | [ABC](http://www.eecs.berkeley.edu/~alanmi/abc) | Berkeley | | [DReal](http://dreal.github.io/) | CMU |
+  | [Bitwuzla](http://bitwuzla.github.io/) | Stanford | | [MathSAT](http://mathsat.fbk.eu/) | FBK / Trento |
+  | [Boolector](http://boolector.github.io/) | JKU | | [OpenSMT](http://verify.inf.usi.ch/opensmt) | USI |
+  | [CVC4](http://cvc4.github.io/) | Stanford / Iowa | | [Yices](http://github.com/SRI-CSL/yices2) | SRI |
+  | [CVC5](http://cvc5.github.io/) | Stanford / Iowa | | [Z3](http://github.com/Z3Prover/z3/wiki) | Microsoft |
+
+  **Z3** is the default solver. Use `proveWith`, `satWith`, etc. to select a different one (e.g., `proveWith cvc5`). See [tested versions](http://github.com/LeventErkok/sbv/blob/master/SMTSolverVersions.md) for details. Other SMT-Lib compatible solvers can be hooked up with minimal effort — get in touch if you'd like to use one not listed here.
+
+  ## A Selection of Examples
+
+  SBV ships with many worked examples. Here are some highlights:
+
+  | Example | Description |
+  |---------|-------------|
+  | [Sudoku](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-Puzzles-Sudoku.html) | Solve Sudoku puzzles using SMT constraints |
+  | [N-Queens](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-Puzzles-NQueens.html) | Solve the N-Queens placement puzzle |
+  | [SEND + MORE = MONEY](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-Puzzles-SendMoreMoney.html) | The classic cryptarithmetic puzzle |
+  | [Fish/Zebra](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-Puzzles-Fish.html) | Einstein's logic puzzle |
+  | [SQL Injection](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-Strings-SQLInjection.html) | Find inputs that cause SQL injection vulnerabilities |
+  | [Regex Crossword](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-Strings-RegexCrossword.html) | Solve regex crossword puzzles |
+  | [BitTricks](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-BitPrecise-BitTricks.html) | Verify bit-manipulation tricks from Stanford's bithacks collection |
+  | [Legato multiplier](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-BitPrecise-Legato.html) | Correctness proof of Legato's 8-bit multiplier |
+  | [Prefix sum](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-BitPrecise-PrefixSum.html) | Ladner-Fischer prefix-sum implementation proof |
+  | [AES](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-Crypto-AES.html) | AES encryption with C code generation |
+  | [CRC](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-CodeGeneration-CRC_USB5.html) | Symbolic CRC computation with C code generation |
+  | [Sqrt2 irrational](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-Sqrt2IsIrrational.html) | Prove that the square root of 2 is irrational |
+  | [Sorting](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-InsertionSort.html) | Prove [insertion sort](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-InsertionSort.html), [merge sort](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-MergeSort.html), and [quick sort](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-QuickSort.html) correct |
+  | [Kadane](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-Kadane.html) | Prove Kadane's maximum segment-sum algorithm correct |
+  | [McCarthy91](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-McCarthy91.html) | Prove McCarthy's 91 function meets its specification |
+  | [Binary search](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-BinarySearch.html) | Prove binary search correct |
+  | [Collatz](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-Collatz.html) | Explore properties of the Collatz sequence |
+  | [Infinitely many primes](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-Primes.html) | Prove there are infinitely many primes |
+  | [Tautology checker](http://hackage.haskell.org/package/sbv/docs/Documentation-SBV-Examples-TP-TautologyChecker.html) | A verified BDD-style tautology checker |
+
+  Browse the full collection in `Documentation.SBV.Examples` [on Hackage](http://hackage.haskell.org/package/sbv).
+
+  ## License
+
+  SBV is distributed under the [BSD3](http://en.wikipedia.org/wiki/BSD_licenses) license. See [COPYRIGHT](http://github.com/LeventErkok/sbv/tree/master/COPYRIGHT) and [LICENSE](http://github.com/LeventErkok/sbv/tree/master/LICENSE) for details.
+
+  Please report bugs and feature requests at the [GitHub issue tracker](http://github.com/LeventErkok/sbv/issues).
+
+  ## Thanks
+
+  The following people made major contributions to SBV, by developing new features and contributing to the design in significant ways: Joel Burget, Brian Huffman, Brian Schroeder, and Jeffrey Young.
+
+  The following people reported bugs, provided comments/feedback, or contributed to the development of SBV in various ways:
+  Andreas Abel,
+  Ara Adkins,
+  Andrew Anderson,
+  Kanishka Azimi,
+  Markus Barenhoff,
+  Reid Barton,
+  Ben Blaxill,
+  Ian Blumenfeld,
+  Guillaume Bouchard,
+  Martin Brain,
+  Ian Calvert,
+  Oliver Charles,
+  Christian Conkle,
+  Matthew Danish,
+  Iavor Diatchki,
+  Alex Dixon,
+  Robert Dockins,
+  Thomas DuBuisson,
+  Trevor Elliott,
+  Gergő Érdi,
+  John Erickson,
+  Richard Fergie,
+  Adam Foltzer,
+  Joshua Gancher,
+  Remy Goldschmidt,
+  Jan Grant,
+  Brad Hardy,
+  Tom Hawkins,
+  Greg Horn,
+  Jan Hrcek,
+  Georges-Axel Jaloyan,
+  Anders Kaseorg,
+  Tom Sydney Kerckhove,
+  Lars Kuhtz,
+  Piërre van de Laar,
+  Pablo Lamela,
+  Ken Friis Larsen,
+  Andrew Lelechenko,
+  Joe Leslie-Hurd,
+  Nick Lewchenko,
+  Brett Letner,
+  Sirui Lu,
+  Georgy Lukyanov,
+  Martin Lundfall,
+  Daniel Matichuk,
+  John Matthews,
+  Curran McConnell,
+  Philipp Meyer,
+  Fabian Mitterwallner,
+  Joshua Moerman,
+  Matt Parker,
+  Jan Path,
+  Matt Peddie,
+  Lucas Peña,
+  Matthew Pickering,
+  Lee Pike,
+  Gleb Popov,
+  Rohit Ramesh,
+  Geoffrey Ramseyer,
+  Blake C. Rawlings,
+  Jaro Reinders,
+  Stephan Renatus,
+  Dan Rosén,
+  Ryan Scott,
+  Eric Seidel,
+  Austin Seipp,
+  Andrés Sicard-Ramírez,
+  Don Stewart,
+  Greg Sullivan,
+  Josef Svenningsson,
+  George Thomas,
+  May Torrence,
+  Daniel Wagner,
+  Sean Weaver,
+  Robin Webbers,
+  Eddy Westbrook,
+  Nis Wegmann,
+  Jared Ziegler,
+  and Marco Zocca.
+
+  Thanks!
 description-type: markdown
-hash: 65099c81504a2e85a49cc94a4f8bacad12c423b9171cf2ef3b6686a6a71d99ec
+hash: 74216d93d884c69506bbb521fba5c58451a46651f97fb5426c7cc775154dfb8b
 homepage: http://github.com/LeventErkok/sbv
-latest: '13.6'
+latest: '14.0'
 license-name: BSD-3-Clause
 maintainer: Levent Erkok (erkokl@gmail.com)
 synopsis: 'SMT Based Verification: Symbolic Haskell theorem prover using SMT solving.'
