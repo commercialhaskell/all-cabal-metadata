@@ -1,0 +1,272 @@
+all-versions:
+- 0.1.0.0
+author: Martijn Bastiaan
+basic-deps:
+  base: '>=4.18 && <5'
+  ghc: '>=9.6 && <9.15'
+  ghc-typelits-extra: '>=0.5 && <0.6'
+  ghc-typelits-knownnat: '>=0.8 && <0.9'
+  ghc-typelits-natnormalise: '>=0.9 && <0.10'
+  mtl: '>=2.2.2 && <2.4'
+  syb: '>=0.7 && <0.8'
+  template-haskell: '>=2.20 && <2.25'
+changelog: |
+  # Revision history for `checked-literals`
+
+  ## 0.1.0.0 -- 2026-02-28
+
+  * First version. Released on an unsuspecting world.
+changelog-type: markdown
+description: |
+  `checked-literals` is a GHC plugin that rewrites your programs such that you get a type error
+  whenever you use a literal that doesn't fit the target type. It works in any context, mono-
+  or polymorphic. It mostly makes sense in context of custom number types, such as
+  [clash-lang](https://clash-lang.org/)'s`Unsigned`, `Signed`, and `Index`.
+
+  - [How to use](#how-to-use)
+  - [How it works](#how-it-works)
+    - [Integer Literals](#integer-literals)
+    - [Rational Literals](#rational-literals)
+    - [Examples](#examples)
+      - [Out-of-bound, positive literal in monomorphic context](#out-of-bound-positive-literal-in-monomorphic-context)
+      - [Out-of-bound, negative literal in monomorphic context](#out-of-bound-negative-literal-in-monomorphic-context)
+      - [Inexact rational literal in monomorphic context](#inexact-rational-literal-in-monomorphic-context)
+      - [Polymorphic rational context with `UFixed 0 f`](#polymorphic-rational-context-with-ufixed-0-f)
+      - [Polymorphic context](#polymorphic-context)
+      - [Polymorphic context with `Unsigned n`](#polymorphic-context-with-unsigned-n)
+  - [FAQ](#faq)
+    - [Why not rely on GHC's builtin warnings?](#why-not-rely-on-ghcs-builtin-warnings)
+    - [Couldn't you only insert for types you recognize?](#couldnt-you-only-insert-for-types-you-recognize)
+    - [Couldn't you write this as a core-to-core plugin?](#couldnt-you-write-this-as-a-core-to-core-plugin)
+    - [Couldn't you write this as a type-checker plugin?](#couldnt-you-write-this-as-a-type-checker-plugin)
+    - [Why not a warning?](#why-not-a-warning)
+    - [What about `Float`/`Double`?](#what-about-floatdouble)
+
+  # How to use
+  Add `checked-literals` to your library's `build-depends` and `-fplugin=CheckedLiterals` to its
+  `ghc-options`, like this:
+
+  ```yaml
+  library
+    [..]
+
+    build-depends:
+      [..]
+      checked-literals
+
+    ghc-options: -fplugin=CheckedLiterals
+  ```
+
+  # TODO
+  - [ ] Test in larger ecosystems (bittide?)
+  - [ ] Release on Hackage
+  - [ ] Implement in `clash-prelude`
+  - [ ] Investigate use of "if instance exist" hackery to get better error messages in completely polymorphic settings? (Low priority, IMO.)
+
+  # How it works
+
+  ## Integer Literals
+  Every positive integer literal is rewritten as `checkedPositiveIntegerLiteral @lit lit` and every
+  negative integer literal is rewritten as `checkedNegativeIntegerLiteral @lit (-lit)`. The `checked`
+  functions themselves act as `id`, but insert a `Checked{Positive,Negative}IntegerLiteral lit a`
+  constraint where `a` is the type of the literal (possibly polymorphic). Every instance of
+  this class should insert a constraint that's checkable by the type checkers. For example,
+  an instance of `Word8` might look like:
+
+  ```haskell
+  instance (lit <= 255) => CheckedPositiveIntegerLiteral lit Word8
+  ```
+
+  ## Rational Literals
+  Rational literals undergo a very similar rewrite, but use `CheckedPositiveRationalLiteral` and
+  `CheckedNegativeRationalLiteral` instead. This allows instances to reject both out-of-bounds
+  values and values that would require rounding.
+
+  ## Examples
+  ### Out-of-bound, positive literal in monomorphic context
+  ```haskell
+  x :: Word8
+  x = 259
+  ```
+
+  ```haskell
+  error: [GHC-64725]
+      • Literal 259 is out of bounds.
+        Word8 has bounds: [0 .. 255].
+        Possible fix: use 'uncheckedLiteral' from 'CheckedLiterals' to bypass this check.
+      • In the expression: checkedPositiveIntegerLiteral @259 259
+        In an equation for ‘exampleWord8’:
+            x = checkedPositiveIntegerLiteral @259 259
+    |
+  9 | x = 259
+    |     ^^^
+  ```
+
+  ### Out-of-bound, negative literal in monomorphic context
+  ```haskell
+  x :: Word8
+  x = -1
+  ```
+
+  ```haskell
+  error: [GHC-64725]
+      • Negative literal -1 is out of bounds.
+        Word8 has bounds: [0 .. 255].
+        Possible fix: use 'uncheckedLiteral' from 'CheckedLiterals' to bypass this check.
+      • In the expression: checkedNegativeIntegerLiteral @1 -1
+        In an equation for ‘x’:
+            x = checkedNegativeIntegerLiteral @1 -1
+    |
+  9 | x = -1
+    |     ^^
+  ```
+
+  ### Inexact rational literal in monomorphic context
+  ```haskell
+  x :: UFixed 0 1
+  x = 0.75
+  ```
+
+  ```
+  error: [GHC-64725]
+      • Literal 0.75 cannot be represented exactly by Fixed
+                                                        CheckedLiterals.Nums.Unsigned.Unsigned 0 1.
+        The fractional part needs at least 2 bit(s).
+        Possible fix: add a constraint: 2 <= 1.
+        Possible fix: use 'uncheckedLiteral' from 'CheckedLiterals' to bypass this check.
+      • In the expression:
+          CheckedLiterals.Class.Rational.checkedPositiveRationalLiteral
+            @"0.75" @3 @4 0.75
+        In an equation for ‘x’:
+            x = CheckedLiterals.Class.Rational.checkedPositiveRationalLiteral
+                  @"0.75" @3 @4 0.75
+    |
+  6 | x = 0.75
+    |     ^^^^
+  ```
+
+  ### Polymorphic rational context with `UFixed 0 f`
+  ```haskell
+  x :: (KnownNat f, 1 <= f) => UFixed 0 f
+  x = 0.75
+  ```
+
+  ```
+  error: [GHC-64725]
+      • Literal 0.75 cannot be represented exactly by Fixed
+                                                        CheckedLiterals.Nums.Unsigned.Unsigned 0 f.
+        The fractional part needs at least 2 bit(s).
+        Possible fix: add a constraint: 2 <= f.
+        Possible fix: use 'uncheckedLiteral' from 'CheckedLiterals' to bypass this check.
+      • In the expression:
+          CheckedLiterals.Class.Rational.checkedPositiveRationalLiteral
+            @"0.75" @3 @4 0.75
+        In an equation for ‘x’:
+            x = CheckedLiterals.Class.Rational.checkedPositiveRationalLiteral
+                  @"0.75" @3 @4 0.75
+    |
+  6 | x = 0.75
+    |     ^^^^
+  ```
+
+  ### Polymorphic context
+  ```haskell
+  x :: Num a => a
+  x = -1
+  ```
+
+  ```
+  error: [GHC-39999]
+      • Could not deduce ‘CheckedNegativeIntegerLiteral 1 a’
+          arising from a use of ‘checkedNegativeIntegerLiteral’
+        from the context: Num a
+          bound by the type signature for:
+                     x :: forall a. Num a => a
+          at examples.hs:8:1-15
+      • In the expression: checkedNegativeIntegerLiteral @1 - 1
+        In an equation for ‘x’: x = checkedNegativeIntegerLiteral @1 - 1
+    |
+  9 | x = -1
+    |     ^^
+  ```
+
+  ### Polymorphic context with `Unsigned n`
+  ```haskell
+  x :: (4 <= n, KnownNat n) => Unsigned n
+  x = 255
+  ```
+
+  ```
+  error: [GHC-64725]
+      • Literal 255 is out of bounds.
+        Unsigned n has bounds: [0 .. (2 ^ n) - 1].
+        Possible fix: add '8 <= n' to the context.
+        Possible fix: use 'uncheckedLiteral' from 'CheckedLiterals' to bypass this check.
+      • In the expression: checkedPositiveIntegerLiteral @255 255
+        In an equation for ‘x’: x = checkedPositiveIntegerLiteral @255 255
+    |
+  9 | x = 255
+    |     ^^^
+  ```
+
+  # FAQ
+  ## Why not rely on GHC's builtin warnings?
+  GHC's builtin warnings work fine for builtin types when they're monomorphic:
+
+  ```haskell
+  ghci> x = -5 :: Word
+  <interactive>:1:6: warning: [GHC-97441] [-Woverflowed-literals]
+      Literal -5 is out of the Word range 0..18446744073709551615
+  ```
+
+  But it's easy to (accidentally) work around:
+
+  ```haskell
+  ghci> x = -5 :: Num a => a
+  ghci> x :: Word
+  18446744073709551611
+  ```
+
+  More importantly, it doesn't work with custom numeric types, such as Clash's `Signed`,
+  `Unsigned`, and `Index`.
+
+  ## Couldn't you only insert for types you recognize?
+  Maybe, but you'd encounter the same issues as GHC's builtin system does. (See previous question.)
+
+  ## Couldn't you write this as a core-to-core plugin?
+  You can't insert constraints anymore, as type checking has already run. Yes, you could access
+  types and write your own solvers, but this would balloon the size of the plugin. More
+  importantly, it would bypass GHC's usual type checking behavior and user plugins, which
+  is bound to cause issues where GHC would usually approve/reject constraints, but the plugin
+  doesn't.
+
+  ## Couldn't you write this as a type-checker plugin?
+  Maybe in combination with other passes, but _just_ the type checkers don't have access to
+  term level literals.
+
+  ## Why not a warning?
+  Because there is no `TypeWarning` :-).
+
+  ## What about `Float`/`Double`?
+  `Float` and `Double` are supported for rational literals (e.g., `3.14`), however, truncation
+  is expected for these types.
+description-type: markdown
+hash: 0bbe83522b81c847e59141f31ecc261bb4dcfb1106ad6cc0eb5bb2c0ee3450ec
+homepage: https://github.com/clash-lang/checked-literals
+latest: 0.1.0.0
+license-name: BSD-2-Clause
+maintainer: martijn@hmbastiaan.nl
+synopsis: GHC plugin for checked numeric literals
+test-bench-deps:
+  base: '>=0'
+  checked-literals: '>=0'
+  directory: '>=0'
+  filepath: '>=0'
+  ghc-typelits-extra: '>=0.5 && <0.6'
+  ghc-typelits-knownnat: '>=0.8 && <0.9'
+  ghc-typelits-natnormalise: '>=0.9 && <0.10'
+  process: '>=0'
+  string-interpolate: '>=0.3.4.0'
+  tasty: '>=0.10'
+  tasty-hunit: '>=0.9'
+  temporary: '>=0'
