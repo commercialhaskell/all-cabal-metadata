@@ -1,0 +1,142 @@
+all-versions:
+- 0.1.0
+author: Jappie Klooster
+basic-deps:
+  base: '>=4.9.1.0 && <4.23'
+  bytestring: <1
+  containers: <1
+  text: <3
+  transformers: <0.7
+changelog: |
+  # Change log for hatter
+
+  ## Version 1.0.0
+
+  Initial release of hatter.
+changelog-type: markdown
+description: "[![CI](https://img.shields.io/github/actions/workflow/status/jappeace/hatter/ci.yaml?branch=master)](https://github.com/jappeace/hatter/actions)\n\n>
+  \ Why is a raven like a writing-desk?\n\n![hatter](./hatter.png)\n\n# Hatter\nIt's
+  like flutter but instead of dart, haskell!\n\nWrite native mobile apps in Haskell.\nThis
+  works similar to react native where we have\ntight bindings on the existing UI frameworks\nprovided
+  by android and IOS.\n\nThis project cross-compiles a Haskell library to Android
+  (APK) and iOS (static library / IPA),\nwith a thin platform-native UI layer (Kotlin
+  for Android, Swift for iOS).\nThere is support for android wear and wearOS as well,\nbecause
+  I personally want to build apps for those. \nIOS and Android support was just a
+  side effect.\n\nSupports native:\n\n+ android\n+ android wearable\n+ IOS\n+ WearOS
+  (IOS on wearables)\n\nThe library fully controls the UI.\nThis is different from
+  say Simplex chat where they call into the library to do Haskell from dirty java/swift
+  code.\nThis library should've written all swift/java code you'll ever need,\nso
+  you can focus on your sweet Haskell.\n\nHaskell is a fantastic language for UI.\nHaving
+  strong type safety around callbacks and widgets \nmakes it a lot easier to write
+  them.\nI basically copied flutters' approach to encoding UI,\nbut in flutter it's
+  a fair bit of guess work, \nit becomes /very/ nice in Haskell however.\nI've been
+  many times annoyed at the ~~garbage~~ languages\nthey keep shoving into our face
+  for UI.\nWith [vibes](https://jappie.me/haskell-vibes.html) in hand I put my malice\ninto
+  crafting something good.\nFlutter is already pretty good, but the syntax is complex,\nand
+  it has many inherited footguns from Java.\nI think I made here what flutter wanted
+  to be.\n\n# How to use\n\n## Writing your app\n\nYour app is a Haskell module with
+  a `main :: IO (Ptr AppContext)`.\nYou define a `MobileApp` record and pass it to
+  `startMobileApp`:\n\n```haskell\n{-# LANGUAGE OverloadedStrings #-}\nmodule Main
+  where\n\nimport Data.IORef (newIORef, readIORef, modifyIORef')\nimport Data.Text
+  qualified as Text\nimport Foreign.Ptr (Ptr)\nimport Hatter\n  ( startMobileApp,
+  MobileApp(..), AppContext\n  , loggingMobileContext\n  , newActionState, runActionM,
+  createAction, Action\n  )\nimport Hatter.Widget\n\nmain :: IO (Ptr AppContext)\nmain
+  = do\n  actionState <- newActionState\n  counter <- newIORef (0 :: Int)\n  increment
+  <- runActionM actionState $\n    createAction (modifyIORef' counter (+ 1))\n  startMobileApp
+  MobileApp\n    { maContext     = loggingMobileContext\n    , maView        = \\_userState
+  -> do\n        n <- readIORef counter\n        pure $ Column\n          [ text $
+  \"Count: \" <> Text.pack (show n)\n          , button \"+\" increment\n          ]\n
+  \   , maActionState = actionState\n    }\n```\n\n`maView` is called on every render
+  cycle and returns a `Widget` tree.\nButton taps (and other events) fire `Action`
+  handles created via `runActionM`,\nthen the framework re-renders automatically.\n\n\n\n###
+  Platform bridges\n\nThe `UserState` passed to `maView` provides access to platform
+  APIs:\n\n| Bridge         | Functions                                                        |
+  Comments                    |\n|----------------|------------------------------------------------------------------|-----------------------------|\n|
+  Secure storage | `secureStorageWrite`, `secureStorageRead`, `secureStorageDelete`
+  |                             |\n| BLE scanning   | `startBleScan`, `stopBleScan`,
+  `checkBleAdapter`                 | still need to do connecting |\n| Location       |
+  `startLocationUpdates`, `stopLocationUpdates`                    | gps for example
+  \            |\n| Auth sessions  | `startAuthSession` (OAuth/ASWebAuthenticationSession)
+  \           |                             |\n| Camera         | `startCameraSession`,
+  `capturePhoto`, `startVideoCapture`        |                             |\n| HTTP
+  \          | `performRequest`                                                 |
+  http-client also works but this results in much smaller apks which is good for wearables
+  \                           |\n| Permissions    | `requestPermission`, `checkPermission`
+  \                          |                             |\n\n## Building for Android\n\nRequires
+  Nix. The build cross-compiles your Haskell to a `.so` shared library\nand packages
+  it into an APK with the Java UI layer.\n\n### 1. Build the APK\n\n```bash\nnix-build
+  nix/apk.nix\n```\n\nThis produces `result/hatter.apk` containing both arm64-v8a
+  and armeabi-v7a architectures.\n\nTo build with your own `Main.hs`:\n\n```bash\nnix-build
+  nix/apk.nix --arg mainModule ./path/to/your/Main.hs\n```\n\nOr build just the shared
+  library for a single architecture:\n\n```bash\nnix-build nix/android.nix                               #
+  aarch64 (default)\nnix-build nix/android.nix --arg androidArch '\"armv7a\"'   #
+  armv7a\n```\n\n### 2. Install\n\n```bash\nadb install result/hatter.apk\n```\n\n###
+  3. Consumer projects with extra Haskell dependencies\n\nIf your app needs Hackage
+  packages beyond what hatter provides,\npass them via `consumerCabalFile` or `hpkgs`:\n\n```nix\n#
+  your-app/default.nix\nlet\n  hatter = builtins.fetchGit {\n    url = \"https://github.com/jappeace/hatter.git\";\n
+  \   ref = \"master\";\n  };\nin import \"${hatter}/nix/apk.nix\" {\n  mainModule
+  = ./src/Main.hs;\n  # Option A: point to your .cabal file (uses IFD to extract deps)\n
+  \ consumerCabalFile = ./your-app.cabal;\n  # Option B: override haskellPackages
+  directly\n  # hpkgs = self: super: { aeson = self.callHackage \"aeson\" \"2.2.1.0\"
+  {}; };\n}\n```\n\n### How it works under the hood\n\nThe Java activity (`HatterActivity`)
+  loads the `.so` via `System.loadLibrary`,\nwhich triggers `JNI_OnLoad` in `cbits/jni_bridge.c`.
+  That initializes the GHC RTS,\nruns your Haskell `main`, and stores the returned
+  `AppContext` pointer.\nWhen `onCreate` fires, Java calls `renderUI` through JNI,
+  which invokes your `maView`\nand the framework translates the `Widget` tree into
+  Android `View` calls.\n\nYou never need to write Java — `HatterActivity` handles
+  all the native UI,\npermissions, camera, location, etc. Your consumer app's `MainActivity`
+  just extends it:\n\n```java\npackage com.example.myapp;\nimport me.jappie.hatter.HatterActivity;\npublic
+  class MainActivity extends HatterActivity {}\n```\n\n## Building for iOS\n\nRequires
+  macOS with Nix. The build produces a static `.a` library that links into\nan Xcode
+  project via a Swift bridge.\n\n### 1. Build the static library\n\n```bash\nnix-build
+  nix/ios.nix\n```\n\nThis produces `result/lib/libHatter.a` and headers in `result/include/`.\n\nTo
+  build with your own `Main.hs`:\n\n```bash\nnix-build nix/ios.nix --arg mainModule
+  ./path/to/your/Main.hs\n```\n\n### 2. Set up the Xcode project\n\nStage the library
+  and headers, then generate the Xcode project with [XcodeGen](https://github.com/yonaskolb/XcodeGen):\n\n```bash\nmkdir
+  -p ios/lib ios/include\ncp result/lib/libHatter.a ios/lib/\ncp result/include/*.h
+  ios/include/\n\nnix-shell -p xcodegen --run \"cd ios && xcodegen generate\"\nopen
+  ios/Hatter.xcodeproj\n```\n\nThe `ios/project.yml` configures the bridging header,
+  library search paths,\nand framework dependencies automatically.\n\n### 3. Build
+  and run\n\nConfigure signing in Xcode (team, bundle ID, provisioning profile), then\nbuild
+  and run on a device or simulator.\n\n### How it works under the hood\n\nThe Swift
+  bridge (`ios/Hatter/HaskellBridge.swift`) calls `hs_init` and\n`haskellRunMain`
+  to boot the GHC RTS and run your Haskell `main`.\nIt then sets up all the platform
+  bridges (permissions, camera, location, etc.)\nand calls `haskellRenderUI` when
+  SwiftUI requests a view update.\n\nThe bridging header (`Hatter-Bridging-Header.h`)
+  exposes the C FFI functions\nto Swift. The `project.yml` links against the required
+  system frameworks\n(CoreLocation, CoreBluetooth, AVFoundation, WebKit, etc.).\n\n###
+  Consumer iOS projects\n\nCopy the `ios/` directory as a starting point for your
+  app.\nThe key files are:\n\n| File | Purpose |\n|------|---------|\n| `HaskellBridge.swift`
+  | Boots GHC RTS, dispatches UI events |\n| `HatterApp.swift` | SwiftUI `@main` entry
+  point |\n| `ContentView.swift` | SwiftUI view that calls `HaskellBridge.renderUI()`
+  |\n| `Hatter-Bridging-Header.h` | C header imports for Swift |\n| `project.yml`
+  | XcodeGen spec with signing, frameworks, search paths |\n\n## Building for watchOS\n\n```bash\nnix-build
+  nix/watchos.nix\n```\n\nWorks the same as iOS — produces a static library for watchOS.\nThe
+  `watchos/` directory contains the WatchKit app structure.\n\n## Desktop development\n\nFor
+  fast iteration, build and test natively:\n\n```bash\nnix-shell\ncabal build all\ncabal
+  test all\n```\n\nThe desktop build uses stub C bridges that simulate platform responses\n(e.g.
+  permissions always granted, location returns fixed coordinates).\nThis lets you
+  develop and test your app logic without a device.\n\n## CI\n\nFive CI jobs run on
+  every push:\n\n| Job | Platform | What it does |\n|-----|----------|--------------|\n|
+  `nix-build` | Linux | Full nix-build + cabal test |\n| `android` | Linux | Cross-compile
+  aarch64, build APK |\n| `android-armv7a-emulator` | Linux | Cross-compile armv7a,
+  run in emulator |\n| `ios` | macOS | Cross-compile to iOS static lib |\n| `watchos`
+  | macOS | Cross-compile to watchOS static lib |\n"
+description-type: markdown
+hash: 4b026f0d71cf21e9130932f617f85138a397b6cdbc424178e4ccad2b9ba23191
+homepage: https://github.com/jappeace/hatter#readme
+latest: 0.1.0
+license-name: MIT
+maintainer: hi@jappie.me
+synopsis: 'Hatter: Native IOS and Android applications in haskell!'
+test-bench-deps:
+  base: '>=4.9.1.0 && <4.23'
+  bytestring: '>=0'
+  containers: '>=0'
+  directory: '>=0'
+  filepath: '>=0'
+  hatter: '>=0'
+  tasty: '>=0'
+  tasty-hunit: '>=0'
+  tasty-quickcheck: '>=0'
+  text: '>=0'
