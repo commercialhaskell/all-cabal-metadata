@@ -1,11 +1,13 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Nadeem Bitar
 basic-deps:
   base: ^>=4.21.0.0
   bytestring: ^>=0.12
   containers: ^>=0.7
   effectful-core: ^>=2.6.1.0
+  hs-opentelemetry-api: ^>=0.3
   hw-kafka-client: '>=5.3 && <6'
   hw-kafka-streamly: ^>=0.1
   kafka-effectful: ^>=0.1
@@ -17,6 +19,31 @@ basic-deps:
   time: ^>=1.14
 changelog: |
   # Changelog
+
+  ## 0.2.0.0 — 2026-04-18
+
+  Additive release. Adds one new exposed module, no changes to existing
+  public types or to `kafkaAdapter`'s signature.
+
+  ### Added
+
+  - `Shibuya.Adapter.Kafka.Tracing` exposing a single stream transformer
+    `traced :: (Tracing :> es, IOE :> es) => TopicName -> Stream (Eff es)
+    (Ingested es v) -> Stream (Eff es) (Ingested es v)`. For each emitted
+    `Ingested`, `traced` rewrites the envelope's `AckHandle` so that
+    when the downstream handler calls `finalize` the call is enclosed
+    in a Consumer-kind `shibuya.process.message` span parented on the
+    envelope's carried W3C `traceparent` (or a root span when absent).
+    The span carries the v1.27 messaging-conventions attribute set
+    (`messaging.system`, `messaging.destination.name`,
+    `messaging.message.id`, and — when partition is known —
+    `messaging.destination.partition.id`) from
+    `Shibuya.Telemetry.Semantic`.
+
+  - Explicit `hs-opentelemetry-api ^>=0.3` build-depends edge on the
+    library. The package was previously in the closure transitively via
+    `shibuya-core`, but cabal does not let a library import from a
+    transitively-present dependency.
 
   ## 0.1.0.0 — 2026-04-18
 
@@ -61,9 +88,27 @@ description: |
 
   ## Packages
 
-  - `shibuya-kafka-adapter` — the adapter library (`Shibuya.Adapter.Kafka`, `.Config`, `.Convert`).
+  - `shibuya-kafka-adapter` — the adapter library (`Shibuya.Adapter.Kafka`, `.Config`, `.Convert`, `.Tracing`).
   - `shibuya-kafka-adapter-bench` — micro-benchmarks for the conversion hot path (`ConsumerRecord` → `Envelope`, W3C header extraction, timestamps).
   - `shibuya-kafka-adapter-jitsurei` — runnable examples: `BasicConsumer`, `MultiTopic`, `MultiPartition`, `OffsetManagement`.
+
+  ## Tracing (opt-in)
+
+  `Shibuya.Adapter.Kafka.Tracing.traced` is an opt-in stream transformer that wraps each emitted `Ingested` so that the downstream handler's eventual `finalize` call runs inside a Consumer-kind `shibuya.process.message` OpenTelemetry span. The span inherits the envelope's W3C `traceparent` as parent (from `Envelope.traceContext`) or opens a fresh root span when no parent is present, and is populated with the v1.27 messaging-conventions attributes (`messaging.system=kafka`, `messaging.destination.name`, `messaging.message.id`, and `messaging.destination.partition.id` when the partition is known). A caller that does not import this module pays nothing — no spans are opened and the adapter's public surface is unchanged.
+
+  Typical wiring:
+
+  ```haskell
+  import Shibuya.Adapter.Kafka (kafkaAdapter, defaultConfig)
+  import Shibuya.Adapter.Kafka.Tracing (traced)
+  import Shibuya.Telemetry.Effect (runTracing)
+
+  runTracing tracer $ do
+    Adapter{source} <- kafkaAdapter (defaultConfig [TopicName "orders"])
+    Stream.fold Fold.drain
+      $ Stream.mapM userHandler
+      $ traced (TopicName "orders") source
+  ```
 
   ## Building
 
@@ -96,17 +141,19 @@ description: |
 
   MIT. See package cabal files for details.
 description-type: markdown
-hash: 6e052960754dd1a914e51aa40868972686305cc72a8d09a57bd25d00e7404ce6
+hash: c51005a82d4ee8a20837ee0f647270f1a573fc558e89d4bcac80a0c3ac07892a
 homepage: https://github.com/shinzui/shibuya-kafka-adapter
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: MIT
 maintainer: nadeem@gmail.com
 synopsis: Kafka adapter for the Shibuya queue processing framework
 test-bench-deps:
+  async: ^>=2.2
   base: ^>=4.21.0.0
   bytestring: '>=0'
   containers: '>=0'
   effectful-core: '>=0'
+  hs-opentelemetry-api: ^>=0.3
   hw-kafka-client: '>=0'
   kafka-effectful: '>=0'
   process: '>=0'
