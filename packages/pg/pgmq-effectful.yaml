@@ -3,24 +3,164 @@ all-versions:
 - 0.1.1.0
 - 0.1.2.0
 - 0.1.3.0
+- 0.2.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.0 && <2.3'
   base: '>=4.18 && <5'
   bytestring: '>=0.11 && <0.13'
+  case-insensitive: '>=1.2 && <1.3'
   effectful-core: ^>=2.5 || ^>=2.6
   hasql: ^>=1.10
   hasql-pool: ^>=1.4
   hs-opentelemetry-api: '>=0.2 && <0.4'
-  hs-opentelemetry-propagator-w3c: '>=0.0 && <0.2'
-  pgmq-core: '>=0.1.3 && <0.2'
-  pgmq-hasql: '>=0.1.3 && <0.2'
+  hs-opentelemetry-semantic-conventions: '>=0.1 && <0.2'
+  http-types: '>=0.12 && <0.13'
+  pgmq-core: '>=0.2 && <0.3'
+  pgmq-hasql: '>=0.2 && <0.3'
   text: '>=2.0 && <2.2'
   unliftio: '>=0.2 && <0.3'
   unordered-containers: '>=0.2 && <0.3'
   vector: ^>=0.13
 changelog: |
   # Revision history for pgmq-effectful
+
+  ## 0.2.0.0 -- 2026-04-23
+
+  ### Breaking Changes
+
+  * **OpenTelemetry semantic conventions updated to spec v1.24.** The
+    traced interpreter now emits attribute names compliant with
+    OpenTelemetry Semantic Conventions
+    [v1.24](https://github.com/open-telemetry/semantic-conventions/tree/v1.24.0),
+    sourced as typed `AttributeKey` values from the
+    [`hs-opentelemetry-semantic-conventions`](https://hackage.haskell.org/package/hs-opentelemetry-semantic-conventions)
+    library. Breaking consequences:
+
+    * `messaging.operation.type` → `messaging.operation`. Values change
+      from the post-v1.24 vocabulary (`"send"`, `"receive"`) to the
+      v1.24 vocabulary (`"publish"`, `"receive"`). Note the verb change:
+      `send` → `publish`.
+    * `db.operation.name` → `db.operation`. Values are the pgmq SQL
+      function name (`"pgmq.send"`, `"pgmq.read"`, `"pgmq.archive"`, …),
+      not the previous free-form label.
+    * `messaging.destination.routing_key` (ad-hoc, not in v1.24) is
+      gone. Topic-send operations now emit the routing key as
+      `messaging.destination.name`, since for pgmq topics the routing
+      key is the logical destination. `ValidateRoutingKey`,
+      `ValidateTopicPattern`, and `TestRouting` no longer emit a
+      routing-key attribute at all.
+    * Span names changed from `"pgmq <op>"` to the v1.24
+      `"<operation> <destination>"` form. Examples:
+      `"pgmq send"` → `"publish my-queue"`,
+      `"pgmq read"` → `"receive my-queue"`,
+      `"pgmq archive"` → `"pgmq.archive my-queue"`,
+      `"pgmq list_queues"` → `"pgmq.list_queues"`.
+    * Queue management operations (`createQueue`, `dropQueue`,
+      `createPartitionedQueue`, `createUnloggedQueue`) moved from
+      `Producer` span kind to `Internal`. v1.24 reserves `Producer` for
+      message publishes; queue administration is not a publish.
+    * Span status on failure now carries a short non-PII label
+      (`"pool.acquisition_timeout"`, `"pool.connection.networking"`,
+      `"pool.session.statement"`, …) instead of the raw `show` of
+      `UsageError` (which bakes in SQL text and parameter values).
+      Full detail remains on the standard `exception` event via
+      `OpenTelemetry.Trace.Core.recordException`.
+
+    Dashboards, saved queries, and alerts keyed on the old attribute
+    names or span-name format need to be updated.
+
+  * **Trace context propagation now uses the tracer provider's
+    configured propagator** (W3C by default, but B3 / Datadog / … work
+    out of the box when the provider is configured with them). The old
+    implementation hard-wired `hs-opentelemetry-propagator-w3c`.
+
+    * `Pgmq.Effectful.Telemetry.injectTraceContext` / `extractTraceContext`
+      take a `TracerProvider` (previously an `OTel.Span` / raw carrier).
+    * `Pgmq.Effectful.Telemetry.TraceHeaders` is now
+      `Network.HTTP.Types.RequestHeaders` (case-insensitive header names),
+      matching the carrier type every propagator uses. The previous
+      `[(ByteString, ByteString)]` alias is gone.
+    * `Pgmq.Effectful.Traced.sendMessageTraced` takes a `TracerProvider`.
+    * `Pgmq.Effectful.Traced.readMessageWithContext` takes a
+      `TracerProvider` and now returns
+      `Vector (Message, OpenTelemetry.Context.Context)`.
+      Callers that specifically need the raw `SpanContext` can recover
+      it via `Context.lookupSpan >>= getSpanContext`.
+    * Two new helpers, `traceHeadersToJson` and `jsonToTraceHeaders`,
+      handle the pgmq-over-jsonb serialization boundary.
+
+    The `hs-opentelemetry-propagator-w3c` dependency was dropped from
+    the library; the SDK still installs the W3C propagator as the
+    default.
+
+  * Renamed the interpreter error type from `PgmqError` to
+    `PgmqRuntimeError` and replaced its opaque `PgmqPoolError UsageError`
+    constructor with three structured constructors:
+
+        data PgmqRuntimeError
+          = PgmqAcquisitionTimeout
+          | PgmqConnectionError Hasql.Errors.ConnectionError
+          | PgmqSessionError Hasql.Errors.SessionError
+
+    The old `PgmqError`/`PgmqPoolError` names are retained with a
+    DEPRECATED pragma and will be removed in 0.3.0.0.
+
+  * `runPgmq`'s error constraint changed from `Error PgmqError :> es` to
+    `Error PgmqRuntimeError :> es`. Update any
+    `runError @PgmqError` annotation to `runError @PgmqRuntimeError`.
+
+  * `runPgmqTraced` and `runPgmqTracedWith` now require
+    `Error PgmqRuntimeError :> es`. Previously they had *no* error
+    constraint and threw a `fail`-derived `IOError` outside the Error
+    effect channel, which meant any `runError` wrapper around a traced
+    program was a no-op. Code that relied on that silent swallowing now
+    receives typed errors; update call sites to wrap with
+    `runError @PgmqRuntimeError`.
+
+  ### New Features
+
+  * `fromUsageError :: Hasql.Pool.UsageError -> PgmqRuntimeError` —
+    convert raw hasql-pool errors into the pgmq-effectful error type.
+    Useful when layering `pgmq-effectful` over code that already calls
+    `Pool.use` directly.
+
+  * `isTransient :: PgmqRuntimeError -> Bool` — classification helper for
+    retry logic. Returns True for acquisition timeouts, networking
+    connection errors, unrecognized libpq connection errors, and
+    session-level connection drops; False for authentication,
+    compatibility, missing-types, statement, script, and driver errors.
+
+  * New test suite `pgmq-effectful-test` asserts that both interpreters
+    surface typed `PgmqRuntimeError` values through the Error channel.
+
+  ### Migration Guide
+
+  Before:
+
+      import Pgmq.Effectful (PgmqError (..), runPgmq)
+
+      handler =
+        runEff . runError @PgmqError . runPgmq pool $ action
+
+  After:
+
+      import Pgmq.Effectful (PgmqRuntimeError (..), runPgmq)
+
+      handler =
+        runEff . runError @PgmqRuntimeError . runPgmq pool $ action
+
+  For retry logic:
+
+      import Pgmq.Effectful (isTransient)
+
+      retryIfTransient action = do
+        result <- runError @PgmqRuntimeError action
+        case result of
+          Right a -> pure (Right a)
+          Left (_, err)
+            | isTransient err -> retryIfTransient action
+            | otherwise -> pure (Left err)
 
   ## 0.1.3.0 -- 2026-03-12
 
@@ -53,10 +193,30 @@ description: |-
   library for PGMQ (PostgreSQL Message Queue). Includes OpenTelemetry
   instrumentation for tracing pgmq operations.
 description-type: haddock
-hash: dc3b011ae8d4bd27964b966feaacff436dd79b6971d6b3bce9494d4f5cfc3a9c
+hash: 42af35d8522ab8b5ff46f2a1b7581f10058420db4496018daf7202ce9fb5611d
 homepage: https://github.com/shinzui/pgmq-hs
-latest: 0.1.3.0
+latest: 0.2.0.0
 license-name: MIT
 maintainer: Nadeem Bitar
 synopsis: Effectful effects for PGMQ (PostgreSQL Message Queue)
-test-bench-deps: {}
+test-bench-deps:
+  aeson: '>=2.0 && <2.3'
+  base: '>=4.18 && <5'
+  effectful-core: ^>=2.5 || ^>=2.6
+  ephemeral-pg: '>=0.2.1'
+  hasql: ^>=1.10
+  hasql-pool: ^>=1.4
+  hs-opentelemetry-api: '>=0.2 && <0.4'
+  hs-opentelemetry-exporter-in-memory: '>=0.0 && <0.1'
+  hs-opentelemetry-propagator-w3c: '>=0.0 && <0.2'
+  hs-opentelemetry-sdk: '>=0.0 && <0.2'
+  hs-opentelemetry-semantic-conventions: '>=0.1 && <0.2'
+  pgmq-core: '>=0.2 && <0.3'
+  pgmq-effectful: '>=0'
+  pgmq-migration: '>=0.2 && <0.3'
+  random: ^>=1.2
+  tasty: ^>=1.5
+  tasty-hunit: ^>=0.10
+  text: '>=2.0 && <2.2'
+  unordered-containers: '>=0.2 && <0.3'
+  vector: ^>=0.13
