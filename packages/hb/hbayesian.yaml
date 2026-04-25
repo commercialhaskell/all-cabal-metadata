@@ -1,0 +1,309 @@
+all-versions:
+- 0.1.0.0
+author: hbayesian contributors
+basic-deps:
+  base: '>=4.18.2.1 && <4.20'
+  directory: '>=1.3.8.1 && <1.4'
+  hbayesian: '>=0'
+  hhlo: '>=0.2.0.0 && <0.3'
+  text: '>=2.0 && <2.2'
+  vector: '>=0.13 && <0.14'
+changelog: |
+  # Revision history for hbayesian
+
+  ## 0.1.0.0 -- YYYY-mm-dd
+
+  * First version. Released on an unsuspecting world.
+changelog-type: markdown
+description: |
+  # HBayesian
+
+  Composable Bayesian inference in Haskell on StableHLO / XLA.
+
+  HBayesian provides MCMC samplers that compile to [StableHLO](https://github.com/openxla/stablehlo) and execute via PJRT (CPU, GPU, or TPU). It includes RandomWalk MH, Elliptical Slice, HMC, and MALA — along with chain combinators, diagnostics, and a shallow probabilistic programming layer.
+
+  ## What makes HBayesian different
+
+  ### Write Haskell, run on XLA
+
+  HBayesian is built on a simple idea: write ordinary Haskell functions that construct tensor computation graphs, then compile those graphs to StableHLO and execute them via PJRT.
+
+  You write ordinary Haskell functions that construct tensor computation graphs. Those graphs compile to self-contained StableHLO modules and execute on PJRT — the same runtime that powers JAX, TensorFlow, and PyTorch XLA. The result is that your sampler runs as a single XLA program, with the entire MCMC step (random number generation, proposal, gradient evaluation, acceptance) happening on device.
+
+  ```haskell
+  -- This is not interpreted. It builds a StableHLO graph.
+  myLogPdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)
+  myLogPdf theta = do
+      alpha <- tslice1 @2 @'F32 theta 0
+      beta  <- tslice1 @2 @'F32 theta 1
+      -- ... graph construction ...
+  ```
+
+  ### Compile-time shape safety
+
+  Tensors carry their shape and dtype in the type:
+
+  ```haskell
+  x :: Tensor '[3] 'F32   -- 1-D float vector of length 3
+  y :: Tensor '[] 'F32    -- scalar float
+  ```
+
+  Mismatches are caught at compile time. You cannot pass a `[3]` parameter vector to a sampler expecting `[2]` — the error appears in GHC, not at runtime on the device. This eliminates an entire class of "shape mismatch" bugs that are common in frameworks with dynamic typing.
+
+  ### One language, end to end
+
+  Model definition, sampler design, and execution control are all Haskell. There is no Python/C++ boundary to cross, no foreign-function interface to debug, and no "works in the interpreter but fails on GPU" surprises. If your code type-checks, it compiles to StableHLO. If it compiles to StableHLO, it runs on PJRT.
+
+  ### Composable samplers
+
+  Every sampler exposes the same `Kernel` interface:
+
+  ```haskell
+  data Kernel s d state info = Kernel
+    { kernelInit :: Key -> Tensor s d -> Builder (state s d)
+    , kernelStep :: Key -> state s d -> Builder (state s d, info s d)
+    }
+  ```
+
+  This means the host loop is agnostic to the algorithm inside. You can swap RandomWalk for HMC without changing your execution code. The library provides four kernels out of the box:
+
+  | Sampler | Needs gradient? | Best for |
+  |---------|-----------------|----------|
+  | **RandomWalk** MH | No | Low dimensions, simple models |
+  | **EllipticalSlice** | No | Gaussian priors, no tuning needed |
+  | **HMC** | Yes | High dimensions, informed proposals |
+  | **MALA** | Yes | Cheap gradient steps |
+
+  ### Chain combinators
+
+  Sampling is configured through ordinary function composition:
+
+  ```haskell
+  sampleChain ck [0.0, 0.0] $
+      burnIn 500 $ thin 2 $ withSeed 42 $ defaultChainConfig
+          { ccNumIterations = 2000 }
+  ```
+
+  `parallelChains` runs multiple independent chains with distinct seeds — essential for Gelman-Rubin convergence diagnostics.
+
+  ### Diagnostics
+
+  `HBayesian.Diagnostics` operates on the `Diagnostic` records collected by `sampleChain`:
+
+  - **Acceptance rate** — fraction of accepted proposals
+  - **Gelman-Rubin R-hat** — across parallel chains
+  - **Effective sample size (ESS)** — autocorrelation-adjusted
+
+  ### PPL layer
+
+  Write models as generative stories instead of manual log-densities:
+
+  ```haskell
+  myModel :: PPL 2 ()
+  myModel = do
+      alpha <- param 0
+      beta  <- param 1
+      observe "alpha_prior" (normal 0.0 1.0) alpha
+      observe "beta_prior"  (normal 0.0 1.0) beta
+  ```
+
+  `runPPL` desugars the story into a standard log-posterior function.
+
+  ## Quick start
+
+  ### Install the PJRT plugin
+
+  ```bash
+  ./scripts/pjrt_script.sh
+  ```
+
+  This downloads `libpjrt_cpu.so` into `deps/pjrt/`. To use a custom plugin:
+
+  ```bash
+  export HBAYESIAN_PJRT_PLUGIN=/path/to/libpjrt_cpu.so
+  ```
+
+  ### Build
+
+  ```bash
+  cabal build
+  ```
+
+  ### Run a demo
+
+  ```bash
+  # Run all 4 basic examples
+  cabal run hbayesian-examples -- --execute
+
+  # Run the HMC goodness-of-fit regression test
+  cabal run correlated-gaussian-hmc
+  ```
+
+  ## Usage
+
+  ### Basic sampling
+
+  ```haskell
+  import HBayesian.Chain
+  import HBayesian.MCMC.RandomWalk
+  import HBayesian.Diagnostics (acceptanceRate)
+  import qualified LinearRegressionRandomWalk as Ex
+
+  main :: IO ()
+  main = do
+      let kernel = randomWalk Ex.linearRegLogPdf (RWConfig 0.1)
+          ck     = compileSimpleKernel kernel Ex.linearRegLogPdf
+      (samples, diags) <- sampleChain ck [0.0, 0.0] $
+          burnIn 100 $ thin 2 $ defaultChainConfig { ccNumIterations = 1000 }
+      print (head samples)
+      putStrLn $ "Acceptance rate: " ++ show (acceptanceRate diags)
+  ```
+
+  ### HMC with gradients
+
+  ```haskell
+  import HBayesian.Chain
+  import HBayesian.MCMC.HMC
+
+  main :: IO ()
+  main = do
+      let config = HMCConfig { hmcStepSize = 0.1, hmcNumLeapfrogSteps = 10 }
+          kernel = hmc myLogPdf myGradient config
+          ck     = compileHMC kernel myLogPdf myGradient
+      (samples, diags) <- sampleChain ck (replicate 5 0.0) $
+          burnIn 500 $ defaultChainConfig { ccNumIterations = 2000 }
+      print (head samples)
+  ```
+
+  ### Parallel chains
+
+  ```haskell
+  results <- parallelChains 4 (map (+ 0.5)) ck pos0 config
+  let chains = map fst results
+  ```
+
+  ### PPL layer
+
+  ```haskell
+  import HBayesian.PPL
+
+  myModel :: PPL 2 ()
+  myModel = do
+      alpha <- param 0
+      beta  <- param 1
+      observe "alpha_prior" (normal 0.0 1.0) alpha
+      observe "beta_prior"  (normal 0.0 1.0) beta
+
+  logpdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)
+  logpdf = runPPL myModel
+  ```
+
+  ## Examples
+
+  | Example | Sampler | What it shows | Run |
+  |---------|---------|---------------|-----|
+  | `LinearRegressionRandomWalk` | RandomWalk MH | Bayesian linear regression, 2-D params | `cabal run hbayesian-examples -- --execute` |
+  | `GaussianProcessEllipticalSlice` | Elliptical Slice | GP regression with Gaussian prior | `cabal run hbayesian-examples -- --execute` |
+  | `LogisticRegressionHMC` | HMC | Logistic regression with user-provided gradient | `cabal run hbayesian-examples -- --execute` |
+  | `BivariateGaussianMALA` | MALA | 2-D correlated Gaussian target | `cabal run hbayesian-examples -- --execute` |
+  | `CorrelatedGaussianHMC` | HMC | 5-D Gaussian with statistical GoF validation | `cabal run correlated-gaussian-hmc` |
+
+  Each example exposes `makeKernel` and `runChain`. Import them in GHCi to experiment interactively:
+
+  ```bash
+  cabal repl hbayesian-examples
+  ```
+
+  ```haskell
+  import qualified LinearRegressionRandomWalk as Ex
+  Ex.runChain
+  ```
+
+  ### CorrelatedGaussianHMC — GoF regression test
+
+  `CorrelatedGaussianHMC` is the most rigorous example in the suite. It targets a 5-D correlated Gaussian with AR(1) covariance (ρ = 0.7) where the precision matrix and gradient are derived analytically. Because the model is exact, any deviation in the samples points directly to a sampler bug.
+
+  Running it prints a statistical report with four checks:
+
+  - **Marginal moments** — each dimension's mean and variance match N(μᵢ, 1)
+  - **Kolmogorov–Smirnov** — each marginal passes a KS test against the theoretical CDF
+  - **Mahalanobis χ²** — mean of (x−μ)ᵀΛ(x−μ) ≈ 5
+  - **Gelman–Rubin R-hat** — across 4 parallel chains, R-hat < 1.1 for every dimension
+
+  ```bash
+  cabal run correlated-gaussian-hmc
+  ```
+
+  Output:
+  ```
+  ==================================
+    Goodness-of-Fit Report
+  ==================================
+  Sample count: 2000
+
+  Marginal means (expected vs observed):
+    dim 0:     1.0 vs  1.025  (diff: 2.54e-2)  PASS
+  ...
+
+  Mahalanobis distances:
+    expected mean: 5.00
+    observed mean: 5.04  PASS
+  ```
+
+  ## Tests
+
+  ```bash
+  cabal test
+  ```
+
+  34 tests covering Core, HHLO primitives, RNG, loops, all 4 samplers, chain combinators, PPL, and the CorrelatedGaussian GoF suite.
+
+  ## Tutorial
+
+  A comprehensive two-level tutorial lives in `tutorial/TUTORIAL.md`:
+
+  - **Level 1** — Using inference algorithms (for end users)
+  - **Level 2** — Designing inference algorithms (for algorithm authors)
+
+  ## Project structure
+
+  ```
+  hbayesian/
+  |-- src/HBayesian/
+  |   |-- Chain.hs              -- Chain combinators
+  |   |-- Diagnostics.hs        -- MCMC diagnostics
+  |   |-- PPL.hs                -- Probabilistic programming layer
+  |   |-- MCMC/                 -- Samplers (RandomWalk, EllipticalSlice, HMC, MALA)
+  |   |-- HHLO/                 -- StableHLO primitives, RNG, loops, PJRT helpers
+  |-- examples/                 -- Example suite + CLI entry points
+  |-- test/                     -- Test suite
+  |-- tutorial/TUTORIAL.md
+  ```
+
+  ## Status
+
+  - **Phase 1** (Foundation): ✅ Core abstractions, RNG, loops, compilation
+  - **Phase 2** (Samplers): ✅ 4 samplers + practical examples
+  - **Phase 3** (Usability): ✅ Chain combinators, PPL, diagnostics, GoF validation
+  - **Phase 4+**: NUTS, adaptation, auto-diff — see `doc/` for design documents
+
+  ## License
+
+  MIT
+description-type: markdown
+hash: af84e1abcc9f7f0f44fd70b85bdb94fda011ec4e539793d973c22d5211d4c8f0
+homepage: https://github.com/overshiki/hbayesian
+latest: 0.1.0.0
+license-name: MIT
+maintainer: le.niu@hotmail.com
+synopsis: Composable Bayesian inference in Haskell on StableHLO/XLA
+test-bench-deps:
+  base: '>=4.18.2.1 && <4.20'
+  bytestring: '>=0.11 && <0.13'
+  hbayesian: '>=0'
+  hhlo: '>=0.2.0.0 && <0.3'
+  tasty: '>=1.4 && <1.6'
+  tasty-golden: '>=2.3 && <2.4'
+  tasty-hunit: '>=0.10 && <0.11'
+  text: '>=2.0 && <2.2'
+  vector: '>=0.13 && <0.14'
