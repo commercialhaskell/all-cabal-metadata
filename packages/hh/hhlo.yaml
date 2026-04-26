@@ -2,12 +2,14 @@ all-versions:
 - 0.1.0.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.4.0.0
 author: overshiki
 basic-deps:
   async: '>=2.2 && <2.3'
   base: '>=4.18.2 && <5'
   bytestring: '>=0.12 && <0.13'
   containers: '>=0.6 && <0.8'
+  directory: '>=1.3 && <1.4'
   hhlo: '>=0'
   mtl: '>=2.3 && <2.4'
   text: '>=2.0 && <2.2'
@@ -63,6 +65,26 @@ changelog: |
   * Fixed `compare` to return shape-preserving `Tensor s 'Bool` per StableHLO spec.
   * New comparison wrappers: `equal`, `notEqual`, `greaterThan`, `lessThanOrEqual`, `greaterThanOrEqual`.
   * Test count: 141 CPU tests + 6 GPU integration tests.
+
+  ## 0.4.0.0 -- 2026-04-20
+
+  **BREAKING**: `HostType 'Bool` changed from `Bool` to `Word8` to match
+  PJRT's PRED buffer transfer semantics.
+
+  * **Convenience layer** — two new modules that eliminate boilerplate for
+  the common compile-and-run workflow:
+    * `HHLO.ModuleBuilder` provides `buildModule @nIn @nOut`, a polymorphic
+      entry point (via `TypeApplications`) that auto-generates `FuncArg`
+      declarations and wires up `arg` calls. No more `natVal` or `FuncArg`
+      boilerplate.
+    * `HHLO.Session` provides `withCPU`, `withGPU`, `withGPUDevice`, `compile`,
+      `run`, `runAsync`, and typed `HostTensor` host-device transfers.
+      No more manual `render`, `toDeviceF32`, `fromDeviceF32`, or shape lists.
+  * `whileLoop3`–`whileLoop8` and `conditional3`–`conditional8` for carrying
+    3–8 heterogeneous tensors through control flow.
+  * Boolean logic ops: `logicalAnd`, `logicalOr`, `logicalNot`.
+  * New dependency: `directory` (for plugin-path discovery in `withCPU`/`withGPU`).
+  * Test count: 155 CPU tests + 6 GPU integration tests.
 changelog-type: markdown
 description: |
   # HHLO — Haskell Frontend for StableHLO
@@ -75,10 +97,12 @@ description: |
 
   ## Design
 
-  HHLO is structured in four layers:
+  HHLO is structured in five layers:
 
   ```
   ┌─────────────────────────────────────┐
+  │  Convenience (HHLO.Session)         │  One-liners: withCPU, compile, run
+  ├─────────────────────────────────────┤
   │  EDSL (HHLO.EDSL.Ops)               │  Type-safe frontend: add, matmul, relu, etc.
   ├─────────────────────────────────────┤
   │  IR Builder (HHLO.IR.Builder)       │  Stateful monad for constructing MLIR
@@ -145,6 +169,25 @@ description: |
   (newState, output) <- rngBitGenerator state
   ```
 
+  **Convenience Layer**
+
+  `HHLO.ModuleBuilder` and `HHLO.Session` provide a high-level API that eliminates PJRT boilerplate for the common case:
+
+  ```haskell
+  import HHLO.ModuleBuilder
+  import HHLO.Session
+
+  -- Build + compile + run in four lines
+  main = withCPU $ \sess -> do
+      let modu = buildModule @2 @1 "mul" $ \x y -> multiply x y
+      compiled <- compile sess modu
+      result <- run sess compiled (hostFromList @'[2] [2.0, 3.0],
+                                    hostFromList @'[2] [4.0, 5.0])
+      print (hostToList result)   -- [8.0, 15.0]
+  ```
+
+  No `FuncArg`, no `natVal`, no `render`, no `toDeviceF32`, no explicit shape lists. The low-level API remains available for expert users who need full control.
+
   **Multi-Value Control Flow**
 
   `whileLoop2` / `conditional2` carry multiple typed tensors through loops and conditionals without manual packing:
@@ -210,6 +253,20 @@ description: |
   - `curl`, `tar`, and standard C toolchain (`gcc` or `clang`)
   - `libstdc++` and `libdl` (usually present on Linux)
 
+  ### From Hackage
+
+  HHLO is published on [Hackage](https://hackage.haskell.org/package/hhlo). You can add it directly to your `.cabal` file:
+
+  ```cabal
+  build-depends: hhlo >= 0.4
+  ```
+
+  Or with `cabal`:
+
+  ```bash
+  cabal install hhlo
+  ```
+
   ### Download PJRT Plugins
 
   Run the provided script to download prebuilt PJRT plugins:
@@ -263,6 +320,29 @@ description: |
   ---
 
   ## EDSL Quick Start
+
+  ### Convenience layer (recommended)
+
+  ```haskell
+  {-# LANGUAGE DataKinds #-}
+  {-# LANGUAGE TypeApplications #-}
+
+  import HHLO.ModuleBuilder
+  import HHLO.Session
+
+  -- Build a program: c = a + b
+  program = buildModule @2 @1 "add" $ \a b -> add a b
+
+  main = withCPU $ \sess -> do
+      compiled <- compile sess program
+      result <- run sess compiled
+          ( hostFromList @'[2,2] @'F32 [1, 2, 3, 4]
+          , hostFromList @'[2,2] @'F32 [5, 6, 7, 8]
+          )
+      print (hostToList result)   -- [6.0, 8.0, 10.0, 12.0]
+  ```
+
+  ### Low-level API (full control)
 
   ```haskell
   {-# LANGUAGE DataKinds #-}
@@ -368,7 +448,7 @@ description: |
   cabal test
   ```
 
-  Runs **141 tests** across three tiers:
+  Runs **155 tests** across three tiers:
 
   - **Tier 1 — Golden tests** — Verify rendered MLIR text for EDSL ops, IR constructs, NN layers, and control flow.
   - **Tier 2 — End-to-end runtime tests** — Load the PJRT CPU plugin, compile StableHLO programs, execute them, and verify numerical results. Covers arithmetic, matmul, reductions, data movement, and NN ops.
@@ -380,7 +460,7 @@ description: |
   HHLO_TEST_GPU=1 cabal test
   ```
 
-  Runs the full 141 CPU tests **plus** 6 additional GPU integration tests:
+  Runs the full 155 CPU tests **plus** 6 additional GPU integration tests:
 
   - `EndToEnd.GPU` — GPU availability and device enumeration
   - `Runtime.BufferGPU` — Buffer round-trip and metadata queries on GPU
@@ -476,15 +556,15 @@ description: |
 
   ---
 
-  ## Architecture Docs
+  <!-- ## Architecture Docs -->
 
-  The `doc/` directory contains detailed design documents:
+  <!-- The `doc/` directory contains detailed design documents: -->
 
-  | Document | Contents |
-  |----------|----------|
-  | `implementation-design.md` | Four-layer architecture and design decisions |
-  | `progress-and-remaining-work.md` | Current status, completed features, and backlog |
-  | `test-suite-documentation.md` | Test catalog and tier descriptions |
+  <!-- | Document | Contents | -->
+  <!-- |----------|----------| -->
+  <!-- | `implementation-design.md` | Four-layer architecture and design decisions | -->
+  <!-- | `progress-and-remaining-work.md` | Current status, completed features, and backlog | -->
+  <!-- | `test-suite-documentation.md` | Test catalog and tier descriptions | -->
 
   ---
 
@@ -492,9 +572,9 @@ description: |
 
   MIT License — see [LICENSE](LICENSE).
 description-type: markdown
-hash: a53a7b8bbe17d63e604fda84fabf54658d2d53f13682acc2fddc2e0d8944f67c
+hash: 9350ee5cf3cdf90ee4a8cafd7987e1eb4c523e1b6a5ea918ae36e91c9f661308
 homepage: https://github.com/overshiki/hhlo
-latest: 0.3.0.0
+latest: 0.4.0.0
 license-name: MIT
 maintainer: le.niu@hotmail.com
 synopsis: Haskell Frontend for StableHLO — type-safe ML inference on CPU and GPU
