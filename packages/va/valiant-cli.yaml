@@ -1,0 +1,513 @@
+all-versions:
+- 0.1.0.0
+author: Josh Burgess
+basic-deps:
+  base: '>=4.17 && <5'
+  valiant-cli: '>=0'
+changelog: |
+  # Changelog
+
+  All notable changes to the valiant project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+  ## [0.1.0.0] - 2026-04-25
+
+  Initial release. The project ships four primary packages plus eight adapter
+  libraries.
+
+  ### Packages
+
+  - **pg-wire** 0.1.0.0: pure-Haskell PostgreSQL v3 wire-protocol driver. No
+    libpq, no C dependencies. Includes a connection pool with idle reaping,
+    health checks, jittered max-life, queue mode (LIFO/FIFO), recycling
+    modes, lifecycle hooks, and `nothunks`-checked invariants.
+  - **valiant** 0.1.0.0: runtime library. Binary codecs for all common
+    PostgreSQL types (numerics, text, time, UUID, JSON/JSONB, hstore, inet,
+    macaddr, point, ranges, arrays, composites, enums), a `Statement` type,
+    query execution, server-side cursor streaming, pipelined execution,
+    COPY in/out, large objects, LISTEN/NOTIFY, advisory locks, transactions,
+    and re-exports from `pg-wire`.
+  - **valiant-cli** 0.1.0.0: `valiant` CLI with `prepare`, `check`,
+    `types`, `generate`, and `watch` commands.
+  - **valiant-plugin** 0.1.0.0: GHC source plugin that validates SQL files
+    against the `.valiant/` cache at compile time.
+
+  ### Adapters
+
+  Eight first-party adapters for popular effect systems and streaming
+  libraries: `valiant-bluefin`, `valiant-conduit`, `valiant-effectful`,
+  `valiant-fused-effects`, `valiant-mtl`, `valiant-pipes`,
+  `valiant-streaming`, `valiant-streamly`.
+
+  ### Highlights
+
+  - **Compile-time SQL safety.** Raw `.sql` files are validated against a
+    live PostgreSQL database via `valiant prepare` and a `.valiant/` cache.
+    The GHC source plugin checks parameter and result types at compile
+    time. No Template Haskell.
+  - **Performance.** Roughly 5x faster than hasql on multi-row reads and
+    10x faster on pipelined batch writes in our comparative benchmarks
+    (`bench-compare`). Competitive with asyncpg (Python) on throughput.
+  - **Wire protocol features.** Extended query protocol with binary
+    format, statement caching, prepared statements, server-side cursors,
+    pipelining, COPY in/out (including CSV), large objects,
+    LISTEN/NOTIFY, query cancellation, cleartext, MD5, and SCRAM-SHA-256
+    authentication.
+  - **Strict by default.** `StrictData`, `-funbox-strict-fields`, and
+    `-fspecialise-aggressively` across all libraries. `-fno-full-laziness`
+    on streaming-sensitive modules. `nothunks` invariants on the pool.
+  - **Tested.** 267 unit tests in `pg-wire`, 282 in `valiant`, 101
+    integration tests against a real Postgres, plus property tests with
+    hedgehog and a state-machine test for the connection pool.
+
+  ### Added (post-tag)
+
+  - `refine` and `refineWith` combinators in `Valiant.Binary.Decode` for
+    validating decoded values against extra invariants without writing a
+    full `PgDecode` instance.
+  - `fetchAllUnboxed`: an unboxed-vector variant of `fetchAllVec` for
+    fixed-size primitive result columns. Eliminates per-element pointer
+    indirection for `Int32`/`Int64`/`Double`/`Bool` and tuples of those.
+
+  ### Documentation
+
+  - Tutorial, performance notes, asyncpg comparison, async architecture,
+    and gap analysis under `docs/`.
+  - Per-package READMEs for `pg-wire`, `valiant`, `valiant-cli`,
+    `valiant-plugin`, and each adapter.
+
+  [0.1.0.0]: https://github.com/joshburgess/valiant/releases/tag/v0.1.0.0
+changelog-type: markdown
+description: |
+  # valiant
+
+  **Compile-time checked SQL for Haskell.**
+
+  Inspired by Rust's [sqlx](https://github.com/launchbadge/sqlx), built from scratch for Haskell. No Template Haskell. No `libpq`. No C dependencies. Raw `.sql` files validated against a live Postgres database at prepare time, with a GHC source plugin that enforces type safety at compile time. The fastest Haskell PostgreSQL library: 5x faster than hasql on multi-row reads, 10x faster on pipelined batch writes, competitive with asyncpg (Python) on throughput.
+
+  ## How it works
+
+  ```
+    .sql files ──> valiant prepare ──> .valiant/ cache ──> GHC plugin ──> type-safe Haskell
+                      (live DB)        (committed)      (compile time)
+  ```
+
+  1. Write SQL in standalone `.sql` files with full editor support
+  2. Run `valiant prepare` to validate queries against your database and cache type metadata
+  3. The GHC source plugin reads the cache at compile time and verifies your Haskell types match
+  4. At runtime, a custom Postgres wire protocol driver executes queries with binary format encoding
+
+  ## Quick start
+
+  ```haskell
+  -- sql/users/find_by_id.sql:
+  --   SELECT id, name, email FROM users WHERE id = $1
+
+  {-# OPTIONS_GHC -fplugin=Valiant.Plugin
+                  -fplugin-opt=Valiant.Plugin:sql-dir=sql #-}
+
+  module MyApp.Queries.Users where
+
+  import Valiant
+
+  findById :: Statement Int32 (Maybe (Int32, Text, Maybe Text))
+  findById = queryFile "users/find_by_id.sql"
+  ```
+
+  The plugin verifies at compile time that:
+  - The `.sql` file exists
+  - `Int32` matches the `$1` parameter (Postgres `int4`)
+  - `(Int32, Text, Maybe Text)` matches the result columns
+  - `email` is correctly wrapped in `Maybe` (it's nullable)
+
+  If anything is wrong, you get a clear compile error:
+
+  ```
+  src/MyApp/Queries/Users.hs:12:1: error: [VALIANT-003]
+
+      -- Result type mismatch
+      |
+      |  Comparing column by column:
+      |
+      |    Column    Postgres type    Your type       Expected
+      |    id        int4             Int32           Int32       ok
+      |    name      text             Text            Text        ok
+      |    email     text (nullable)  Text            Maybe Text  MISMATCH
+      |
+      -- Fix: wrap the field in Maybe:  Maybe Text
+  ```
+
+  ## Runtime usage
+
+  ```haskell
+  import Valiant
+  import MyApp.Queries.Users qualified as Q
+
+  main :: IO ()
+  main = do
+    pool <- newPool defaultPoolConfig
+      { poolConnString = "postgres://user:pass@localhost:5432/mydb"
+      , poolSize = 10
+      }
+
+    -- Fetch one row
+    mUser <- withResource pool $ \conn ->
+      fetchOne conn Q.findById 42
+
+    -- Fetch all rows
+    users <- withResource pool $ \conn ->
+      fetchAll conn Q.listAll ()
+
+    -- Execute a command
+    n <- withResource pool $ \conn ->
+      execute conn Q.insert ("Alice", Just "alice@example.com")
+
+    -- Batch insert (pipelined, eliminates per-row round-trips)
+    withResource pool $ \conn ->
+      executeBatch conn Q.insert
+        [ ("Alice", Just "alice@example.com")
+        , ("Bob", Just "bob@example.com")
+        , ("Carol", Nothing)
+        ]
+
+    -- Transactions
+    withTransaction pool $ \tx -> do
+      execute (txConn tx) Q.insert ("Dave", Just "dave@example.com")
+      execute (txConn tx) Q.insert ("Eve", Nothing)
+
+    -- Constant-memory streaming (no cursor/transaction needed)
+    total <- withResource pool $ \conn ->
+      executeWithFold conn Q.listAll () (RowFold 0 (\n _ -> n + 1))
+  ```
+
+  ## CLI tool
+
+  ```bash
+  # Validate all .sql files against your database
+  $ valiant prepare
+    [1/10] sql/users/find_by_id.sql ............ ok
+    [2/10] sql/users/find_by_email.sql ......... ok
+    ...
+    Wrote 10 cache files to .valiant/
+
+  # Check cache freshness (for CI, no database needed)
+  $ valiant check
+
+  # Print inferred Haskell types
+  $ valiant types
+    sql/users/find_by_id.sql
+      Params: Int32
+      Result: (Int32, Text, Maybe Text)
+
+  # Auto-generate Haskell binding modules
+  $ valiant generate --module-prefix MyApp.Queries --output-dir src/MyApp/Queries/
+    Generated src/MyApp/Queries/Users.hs (7 queries)
+    Generated src/MyApp/Queries/Posts.hs (3 queries)
+
+  # Watch for changes and re-prepare
+  $ valiant watch
+  ```
+
+  ## Performance
+
+  valiant is the fastest Haskell PostgreSQL library. It implements its own wire
+  protocol in pure Haskell with binary format encoding, direct byte writes,
+  pipelined execution, async sender/receiver split, and zero unnecessary copies.
+
+  Benchmarks against [hasql](https://hackage.haskell.org/package/hasql)
+  (libpq FFI, binary) and [postgresql-simple](https://hackage.haskell.org/package/postgresql-simple)
+  (libpq FFI, text). Single connection, native Postgres 16.
+
+  **Reads** (Linux benchmark host, Postgres 16, Unix socket):
+
+  | Rows | valiant | hasql | pg-simple | vs hasql | vs pg-simple |
+  |------|-------|-------|-----------|----------|--------------|
+  | 1 (by PK) | 138 μs | 89 μs | 179 μs | 1.6x slower | **23% faster** |
+  | 1,000 | **895 μs** | 4.76 ms | 3.57 ms | **5.3x faster** | **4.0x faster** |
+  | 5,000 | **4.66 ms** | 25.5 ms | 20.0 ms | **5.5x faster** | **4.3x faster** |
+  | 10,000 | **11.0 ms** | 54.4 ms | 38.3 ms | **5.0x faster** | **3.5x faster** |
+
+  valiant is 1.6x slower on single-row lookups (the async sender/receiver
+  split has per-query coordination overhead that dominates when there's
+  nothing to pipeline) but **5x faster** once row decoding dominates.
+
+  **Writes (pipelined):**
+
+  | Rows | valiant (pipelined) | valiant (seq) | hasql | pg-simple |
+  |------|--------------------|------------|-------|-----------|
+  | 100 | **956 μs** | 15.2 ms | 9.46 ms | 15.9 ms |
+
+  Pipelined batch inserts are **9.9x faster** than hasql and **16.6x faster**
+  than postgresql-simple.
+
+  **vs asyncpg (Python)** (CI-verified on the same GitHub Actions runner, Postgres 16, Unix socket):
+
+  | Benchmark | asyncpg | valiant |
+  |-----------|---------|-------|
+  | SELECT 1+1 throughput (10 conns) | 30,279/s | **31,056/s** |
+  | fetch 1000 rows throughput | 2,819/s | **3,091/s** |
+  | batch insert 1000 (pipelined) | N/A | **173.8/s** |
+
+  See [docs/benchmark-results/asyncpg-comparison.md](docs/benchmark-results/asyncpg-comparison.md)
+  for the full head-to-head comparison.
+
+  **Why it's fast:**
+
+  - **Binary format decoding** -- direct from network buffer, no FFI boundary
+  - **Direct byte writes** -- `unsafeCreate` + `pokeByteOff`, 5-6x faster than Builder for fixed-size types (30ns per Int32)
+  - **Pipelined execution** -- `executeBatch` sends N Bind+Execute pairs with 1 Sync, 40-100x faster than sequential
+  - **Sender/receiver split** -- dedicated writer+reader threads per connection, automatic pipelining for concurrent workloads
+  - **Fused Builder encoding** -- all protocol messages in a batch fused into one Builder, one allocation, one `send()`
+  - **Direct-to-Vector parsing** -- DataRow parsed directly into mutable Vector, no intermediate list
+  - **Pre-computed message sizes** -- single-pass protocol encoding, no double-copy
+  - **Message coalescing + TCP_NODELAY** -- single syscall per message sequence
+  - **Fused row decoding** -- decode as rows arrive, no intermediate list
+  - **Pure Haskell** -- no `libpq`, no C toolchain, no system dependencies
+
+  | | libpq (FFI) | valiant (pure Haskell) |
+  |---|---|---|
+  | Single-row latency | **89 μs** (hasql) | 138 μs (1.6x slower) |
+  | Multi-row throughput (10K) | 54.4 ms (hasql) | **11.0 ms (5.0x faster)** |
+  | Batch writes (100 inserts) | 9.46 ms (hasql) | **956 μs (9.9x faster)** |
+  | vs asyncpg (Python) | N/A | **Faster on row throughput** |
+  | Build requirements | Needs `libpq-dev` | No system dependencies |
+
+  See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the full deep-dive:
+  codec benchmarks, pool benchmarks, architecture comparison, optimization
+  techniques, and the complete optimization journey. Archived numbers with
+  CSV data (Apple Silicon / macOS / Docker Postgres) are in
+  [docs/benchmark-results/](docs/benchmark-results/README.md); the
+  [`bench-compare`](bench-compare/README.md) suite reproduces the read,
+  insert, and asyncpg comparisons locally or via the
+  [Benchmarks workflow](.github/workflows/benchmarks.yml).
+
+  ## Project structure
+
+  valiant is a multi-package Cabal project:
+
+  | Package | Description |
+  |---------|-------------|
+  | `pg-wire` | Pure Haskell PostgreSQL v3 wire protocol driver, connection pool, auth, TLS |
+  | `valiant` | Runtime library: binary codecs, query execution, transactions, streaming, COPY |
+  | `valiant-cli` | CLI tool (`valiant prepare`, `check`, `types`, `generate`, `watch`) |
+  | `valiant-plugin` | GHC source plugin for compile-time query validation |
+  | `valiant-conduit` | Conduit streaming adapter |
+  | `valiant-pipes` | Pipes streaming adapter |
+  | `valiant-streaming` | `streaming` library adapter |
+  | `valiant-streamly` | Streamly streaming adapter |
+  | `valiant-bluefin` | Bluefin effect system adapter |
+  | `valiant-effectful` | Effectful effect system adapter |
+  | `valiant-fused-effects` | Fused-effects effect system adapter |
+  | `valiant-mtl` | MTL monad transformer adapter |
+  | `valiant-example` | Example REST API using valiant + scotty |
+  | [`bench-compare`](bench-compare/README.md) | Comparative benchmarks against hasql, postgresql-simple, persistent, and asyncpg |
+
+  ```
+  valiant/
+  ├── wire/                      # pg-wire: wire protocol, connection, pool, auth, TLS
+  │   ├── src/PgWire/            # Protocol messages, builders, parsers, async I/O
+  │   └── test/                  # Wire protocol unit tests
+  ├── runtime/                   # valiant: runtime library
+  │   ├── src/Valiant/           # Binary codecs, execute, batch, pipeline, fold, copy, streaming
+  │   ├── bench/                 # Codec + concurrent benchmarks (criterion)
+  │   ├── integration/           # Integration tests (require Postgres)
+  │   └── test/                  # Codec unit tests
+  ├── src/                       # valiant-cli source
+  │   └── Valiant/CLI/           # Commands, cache, type map, discovery, nullability
+  ├── plugin/                    # GHC source plugin
+  │   └── src/Valiant/Plugin/    # AST traversal, verification, error messages
+  ├── adapters/                  # Streaming and effect system adapters (8 packages)
+  │   ├── valiant-conduit/       # Conduit adapter
+  │   ├── valiant-pipes/         # Pipes adapter
+  │   ├── valiant-streaming/     # streaming library adapter
+  │   ├── valiant-streamly/      # Streamly adapter
+  │   ├── valiant-bluefin/       # Bluefin effect system adapter
+  │   ├── valiant-effectful/     # Effectful effect system adapter
+  │   ├── valiant-fused-effects/ # Fused-effects adapter
+  │   └── valiant-mtl/           # MTL monad transformer adapter
+  ├── example/                   # Example REST API (scotty)
+  ├── bench-compare/             # Comparative benchmarks vs hasql, pg-simple
+  ├── scripts/                   # pg-setup.sh, pg-teardown.sh
+  ├── docs/                      # TUTORIAL.md, PERFORMANCE.md, ASYNC_ARCHITECTURE.md
+  └── .valiant/                  # Cached query metadata (committed to VCS)
+  ```
+
+  ## Features
+
+  ### SQL authoring
+  - One SQL statement per `.sql` file with full editor support
+  - Optional metadata comments: `-- valiant:name`, `-- valiant:result`, `-- valiant:single`
+  - Directory structure maps to Haskell module structure
+
+  ### Compile-time validation
+  - 6 structured error codes (`VALIANT-001`..`006`) with column-by-column diagnostics
+  - Nullability inference from `pg_attribute`
+  - Did-you-mean suggestions for mistyped file paths (Levenshtein distance)
+  - Type inference (no signature required) or typed hole discovery
+  - `addDependentFile` tracking: GHC recompiles when `.sql` files change
+
+  ### Type mapping
+
+  | Postgres | Haskell | Postgres | Haskell |
+  |----------|---------|----------|---------|
+  | `bool` | `Bool` | `float4` | `Float` |
+  | `int2` | `Int16` | `float8` | `Double` |
+  | `int4` | `Int32` | `numeric` | `Scientific` |
+  | `int8` | `Int64` | `uuid` | `UUID` |
+  | `text` | `Text` | `json`/`jsonb` | `Value` |
+  | `bytea` | `ByteString` | `date` | `Day` |
+  | `varchar` | `Text` | `time` | `TimeOfDay` |
+  | `timestamp` | `LocalTime` | `timestamptz` | `UTCTime` |
+  | `interval` | `PgInterval` | `inet`/`cidr` | `PgInet` |
+  | `int4[]`, etc. | `Vector Int32`, etc. | | |
+
+  Nullable columns are wrapped in `Maybe`. Custom types are auto-discovered
+  from `pg_type` at prepare time: enums map to `Text`, domains unwrap to
+  their base type, ranges map to `PgRange BaseType`. Manual overrides via
+  `valiant-types.json`.
+
+  ### Runtime
+  - Custom PostgreSQL v3 wire protocol implementation (no FFI, no `libpq`)
+  - Async sender/receiver split: dedicated writer+reader threads per connection
+    with automatic pipelining for concurrent workloads (7.2x scaling at 32 threads)
+  - Binary format encoding/decoding for all supported types
+  - Extended query protocol (Parse/Bind/Execute/Sync) with prepared statement caching
+  - Cross-connection shared statement cache at the pool level
+  - Pipelined batch execution (`executeBatch`) for high-throughput writes
+  - Pipeline Applicative for combining independent queries into one round-trip
+  - Fused Builder encoding and direct-to-Vector DataRow parsing
+  - Constant-memory streaming via `RowFold` (no cursor/transaction needed)
+  - Server-side cursors for large result sets within transactions
+  - Connection pooling with idle reaping, max lifetime, health checking, and
+    pool-level type cache
+  - SCRAM-SHA-256 (with channel binding), MD5, and cleartext authentication
+  - TLS 1.2/1.3 via the `tls` library, client certificates, CA validation
+  - Multi-host failover with `target_session_attrs` and `load_balance_hosts`
+  - Transactions with configurable isolation levels and savepoints
+  - LISTEN/NOTIFY for async notifications (callback-based, no polling)
+  - COPY IN/OUT for bulk data transfer (text, CSV, and binary formats)
+  - Query cancellation with `cancelQuery` and `withQueryTimeout`
+  - Composite, range, array, interval, and Scientific binary codecs
+  - `PgEnum` type class for Haskell sum types mapping to PG enums
+  - Protocol tracing via `setTraceHandler` callback
+  - Logging hooks for query timing and connection events
+
+  ## Workflow
+
+  ### Development
+
+  ```bash
+  # 1. Write a query
+  echo "SELECT id, name FROM users WHERE active = true" > sql/users/list_active.sql
+
+  # 2. Validate against your dev database
+  export DATABASE_URL="postgres://localhost:5432/mydb"
+  valiant prepare
+
+  # 3. Write (or generate) the Haskell binding
+  # 4. Build (the plugin checks everything at compile time)
+  cabal build
+  ```
+
+  ### CI
+
+  ```yaml
+  steps:
+    - name: Verify query cache
+      run: valiant check          # no database needed
+
+    - name: Build
+      run: cabal build
+      env:
+        VALIANT_OFFLINE: "true"   # plugin reads from .valiant/ only
+  ```
+
+  ### Running benchmarks
+
+  ```bash
+  # Start Postgres via docker-compose (tuned for benchmarks)
+  docker compose up -d --wait
+  export DATABASE_URL="postgres://valiant_test:valiant_test@localhost:5433/valiant_test"
+
+  # Codec benchmarks (pure, no database needed)
+  cabal bench valiant-bench --benchmark-options='--match prefix codec'
+
+  # Query benchmarks
+  cabal bench valiant-bench --benchmark-options='--match prefix query'
+
+  # Concurrent benchmarks (the async split showcase)
+  cabal bench valiant-bench --benchmark-options='+RTS -N -RTS --match prefix concurrent'
+
+  # Comparative benchmarks vs hasql and postgresql-simple
+  # (requires system libpq: `brew install libpq` on macOS, then add its bin to PATH)
+  cabal run --project-file=cabal.project.bench bench-compare
+
+  # Teardown
+  docker compose down
+  ```
+
+  ## Building from source
+
+  Requires GHC 9.10.3 and Cabal 3.0+. v0.1 ships against a single GHC
+  version; multi-GHC support (9.6, 9.8, and newer) is planned for 0.1.x
+  once the plugin's GHC AST shims are in place.
+
+  ```bash
+  git clone https://github.com/joshburgess/valiant.git
+  cd valiant
+  cabal build all
+  cabal test pg-wire-test valiant-test valiant-cli-test valiant-plugin-test
+  ```
+
+  All packages compile with `-Werror`.
+
+  ## Design decisions
+
+  **Why not Template Haskell?** TH has stage restrictions, cross-compilation issues, and makes it hard to produce good error messages. A GHC source plugin runs after typechecking, has access to the full AST, and can emit rich diagnostics with source locations and custom formatting.
+
+  **Why a separate prepare step?** Connecting to Postgres from inside the compiler (as Rust's sqlx does) causes well-known compilation speed issues and complicates CI. A separate CLI step + JSON cache keeps compilation fast and enables fully offline builds.
+
+  **Why a custom wire protocol driver?** Full control over binary format encoding, connection management, and protocol features (pipelining, async I/O, COPY, LISTEN/NOTIFY, cursors) without depending on `libpq` or any existing Haskell database library. No system C dependencies means simpler builds and cross-compilation. And as the benchmarks show, pure Haskell binary decoding is faster than FFI-based alternatives on multi-row reads.
+
+  **Why sender/receiver split?** The same architecture behind asyncpg's 3x advantage over psycopg2. Dedicated writer+reader threads per connection allow multiple green threads to pipeline queries automatically on a single connection, achieving 7.2x throughput scaling at 32 threads.
+
+  ## Comparison with Rust's sqlx
+
+  | Aspect | Rust sqlx | valiant |
+  |--------|-----------|-------|
+  | SQL authoring | String literals or `.sql` files | `.sql` files (primary) |
+  | Compile-time mechanism | Proc macro | GHC source plugin |
+  | DB at compile time | From proc macro | Separate `valiant prepare` step |
+  | Offline mode | `.sqlx/` JSON cache | `.valiant/` JSON cache |
+  | Code generation | No | `valiant generate` (optional) |
+  | Runtime driver | Custom async Rust driver | Custom async Haskell driver |
+  | Concurrent I/O | Tokio async/await | Sender/receiver green threads |
+  | Error messages | Generic Rust type errors | Column-by-column diagnostics with fixes |
+  | Pipelining | Via driver internals | Explicit `executeBatch` + automatic via async split |
+  | Custom types | Trait impls | Auto-discovery from `pg_type` + `PgEnum` type class |
+
+  ## License
+
+  BSD-3-Clause
+description-type: markdown
+hash: 3287edfb6097a525ac7dee8f666894cd58d185f00b7366b411a66a53914de947
+homepage: https://github.com/joshburgess/valiant
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: joshburgess.webdev@gmail.com
+synopsis: 'Compile-time checked SQL for Haskell: CLI tool'
+test-bench-deps:
+  aeson: '>=0'
+  base: '>=4.17 && <5'
+  bytestring: '>=0'
+  containers: '>=0'
+  directory: '>=0'
+  filepath: '>=0'
+  hspec: '>=2.11 && <2.13'
+  pg-wire: '>=0'
+  temporary: '>=1.3 && <1.4'
+  text: '>=0'
+  time: '>=0'
+  valiant-cli: '>=0'
