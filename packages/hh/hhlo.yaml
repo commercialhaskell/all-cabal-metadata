@@ -3,6 +3,7 @@ all-versions:
 - 0.2.0.0
 - 0.3.0.0
 - 0.4.0.0
+- 0.5.0.0
 author: overshiki
 basic-deps:
   async: '>=2.2 && <2.3'
@@ -66,7 +67,7 @@ changelog: |
   * New comparison wrappers: `equal`, `notEqual`, `greaterThan`, `lessThanOrEqual`, `greaterThanOrEqual`.
   * Test count: 141 CPU tests + 6 GPU integration tests.
 
-  ## 0.4.0.0 -- 2026-04-20
+  ## 0.4.0.0 -- 2026-04-26
 
   **BREAKING**: `HostType 'Bool` changed from `Bool` to `Word8` to match
   PJRT's PRED buffer transfer semantics.
@@ -85,25 +86,111 @@ changelog: |
   * Boolean logic ops: `logicalAnd`, `logicalOr`, `logicalNot`.
   * New dependency: `directory` (for plugin-path discovery in `withCPU`/`withGPU`).
   * Test count: 155 CPU tests + 6 GPU integration tests.
+
+
+  ## 0.5.0.0 -- 2026-04-27
+
+  * **Autograd** — reverse-mode automatic differentiation is now part of HHLO.
+    New module `HHLO.Autograd` provides `grad` and `vjp` combinators that
+    transform HHLO computation graphs into their gradients, producing new
+    StableHLO modules that compile via PJRT. VJP rules cover ~25 ops including
+    element-wise arithmetic, matmul, transpose, reshape, broadcast, reduce,
+    slice, pad, concatenate, select, and more.
+  * New convenience ops:
+    * `einsum` — Einstein summation via subscript strings (e.g. `"ij,jk->ik"`).
+      Parses labels, computes batch/contracting dims, and emits the correct
+      `stablehlo.dot_general` + optional `stablehlo.transpose`.
+    * `split` — split a tensor into N equal parts along a dimension.
+    * `stack` — stack N tensors along a new axis.
+    * `productAll`, `productDim` — product reductions (mirrors `sumAll`/`reduceSumDim`).
+    * `topK` — return top-K values along a dimension via `sort` + `slice`.
+  * Bug fix: `stablehlo.sort` now wraps its region in parentheses for PJRT
+    v1.16.0 parser compatibility.
+  * Test count: 181 CPU tests + 6 GPU integration tests.
 changelog-type: markdown
 description: |
   # HHLO — Haskell Frontend for StableHLO
 
-  HHLO is a Haskell library and runtime for building, compiling, and executing machine learning programs targeting [StableHLO](https://github.com/openxla/stablehlo), the portable, versioned intermediate representation of the [OpenXLA](https://openxla.org/) ecosystem.
+  HHLO is a Haskell library for building, compiling, and executing machine learning programs that target [StableHLO](https://github.com/openxla/stablehlo), the portable, versioned IR of the [OpenXLA](https://openxla.org/) ecosystem.
 
-  Instead of replicating JAX's Python-based tracing infrastructure, HHLO generates StableHLO MLIR text directly from Haskell and compiles it to **CPU or GPU** via the [PJRT](https://github.com/openxla/xla/blob/main/xla/pjrt/c/pjrt_c_api.h) plugin interface.
+  It lets you write ML models in pure Haskell with compile-time shape checking, compile them to CPU or GPU via the [PJRT](https://github.com/openxla/xla/blob/main/xla/pjrt/c/pjrt_c_api.h) C API, and even differentiate them automatically — all without leaving the type system.
+
+  ```haskell
+  {-# LANGUAGE DataKinds, TypeApplications #-}
+  import HHLO.Session
+  import HHLO.EDSL.Ops
+  import HHLO.Autograd
+
+  -- Define a model, differentiate it, and run it on CPU in 6 lines.
+  main = withCPU $ \sess -> do
+      let f x = sumAll =<< multiply x x
+          gradMod = gradModule @'[3] @'F32 f
+      compiled <- compile sess gradMod
+      result   <- run sess compiled (hostFromList @'[3] @'F32 [1, 2, 3])
+      print (hostToList result)   -- [2.0, 4.0, 6.0]
+  ```
 
   ---
 
-  ## Design
+  ## Table of Contents
 
-  HHLO is structured in five layers:
+  - [Why HHLO?](#why-hhlo)
+  - [Design Philosophy](#design-philosophy)
+  - [Features](#features)
+    - [Type-Safe EDSL](#type-safe-edsl)
+    - [Convenience Ops](#convenience-ops)
+    - [Autograd](#autograd)
+    - [Runtime & Hardware](#runtime--hardware)
+    - [Control Flow & RNG](#control-flow--rng)
+  - [Quick Start](#quick-start)
+  - [Examples](#examples)
+  - [Installation](#installation)
+  - [Project Structure](#project-structure)
+  - [License](#license)
+
+  ---
+
+  ## Why HHLO?
+
+  Most ML frameworks trace Python code to build computation graphs. HHLO takes a different path: you write StableHLO directly in Haskell.
+
+  This means:
+
+  - **No Python runtime** — Your model is ordinary Haskell code.
+  - **Compile-time shape safety** — Matmul mismatches are type errors, not runtime failures.
+  - **Native autograd** — Reverse-mode differentiation is implemented as a Haskell library, not a C++ backend.
+  - **True portability** — StableHLO is a standardized, versioned IR; the same Haskell code runs on CPU, NVIDIA GPU, or any future PJRT backend.
+
+  ---
+
+  ## Design Philosophy
+
+  ### Text Emission + PJRT
+
+  HHLO emits StableHLO MLIR text and hands it straight to `PJRT_Client_Compile`. This is the same compilation path used by JAX's C++ backend, but without the heavy dependency of building LLVM/MLIR from source.
+
+  ### Phantom Types
+
+  Every tensor carries its shape and dtype as phantom type parameters:
+
+  ```haskell
+  Tensor '[2, 3] 'F32   -- 2×3 matrix of Float32
+  Tensor '[4]    'F64   -- 4-element vector of Float64
+  ```
+
+  Matmul, broadcast, and conv shapes are checked at compile time via type families. If the shapes don't match, GHC tells you before you ever load a PJRT plugin.
+
+  ### Layered Architecture
+
+  HHLO is structured so you can use as much or as little abstraction as you need:
 
   ```
   ┌─────────────────────────────────────┐
-  │  Convenience (HHLO.Session)         │  One-liners: withCPU, compile, run
+  │  Session (HHLO.Session)             │  One-liners: withCPU, compile, run
   ├─────────────────────────────────────┤
-  │  EDSL (HHLO.EDSL.Ops)               │  Type-safe frontend: add, matmul, relu, etc.
+  │  Autograd (HHLO.Autograd)           │  grad, vjp, gradModule — reverse-mode AD
+  ├─────────────────────────────────────┤
+  │  EDSL (HHLO.EDSL.Ops)               │  Type-safe frontend: add, matmul, einsum, etc.
   ├─────────────────────────────────────┤
   │  IR Builder (HHLO.IR.Builder)       │  Stateful monad for constructing MLIR
   ├─────────────────────────────────────┤
@@ -113,47 +200,118 @@ description: |
   └─────────────────────────────────────┘
   ```
 
-  **Text Emission + PJRT**
+  The high-level layers (`Session`, `Autograd`) eliminate PJRT boilerplate for the common case. The low-level layers (`IR.Builder`, `Pretty`, `Runtime`) remain available when you need full control.
 
-  The library emits StableHLO MLIR text directly and hands it to `PJRT_Client_Compile`. This is the same path used by JAX's C++ backend and avoids the heavy dependency of building LLVM/MLIR from source.
+  ---
 
-  **Phantom Types**
+  ## Features
 
-  Every tensor carries its shape and dtype as phantom type parameters:
+  ### Type-Safe EDSL
+
+  The frontend provides 50+ typed ops covering arithmetic, linear algebra, reductions, data movement, and neural network primitives:
+
   ```haskell
-  Tensor '[2, 3] 'F32   -- 2×3 matrix of Float32
+  -- Arithmetic
+  c <- add a b
+  d <- multiply a b
+  e <- matmul a b
+
+  -- Non-linear
+  y <- relu x
+  y <- sigmoid x
+  y <- softmax x
+
+  -- Reductions
+  s <- sumAll x                    -- reduce all dims → scalar
+  v <- reduceSumDim @0 x           -- reduce dim 0
+
+  -- Data movement
+  sliced <- slice x [(0, 2), (1, 3)]   -- extract sub-array
+  padded <- pad x 0 [(1, 1), (0, 0)]   -- pad with zeros
+  trans  <- transpose x [1, 0]         -- permute dimensions
   ```
-  Matmul, broadcast, and conv shapes are checked at compile time via type families.
 
-  **ForeignPtr Finalizers**
+  Shape mismatches are caught at compile time. A matmul between a `[2,3]` and a `[4,5]` tensor is a type error, not a segfault.
 
-  PJRT buffers and executables are managed by `ForeignPtr` finalizers that automatically call `PJRT_Buffer_Destroy` and `PJRT_LoadedExecutable_Destroy` when values are garbage-collected. You can still let references drop out of scope without explicit cleanup.
+  ### Convenience Ops
 
-  **Dynamic Output Counts**
+  Beyond the raw StableHLO surface, HHLO provides higher-level combinators that compose primitive ops into familiar patterns:
 
-  The runtime queries the compiled executable for its actual number of outputs via `PJRT_Executable_NumOutputs` instead of guessing or hardcoding a maximum.
+  | Op | What it does |
+  |---|---|
+  | `einsum "ij,jk->ik" a b` | Einstein summation (dispatches to `dotGeneral` + `transpose`) |
+  | `split dim n t` | Decompose a tensor into `n` equal slices along `dim` |
+  | `stack dim [t1, t2, ...]` | Concatenate tensors along a new axis `dim` |
+  | `productAll t` | Reduce all dimensions with `multiply` (like `sumAll` but product) |
+  | `productDim dims t` | Reduce specific dimensions with `multiply` |
+  | `topK k t` | Return the top-K elements (sort descending + slice) |
+
+  These are implemented as pure compositions of existing EDSL ops, so they inherit full autograd support automatically.
+
+  ### Autograd
+
+  HHLO includes a native reverse-mode automatic differentiation engine that transforms StableHLO computation graphs into their gradients.
+
+  **Standalone modules** — produce a reusable `Module`:
+
+  ```haskell
+  -- f(x) = sum(x²)   =>   grad f(x) = 2x
+  gradMod :: Module
+  gradMod = gradModule @'[3] @'F32 $ \x -> do
+      sq <- multiply x x
+      sumAll sq
+  ```
+
+  **In-place combinators** — use inside `buildModule` for composability:
+
+  ```haskell
+  buildModule @1 @1 "loss_and_grad" $ \x -> do
+      loss <- sumAll =<< multiply x x
+      g    <- grad (\y -> sumAll (multiply y y)) x
+      returnTuple2 loss g
+  ```
+
+  **Vector-Jacobian products** — for non-scalar outputs:
+
+  ```haskell
+  -- vjp f x seed = (Df(x))ᵀ · seed
+  vjpModule @'[3] @'[2] @'F32
+      (\x -> do w <- constant @'[2,3] @'F32 1.0; matmul w x)
+  ```
+
+  Supported ops: `add`, `subtract`, `multiply`, `divide`, `negate`, `exponential`, `log`, `sqrt`, `power`, `sine`, `cosine`, `tanh`, `abs`, `maximum`, `minimum`, `reshape`, `transpose`, `broadcast_in_dim`, `reduce` (sum), `dot`, `select`, `slice`, `pad`, `concatenate`, `convert`, and more.
+
+  Ops without gradient rules (e.g. `compare`, `floor`, `ceil`, `sort`) safely return zero gradients. Stubs (e.g. `gather`, `scatter`) error explicitly.
+
+  ### Runtime & Hardware
+
+  **CPU & GPU**
+
+  The same Haskell code compiles to CPU via `withCPU` or to GPU via `withGPU`:
+
+  ```haskell
+  withCPU $ \sess -> do ...   -- CPU plugin, works out of the box
+  withGPU $ \sess -> do ...   -- CUDA plugin, requires NVIDIA runtime libs
+  ```
 
   **Async Execution**
 
-  `HHLO.Runtime.Async` provides true non-blocking execution: `executeAsync` returns buffer handles immediately, `bufferReady` polls for completion, and `awaitBuffers` blocks until device-side computation finishes.
+  `HHLO.Runtime.Async` provides true non-blocking execution:
 
-  **Device Enumeration & Selection**
-
-  `HHLO.Runtime.Device` lets you discover and select specific GPUs at runtime:
   ```haskell
-  addressableDevices api client        -- list all devices
-  deviceKind api dev                   -- "cpu" or "NVIDIA GeForce RTX 5090"
-  defaultGPUDevice api client          -- first non-CPU device
+  bufs <- executeAsync api exec inputs
+  ready <- bufferReady api (head bufs)   -- poll
+  awaitBuffers api bufs                   -- block until done
   ```
 
-  **Multi-GPU Inference Scaling**
+  **Multi-GPU Inference**
 
-  `HHLO.Runtime.Execute` provides `executeReplicas` for running the same compiled model concurrently across multiple GPUs:
+  Run the same compiled model concurrently across multiple GPUs:
+
   ```haskell
   compileWithOptions api client mlirText
       (defaultCompileOptions { optNumReplicas = numDevs })
 
-  -- Launch independent forward passes on all GPUs
   executeReplicas api exec
       [ (gpu0, [bufA0, bufB0])
       , (gpu1, [bufA1, bufB1])
@@ -161,38 +319,17 @@ description: |
       ]
   ```
 
-  **Multi-Result Operations**
+  **ForeignPtr Finalizers**
 
-  The AST `Operation` type supports multiple results, enabling ops like `stablehlo.rng_bit_generator` and multi-value control flow:
-  ```haskell
-  -- Two-result operation
-  (newState, output) <- rngBitGenerator state
-  ```
+  PJRT buffers and executables are managed by `ForeignPtr` finalizers. They are automatically destroyed when garbage-collected — no explicit cleanup required.
 
-  **Convenience Layer**
-
-  `HHLO.ModuleBuilder` and `HHLO.Session` provide a high-level API that eliminates PJRT boilerplate for the common case:
-
-  ```haskell
-  import HHLO.ModuleBuilder
-  import HHLO.Session
-
-  -- Build + compile + run in four lines
-  main = withCPU $ \sess -> do
-      let modu = buildModule @2 @1 "mul" $ \x y -> multiply x y
-      compiled <- compile sess modu
-      result <- run sess compiled (hostFromList @'[2] [2.0, 3.0],
-                                    hostFromList @'[2] [4.0, 5.0])
-      print (hostToList result)   -- [8.0, 15.0]
-  ```
-
-  No `FuncArg`, no `natVal`, no `render`, no `toDeviceF32`, no explicit shape lists. The low-level API remains available for expert users who need full control.
+  ### Control Flow & RNG
 
   **Multi-Value Control Flow**
 
   `whileLoop2` / `conditional2` carry multiple typed tensors through loops and conditionals without manual packing:
+
   ```haskell
-  -- Loop with two accumulators: counter and running sum
   (resultCounter, resultSum) <- whileLoop2 counter0 sum0
       (\c s -> compare c limit "LT")
       (\c s -> do
@@ -203,43 +340,118 @@ description: |
 
   **Random Number Generation**
 
-  Three RNG primitives are exposed in the EDSL:
   ```haskell
   uniform  <- rngUniform a b      -- uniform in [a, b)
   normal   <- rngNormal            -- standard normal (mean 0, std 1)
   (newSt, bits) <- rngBitGenerator state   -- Threefry bit generator
   ```
 
-  **Extended Math Primitives**
+  ---
 
-  Element-wise ops covering the full HBayesian requirements:
-  ```haskell
-  y <- sqrt x          -- square root
-  y <- rsqrt x         -- reciprocal sqrt
-  y <- sin x           -- sine
-  y <- cos x           -- cosine
-  y <- tan x           -- tangent
-  y <- pow x e         -- element-wise power
-  y <- log1p x         -- log(1+x)
-  y <- floor x         -- floor
-  y <- ceil x          -- ceiling
-  y <- sigmoid x       -- 1 / (1 + exp(-x))
+  ## Quick Start
+
+  ### 1. Download PJRT plugins
+
+  ```bash
+  ./pjrt_script.sh
   ```
 
-  **Shape-Preserving Comparisons**
+  This fetches `libpjrt_cpu.so` into `deps/pjrt/`. If you have an NVIDIA GPU, the CUDA plugin is also downloaded automatically.
 
-  `compare` and its wrappers return `Tensor s 'Bool` (same shape as inputs), matching StableHLO semantics:
-  ```haskell
-  mask <- equal x y                -- element-wise equality
-  mask <- greaterThan x y          -- element-wise >
-  mask <- lessThanOrEqual x y      -- element-wise <=
+  ### 2. Build
+
+  ```bash
+  cabal build all
   ```
 
-  Convenience ops for scalar manipulation:
+  ### 3. Run an example
+
+  ```bash
+  # CPU — works out of the box
+  cabal run example-add --flag=examples
+
+  # Autograd
+  cabal run example-autograd-basic --flag=examples
+  ```
+
+  ### 4. Run tests
+
+  ```bash
+  cabal test                    # 181 CPU tests
+  cabal test --test-options="-t HHLO+GPU"   # + 6 GPU integration tests
+  ```
+
+  ---
+
+  ## Examples
+
+  Standalone examples live in `examples/` and cover arithmetic, neural networks, control flow, RNG, and autograd:
+
+  | # | Command | Description |
+  |---|---------|-------------|
+  | 1 | `example-add` | Element-wise `c = a + b` |
+  | 2 | `example-matmul` | 2×3 @ 3×2 matrix multiply |
+  | 3 | `example-chain-ops` | `(a + b) * (a - b)` |
+  | 4 | `example-async` | Async `executeAsync` + `relu` |
+  | 5 | `example-mlp` | 2-layer MLP |
+  | 6 | `example-mlp-batched` | Batched MLP |
+  | 7 | `example-tuple` | Multi-result `func.func` |
+  | 8 | `example-reduce` | `reduceSum` over all dimensions |
+  | 9 | `example-softmax` | 1-D and batched 2-D softmax |
+  | 10 | `example-conv2d` | NHWC conv2d |
+  | 11 | `example-batch-norm` | Batch norm inference |
+  | 12 | `example-while` | `whileLoop` count-up |
+  | 13 | `example-conditional` | `conditional` if-then-else |
+  | 14 | `example-gather` | `gather` rows from matrix |
+  | 15 | `example-scatter` | `scatter` replace into vector |
+  | 16 | `example-slice` | `slice` sub-array extraction |
+  | 17 | `example-pad` | `pad` with edge/interior padding |
+  | 18 | `example-dynamic-slice` | `dynamicSlice` runtime indices |
+  | 19 | `example-sort` | `sort` 1-D ascending |
+  | 20 | `example-select` | Element-wise ternary `select` |
+  | 21 | `example-map` | `map` with custom computation |
+  | 22 | `example-new-ops-smoke-test` | Smoke test for newer ops |
+  | 23 | `example-resnet` | ResNet-18 toy (8×8 input) |
+  | 24 | `example-alexnet` | AlexNet toy (16×16 input) |
+  | 25 | `example-transformer` | Transformer encoder (1×4×16) |
+  | 26 | `example-unet` | UNet segmentation toy (16×16) |
+  | 30 | `example-rng-uniform` | `rngUniform` random floats [0,1) |
+  | 31 | `example-rng-normal` | `rngNormal` standard normal distribution |
+  | 32 | `example-rng-bit-generator` | `rngBitGenerator` Threefry PRNG |
+  | 33 | `example-multi-value-loop` | `whileLoop2` with two loop-carried values |
+  | **34** | **`example-autograd-basic`** | **Gradient of `sum(x²)`** |
+  | **35** | **`example-autograd-linear`** | **Gradient of linear + MSE loss** |
+  | **36** | **`example-autograd-composite`** | **Gradient through ReLU + linear + sum** |
+  | 27 | `example-gpu-add` | GPU smoke test |
+  | 28 | `example-gpu-matmul-bench` | GPU 4096×4096 benchmark |
+  | 29 | `example-multi-gpu-inference` | Multi-GPU concurrent matmul |
+
+  > **Note:** All `example-*` executables are guarded by the `examples` flag in `hhlo.cabal` (defaults to `False`). Append `--flag=examples` to every `cabal run example-*` command.
+
+  ### Writing your own model
+
   ```haskell
-  s <- sumAll x          -- reduce all dimensions to scalar
-  v <- slice1 vec i      -- extract scalar from 1-D tensor
-  packed <- pack2 a b    -- pack two scalars into [2]
+  {-# LANGUAGE DataKinds, TypeApplications #-}
+
+  import HHLO.Session
+  import HHLO.EDSL.Ops
+  import HHLO.Autograd
+
+  -- A tiny model: predict y from x via a learned weight.
+  -- We want the gradient of the squared error.
+  main = withCPU $ \sess -> do
+      let model x = do
+              w <- constant @'[1] @'F32 2.0   -- fixed weight for demo
+              b <- constant @'[1] @'F32 1.0
+              y <- add =<< multiply w x =<< pure b
+              tgt <- constant @'[1] @'F32 5.0
+              diff <- sub y tgt
+              sumAll =<< multiply diff diff
+
+      let gradMod = gradModule @'[1] @'F32 model
+      compiled <- compile sess gradMod
+      result   <- run sess compiled (hostFromList @'[1] @'F32 [3.0])
+      print (hostToList result)   -- [8.0]
   ```
 
   ---
@@ -255,242 +467,30 @@ description: |
 
   ### From Hackage
 
-  HHLO is published on [Hackage](https://hackage.haskell.org/package/hhlo). You can add it directly to your `.cabal` file:
-
   ```cabal
-  build-depends: hhlo >= 0.4
+  build-depends: hhlo >= 0.5
   ```
 
-  Or with `cabal`:
+  Or:
 
   ```bash
   cabal install hhlo
   ```
 
-  ### Download PJRT Plugins
+  ### GPU Setup
 
-  Run the provided script to download prebuilt PJRT plugins:
-
-  ```bash
-  ./pjrt_script.sh
-  ```
-
-  This downloads `libpjrt_cpu.so` from the [zml/pjrt-artifacts](https://github.com/zml/pjrt-artifacts) nightly builds into `deps/pjrt/`. If you have an NVIDIA GPU with `nvidia-smi` available, the CUDA plugin is also fetched automatically.
-
-  ### Build the Project
-
-  ```bash
-  cabal build all
-  ```
-
-  This compiles the library, the demo, the examples, and the test suite.
-
-  ---
-
-  ## Usage
-
-  ### CPU (works out of the box)
-
-  ```bash
-  cabal run example-add --flag=examples
-  cabal test
-  ```
-
-  > **Note:** All `example-*` executables are guarded by the `examples` flag in `hhlo.cabal` (defaults to `False`). Append `--flag=examples` to every `cabal run example-*` command.
-
-  ### GPU (requires runtime libraries)
-
-  The PJRT CUDA plugin depends on NVIDIA runtime libraries: **cuDNN**, **NCCL**, and **NVSHMEM**. These are commonly available via conda, pip, or system packages.
-
-  If you already have them (e.g. via PyTorch or JAX installations), simply run:
+  The PJRT CUDA plugin depends on **cuDNN**, **NCCL**, and **NVSHMEM**. If you already have them (e.g. via PyTorch or JAX):
 
   ```bash
   ./setup_gpu_env.sh
   source ~/.bashrc
   ```
 
-  This idempotent script auto-discovers the libraries and appends them to `~/.bashrc`. After that, GPU examples work directly:
+  This auto-discovers the libraries and appends them to `~/.bashrc`. After that, GPU examples work directly:
 
   ```bash
   cabal run example-gpu-add --flag=examples
   cabal run example-gpu-matmul-bench --flag=examples
-  cabal run example-multi-gpu-inference --flag=examples
-  ```
-
-  ---
-
-  ## EDSL Quick Start
-
-  ### Convenience layer (recommended)
-
-  ```haskell
-  {-# LANGUAGE DataKinds #-}
-  {-# LANGUAGE TypeApplications #-}
-
-  import HHLO.ModuleBuilder
-  import HHLO.Session
-
-  -- Build a program: c = a + b
-  program = buildModule @2 @1 "add" $ \a b -> add a b
-
-  main = withCPU $ \sess -> do
-      compiled <- compile sess program
-      result <- run sess compiled
-          ( hostFromList @'[2,2] @'F32 [1, 2, 3, 4]
-          , hostFromList @'[2,2] @'F32 [5, 6, 7, 8]
-          )
-      print (hostToList result)   -- [6.0, 8.0, 10.0, 12.0]
-  ```
-
-  ### Low-level API (full control)
-
-  ```haskell
-  {-# LANGUAGE DataKinds #-}
-  {-# LANGUAGE OverloadedStrings #-}
-
-  import HHLO.Core.Types
-  import HHLO.EDSL.Ops
-  import HHLO.IR.AST (FuncArg(..), TensorType(..))
-  import HHLO.IR.Builder
-  import HHLO.IR.Pretty
-  import qualified Data.Text as T
-
-  -- Build a program: c = a + b
-  program :: Module
-  program = moduleFromBuilder @'[2,2] @'F32 "main"
-      [ FuncArg "a" (TensorType [2, 2] F32)
-      , FuncArg "b" (TensorType [2, 2] F32)
-      ]
-      $ do
-          a <- arg
-          b <- arg
-          c <- add a b
-          return c
-
-  main :: IO ()
-  main = T.putStrLn (render program)
-  ```
-
-  Output:
-  ```mlir
-  module {
-    func.func @main(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32> {
-        %0 = stablehlo.add %arg0, %arg1 : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
-        return %0 : tensor<2x2xf32>
-    }
-  }
-  ```
-
-  ### Running the Demo
-
-  ```bash
-  cabal run hhlo-demo
-  ```
-
-  The demo builds a `stablehlo.add` program via the EDSL, compiles it with PJRT CPU, creates F32 input buffers, executes, and reads back the result:
-
-  ```
-  === HHLO End-to-End Demo ===
-  Loading PJRT CPU plugin...
-  Plugin loaded.
-  ...
-  Result: [6.0,8.0,10.0,12.0]
-  SUCCESS: Results match expected values!
-  ```
-
-  ### Running Examples
-
-  Standalone examples are provided in `examples/`:
-
-  | # | Command | Description |
-  |---|---------|-------------|
-  | 1 | `cabal run example-add --flag=examples` | Element-wise `c = a + b` |
-  | 2 | `cabal run example-matmul --flag=examples` | 2×3 @ 3×2 matrix multiply |
-  | 3 | `cabal run example-chain-ops --flag=examples` | `(a + b) * (a - b)` |
-  | 4 | `cabal run example-async --flag=examples` | Async `executeAsync` + `relu` |
-  | 5 | `cabal run example-mlp --flag=examples` | 2-layer MLP |
-  | 6 | `cabal run example-mlp-batched --flag=examples` | Batched MLP |
-  | 7 | `cabal run example-tuple --flag=examples` | Multi-result `func.func` |
-  | 8 | `cabal run example-reduce --flag=examples` | `reduceSum` over all dimensions |
-  | 9 | `cabal run example-softmax --flag=examples` | 1-D and batched 2-D softmax |
-  | 10 | `cabal run example-conv2d --flag=examples` | NHWC conv2d |
-  | 11 | `cabal run example-batch-norm --flag=examples` | Batch norm inference |
-  | 12 | `cabal run example-while --flag=examples` | `whileLoop` count-up |
-  | 13 | `cabal run example-conditional --flag=examples` | `conditional` if-then-else |
-  | 14 | `cabal run example-gather --flag=examples` | `gather` rows from matrix |
-  | 15 | `cabal run example-scatter --flag=examples` | `scatter` replace into vector |
-  | 16 | `cabal run example-slice --flag=examples` | `slice` sub-array extraction |
-  | 17 | `cabal run example-pad --flag=examples` | `pad` with edge/interior padding |
-  | 18 | `cabal run example-dynamic-slice --flag=examples` | `dynamicSlice` runtime indices |
-  | 19 | `cabal run example-sort --flag=examples` | `sort` 1-D ascending |
-  | 20 | `cabal run example-select --flag=examples` | Element-wise ternary `select` |
-  | 21 | `cabal run example-map --flag=examples` | `map` with custom computation |
-  | 22 | `cabal run example-new-ops-smoke-test --flag=examples` | Smoke test for newer ops |
-  | 23 | `cabal run example-resnet --flag=examples` | ResNet-18 toy (8×8 input) |
-  | 24 | `cabal run example-alexnet --flag=examples` | AlexNet toy (16×16 input) |
-  | 25 | `cabal run example-transformer --flag=examples` | Transformer encoder (1×4×16) |
-  | 26 | `cabal run example-unet --flag=examples` | UNet segmentation toy (16×16) |
-  | 30 | `cabal run example-rng-uniform --flag=examples` | `rngUniform` random floats [0,1) |
-  | 31 | `cabal run example-rng-normal --flag=examples` | `rngNormal` standard normal distribution |
-  | 32 | `cabal run example-rng-bit-generator --flag=examples` | `rngBitGenerator` Threefry PRNG |
-  | 33 | `cabal run example-multi-value-loop --flag=examples` | `whileLoop2` with two loop-carried values |
-  | **27** | `cabal run example-gpu-add --flag=examples` | **GPU smoke test** |
-  | **28** | `cabal run example-gpu-matmul-bench --flag=examples` | **GPU 4096×4096 benchmark** |
-  | **29** | `cabal run example-multi-gpu-inference --flag=examples` | **Multi-GPU concurrent matmul** |
-
-  ---
-
-  ## Tests
-
-  ### CPU Tests (default)
-
-  ```bash
-  cabal test
-  ```
-
-  Runs **155 tests** across three tiers:
-
-  - **Tier 1 — Golden tests** — Verify rendered MLIR text for EDSL ops, IR constructs, NN layers, and control flow.
-  - **Tier 2 — End-to-end runtime tests** — Load the PJRT CPU plugin, compile StableHLO programs, execute them, and verify numerical results. Covers arithmetic, matmul, reductions, data movement, and NN ops.
-  - **Tier 3 — Runtime integration tests** — Buffer metadata queries, async execution, and error handling.
-
-  ### GPU Tests
-
-  ```bash
-  HHLO_TEST_GPU=1 cabal test
-  ```
-
-  Runs the full 155 CPU tests **plus** 6 additional GPU integration tests:
-
-  - `EndToEnd.GPU` — GPU availability and device enumeration
-  - `Runtime.BufferGPU` — Buffer round-trip and metadata queries on GPU
-  - `Runtime.AsyncGPU` — Async execution and `bufferReady` polling on GPU
-  - `Runtime.MultiGPU` — Concurrent `executeReplicas` across all GPUs
-
-  Sample output:
-  ```
-  HHLO Tests
-    EDSL.Ops
-      Binary element-wise
-        add:                            OK
-        ...
-    EndToEnd.Arithmetic
-      relu:                             OK (0.02s)
-      ...
-    Runtime.Buffer
-      buffer round-trip f32:            OK
-    Runtime.Async
-      buffer ready after sync execute:  OK (0.02s)
-    EndToEnd.GPU
-      gpu available:                    OK
-    Runtime.BufferGPU
-      gpu buffer round-trip f32:        OK
-    Runtime.AsyncGPU
-      gpu executeAsync + await:         OK
-    Runtime.MultiGPU
-      execute replicas on all GPUs:     OK
-
-  All 147 tests passed (16.27s)
   ```
 
   ---
@@ -508,14 +508,21 @@ description: |
   │   └── pjrt/               # Downloaded PJRT plugins (.so files)
   │       └── lib_symlinks/   # Compatibility symlinks for missing library versions
   ├── doc/                    # Architecture and design documents
-  ├── examples/               # Standalone example programs (01–33)
+  ├── examples/               # Standalone example programs (01–36)
   ├── src/HHLO/
+  │   ├── Autograd/           # Reverse-mode automatic differentiation
+  │   │   ├── Autograd.hs     # Public re-export module
+  │   │   ├── Core.hs         # BTensor (runtime-typed backward handles)
+  │   │   ├── Grad.hs         # grad, vjp, gradModule, vjpModule
+  │   │   └── Rules.hs        # Per-op VJP rules (~25 ops)
   │   ├── Core/Types.hs       # DType, Shape, HostType type families
   │   ├── IR/
   │   │   ├── AST.hs          # MLIR AST (Operation, Function, Module)
   │   │   ├── Builder.hs      # Stateful Builder monad + Tensor/Tuple GADTs
   │   │   └── Pretty.hs       # MLIR text pretty-printer
-  │   ├── EDSL/Ops.hs         # Type-safe frontend ops (50+ ops)
+  │   ├── EDSL/Ops.hs         # Type-safe frontend ops (50+ ops + convenience wrappers)
+  │   ├── ModuleBuilder.hs    # Typeclass-dispatched buildModuleN @M @K
+  │   ├── Session.hs          # High-level withCPU / withGPU / compile / run API
   │   └── Runtime/
   │       ├── PJRT/
   │       │   ├── FFI.hs      # C FFI declarations
@@ -523,13 +530,15 @@ description: |
   │       │   ├── Error.hs    # PJRT error handling
   │       │   └── Plugin.hs   # Backend-agnostic plugin loading (withPJRT)
   │       ├── Device.hs       # Device enumeration & selection
-  │       ├── Compile.hs      # MLIR → PJRT executable
-  │       ├── Compile.hs      # MLIR → PJRT executable (with `CompileOptions`)
+  │       ├── Compile.hs      # MLIR → PJRT executable (with CompileOptions)
   │       ├── Execute.hs      # Synchronous + device-targeted + multi-GPU replica execution
   │       ├── Async.hs        # Non-blocking execution with PJRT_Event
   │       └── Buffer.hs       # Host↔device buffer transfers + metadata queries
   ├── test/
   │   ├── Test/
+  │   │   ├── Autograd/       # Autograd golden & unit tests
+  │   │   │   ├── Grad.hs
+  │   │   │   └── Rules.hs
   │   │   ├── EDSL/Ops.hs
   │   │   ├── IR/
   │   │   │   ├── Builder.hs
@@ -539,6 +548,7 @@ description: |
   │   │   │   └── PrettyControlFlow.hs
   │   │   ├── Runtime/
   │   │   │   ├── EndToEnd*.hs       # CPU E2E test modules
+  │   │   │   ├── EndToEndAutograd.hs # Numerical autograd verification
   │   │   │   ├── EndToEndGPU.hs     # GPU availability test
   │   │   │   ├── Buffer.hs
   │   │   │   ├── BufferGPU.hs       # GPU buffer integration tests
@@ -556,25 +566,13 @@ description: |
 
   ---
 
-  <!-- ## Architecture Docs -->
-
-  <!-- The `doc/` directory contains detailed design documents: -->
-
-  <!-- | Document | Contents | -->
-  <!-- |----------|----------| -->
-  <!-- | `implementation-design.md` | Four-layer architecture and design decisions | -->
-  <!-- | `progress-and-remaining-work.md` | Current status, completed features, and backlog | -->
-  <!-- | `test-suite-documentation.md` | Test catalog and tier descriptions | -->
-
-  ---
-
   ## License
 
   MIT License — see [LICENSE](LICENSE).
 description-type: markdown
-hash: 9350ee5cf3cdf90ee4a8cafd7987e1eb4c523e1b6a5ea918ae36e91c9f661308
+hash: eeab38d435d6ba03697acea79489807cd8ac366eda4580d0e5e7226ae0808b51
 homepage: https://github.com/overshiki/hhlo
-latest: 0.4.0.0
+latest: 0.5.0.0
 license-name: MIT
 maintainer: le.niu@hotmail.com
 synopsis: Haskell Frontend for StableHLO — type-safe ML inference on CPU and GPU
