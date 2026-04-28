@@ -5,6 +5,7 @@ all-versions:
 - 0.4.0.0
 - 0.5.0.0
 - 0.6.0.0
+- 0.7.0.0
 author: overshiki
 basic-deps:
   async: '>=2.2 && <2.3'
@@ -18,111 +19,86 @@ basic-deps:
   time: '>=1.12 && <1.15'
   transformers: '>=0.6 && <0.7'
   vector: '>=0.13 && <0.14'
-changelog: |
-  # Revision history for hhlo
-
-  ## 0.1.0.0 -- 2026-04-22
-
-  * Initial release.
-  * Type-safe EDSL for StableHLO with 50+ ops.
-  * CPU execution via PJRT CPU plugin.
-  * GPU execution via PJRT CUDA plugin with device enumeration and selection.
-  * Multi-GPU concurrent inference scaling via `executeReplicas`.
-  * 115 CPU tests + 6 GPU integration tests.
-  * 29 executable examples including ResNet-18, AlexNet, Transformer, and UNet.
-
-  ## 0.2.0.0 -- 2026-04-22
-
-  **BREAKING**: `Operation` AST changed from single-result to multi-result.
-  Any code using `opResult` / `opResultType` or pattern-matching on the
-  `Operation` constructor must update to `opResults` / `opResultTypes`.
-
-  * Multi-result `Operation` AST — `Operation` now supports `opResults :: [ValueId]`
-    and `opResultTypes :: [TensorType]`, enabling ops with multiple outputs such as
-    `stablehlo.rng_bit_generator`.
-  * Multi-value control flow — added `whileLoop2`, `conditional2`, `whileLoopN`,
-    and `conditionalN` for carrying multiple typed tensors through loops and
-    conditionals without manual packing.
-  * Random number generation — added `rngUniform`, `rngNormal`, and
-    `rngBitGenerator` to the EDSL, wrapping `stablehlo.rng` and
-    `stablehlo.rng_bit_generator`.
-  * PJRT CPU v1.16.0 parser compatibility fixes:
-    * `stablehlo.compare` now emits generic form with enum attributes
-      (`#stablehlo<comparison_direction LT>`) instead of custom form.
-    * `stablehlo.rng` and `stablehlo.rng_bit_generator` emit generic form.
-    * `func.return` for multi-result functions no longer wraps types in parentheses.
-  * New examples: `30-rng-uniform`, `31-rng-normal`, `32-rng-bit-generator`,
-    `33-multi-value-loop`.
-  * Updated example `12-while` from print-only to fully executable.
-  * Test count: 124 CPU tests + 6 GPU integration tests.
-
-  ## 0.3.0.0 -- 2026-04-25
-
-  **BREAKING**: `compare` and `lessThan` now return shape-preserving
-  `Tensor s 'Bool` instead of scalar `Tensor '[] 'Bool`. New exports
-  `sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil` may conflict with Prelude.
-
-  * New primitive ops: `sqrt`, `rsqrt`, `sin`, `cos`, `tan`, `pow`, `log1p`, `floor`, `ceil`.
-  * New composite / convenience ops: `sigmoid`, `sumAll`, `pack2`, `pack3`, `slice1`.
-  * Fixed `compare` to return shape-preserving `Tensor s 'Bool` per StableHLO spec.
-  * New comparison wrappers: `equal`, `notEqual`, `greaterThan`, `lessThanOrEqual`, `greaterThanOrEqual`.
-  * Test count: 141 CPU tests + 6 GPU integration tests.
-
-  ## 0.4.0.0 -- 2026-04-26
-
-  **BREAKING**: `HostType 'Bool` changed from `Bool` to `Word8` to match
-  PJRT's PRED buffer transfer semantics.
-
-  * **Convenience layer** — two new modules that eliminate boilerplate for
-  the common compile-and-run workflow:
-    * `HHLO.ModuleBuilder` provides `buildModule @nIn @nOut`, a polymorphic
-      entry point (via `TypeApplications`) that auto-generates `FuncArg`
-      declarations and wires up `arg` calls. No more `natVal` or `FuncArg`
-      boilerplate.
-    * `HHLO.Session` provides `withCPU`, `withGPU`, `withGPUDevice`, `compile`,
-      `run`, `runAsync`, and typed `HostTensor` host-device transfers.
-      No more manual `render`, `toDeviceF32`, `fromDeviceF32`, or shape lists.
-  * `whileLoop3`–`whileLoop8` and `conditional3`–`conditional8` for carrying
-    3–8 heterogeneous tensors through control flow.
-  * Boolean logic ops: `logicalAnd`, `logicalOr`, `logicalNot`.
-  * New dependency: `directory` (for plugin-path discovery in `withCPU`/`withGPU`).
-  * Test count: 155 CPU tests + 6 GPU integration tests.
-
-  ## 0.5.0.0 -- 2026-04-27
-
-  * **Autograd** — reverse-mode automatic differentiation is now part of HHLO.
-    New module `HHLO.Autograd` provides `grad` and `vjp` combinators that
-    transform HHLO computation graphs into their gradients, producing new
-    StableHLO modules that compile via PJRT. VJP rules cover ~25 ops including
-    element-wise arithmetic, matmul, transpose, reshape, broadcast, reduce,
-    slice, pad, concatenate, select, and more.
-  * New convenience ops:
-    * `einsum` — Einstein summation via subscript strings (e.g. `"ij,jk->ik"`).
-      Parses labels, computes batch/contracting dims, and emits the correct
-      `stablehlo.dot_general` + optional `stablehlo.transpose`.
-    * `split` — split a tensor into N equal parts along a dimension.
-    * `stack` — stack N tensors along a new axis.
-    * `productAll`, `productDim` — product reductions (mirrors `sumAll`/`reduceSumDim`).
-    * `topK` — return top-K values along a dimension via `sort` + `slice`.
-  * Bug fix: `stablehlo.sort` now wraps its region in parentheses for PJRT
-    v1.16.0 parser compatibility.
-  * Test count: 181 CPU tests + 6 GPU integration tests.
-
-  ## 0.6.0.0 -- 2026-04-28
-
-  * **Convolution & pooling VJP rules** — autograd now supports backprop through
-    `conv2d`, `transposeConvolution`, `maxPool`, and `avgPool`.
-    * `vjpConvolution` / `vjpTransposeConvolution` emit backward input via
-      flipped-kernel transposed conv and skip backward-kernel computation when
-      the kernel is a constant (the common `gradModule` case).
-    * `vjpReduceWindow` supports both sum-based (avgPool) and select-mask-based
-      (maxPool) backward passes.
-    * New primitive emitters: `bconvolution`, `breverse`.
-    * PJRT parser compatibility: `stablehlo.reverse` custom pretty-printer and
-      `batch_group_count` / `feature_group_count` attributes on backward convs.
-  * New E2E autograd tests: `grad conv2d`, `grad maxPool`, `grad avgPool`.
-  * New unit tests: `vjpConvolution`, `vjpTransposeConvolution`, `vjpReduceWindow`.
-  * Test count: 187 CPU tests + 6 GPU integration tests.
+changelog: "# Revision history for hhlo\n\n## 0.1.0.0 -- 2026-04-22\n\n* Initial release.\n*
+  Type-safe EDSL for StableHLO with 50+ ops.\n* CPU execution via PJRT CPU plugin.\n*
+  GPU execution via PJRT CUDA plugin with device enumeration and selection.\n* Multi-GPU
+  concurrent inference scaling via `executeReplicas`.\n* 115 CPU tests + 6 GPU integration
+  tests.\n* 29 executable examples including ResNet-18, AlexNet, Transformer, and
+  UNet.\n\n## 0.2.0.0 -- 2026-04-22\n\n**BREAKING**: `Operation` AST changed from
+  single-result to multi-result.\nAny code using `opResult` / `opResultType` or pattern-matching
+  on the\n`Operation` constructor must update to `opResults` / `opResultTypes`.\n\n*
+  Multi-result `Operation` AST — `Operation` now supports `opResults :: [ValueId]`\n
+  \ and `opResultTypes :: [TensorType]`, enabling ops with multiple outputs such as\n
+  \ `stablehlo.rng_bit_generator`.\n* Multi-value control flow — added `whileLoop2`,
+  `conditional2`, `whileLoopN`,\n  and `conditionalN` for carrying multiple typed
+  tensors through loops and\n  conditionals without manual packing.\n* Random number
+  generation — added `rngUniform`, `rngNormal`, and\n  `rngBitGenerator` to the EDSL,
+  wrapping `stablehlo.rng` and\n  `stablehlo.rng_bit_generator`.\n* PJRT CPU v1.16.0
+  parser compatibility fixes:\n  * `stablehlo.compare` now emits generic form with
+  enum attributes\n    (`#stablehlo<comparison_direction LT>`) instead of custom form.\n
+  \ * `stablehlo.rng` and `stablehlo.rng_bit_generator` emit generic form.\n  * `func.return`
+  for multi-result functions no longer wraps types in parentheses.\n* New examples:
+  `30-rng-uniform`, `31-rng-normal`, `32-rng-bit-generator`,\n  `33-multi-value-loop`.\n*
+  Updated example `12-while` from print-only to fully executable.\n* Test count: 124
+  CPU tests + 6 GPU integration tests.\n\n## 0.3.0.0 -- 2026-04-25\n\n**BREAKING**:
+  `compare` and `lessThan` now return shape-preserving\n`Tensor s 'Bool` instead of
+  scalar `Tensor '[] 'Bool`. New exports\n`sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil`
+  may conflict with Prelude.\n\n* New primitive ops: `sqrt`, `rsqrt`, `sin`, `cos`,
+  `tan`, `pow`, `log1p`, `floor`, `ceil`.\n* New composite / convenience ops: `sigmoid`,
+  `sumAll`, `pack2`, `pack3`, `slice1`.\n* Fixed `compare` to return shape-preserving
+  `Tensor s 'Bool` per StableHLO spec.\n* New comparison wrappers: `equal`, `notEqual`,
+  `greaterThan`, `lessThanOrEqual`, `greaterThanOrEqual`.\n* Test count: 141 CPU tests
+  + 6 GPU integration tests.\n\n## 0.4.0.0 -- 2026-04-26\n\n**BREAKING**: `HostType
+  'Bool` changed from `Bool` to `Word8` to match\nPJRT's PRED buffer transfer semantics.\n\n*
+  **Convenience layer** — two new modules that eliminate boilerplate for\nthe common
+  compile-and-run workflow:\n  * `HHLO.ModuleBuilder` provides `buildModule @nIn @nOut`,
+  a polymorphic\n    entry point (via `TypeApplications`) that auto-generates `FuncArg`\n
+  \   declarations and wires up `arg` calls. No more `natVal` or `FuncArg`\n    boilerplate.\n
+  \ * `HHLO.Session` provides `withCPU`, `withGPU`, `withGPUDevice`, `compile`,\n
+  \   `run`, `runAsync`, and typed `HostTensor` host-device transfers.\n    No more
+  manual `render`, `toDeviceF32`, `fromDeviceF32`, or shape lists.\n* `whileLoop3`–`whileLoop8`
+  and `conditional3`–`conditional8` for carrying\n  3–8 heterogeneous tensors through
+  control flow.\n* Boolean logic ops: `logicalAnd`, `logicalOr`, `logicalNot`.\n*
+  New dependency: `directory` (for plugin-path discovery in `withCPU`/`withGPU`).\n*
+  Test count: 155 CPU tests + 6 GPU integration tests.\n\n## 0.5.0.0 -- 2026-04-27\n\n*
+  **Autograd** — reverse-mode automatic differentiation is now part of HHLO.\n  New
+  module `HHLO.Autograd` provides `grad` and `vjp` combinators that\n  transform HHLO
+  computation graphs into their gradients, producing new\n  StableHLO modules that
+  compile via PJRT. VJP rules cover ~25 ops including\n  element-wise arithmetic,
+  matmul, transpose, reshape, broadcast, reduce,\n  slice, pad, concatenate, select,
+  and more.\n* New convenience ops:\n  * `einsum` — Einstein summation via subscript
+  strings (e.g. `\"ij,jk->ik\"`).\n    Parses labels, computes batch/contracting dims,
+  and emits the correct\n    `stablehlo.dot_general` + optional `stablehlo.transpose`.\n
+  \ * `split` — split a tensor into N equal parts along a dimension.\n  * `stack`
+  — stack N tensors along a new axis.\n  * `productAll`, `productDim` — product reductions
+  (mirrors `sumAll`/`reduceSumDim`).\n  * `topK` — return top-K values along a dimension
+  via `sort` + `slice`.\n* Bug fix: `stablehlo.sort` now wraps its region in parentheses
+  for PJRT\n  v1.16.0 parser compatibility.\n* Test count: 181 CPU tests + 6 GPU integration
+  tests.\n\n## 0.6.0.0 -- 2026-04-28\n* **Convolution & pooling VJP rules** — autograd
+  now supports backprop through\n  `conv2d`, `transposeConvolution`, `maxPool`, and
+  `avgPool`.\n  * `vjpConvolution` / `vjpTransposeConvolution` emit backward input
+  via\n    flipped-kernel transposed conv and skip backward-kernel computation when\n
+  \   the kernel is a constant (the common `gradModule` case).\n  * `vjpReduceWindow`
+  supports both sum-based (avgPool) and select-mask-based\n    (maxPool) backward
+  passes.\n  * New primitive emitters: `bconvolution`, `breverse`.\n  * PJRT parser
+  compatibility: `stablehlo.reverse` custom pretty-printer and\n    `batch_group_count`
+  / `feature_group_count` attributes on backward convs.\n  \n## 0.7.0.0 -- 2026-04-28\n\n*
+  **Multi-parameter gradients** — `gradModule` is no longer limited to a single\n
+  \ input. New combinators `gradModule2`, `gradModule3`, `grad2`, `grad3`\n  differentiate
+  w.r.t. multiple tensors natively.\n* **ParamTree** — generic pack/unpack for structured
+  parameter records.\n  Derive via `GHC.Generics` and use `gradWithParams` to train
+  models with\n  dozens of weight tensors without manual offset math.\n  ```haskell\n
+  \ data MLPParams = MLPParams { w :: Tensor '[2,2] 'F32, b :: Tensor '[2] 'F32 }\n
+  \     deriving (Generic)\n  instance ParamTree MLPParams\n  trainStep params x =
+  gradWithParams loss params x\n  ```\n\n* New E2E autograd tests: `grad conv2d`,
+  `grad maxPool`, `grad avgPool`,\n  `grad2 multiply`, `gradWithParams`.\n* New unit
+  tests: `vjpConvolution`, `vjpTransposeConvolution`, `vjpReduceWindow`,\n  `gradModule2`.\n*
+  Bug fix: `vjpSlice` padding value is now a 0D scalar (required by\n  `stablehlo.pad`).\n
+  \ \n* **Comprehensive tutorial** — new document `doc/tutorial.md` (720 lines)\n
+  \ providing a complete guided tour from `add` two scalars to multi-GPU\n  distributed
+  inference. Covers: shapes-as-types, the full EDSL, NN primitives,\n  autograd (`grad`/`grad2`/`grad3`/ParamTree),
+  control flow, async execution,\n  and a deep-dive into the architecture and PJRT
+  pipeline.\n* Test count: 190 CPU tests + 6 GPU integration tests.\n"
 changelog-type: markdown
 description: |
   # HHLO — Haskell Frontend for StableHLO
@@ -278,6 +254,38 @@ description: |
       sumAll sq
   ```
 
+  **Multi-parameter gradients** — differentiate w.r.t. multiple inputs natively:
+
+  ```haskell
+  -- g(x, y) = sum(x * y)   =>   (grad_x = y, grad_y = x)
+  (gradX, gradY) <- grad2 (\x y -> sumAll =<< multiply x y) xVal yVal
+  ```
+
+  **Structured parameters with ParamTree** — train models with many weights
+  without manual pack/slice bookkeeping:
+
+  ```haskell
+  {-# LANGUAGE DeriveGeneric #-}
+
+  data MLPParams = MLPParams
+      { w1 :: Tensor '[2,2] 'F32
+      , b1 :: Tensor '[2]   'F32
+      , w2 :: Tensor '[1,2] 'F32
+      , b2 :: Tensor '[1]   'F32
+      } deriving (Generic)
+
+  instance ParamTree MLPParams
+
+  loss p x = do
+      h  <- relu =<< add (matmul x (w1 p)) (b1 p)
+      y  <- add (matmul h (w2 p)) (b2 p)
+      diff <- sub y target
+      sumAll =<< multiply diff diff
+
+  -- Returns an MLPParams of gradients
+  dParams <- gradWithParams loss params x
+  ```
+
   **In-place combinators** — use inside `buildModule` for composability:
 
   ```haskell
@@ -295,7 +303,7 @@ description: |
       (\x -> do w <- constant @'[2,3] @'F32 1.0; matmul w x)
   ```
 
-  Supported ops: `add`, `subtract`, `multiply`, `divide`, `negate`, `exponential`, `log`, `sqrt`, `power`, `sine`, `cosine`, `tanh`, `abs`, `maximum`, `minimum`, `reshape`, `transpose`, `broadcast_in_dim`, `reduce` (sum), `dot`, `select`, `slice`, `pad`, `concatenate`, `convert`, and more.
+  Supported ops: `add`, `subtract`, `multiply`, `divide`, `negate`, `exponential`, `log`, `sqrt`, `power`, `sine`, `cosine`, `tanh`, `abs`, `maximum`, `minimum`, `reshape`, `transpose`, `broadcast_in_dim`, `reduce` (sum), `dot`, `select`, `slice`, `pad`, `concatenate`, `convert`, `convolution`, `reduce_window`, and more.
 
   Ops without gradient rules (e.g. `compare`, `floor`, `ceil`, `sort`) safely return zero gradients. Stubs (e.g. `gather`, `scatter`) error explicitly.
 
@@ -393,7 +401,7 @@ description: |
   ### 4. Run tests
 
   ```bash
-  cabal test                    # 181 CPU tests
+  cabal test                    # 190 CPU tests
   cabal test --test-options="-t HHLO+GPU"   # + 6 GPU integration tests
   ```
 
@@ -438,6 +446,7 @@ description: |
   | **34** | **`example-autograd-basic`** | **Gradient of `sum(x²)`** |
   | **35** | **`example-autograd-linear`** | **Gradient of linear + MSE loss** |
   | **36** | **`example-autograd-composite`** | **Gradient through ReLU + linear + sum** |
+  | **37** | **`example-autograd-multiparam`** | **`gradWithParams` on a record of weights** |
   | 27 | `example-gpu-add` | GPU smoke test |
   | 28 | `example-gpu-matmul-bench` | GPU 4096×4096 benchmark |
   | 29 | `example-multi-gpu-inference` | Multi-GPU concurrent matmul |
@@ -529,8 +538,9 @@ description: |
   │   ├── Autograd/           # Reverse-mode automatic differentiation
   │   │   ├── Autograd.hs     # Public re-export module
   │   │   ├── Core.hs         # BTensor (runtime-typed backward handles)
-  │   │   ├── Grad.hs         # grad, vjp, gradModule, vjpModule
-  │   │   └── Rules.hs        # Per-op VJP rules (~25 ops)
+  │   │   ├── Grad.hs         # grad, grad2, grad3, gradModule, gradModule2, gradModule3
+  │   │   ├── ParamTree.hs    # Generic pack/unpack for multi-parameter training
+  │   │   └── Rules.hs        # Per-op VJP rules (~30 ops)
   │   ├── Core/Types.hs       # DType, Shape, HostType type families
   │   ├── IR/
   │   │   ├── AST.hs          # MLIR AST (Operation, Function, Module)
@@ -586,9 +596,9 @@ description: |
 
   MIT License — see [LICENSE](LICENSE).
 description-type: markdown
-hash: f02723e956775788d01491a6e475d3b71a01e735ba27ce90c9662e59db0f4231
+hash: 600776326698c6a3fb41120b46b5c64147711932b9d6ddd9a4786b7784f4c362
 homepage: https://github.com/overshiki/hhlo
-latest: 0.6.0.0
+latest: 0.7.0.0
 license-name: MIT
 maintainer: le.niu@hotmail.com
 synopsis: Haskell Frontend for StableHLO — type-safe ML inference on CPU and GPU
