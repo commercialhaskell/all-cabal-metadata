@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0.0
+- 0.1.1.0
 author: Noon van der Silk
 basic-deps:
   base: '>=4.17 && <5'
@@ -11,6 +12,80 @@ basic-deps:
   tasty: <1.6
 changelog: |
   # Changelog
+
+  ## 0.1.1.0 — 2026-04-28
+
+  Fix the instance-resolution false negative: editing the body of an
+  `instance C T` no longer leaves cached test results for tests that use
+  `T` polymorphically through a `C` constraint.
+
+  - Extend the dependency BFS in `transitiveDeps` with **class edges** in
+    addition to the existing name edges.  Test bodies (and the bodies of
+    bindings reached during BFS) are now scanned for `EvidenceVarUse`
+    identifiers; each is resolved to a class by chasing the
+    `EvLetBind → … → EvInstBind` chain in a global evidence-variable
+    index built from every HIE file.  Visiting a class then enqueues
+    every binding declared inside any `instance C T` of that class
+    across the project.
+  - Add `EvBind`, `EvBindIndex`, `ClassIndex`, `resolveEvClass`,
+    `collectEvBinds`, `getUsedClasses`, and `buildFileIndex` to
+    `Test.Tasty.HieCache` (internal but exported).
+  - Add `internalComputeFingerprint` for testing — loads HIE files,
+    applies in-memory source-byte overrides per file, and returns the
+    fingerprint for a single named test.  Used by the new end-to-end
+    regression test in `test/FalseNegatives.hs`.
+  - New test fixtures:
+      * `test/Instances.hs` — `Num Foo`, `Num Bar`, `Greet Foo`, and
+        `Insult Foo` instances, all defined in a module the polymorphic
+        helpers never name directly.
+      * `test/Polymorphic.hs` — `poly :: Num a => a -> a`,
+        `roast :: (Greet a, Insult a) => a -> String` (multi-class
+        constraint), and `pair :: forall a b. a -> b -> (a, b)`
+        (explicit `forall`).
+      * The `Polymorphic` test group in `test/Main.hs` exercises all
+        three.
+  - The `Instance resolution` group in `FalseNegatives` carries seven
+    fingerprint-level checks against the real HIE files (using
+    `internalComputeFingerprint` with per-file source-byte overrides):
+      1. *Editing `Num Foo`'s `fromInteger` invalidates `poly @Foo`* —
+         the core regression test that fails on 0.1.0.0 and passes
+         here.
+      2. *Editing an unused method (`signum`) of `Num Foo` invalidates
+         `poly @Foo`* — visiting class `Num` enqueues every method of
+         every instance, including ones the test never invokes.
+      3. *Editing `Num Bar` invalidates `poly @Foo`* — class-edge
+         resolution is class-only, not class+type, so any instance of a
+         used class invalidates.
+      4. *Editing `Num Foo`'s `fromInteger` does **not** invalidate
+         `add 1 2 == 3`* — precision boundary: tests whose BFS goes
+         through bindings whose `ddUsedClasses` is empty (e.g. `(+)`,
+         which dispatches on `Num Int` from `base` and so resolves
+         outside `globalEvBinds`) do not trigger class-edge BFS at
+         user-defined classes.
+      5. *Editing `Greet Foo` invalidates `roast (Foo 3)`* — multi-class
+         evidence A.
+      6. *Editing `Insult Foo` invalidates `roast (Foo 3)`* —
+         multi-class evidence B; together with #5 this proves that
+         multiple classes on a test body's evidence frontier are all
+         tracked.
+      7. *Swapping `forall a b` to `forall b a` invalidates the
+         corresponding `pair` test* — the type-signature line is now
+         part of each binding's chunks, so semantically-meaningful
+         changes to a signature (forall ordering matters under
+         `TypeApplications`) invalidate.
+  - Include `HIE.TyDecl`-context bindings in `isDeclCtx` so type
+    signatures contribute their source bytes to a binding's chunks
+    (needed for the forall test above).
+  - The class-edge BFS is conservative: visiting class `Num` pulls in
+    *every* `Num` instance's methods, not only the one specialised at
+    the relevant type.  This is consistent with the existing `occName`
+    collision behaviour — it produces false positives, never false
+    negatives.  Note that the conservatism extends transitively: GHC's
+    default-method body for `(-)` (`x - y = x + negate y`) dispatches
+    through the user-defined instance dict, so visiting `(-)` from a
+    monomorphic test like `factorial 5 == 120` also pulls in every
+    `Num` method via the class edge.  This is documented and exercised
+    by the `Instance resolution` test group.
 
   ## 0.1.0.0 — 2026-04-22
 
@@ -24,17 +99,22 @@ changelog: |
   - Pragma-line hashing for language extension changes
   - Cabal file hashing so `default-extensions` changes invalidate the cache
   - `OK (cached)` output for skipped tests
+  - Disable with `cabal test --test-options="--disable-tasty-cache"`
 changelog-type: markdown
 description: |2
 
   > [!Note]
-  > Note: This project was built almost entirely with AI; see
-  > [How this was built](#how-this-was-built) for the prompts.
+  > This project was built almost entirely with AI; see [How this was
+  > built](#how-this-was-built) for the prompts.
   >
   > A human did, however, read over the readme and find it acceptable.
 
 
   # tasty-cache
+
+  ![Demo of the functionality](./demo.gif)
+
+  [![Hackage](https://img.shields.io/hackage/v/tasty-cache.svg?logo=haskell&label=Hackage)](https://hackage.haskell.org/package/tasty-cache)
 
   A [Tasty](https://hackage.haskell.org/package/tasty) ingredient that skips
   tests whose source hasn't changed since the last passing run, using GHC HIE
@@ -203,6 +283,40 @@ description: |2
   The transitive dependency set is computed by BFS over the HIE identifier
   graph, starting from the names used in the test body and following `Use`
   references through every reachable declaration in every library module.
+  Each binding's chunks include both its equation lines and its type
+  signature line(s), so signature-only edits — for example swapping the
+  order of variables in an explicit `forall`, which is observable under
+  `TypeApplications` — also invalidate.
+
+  The BFS also follows **class edges**: whenever a test body or a visited
+  binding contains an `EvidenceVarUse` ident — GHC's HIE-level marker for a
+  type-class dictionary application — `tasty-cache` resolves the evidence
+  variable (chasing `EvLetBind` aliases until it reaches an `EvInstBind`) to
+  its class, then enqueues every binding declared inside any `instance C T`
+  of that class across every HIE file. This is what makes a polymorphic
+  test like `poly @Foo 3 @?= Foo 10` correctly invalidate when an
+  implicitly-invoked method (e.g. `fromInteger`, `fromString`) on the
+  relevant instance is edited — even though the method's name appears
+  nowhere in the test body or the polymorphic helper's source.
+
+  The resolution is class-only, not class-and-type, so it is conservative
+  (over-approximating). Concretely: editing *any* `Num` instance's body —
+  even one specialised at a type the test never uses — invalidates every
+  test that goes through some `Num` dictionary; and editing *any* method
+  of the relevant instance — even one the test never invokes —
+  invalidates as well. Both behaviours are intentional and exercised by
+  the `Instance resolution` group in `test/FalseNegatives.hs`.
+
+  The conservatism propagates transitively in one direction worth knowing:
+  GHC generates `(-)` as a default-method body (`x - y = x + negate y`)
+  whose `(+)` and `negate` dispatch through the user-defined `Num`
+  dictionary. That dictionary *is* in the global evidence-var index, so
+  `(-)`'s own `ddUsedClasses` ends up containing `Num`. Tests that go
+  through `(-)` therefore pull in every `Num` method via the class edge —
+  even monomorphic `Int` tests like `factorial 5 == 120`. Tests that go
+  only through `(+)` (e.g. `add 1 2 == 3`) do not, because `(+)`
+  dispatches through `Num Int`'s dict from `base`, which lies outside
+  *our* HIE files and so resolves to nothing.
 
   On each run the ingredient compares fingerprints against a cache
   (`.cache/hie-tasty-cache`). Tests whose fingerprint is unchanged are replaced
@@ -387,14 +501,15 @@ description: |2
 
   ## Test scenarios
 
-  The bundled test suite (`test/Main.hs`) contains 45 tests across 7 modules,
-  demonstrating the range of dependency patterns the cache handles:
+  The bundled test suite (`test/Main.hs`) demonstrates the range of dependency
+  patterns the cache handles:
 
   | Module | `cacheable`? | What it demonstrates |
   |---|---|---|
   | `Lib` | yes | Basic direct dep — editing `factorial` doesn't invalidate `add` tests |
   | `Parity` | no | Always runs; mutual recursion — `isEven`/`isOdd` call each other |
   | `Expr` | yes | GADT — `eval` and `pretty` are independent; editing one doesn't invalidate the other |
+  | `Polymorphic` (+ `Instances`) | yes | Polymorphic helper used at `Foo` whose `Num` instance lives in another module — exercises the class-edge BFS that follows type-class evidence into instance bodies |
   | `Diamond` | yes | Diamond deps — `combined → partA/partB → base`; editing `base` invalidates all four |
   | `Arithmetic` | no | Always runs; Template Haskell — splice dependency tracking |
   | `CPPDemo` | no | Always runs; CPP `#define` changes caught via whole-file hashing |
@@ -519,6 +634,8 @@ description: |2
 
   9. *Can you think of a nice name for this project?*
 
+      (Human's note: All the names it came up with were terrible.)
+
   10. *Can you rename this project to tasty-cache.*
 
   11. *Can you update the README now to reflect the current output and state of
@@ -593,10 +710,64 @@ description: |2
       add any GitHub actions.*
 
       *Please do update the README.*
+
+  28. *We're going to upload this package to hackage.*
+
+      *Can you please write a nix build step to prepare a package to upload to
+      Hackage?*
+
+      *Can you make sure the documentation on the code is compatiable with
+      hackage-style documentation?*
+
+  29. *A user had the following question:*
+
+      *How does it work in the presence of overloaded identifiers? I assume
+      you must somehow resolve which instances are used in each particular
+      test case and track changes to respective definitions. Is it possible
+      to do it just through HIE files, without type checking?*
+
+      *Say, you have `factorial :: Num a => a -> a` and want to test that
+      `factorial @Foo 5 = 120`. The definition of `factorial` has not
+      changed and same for the type declaration of `Foo`. But how do you
+      check that `instance Num Foo` remains the same? We don't even know
+      upfront where it is defined.*
+
+      *Please have a think about how this library handles this case; you
+      can:*
+
+      1. *Add a test case to verify this behaviour,*
+      2. *Investigate solutions, or decide that there is no solution,*
+      3. *Perhaps see if you can at least* detect *this, and emit a warning,*
+      4. *Or come up with some alternative.*
+
+  30. *Please do attempt to make the fix to `transitiveDeps` and do the
+      re-work.*
+
+      *Before embarking on this, please make sure you have a test that
+      fails now, and succeeds when you've completed the work.*
+
+      *I don't mind a redesign of the data model.*
+
+  31. *Can you update the CHANGELOG with this change; the README with the
+      log of prompts from this session, and then bump the version to
+      0.1.1.0 to reflect this fix.*
+
+  32. *As a final check, can you add a couple of other tests to the
+      instance section; i.e. functions with multiple instances where only
+      one changes; and anything else interesting you can think of, and
+      verify that it all works.*
+
+  33. *Please make sure the changelog and readme reflect this.*
+
+  34. *Just as a final confirmation, please add a few more tests to the
+      "Polymorphic.hs" file that demonstrates the fixes; i.e. using
+      multiple classes.  While we're at it, please also check that
+      changes in explicit forall's also invalidate the cache; i.e.
+      `forall a b` vs `forall b a`, etc.*
 description-type: markdown
-hash: 43445ec49e4c2f12945b9c40651202c3dfff4fee7b73eea566dcf059cd73f740
+hash: c4c1d09059b2ad3f3e70cdc65f7581db7a891e9846c9421190779911e6f4f0d3
 homepage: https://github.com/silky/tasty-cache
-latest: 0.1.0.0
+latest: 0.1.1.0
 license-name: MIT
 maintainer: Noon van der Silk <noonsilk@gmail.com>
 synopsis: Tasty ingredient that skips unchanged tests using GHC HIE files
