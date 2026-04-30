@@ -1,6 +1,7 @@
 all-versions:
 - 0.1.0.0
 - 0.2.0.0
+- 0.4.0.0
 author: Nadeem Bitar
 basic-deps:
   base: ^>=4.21.0.0
@@ -8,10 +9,11 @@ basic-deps:
   containers: ^>=0.7
   effectful-core: ^>=2.6.1.0
   hs-opentelemetry-api: ^>=0.3
+  hs-opentelemetry-semantic-conventions: ^>=0.1
   hw-kafka-client: '>=5.3 && <6'
   hw-kafka-streamly: ^>=0.1
   kafka-effectful: ^>=0.1
-  shibuya-core: ^>=0.1.0.0
+  shibuya-core: ^>=0.4
   stm: ^>=2.5
   streamly: ^>=0.11
   streamly-core: ^>=0.3
@@ -19,6 +21,71 @@ basic-deps:
   time: ^>=1.14
 changelog: |
   # Changelog
+
+  ## 0.4.0.0 — 2026-04-29
+
+  ### Breaking Changes
+
+  - Tracks the `shibuya-core 0.4.0.0` release, which adds an
+    `attempt :: !(Maybe Attempt)` field to the `Envelope` record
+    exported from `Shibuya.Core.Types`. The adapter's
+    `consumerRecordToEnvelope` now sets this field to `Nothing`,
+    consistent with the upstream guidance that adapters which cannot
+    observe broker-side redeliveries (e.g. Kafka) report `Nothing`.
+    Downstream code that pattern-matches on `Envelope` with positional
+    patterns or with non-punned record patterns that name every field
+    must be updated.
+
+  ### Other Changes
+
+  - Bumps the `shibuya-core` build-depends pin to `^>=0.4` in all three
+    packages of this repo.
+  - Drops three orphan `NFData` instances (`MessageId`, `Cursor`,
+    `Envelope a`) from `shibuya-kafka-adapter-bench/bench/Main.hs`;
+    these instances have been provided upstream by `shibuya-core` since
+    `0.2.0.0` and the orphans had become duplicate-instance hazards
+    whenever the bench resolved against a `shibuya-core` newer than
+    `0.1`.
+  - `shibuya-kafka-adapter-bench` and `shibuya-kafka-adapter-jitsurei`
+    are re-released at `0.4.0.0` to track the shared version of this
+    repo; neither has user-visible changes of its own.
+
+  ## 0.3.0.0 — 2026-04-22
+
+  Telemetry wire-format change. No Haskell API break —
+  `Shibuya.Adapter.Kafka.Tracing.traced`'s signature is unchanged — but
+  operators with dashboards filtering on the old attribute-key strings
+  or span name must update their queries.
+
+  ### Changed
+
+  - Per-message spans now follow the OpenTelemetry messaging
+    semantic-conventions span-name pattern `"<destination> <operation>"`,
+    yielding e.g. `"orders process"` in place of the previous constant
+    `"shibuya.process.message"`.
+  - The `messaging.operation` attribute is now set to `"process"` on
+    every consumer span.
+  - The Kafka partition is now emitted as the typed Kafka-specific key
+    `messaging.kafka.destination.partition` (Int64), replacing the
+    never-defined `messaging.destination.partition.id` (Text). If the
+    envelope's partition text does not parse as an integer, the
+    shibuya-namespaced `shibuya.partition` is emitted as a defensive
+    fallback.
+  - The Kafka offset is now emitted as `messaging.kafka.message.offset`
+    (Int64), derived from `Envelope.cursor` when it is a `CursorInt`.
+
+  ### Aligned with
+
+  - `Shibuya.Telemetry.Semantic` as of sibling `shibuya` plan 2
+    (`docs/plans/2-align-opentelemetry-semantic-conventions.md` in the
+    shibuya repo). Attribute keys for the generic `messaging.*`
+    namespace are sourced from that module, which in turn derives them
+    from typed `AttributeKey` values in
+    `OpenTelemetry.SemanticConventions`.
+  - `OpenTelemetry.SemanticConventions` (new direct `build-depends`)
+    for the typed Kafka-specific keys
+    `messaging_kafka_destination_partition` and
+    `messaging_kafka_message_offset`.
 
   ## 0.2.0.0 — 2026-04-18
 
@@ -94,7 +161,7 @@ description: |
 
   ## Tracing (opt-in)
 
-  `Shibuya.Adapter.Kafka.Tracing.traced` is an opt-in stream transformer that wraps each emitted `Ingested` so that the downstream handler's eventual `finalize` call runs inside a Consumer-kind `shibuya.process.message` OpenTelemetry span. The span inherits the envelope's W3C `traceparent` as parent (from `Envelope.traceContext`) or opens a fresh root span when no parent is present, and is populated with the v1.27 messaging-conventions attributes (`messaging.system=kafka`, `messaging.destination.name`, `messaging.message.id`, and `messaging.destination.partition.id` when the partition is known). A caller that does not import this module pays nothing — no spans are opened and the adapter's public surface is unchanged.
+  `Shibuya.Adapter.Kafka.Tracing.traced` is an opt-in stream transformer that wraps each emitted `Ingested` so that the downstream handler's eventual `finalize` call runs inside a Consumer-kind OpenTelemetry span named following the messaging convention `"<destination> <operation>"` — e.g. `"orders process"` for a topic named `orders`. The span inherits the envelope's W3C `traceparent` as parent (from `Envelope.traceContext`) or opens a fresh root span when no parent is present, and is populated with the spec-aligned messaging attributes (`messaging.system=kafka`, `messaging.destination.name`, `messaging.operation=process`, `messaging.message.id`) and the Kafka-specific typed attributes `messaging.kafka.destination.partition` (Int64) and `messaging.kafka.message.offset` (Int64) when available. A caller that does not import this module pays nothing — no spans are opened and the adapter's public surface is unchanged.
 
   Typical wiring:
 
@@ -141,9 +208,9 @@ description: |
 
   MIT. See package cabal files for details.
 description-type: markdown
-hash: c51005a82d4ee8a20837ee0f647270f1a573fc558e89d4bcac80a0c3ac07892a
+hash: 2c743046efce62f3b16d7077e26ff3d665c497d241f30bbf21a1a7fc3bbd56b0
 homepage: https://github.com/shinzui/shibuya-kafka-adapter
-latest: 0.2.0.0
+latest: 0.4.0.0
 license-name: MIT
 maintainer: nadeem@gmail.com
 synopsis: Kafka adapter for the Shibuya queue processing framework
@@ -154,6 +221,7 @@ test-bench-deps:
   containers: '>=0'
   effectful-core: '>=0'
   hs-opentelemetry-api: ^>=0.3
+  hs-opentelemetry-semantic-conventions: ^>=0.1
   hw-kafka-client: '>=0'
   kafka-effectful: '>=0'
   process: '>=0'
