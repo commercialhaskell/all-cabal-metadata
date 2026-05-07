@@ -1,19 +1,79 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Nadeem Bitar
 basic-deps:
   base: '>=4.21 && <5'
   bytestring: '>=0.11 && <0.13'
+  case-insensitive: '>=1.2 && <1.3'
   containers: '>=0.6 && <0.8'
   effectful-core: '>=2.5 && <2.7'
+  hs-opentelemetry-api: '>=0.3 && <0.4'
+  hs-opentelemetry-exporter-otlp: ^>=0.1
+  hs-opentelemetry-sdk: ^>=0.1
+  hs-opentelemetry-semantic-conventions: ^>=0.1
+  http-types: '>=0.12 && <0.13'
   hw-kafka-client: '>=5.3 && <6'
+  kafka-effectful: '>=0'
   text: '>=2.0 && <2.2'
+  unliftio-core: '>=0.2 && <0.3'
+  unordered-containers: '>=0.2 && <0.3'
 changelog: |
   # Changelog
 
   All notable changes to `kafka-effectful` are documented here.
 
   This package follows the [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.2.0.0 — 2026-05-06
+
+  Additive release. No breaking changes to existing modules.
+
+  - Add `produceMessage'` and `produceMessageSync` to the
+    `KafkaProducer` effect. `produceMessage'` mirrors
+    `Kafka.Producer.produceMessage'`, taking a per-message
+    `DeliveryReport -> IO ()` callback. `produceMessageSync` blocks
+    until the broker acknowledges the record and returns the assigned
+    `Offset`. Both throw `KafkaError` via the `Error` effect on
+    failure.
+  - Add `produceMessageBatch` to the `KafkaProducer` effect. Returns
+    only the records that failed to enqueue, paired with their
+    `KafkaError`. The interpreter inlines the upstream definition
+    (`mapM` over the list) because Hackage `hw-kafka-client-5.3.0`
+    does not re-export `Kafka.Producer.produceMessageBatch`.
+  - Add the transaction API to the `KafkaProducer` effect —
+    `initTransactions`, `beginTransaction`, `commitTransaction`,
+    `abortTransaction` — plus the cross-effect helper
+    `commitOffsetMessageTransaction` (in new module
+    `Kafka.Effectful.Producer.Transaction`) that commits consumer
+    offsets as part of the producer's open transaction. Re-exports
+    `TxError` with its three accessors
+    (`kafkaErrorTxnRequiresAbort`, `kafkaErrorIsRetriable`,
+    `kafkaErrorIsFatal`).
+  - Add narrow handle-ask escape hatches `askProducerHandle` and
+    `askConsumerHandle` on the scoped facades. Reachable only from
+    `Kafka.Effectful.Producer` and `Kafka.Effectful.Consumer`; not
+    re-exported from the combined `Kafka.Effectful` facade.
+  - Add OpenTelemetry tracing support via opt-in interpreter variants
+    `runKafkaProducerTraced` and `runKafkaConsumerTraced`. New modules
+    under `Kafka.Effectful.OpenTelemetry.*` provide the
+    attribute-builder helpers (`producerRecordAttributes`,
+    `consumerRecordAttributes`) and the W3C trace-context header
+    bridges (`extractTraceContextFromRecord`,
+    `injectTraceContextIntoRecord`). The default interpreters
+    `runKafkaProducer` and `runKafkaConsumer` are unchanged and remain
+    zero-cost for users who do not want tracing. The attribute keys
+    and value types match what `shibuya-kafka-adapter` already emits,
+    so layering the two remains compatible.
+  - Add `kafka-effectful-test` test suite covering the OpenTelemetry
+    attribute helpers and trace-context propagation bridges.
+  - Add example projects: `example-sync-publish`,
+    `example-transactional-etl`, and `example-otel-tracing`
+    demonstrating an end-to-end traced producer/consumer pipeline.
+  - Expand the README with a "Producer scenarios" walkthrough covering
+    all eight best-practice cases from upstream's
+    `producer-best-practices.md`, and document the new tracing
+    support.
 
   ## 0.1.0.0 — 2026-04-16
 
@@ -60,6 +120,158 @@ description: |
     runKafkaProducer producerProps $ do
       produceMessage record
       flushProducer
+  ```
+
+  ### Producer scenarios
+
+  The eight scenarios below mirror the
+  [producer-best-practices](https://github.com/haskell-works/hw-kafka-client/blob/master/docs/producer-best-practices.md)
+  guide from `hw-kafka-client`. Each snippet uses only symbols exported
+  from `Kafka.Effectful`; when a snippet needs `produceMessage'` or
+  `askProducerHandle`, it also imports `Kafka.Effectful.Producer`.
+
+  ##### Scenario 1 — Fire-and-forget
+
+  Register a global delivery callback via `ProducerProperties` and
+  enqueue without blocking. `runKafkaProducer` flushes on scope exit.
+
+  ```haskell
+  fireAndForgetProps =
+    brokersList ["localhost:9092"]
+    <> setCallback (deliveryCallback logFailure)
+
+  runKafkaProducer fireAndForgetProps $
+    forM_ events (produceMessage . toRecord)
+  ```
+
+  ##### Scenario 2 — Synchronous delivery confirmation
+
+  `produceMessageSync` allocates an `MVar`, flushes the producer, and
+  returns the broker-assigned `Offset` — throwing `KafkaError` on any
+  failure.
+
+  ```haskell
+  runKafkaProducer producerProps $ do
+    offset <- produceMessageSync record
+    liftIO $ putStrLn ("stored at offset " <> show offset)
+  ```
+
+  ##### Scenario 3 — Idempotent producer
+
+  Configuration only — no new call site is needed. Safe to enable by
+  default; the broker deduplicates retries by `(producer-id, sequence)`.
+
+  ```haskell
+  idempotentProps =
+    brokersList ["localhost:9092"]
+    <> extraProp "enable.idempotence" "true"
+    <> extraProp "acks" "all"
+    <> extraProp "max.in.flight.requests.per.connection" "5"
+  ```
+
+  ##### Scenario 4 — High-throughput batching
+
+  Combine `produceMessageBatch` with `linger.ms`, `batch.size`, and
+  `compression` to trade a few milliseconds of latency for substantially
+  higher throughput. The result contains only records that failed to
+  enqueue.
+
+  ```haskell
+  batchProps =
+    brokersList ["localhost:9092"]
+    <> compression Snappy
+    <> extraProp "linger.ms" "10"
+    <> extraProp "batch.size" "65536"
+
+  runKafkaProducer batchProps $ do
+    failures <- produceMessageBatch records
+    unless (null failures) $
+      liftIO $ putStrLn ("enqueue failures: " <> show (length failures))
+  ```
+
+  ##### Scenario 5 — Transactional ETL
+
+  Consume, transform, produce, and commit consumer offsets — all inside
+  one producer transaction. `commitOffsetMessageTransaction` requires
+  both the `KafkaProducer` and `KafkaConsumer` effects. `TxError` must
+  be dispatched on in a fixed order: `kafkaErrorTxnRequiresAbort`,
+  `kafkaErrorIsRetriable`, `kafkaErrorIsFatal`.
+
+  ```haskell
+  txProps =
+    brokersList ["localhost:9092"]
+    <> extraProp "transactional.id" "etl-1"
+    <> extraProp "enable.idempotence" "true"
+    <> extraProp "acks" "all"
+
+  etl = runKafkaProducer txProps $ runKafkaConsumer consumerProps sub $ do
+    initTransactions (Timeout 10000)
+    forever $ do
+      msgs <- pollMessageBatch (Timeout 500) (BatchSize 100)
+      let records = rights msgs
+      unless (null records) $ do
+        beginTransaction
+        forM_ records (produceMessage . transform)
+        forM_ (lastPerPartition records) $ \r ->
+          commitOffsetMessageTransaction r (Timeout 5000)
+            >>= handleTxResult
+        commitTransaction (Timeout 5000) >>= handleTxResult
+
+  handleTxResult Nothing  = pure ()
+  handleTxResult (Just e)
+    | kafkaErrorTxnRequiresAbort e = abortTransaction (Timeout 5000)
+    | kafkaErrorIsRetriable e      = liftIO $ putStrLn "retry"
+    | kafkaErrorIsFatal e          = throwError (getKafkaError e)
+    | otherwise                    = liftIO $ putStrLn (show (getKafkaError e))
+  ```
+
+  ##### Scenario 6 — Keyed partitioning for ordering
+
+  Set `prKey` and leave `prPartition = UnassignedPartition` so the
+  default hash partitioner routes every record for the same key to the
+  same partition. Enable idempotence alongside, so a retry does not
+  reorder.
+
+  ```haskell
+  orderedByKey userId event = ProducerRecord
+    { prTopic     = TopicName "user-events"
+    , prPartition = UnassignedPartition
+    , prKey       = Just userId
+    , prValue     = Just (encode event)
+    , prHeaders   = mempty
+    }
+  ```
+
+  ##### Scenario 7 — Custom partitioning and headers
+
+  Target a specific partition with `SpecifiedPartition` and attach
+  per-message metadata via `headersFromList`.
+
+  ```haskell
+  shardedRecord (Shard n) payload = ProducerRecord
+    { prTopic     = TopicName "sharded-events"
+    , prPartition = SpecifiedPartition n
+    , prKey       = Nothing
+    , prValue     = Just payload
+    , prHeaders   = headersFromList
+        [ ("schema-version", "v3")
+        , ("source",         "billing-api")
+        ]
+    }
+  ```
+
+  ##### Scenario 8 — Graceful shutdown
+
+  `runKafkaProducer` already brackets the handle — it flushes and closes
+  the producer on normal scope exit, so enqueued records drain before
+  the program continues. No explicit cleanup code is needed.
+
+  ```haskell
+  main =
+    runEff . runError @KafkaError $
+      runKafkaProducer props $ do
+        forM_ events (produceMessage . toRecord)
+        -- no explicit flush needed; runKafkaProducer flushes on exit
   ```
 
   ### Consumer
@@ -113,6 +325,76 @@ description: |
   `ProducerRecord` values (see the `Kafka.Effectful.Producer` module for the
   available builders).
 
+  ### OpenTelemetry tracing
+
+  Swap `runKafkaProducer` for `runKafkaProducerTraced tracer` and
+  `runKafkaConsumer` for `runKafkaConsumerTraced tracer` to add
+  distributed tracing without changing any effect-level code. The
+  traced interpreters open a `Producer`-kind span around every
+  record-sending operation and a `Consumer`-kind span around every
+  successful `pollMessage` / per-record success of `pollMessageBatch`,
+  populated with the OpenTelemetry messaging semantic conventions
+  (`messaging.system`, `messaging.destination.name`,
+  `messaging.operation`, `messaging.kafka.destination.partition`,
+  `messaging.kafka.message.offset`, `messaging.kafka.message.key`,
+  `messaging.kafka.consumer.group`). The current OTel context is
+  injected into the outgoing record's headers as W3C `traceparent` /
+  `tracestate` so downstream consumers can extract it and continue the
+  trace.
+
+  ```haskell
+  {-# LANGUAGE TypeApplications #-}
+
+  import Effectful
+  import Effectful.Error.Static (runError)
+  import Kafka.Effectful
+  import Kafka.Effectful.OpenTelemetry (runKafkaProducerTraced)
+  import OpenTelemetry.Trace
+    ( initializeGlobalTracerProvider
+    , makeTracer
+    , tracerOptions
+    )
+
+  main :: IO ()
+  main = do
+    tp <- initializeGlobalTracerProvider
+    let tracer = makeTracer tp "my-app" tracerOptions
+    result <- runEff . runError @KafkaError $
+      runKafkaProducerTraced tracer producerProps $ do
+        produceMessage record
+        flushProducer
+    case result of
+      Left (_, err) -> putStrLn ("Kafka error: " <> show err)
+      Right ()      -> pure ()
+  ```
+
+  Span names are `"send <topic>"` and `"process <topic>"`. The default
+  interpreters (`runKafkaProducer`, `runKafkaConsumer`) are unchanged
+  and zero-cost for users who do not want tracing.
+
+  **Compatibility with `shibuya-kafka-adapter`.** The attribute keys
+  this library emits (`messaging.system`,
+  `messaging.kafka.destination.partition`,
+  `messaging.kafka.message.offset`) agree with what
+  `shibuya-kafka-adapter`'s envelope-level attributes already produce.
+  Layering the two yields a Receive→Process span split:
+  `kafka-effectful`'s poll span as parent, Shibuya's framework
+  per-message span as child. If you want only one span per message
+  instead of two, use either `kafka-effectful`'s traced runner *or*
+  Shibuya's framework span — not both.
+
+  The end-to-end demo in
+  `examples/OtelTracing.hs` produces a record through the traced
+  producer and reads it back through the traced consumer, printing
+  both trace IDs and asserting they match. Run it against a local
+  broker:
+
+  ```
+  cabal run example-otel-tracing -f examples -- \
+    --bootstrap-servers localhost:9092 \
+    --topic otel-demo
+  ```
+
   ## Module Structure
 
   | Module | Description |
@@ -122,8 +404,14 @@ description: |
   | `Kafka.Effectful.Consumer` | Consumer effect, interpreter, and types |
   | `Kafka.Effectful.Producer.Effect` | `KafkaProducer` effect definition and operations |
   | `Kafka.Effectful.Producer.Interpreter` | `runKafkaProducer` interpreter |
+  | `Kafka.Effectful.Producer.Transaction` | Cross-effect `commitOffsetMessageTransaction` helper |
   | `Kafka.Effectful.Consumer.Effect` | `KafkaConsumer` effect definition and operations |
   | `Kafka.Effectful.Consumer.Interpreter` | `runKafkaConsumer` interpreter |
+  | `Kafka.Effectful.OpenTelemetry` | Single-import facade for the traced interpreters and helpers |
+  | `Kafka.Effectful.OpenTelemetry.Producer.Interpreter` | `runKafkaProducerTraced` |
+  | `Kafka.Effectful.OpenTelemetry.Consumer.Interpreter` | `runKafkaConsumerTraced` |
+  | `Kafka.Effectful.OpenTelemetry.Semantic` | Pure attribute-builder helpers |
+  | `Kafka.Effectful.OpenTelemetry.Propagation` | W3C trace-context header bridges |
 
   ## Requirements
 
@@ -134,10 +422,26 @@ description: |
 
   MIT
 description-type: markdown
-hash: fcdabc88178b12322c59d80db9962f27be0cb2c9fcb2cfa236ff02679da9c7a5
+hash: 4ebd05a2d14a05c5988cefc8b66a7ccfbdf81a828c017041b9d74f880a99e239
 homepage: ''
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: MIT
 maintainer: Nadeem Bitar
 synopsis: Effectful effects for hw-kafka-client
-test-bench-deps: {}
+test-bench-deps:
+  base: '>=4.21 && <5'
+  bytestring: '>=0.11 && <0.13'
+  case-insensitive: '>=1.2 && <1.3'
+  containers: '>=0.6 && <0.8'
+  effectful-core: '>=2.5 && <2.7'
+  hs-opentelemetry-api: ^>=0.3
+  hs-opentelemetry-exporter-in-memory: ^>=0.0.1
+  hs-opentelemetry-sdk: ^>=0.1
+  hs-opentelemetry-semantic-conventions: ^>=0.1
+  http-types: '>=0.12 && <0.13'
+  hw-kafka-client: '>=5.3 && <6'
+  kafka-effectful: '>=0'
+  tasty: ^>=1.5
+  tasty-hunit: ^>=0.10
+  text: '>=2.0 && <2.2'
+  unordered-containers: '>=0.2 && <0.3'
