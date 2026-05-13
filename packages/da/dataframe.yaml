@@ -49,6 +49,7 @@ all-versions:
 - 1.1.2.0
 - 1.1.2.1
 - 1.2.0.0
+- 1.3.0.0
 author: Michael Chavinda
 basic-deps:
   Glob: '>=0.10 && <1'
@@ -68,6 +69,7 @@ basic-deps:
   granite: ^>=0.4
   hashable: '>=1.2 && <2'
   http-conduit: '>=2.3 && <3'
+  pinch: '>=0.5 && <1'
   process: '>=1.6 && <1.7'
   random: '>=1.2 && <2'
   regex-tdfa: '>=1.3.0 && <2'
@@ -87,10 +89,29 @@ basic-deps:
   vector-algorithms: ^>=0.9
   zlib: '>=0.5 && <1'
   zstd: '>=0.1.2.0 && <0.2'
-changelog: "# Revision history for dataframe\n\n## 1.2.0.0\n### Breaking changes\n*
-  Remove `Eq` and `Ord` instances for `Expr` — they were buggy under cross-type comparison.
-  Use `eqExpr` / `compareExpr` from `DataFrame.Internal.Expression` directly.\n* Lazy
-  executor: `ExecutorConfig` removed; `execute` now takes only a `PhysicalPlan`. `CsvSource`
+changelog: "# Revision history for dataframe\n\n## 0.1.3.0.0\n### New features\n*
+  New `DataFrame.Typed.TH.deriveSchemaFromType` Template Haskell splice generates
+  a typed schema synonym and a `HasSchema` instance from a Haskell record ADT. Pair
+  with `DataFrame.fromRecords` / `DataFrame.toRecords` (or `DataFrame.Typed.fromRecordsTyped`
+  / `toRecordsTyped`) to convert between `[Order]` and `DataFrame`/`TypedDataFrame
+  OrderSchema`. Field names are translated `camelCase → snake_case` by default; the
+  transform is configurable via `SchemaOptions`.\n* New `DataFrame.Typed.Generic`
+  exposes `SchemaOf`/`SchemaOfRaw` plus `genericToColumns` / `genericFromColumns`,
+  so users who prefer `GHC.Generics` over a TH splice can derive the same schema and
+  row bridge.\n* New `DataFrame.Internal.Schema.deriveSchema` Template Haskell splice
+  generates, from a record ADT, both a runtime `Schema` value (`orderSchema :: Schema`,
+  suitable for `readCsvWithSchema` / `readCsvWithOpts`) and one `Expr` accessor per
+  field (`orderCustomerId :: Expr Int`, etc.), so expression-DSL code can refer to
+  columns by typed name without writing `col @T \"snake_case_name\"` at each call
+  site. Re-exported from `DataFrame`.\n\n### Refactor\n* The untyped Template Haskell
+  splices (`declareColumns`, `declareColumnsFromCsvFile`, `declareColumnsFromCsvWithOpts`,
+  `declareColumnsFromParquetFile`, `declareColumnsWithPrefix`, `declareColumnsWithPrefix'`)
+  have moved from `DataFrame.Functions` to a new `DataFrame.TH` module (re-exported
+  from `DataFrame`). Update imports accordingly; the bundled `dataframe.ghci` already
+  points to the new module.\n\n## 1.2.0.0\n### Breaking changes\n* Remove `Eq` and
+  `Ord` instances for `Expr` — they were buggy under cross-type comparison. Use `eqExpr`
+  / `compareExpr` from `DataFrame.Internal.Expression` directly.\n* Lazy executor:
+  `ExecutorConfig` removed; `execute` now takes only a `PhysicalPlan`. `CsvSource`
   carries the `CsvReader` per scan, so the executor no longer has to know about the
   CSV implementation.\n\n### New features\n* New `dataframe-fusion` package: typed
   Apache DataFusion-backed query API (`DataFrame.Fusion.Typed`).\n* Can now use any
@@ -539,7 +560,8 @@ description: |
 
   ### Generate column references from a CSV
 
-  `declareColumnsFromCsvFile` reads your CSV at compile time and generates typed `Expr` bindings for every column:
+  `declareColumnsFromCsvFile` (in `DataFrame.TH`, also re-exported from `DataFrame`)
+  reads your CSV at compile time and generates typed `Expr` bindings for every column:
 
   ```haskell
   {-# LANGUAGE TemplateHaskell #-}
@@ -554,7 +576,7 @@ description: |
   --   total_rooms :: Expr Double
   --   ocean_proximity :: Expr Text
   --   ... one binding per column
-  $(F.declareColumnsFromCsvFile "./data/housing.csv")
+  $(D.declareColumnsFromCsvFile "./data/housing.csv")
 
   main :: IO ()
   main = do
@@ -592,6 +614,107 @@ description: |
   --                        , ...
   --                        ]
   $(T.deriveSchemaFromCsvFile "HousingSchema" "./data/housing.csv")
+  ```
+
+  ### Generate a schema (and a row bridge) from a record ADT
+
+  When the canonical row shape lives in your code as a Haskell record,
+  `deriveSchemaFromType` produces both the typed schema and a `HasSchema`
+  instance that converts between `[Order]` and a `DataFrame` (or
+  `TypedDataFrame OrderSchema`) at runtime:
+
+  ```haskell
+  {-# LANGUAGE DataKinds #-}
+  {-# LANGUAGE FlexibleInstances #-}
+  {-# LANGUAGE TemplateHaskell #-}
+  {-# LANGUAGE TypeFamilies #-}
+
+  import Data.Int (Int64)
+  import qualified Data.Text as T
+  import qualified DataFrame as D
+  import qualified DataFrame.Typed as DT
+
+  data Order = Order
+      { orderId :: Int64
+      , region  :: T.Text
+      , amount  :: Double
+      } deriving (Show, Eq)
+
+  $(DT.deriveSchemaFromType ''Order)
+  -- expands to:
+  --   type OrderSchema =
+  --     '[DT.Column "order_id" Int64, DT.Column "region" T.Text, DT.Column "amount" Double]
+  --   instance DT.HasSchema Order where
+  --     type Schema Order = OrderSchema
+  --     toColumns   = ...
+  --     fromColumns = ...
+
+  xs :: [Order]
+  xs = [Order 1 "us" 10.0, Order 2 "eu" 20.5]
+
+  -- Untyped: [Order] <-> DataFrame
+  df :: D.DataFrame
+  df = D.fromRecords xs
+
+  xs' :: Either T.Text [Order]
+  xs' = D.toRecords df          -- runtime-checked
+
+  -- Typed: [Order] <-> TypedDataFrame OrderSchema
+  tdf :: DT.TypedDataFrame OrderSchema
+  tdf = DT.fromRecordsTyped xs
+  ```
+
+  Field names are translated `camelCase → snake_case` by default; override
+  the translation with `deriveSchemaFromTypeWith
+  defaultSchemaOptions{nameTransform = id}` (or any `String -> String`).
+
+  If all you need is a runtime `Schema` to drive `readCsvWithSchema` (no
+  typed-dataframe machinery), there's a companion splice in
+  `DataFrame.Internal.Schema` (re-exported from `DataFrame`):
+
+  ```haskell
+  $(D.deriveSchema ''Order)
+  -- emits:
+  --   orderSchema     :: Schema
+  --   orderSchema     = makeSchema [("order_id", schemaType @Int64), ...]
+  --   orderOrderId    :: Expr Int64
+  --   orderOrderId    = col "order_id"
+  --   orderRegion     :: Expr Text
+  --   orderRegion     = col "region"
+  --   orderAmount     :: Expr Double
+  --   orderAmount     = col "amount"
+
+  orders :: IO D.DataFrame
+  orders = do
+      df <- D.readCsvWithSchema orderSchema "orders.csv"
+      pure (D.filter orderAmount (> 100) df)
+  ```
+
+  Each record field gets a typed accessor named `<lower-first TyConName><UpperFirst FieldName>`,
+  so `data Order { customerId :: Int }` yields `orderCustomerId :: Expr Int = col "customer_id"`.
+  That's the same shape as `$(D.declareColumns df)` produces from a runtime
+  `DataFrame`, but driven off the ADT instead of an existing frame.
+
+  If you'd rather not depend on Template Haskell, the same schema is
+  available via `GHC.Generics`:
+
+  ```haskell
+  {-# LANGUAGE DeriveGeneric #-}
+  {-# LANGUAGE TypeFamilies #-}
+  {-# LANGUAGE UndecidableInstances #-}
+
+  import GHC.Generics (Generic)
+  import DataFrame.Typed (Schema)
+  import qualified DataFrame.Typed as DT
+
+  data Order = Order { … } deriving (Generic)
+
+  type OrderSchema = DT.SchemaOf Order
+
+  instance DT.HasSchema Order where
+      type Schema Order = OrderSchema
+      toColumns   = DT.genericToColumns
+      fromColumns = DT.genericFromColumns
   ```
 
   ## Typed API
@@ -709,9 +832,9 @@ description: |
   * [Tutorials](docs/tutorial.md)
   * Discord: https://discord.gg/8u8SCWfrNC
 description-type: markdown
-hash: 75c57b8afde5f100d354f7629f218c68bc0f23b1544b2c7be71b06a439de2de0
+hash: 7e107754ae2bd607ac20ac9ed9c8dcb4953443b30d9149a01213aa33956bfcb4
 homepage: ''
-latest: 1.2.0.0
+latest: 1.3.0.0
 license-name: MIT
 maintainer: mschavinda@gmail.com
 synopsis: A fast, safe, and intuitive DataFrame library.
@@ -723,7 +846,6 @@ test-bench-deps:
   containers: '>=0.6.7 && <0.9'
   criterion: '>=1 && <2'
   dataframe: '>=1 && <2'
-  directory: '>=1.3 && <2'
   process: '>=1.6 && <2'
   random: '>=1 && <2'
   random-shuffle: '>=0.0.4 && <1'
