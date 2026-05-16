@@ -1,0 +1,174 @@
+all-versions:
+- 0.1.0.0
+author: Ian Duncan
+basic-deps:
+  aeson: '>=2.1 && <2.3'
+  base: '>=4.16 && <5'
+  bytestring: '>=0.11 && <0.13'
+  containers: '>=0.6 && <0.9'
+  deepseq: '>=1.4 && <1.6'
+  hashable: '>=1.3 && <1.6'
+  mtl: '>=2.2 && <2.4'
+  template-haskell: '>=2.18 && <2.24'
+  text: '>=2.0 && <2.2'
+  th-abstraction: '>=0.5 && <0.8'
+  transformers: '>=0.5 && <0.7'
+changelog: |
+  # Changelog for wireform-derive
+
+  ## 0.1.0.0 -- 2026-05-16
+
+  Initial public release of the cross-format deriver core.
+
+  ### Highlights
+
+  * `Wireform.Derive` -- TH driver and re-export surface.
+  * `Wireform.Derive.Modifier` -- shared annotation vocabulary
+    (`Modifier`): `rename` / `renameStyle` / `renameWith` /
+    `renameIdiomatic`, `tag N`, `skip`, `defaults`, `required` /
+    `optional`, `coerced`, `flatten`, `wireOverride`, `mapKey`,
+    `oneof`, `extension`.
+  * `Wireform.Derive.ModifierInfo` -- resolved modifier shape
+    consumed by per-format derivers.  `ConflictX` errors surface
+    modifier conflicts cleanly.
+  * `Wireform.Derive.NameStyle` -- name conversion helpers
+    (`SnakeCase`, `CamelCase`, `KebabCase`, `Idiomatic`, …).
+  * `Wireform.Derive.Backend` -- backend tags
+    (`backendJSON` / `backendProto` / `backendCBOR` / …) used by
+    the per-backend overrides.
+  * `Wireform.Derive.Extension` -- `BackendModifier` typeclass for
+    typed per-backend payloads (e.g. `XmlFieldOpt`,
+    `HtmlFieldOpt`, `Asn1Tag`).
+  * `Wireform.Derive.TypeInfo` -- TH reification helpers for the
+    per-format derivers.
+  * `Wireform.Derive.Aeson` -- canonical worked-example deriver
+    (`deriveJSON`) that targets Aeson; per-format derivers in
+    sibling packages mirror the same shape.
+changelog-type: markdown
+description: |
+  # wireform-derive
+
+  [![BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
+
+
+  > [!CAUTION]
+  > wireform is in heavy development and has not been published to Hackage yet. APIs may change.
+
+  Annotation-driven Template Haskell deriver core for the
+  [`wireform`][wireform] family.  One `{-# ANN ... #-}` vocabulary
+  drives instance generation for every supported wire format -- JSON,
+  protobuf, CBOR, MessagePack, Thrift, BSON, Ion, EDN, TOML, Bencode,
+  NDJSON, CSV, XML, HTML, ASN.1, FlatBuffers, Cap'n Proto, Avro, Bond,
+  Arrow, Parquet, ORC, Iceberg.
+
+  [wireform]: https://github.com/iand675/wireform-
+
+  ## How it fits together
+
+  * **This package** ships the cross-cutting vocabulary
+    (`Wireform.Derive.Modifier`) and TH reflection helpers
+    (`Wireform.Derive.TypeInfo` / `Wireform.Derive.NameStyle` /
+    `Wireform.Derive.Backend` / `Wireform.Derive.Extension`).
+  * **Per-format packages** (`wireform-proto`, `wireform-cbor`,
+    `wireform-msgpack`, …) each ship a `<Format>.Derive` module that
+    consumes the same vocabulary.  Adding a new format mostly means
+    cloning the nearest existing `<Format>.Derive` and adapting the
+    value-mapping calls.
+  * `Wireform.Derive.Aeson` (in this package) is the canonical
+    worked-example deriver and the only one that lives outside a
+    format-specific package.
+
+  ## Vocabulary at a glance
+
+  ```haskell
+  data Person = Person
+    { personFullName :: !Text
+    , personAge      :: !Word32
+    , personBalance  :: !Int64
+    , personSecret   :: !Text
+    } deriving stock (Show, Eq, Generic)
+
+  {-# ANN type Person ("Person" :: String) #-}
+
+  -- Wire tags / field numbers, used by tag-based formats (proto,
+  -- Thrift, Bond, Iceberg).
+  {-# ANN personFullName (tag 1) #-}
+  {-# ANN personAge      (tag 2) #-}
+  {-# ANN personBalance  (tag 3) #-}
+  {-# ANN personSecret   (tag 4) #-}
+
+  -- snake_case by default everywhere.
+  {-# ANN personFullName (renameStyle SnakeCase) #-}
+  {-# ANN personAge      (renameStyle SnakeCase) #-}
+  {-# ANN personBalance  (renameStyle SnakeCase) #-}
+  {-# ANN personSecret   (renameStyle SnakeCase) #-}
+
+  -- JSON-only override: `fullName` instead of `full_name`.
+  {-# ANN personFullName (forBackend backendJSON (rename "fullName")) #-}
+
+  -- JSON-only `skip`: never serialise `personSecret` to JSON.
+  {-# ANN personSecret   (forBackend backendJSON skip) #-}
+  ```
+
+  Each per-format deriver then runs from a separate TH splice:
+
+  ```haskell
+  import qualified Proto.Derive    as DProto
+  import qualified CBOR.Derive     as DCBOR
+  import qualified MsgPack.Derive  as DMP
+  import qualified Wireform.Derive.Aeson as DAeson
+
+  DProto.deriveProto ''Person
+  DCBOR.deriveCBOR   ''Person
+  DMP.deriveMsgPack  ''Person
+  DAeson.deriveJSON  ''Person
+  ```
+
+  Result: `personFullName` becomes `full_name` on every binary wire
+  but `fullName` in JSON, and `personSecret` is omitted from JSON.
+
+  ## `BackendModifier` extensions
+
+  Backends that need their own typed payloads (e.g. XML attribute vs.
+  element, ASN.1 explicit / implicit tagging, HTML attr vs. child)
+  opt in via the `BackendModifier` typeclass:
+
+  ```haskell
+  class (Eq a, Show a, Read a, Typeable a) => BackendModifier a where
+    backendModifierTag :: Proxy a -> Text
+  ```
+
+  Each backend declares its own ADT under a unique tag namespace
+  (e.g. `wireform-xml.field-opt`, `wireform-asn1.field-opt`).
+  Annotations attach via `extension`, and per-backend deriver code
+  reads them via `lookupExtension` / `lookupExtensions` /
+  `hasExtension`.
+
+  ## Inspirations
+
+  * riz0id's [`serde-th`](https://github.com/riz0id/serde-th)
+    for the per-field annotation idea.
+  * `aeson-th` for the proven TH-driven JSON pattern.
+
+  ## License
+
+  BSD-3-Clause.
+description-type: markdown
+hash: 2caeaed6490ce5b3ed247c55132ae37d9a5af235f661c4162a71cc28cd52048f
+homepage: https://github.com/iand675/wireform-
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: ian@iankduncan.com
+synopsis: Annotation-driven Template Haskell deriver core for wireform
+test-bench-deps:
+  aeson: '>=0'
+  base: '>=0'
+  bytestring: '>=0'
+  containers: '>=0'
+  hedgehog: '>=1.0 && <1.8'
+  tasty: '>=1.4 && <1.6'
+  tasty-hedgehog: '>=1.0 && <1.8'
+  tasty-hunit: '>=0.10 && <0.11'
+  template-haskell: '>=0'
+  text: '>=0'
+  wireform-derive: '>=0'
