@@ -9,6 +9,7 @@ all-versions:
 - 0.8.0.0
 - 0.9.0.0
 - 0.10.0.0
+- 0.11.0.0
 author: overshiki
 basic-deps:
   async: '>=2.2 && <2.3'
@@ -174,7 +175,50 @@ changelog: "# Revision history for hhlo\n\n## 0.1.0.0 -- 2026-04-22\n\n* Initial
   the\n    `@symbol` prefix before operands (e.g.\n    `stablehlo.custom_call @foo(%arg0)
   {...} : ...`).\n  * `examples/CustomCallPlugin.hs` + `examples/cbits/vector_add.cu`
   —\n    minimal working example showing the full plugin contract.\n* Test count:
-  205 CPU tests + 82 GPU tests = 287 total.\n"
+  205 CPU tests + 82 GPU tests = 287 total.\n* **Bug fix**: Full GPU test suite (`HHLO_TEST_GPU=1
+  cabal test`) no longer\n  crashes with mutex corruption from the PJRT CUDA plugin.
+  Root cause was the\n  `EndToEnd.Dynamic` \"dynamic add on GPU\" test creating a
+  separate PJRT client\n  via `withGPU` in the CPU tree; when that client was destroyed,
+  buffer and\n  executable finalizers could race with plugin teardown, corrupting
+  internal\n  mutex state. Fixed by moving the GPU dynamic test to the shared `GPUResource`\n
+  \ tree (new `Test.Runtime.EndToEndDynamicGPU` module). Also added missing\n  `Test.Runtime.EndToEndDynamic`
+  entry to `.cabal` `other-modules`.\n* Test count after fix: 216 CPU tests + 95 GPU
+  tests = 311 total.\n\n## 0.11.0.0 -- 2026-05-17\n\n* **Dynamic shape support** —
+  tensors whose dimensions are only known at\n  runtime can now be constructed, compiled,
+  and executed end-to-end.\n  * `HHLO.EDSL.Dynamic` provides dynamic-shape variants
+  of core ops\n    (`dynamicAdd`, `dynamicMatmul`, `dynamicConv2d`, etc.) using the
+  new\n    `AnyTensor` type.\n  * `HHLO.Session.Dynamic` provides `runDynamic` and
+  `runDynamicAsync`\n    for transferring and executing `DynamicHostTensor` values.\n
+  \ * `HHLO.IR.AST.TensorType` now uses `[Maybe Integer]` for dimensions\n    (`Nothing`
+  renders as `?` in MLIR), enabling static/dynamic mixed shapes.\n  * New example:
+  `37-dynamic-shapes.hs`.\n  * New tests: `Test.Runtime.EndToEndDynamic` and\n    `Test.Runtime.EndToEndDynamicGPU`.\n\n*
+  **Device assignment compile option** — `CompileOptions` gains\n  `optDeviceAssignment`,
+  and the `Session` API now routes buffer transfers\n  and execution to the selected
+  device rather than defaulting to the first\n  device. Fixes multi-GPU session behaviour.\n
+  \ * C shim (`cbits/pjrt_shim.c`) extended to pass device assignment through\n    to
+  `PJRT_Client_Compile`.\n\n* **ForeignPtr lifetime hardening** — critical FFI safety
+  fix for premature\n  GC finalization.\n  * Added `withBufferPtr`, `withExecPtr`,
+  and `withBufferPtrs` helpers to\n    `HHLO.Runtime.PJRT.Types`.\n  * `Execute`,
+  `Buffer`, and `Async` modules hardened so that PJRT buffers\n    and executables
+  cannot be finalized while still in use by C calls.\n\n* **Global API registry**
+  — buffer finalizers are now safe even after the\n  PJRT session closes.\n  * New
+  module `HHLO.Runtime.PJRT.Registry` maintains a global registry of\n    active PJRT
+  API pointers.\n  * Prevents use-after-free crashes when GC runs after plugin teardown.\n
+  \ * New regression tests in `Test.Runtime.Buffer` and `Test.Runtime.BufferGPU`.\n\n*
+  **Structured attribute generation** — all attribute generation across\n  the EDSL,
+  Pretty printer, Autograd, and IR Builder now uses a typed,\n  structured approach
+  instead of ad-hoc attribute lists.\n  * New module: `HHLO.ShapeCheck` (~950 lines)
+  for centralized compile-time\n    shape validation logic.\n\n* **Matmul unified
+  on `dot_general`** — `matmul` now emits canonical\n  `dot_general` attributes. Added
+  `vjpDotGeneral` supporting arbitrary-rank\n  batched matrix multiplication, with
+  new E2E tests for batched configs.\n\n* **Zero-argument module execution** — `ToDeviceInputs`
+  and\n  `FromDeviceOutputs` are now exported from `HHLO.Session`, and `()`\n  instances
+  allow compiling and executing modules with no inputs or no\n  outputs (e.g. constant
+  generators).\n\n* GPU test harness improvements:\n  * SessionGPU regression tests
+  refactored to reuse the shared GPU client,\n    eliminating BFC allocator retry
+  noise.\n  * Dynamic-shape GPU tests moved into the shared `GPUResource` tree.\n\n*
+  Test count: 218 CPU tests; GPU suite expanded with additional session,\n  buffer,
+  and dynamic-shape coverage.\n"
 changelog-type: markdown
 description: |
   # HHLO — Haskell Frontend for StableHLO
@@ -607,85 +651,13 @@ description: |
 
   ---
 
-  ## Project Structure
-
-  ```
-  .
-  ├── app/                    # hhlo-demo executable
-  ├── cbits/                  # C shim around PJRT C API
-  │   ├── pjrt_c_api.h        # Upstream PJRT header
-  │   ├── pjrt_shim.c         # Thin wrapper exposing flat C functions
-  │   └── pjrt_shim.h         # C header for the shim
-  ├── deps/
-  │   └── pjrt/               # Downloaded PJRT plugins (.so files)
-  │       └── lib_symlinks/   # Compatibility symlinks for missing library versions
-  ├── doc/                    # Architecture and design documents
-  ├── examples/               # Standalone example programs (01–36)
-  ├── src/HHLO/
-  │   ├── Autograd/           # Reverse-mode automatic differentiation
-  │   │   ├── Autograd.hs     # Public re-export module
-  │   │   ├── Core.hs         # BTensor (runtime-typed backward handles)
-  │   │   ├── Grad.hs         # grad, grad2, grad3, gradModule, gradModule2, gradModule3
-  │   │   ├── ParamTree.hs    # Generic pack/unpack for multi-parameter training
-  │   │   └── Rules.hs        # Per-op VJP rules (~30 ops)
-  │   ├── Core/Types.hs       # DType, Shape, HostType type families
-  │   ├── IR/
-  │   │   ├── AST.hs          # MLIR AST (Operation, Function, Module)
-  │   │   ├── Builder.hs      # Stateful Builder monad + Tensor/Tuple GADTs
-  │   │   └── Pretty.hs       # MLIR text pretty-printer
-  │   ├── EDSL/Ops.hs         # Type-safe frontend ops (50+ ops + convenience wrappers)
-  │   ├── ModuleBuilder.hs    # Typeclass-dispatched buildModuleN @M @K
-  │   ├── Session.hs          # High-level withCPU / withGPU / compile / run API
-  │   └── Runtime/
-  │       ├── PJRT/
-  │       │   ├── FFI.hs      # C FFI declarations
-  │       │   ├── Types.hs    # Opaque pointer newtypes + buffer type constants
-  │       │   ├── Error.hs    # PJRT error handling
-  │       │   └── Plugin.hs   # Plugin loading + discovery (withPJRT, getPluginPath)
-  │       ├── Device.hs       # Device enumeration & selection
-  │       ├── Compile.hs      # MLIR → PJRT executable (with CompileOptions)
-  │       ├── Execute.hs      # Synchronous + device-targeted + multi-GPU replica execution
-  │       ├── Async.hs        # Non-blocking execution with PJRT_Event
-  │       └── Buffer.hs       # Host↔device buffer transfers + metadata queries
-  ├── test/
-  │   ├── Test/
-  │   │   ├── Autograd/       # Autograd golden & unit tests
-  │   │   │   ├── Grad.hs
-  │   │   │   └── Rules.hs
-  │   │   ├── EDSL/Ops.hs
-  │   │   ├── IR/
-  │   │   │   ├── Builder.hs
-  │   │   │   ├── Pretty.hs
-  │   │   │   ├── PrettyOps.hs
-  │   │   │   ├── PrettyNN.hs
-  │   │   │   └── PrettyControlFlow.hs
-  │   │   ├── Runtime/
-  │   │   │   ├── EndToEnd*.hs       # CPU E2E test modules
-  │   │   │   ├── EndToEndAutograd.hs # Numerical autograd verification
-  │   │   │   ├── EndToEndGPU.hs     # GPU availability test
-  │   │   │   ├── Buffer.hs
-  │   │   │   ├── BufferGPU.hs       # GPU buffer integration tests
-  │   │   │   ├── Async.hs
-  │   │   │   ├── AsyncGPU.hs        # GPU async tests
-  │   │   │   ├── MultiGPU.hs        # Multi-GPU inference scaling tests
-  │   │   │   └── Errors.hs
-  │   │   └── Utils.hs
-  │   └── Main.hs
-  ├── hhlo.cabal
-  ├── pjrt_script.sh          # Downloads PJRT plugins
-  ├── setup_gpu_env.sh        # Auto-configures LD_LIBRARY_PATH for GPU
-  └── README.md
-  ```
-
-  ---
-
   ## License
 
   MIT License — see [LICENSE](LICENSE).
 description-type: markdown
-hash: 0ff5e8c1e0a044d03a2acfb2083981f8bde88a325b1bd99458cbc5f361777c13
+hash: 11b87f541f39816c3f15311bf51e60258529d9c49a3ef487d2b314b73bbfcb55
 homepage: https://github.com/overshiki/hhlo
-latest: 0.10.0.0
+latest: 0.11.0.0
 license-name: MIT
 maintainer: le.niu@hotmail.com
 synopsis: Haskell Frontend for StableHLO — type-safe ML training/inference on CPU
