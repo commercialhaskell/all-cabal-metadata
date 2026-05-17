@@ -1,0 +1,266 @@
+all-versions:
+- 0.0.1.0
+author: phoityne.hs@gmail.com
+basic-deps:
+  ai-agent-diff-patch: '>=0'
+  array: '>=0'
+  base: '>=4.18.0.0 && <4.19'
+  bytestring: '>=0'
+  data-default: '>=0'
+  lens: '>=0'
+  megaparsec: '>=0'
+  mtl: '>=0'
+  optparse-applicative: '>=0'
+  safe-exceptions: '>=0'
+  text: '>=0'
+  transformers: '>=0'
+  vector: '>=0'
+changelog: "# Revision history for ai-agent-diff-patch\r\n\r\n## 0.0.1.0 -- 2026-05-15\r\n\r\n*
+  First version. Released on an unsuspecting world.\r\n"
+changelog-type: markdown
+description: |
+  # ai-agent-diff-patch
+
+  A Haskell library for unified diff generation and fuzzy patch application,
+  designed for AI agents and automated file-editing tools.
+
+  ---
+
+  ## Overview
+
+  `ai-agent-diff-patch` provides three simple entry points for working with
+  [unified diff](https://www.gnu.org/software/diffutils/manual/html_node/Unified-Format.html)
+  format patches:
+
+  - **diff** — compare two text files and emit a unified diff to stdout
+  - **patch** — apply a unified diff patch to a file and emit the result to stdout
+  - **patchFile** — apply a unified diff patch to a file and write the result back in place
+
+  The library is used as the backend for the
+  [pty-mcp-server](https://github.com/phoityne/pty-mcp-server) `pms-patch-file` MCP tool,
+  which lets AI agents edit files by generating and applying minimal patches instead of
+  rewriting entire file contents.
+
+  ---
+
+  ## Features
+
+  - Unified diff generation using the Myers O(ND) algorithm
+  - Fuzzy patch application with configurable line-number drift tolerance
+  - Automatic CRLF / LF line-ending detection and round-trip restoration (Windows compatible)
+  - Rich failure diagnostics: failed hunk index, header, search range, and nearest mismatch
+  - No dependency on external diff/patch executables
+
+  ---
+
+  ## Installation
+
+  Add the library to your `build-depends` in your `.cabal` file:
+
+  ```cabal
+  build-depends:
+      ai-agent-diff-patch
+  ```
+
+  Or, to build from source, clone the repository and run:
+
+  ```
+  cabal build
+  ```
+
+  ---
+
+  ## Usage
+
+  ```haskell
+  import AIAgent.DiffPatch.Unified
+
+  -- | Compare two files and write the unified diff to stdout.
+  diff :: FilePath -> FilePath -> IO (Either String ())
+
+  -- | Apply a unified diff patch to a file and write the result to stdout.
+  patch :: FilePath -> String -> IO (Either String ())
+
+  -- | Apply a unified diff patch to a file and write the result back to the same file.
+  patchFile :: FilePath -> String -> IO (Either String ())
+  ```
+
+  ### diff
+
+  ```haskell
+  result <- diff "old.txt" "new.txt"
+  case result of
+    Left  err -> putStrLn $ "diff failed: " ++ err
+    Right ()  -> pure ()   -- unified diff has been written to stdout
+  ```
+
+  ### patch
+
+  ```haskell
+  let patchText = unlines
+        [ "--- old.txt"
+        , "+++ new.txt"
+        , "@@ -1,3 +1,3 @@"
+        , " line1"
+        , "-line2"
+        , "+line2 modified"
+        , " line3"
+        ]
+  result <- patch "old.txt" patchText
+  case result of
+    Left  err -> putStrLn $ "patch failed: " ++ err
+    Right ()  -> pure ()   -- patched content has been written to stdout
+  ```
+
+  ### patchFile
+
+  ```haskell
+  result <- patchFile "target.txt" patchText
+  case result of
+    Left  err -> putStrLn $ "patchFile failed: " ++ err
+    Right ()  -> pure ()   -- target.txt has been updated in place
+  ```
+
+  All three functions return `Left errorMessage` on failure; no exceptions are thrown.
+
+  ---
+
+  ## Algorithms
+
+  ### Myers Diff Algorithm
+
+  Diff generation is implemented using the **Myers O(ND) algorithm**:
+
+  > E. W. Myers, *"An O(ND) Difference Algorithm and Its Variations"*,
+  > Algorithmica, 1986.
+
+  The algorithm finds the shortest edit script between two sequences of lines,
+  producing compact unified diff output.
+  Time complexity is O(ND), where N is the total number of lines and D is the
+  size of the minimum edit (number of insertions + deletions).
+  The implementation uses an unboxed vector frontier for the forward phase and
+  a snapshot trace for the backward phase, following Myers' original formulation.
+
+  Context lines surrounding each changed block default to **3 lines**, matching
+  the GNU `diff -u` convention.
+
+  ### Fuzzy Patching
+
+  Patch application uses **fuzzy matching** to tolerate line-number drift that
+  commonly occurs when an AI agent generates a patch against a slightly outdated
+  view of a file.
+
+  When applying a hunk, the algorithm:
+
+  1. Reads the `oldStart` hint from the hunk header.
+  2. Generates candidate positions by expanding outward from the hint:
+     `hint, hint+1, hint-1, hint+2, hint-2, ...` up to `+-_FUZZY_RANGE` (default: **5**).
+  3. Tests each candidate by verifying that the hunk's `Context` and `Removed`
+     lines match the file content at that position.
+  4. Applies the hunk at the first matching position.
+
+  If no candidate matches, a detailed error message is produced (see *Limitations*).
+
+  ---
+
+  ## Limitations
+
+  ### Fuzzy Patching search range
+
+  The fuzzy search window is `+-5` lines from the hunk's stated `oldStart`.
+  Line-number drift larger than 5 lines will cause the patch to fail with an
+  `InvalidPatch` error.
+
+  When multiple regions of the file contain similar context lines, the fuzzy
+  search may match an unintended location.  To reduce this risk, keep hunk
+  context lines as specific as possible and avoid overly generic surrounding lines.
+
+  If the number of `Context + Removed` lines in the hunk body does not match
+  `oldCount` in the hunk header, the patch fails immediately and the diagnostic
+  message includes a `[MISMATCH]` marker showing the discrepancy.
+
+  ### Diff algorithm performance
+
+  The Myers algorithm runs in O(ND) time, where D is the edit distance.
+  For files with a large number of differences (high D), performance degrades
+  toward O(N^2).  The internal LCS fallback table requires O(m x n) space, making
+  it unsuitable for very large files (tens of thousands of lines or more).
+
+  ### Non-UTF-8 bytes are silently replaced
+
+  Files are read in binary mode and decoded as UTF-8 using **lenient decoding**.
+  Any byte sequence that is not valid UTF-8 is silently replaced with the Unicode
+  replacement character U+FFFD rather than causing an error.
+  This means corrupted or non-UTF-8 encoded files (e.g. Latin-1, Shift-JIS) will
+  be read without error, but their content will be silently altered.
+  The replacement characters will also propagate into any generated diff or
+  patched output, potentially corrupting the result.
+  Always ensure input files are valid UTF-8 before using this library.
+
+  ### Binary files not supported
+
+  The library operates on `Text` values decoded from UTF-8.
+  Binary files will be partially decoded and corrupted as described above;
+  their use is not supported.
+
+  ### Single-file patches only
+
+  Each call to `patch` / `patchFile` processes a single file.  Multi-file patch
+  bundles (as produced by `git diff` across multiple files) are not supported.
+  Strip the relevant hunk(s) for the target file before calling the library.
+
+  ### No newline at end of file marker not supported
+
+  The unified diff `\ No newline at end of file` marker is neither parsed nor
+  emitted.  Files that lack a trailing newline are handled silently; the marker
+  will not appear in generated diffs.
+
+  ### VCS-specific extended headers not supported
+
+  Extended headers produced by VCS tools -- such as `diff --git a/... b/...` or
+  `index <hash>..<hash>` lines -- are not parsed.  Only the standard
+  `--- old` / `+++ new` file header and `@@ ... @@` hunk headers are recognised.
+
+  ---
+
+  ## Architecture
+
+  `ai-agent-diff-patch` is structured according to the
+  **Core Projection Architecture ([CPA](https://github.com/lambda-tuber/core-projection-architecture/blob/main/README_en.md))**:
+
+
+  | CPA Layer | Module | Responsibility |
+  |---|---|---|
+  | CoreModel | `CoreModel.Type` / `CoreModel.Constant` | Domain types (`Hunk`, `Patch`, `PatchError`, ...) and constants; no IO |
+  | ProjectedContext | `ProjectedContext.Algorithm` / `Parser` / `Context` | Myers diff, fuzzy patching, unified diff parser; pure functions + AppContext actions |
+  | ApplicationBase | `ApplicationBase.Control` | Use-case runners (`runDiff`, `runPatch`, `runPatchFile`); assembles the monad stack |
+  | Interface / Boot | `Interface.FileIO` / `Interface.StdIO` / `Unified` | Concrete IO implementations; public API entry point |
+
+  IO is confined to the Interface and Boot layers.
+  The CoreModel and ProjectedContext layers contain only pure functions,
+  making them straightforward to test in isolation.
+
+  ---
+
+  ## Credits & License
+
+  - **Execution & Process Lead:** Sonnet 4.6, Gemini 3 Flash, GPT-5.5
+  - **Direction & Policy:** phoityne
+  - **License:** MIT -- see [LICENSE](./LICENSE)
+description-type: markdown
+hash: f74de5ae115cf6aae8ec1d1afff7f3a314d04f573a16dace20066a19f4c4ecda
+homepage: https://github.com/phoityne/ai-agent-diff-patch
+latest: 0.0.1.0
+license-name: MIT
+maintainer: phoityne.hs@gmail.com
+synopsis: Unified diff generation and fuzzy patch application for AI agents
+test-bench-deps:
+  QuickCheck: '>=0'
+  ai-agent-diff-patch: '>=0'
+  base: ^>=4.18.0.0
+  bytestring: '>=0'
+  data-default: '>=0'
+  hspec: '>=0'
+  hspec-discover: '>=0'
+  temporary: '>=0'
+  text: '>=0'
