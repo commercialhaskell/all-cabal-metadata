@@ -1,0 +1,549 @@
+all-versions:
+- 0.1.0.0
+author: Toshiaki Honda
+basic-deps:
+  ad: '>=4.4 && <4.6'
+  aeson: '>=2.0 && <2.3'
+  async: '>=2.2 && <2.3'
+  base: '>=4.14 && <5'
+  bytestring: '>=0.11 && <0.13'
+  cassava: '>=0.5 && <0.6'
+  containers: '>=0.6 && <0.8'
+  dataframe: '>=0.4 && <2'
+  deepseq: '>=1.4 && <1.6'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  hanalyze: '>=0'
+  hmatrix: '>=0.20 && <0.21'
+  hvega: '>=0.12 && <0.13'
+  massiv: '>=1.0 && <1.1'
+  mwc-random: '>=0.15 && <0.16'
+  parallel: '>=3.2 && <3.3'
+  process: '>=1.6 && <1.8'
+  random: '>=1.2 && <1.4'
+  statistics: '>=0.16 && <0.17'
+  tasty: '>=1.4 && <1.6'
+  tasty-bench: '>=0.3 && <0.5'
+  temporary: '>=1.3 && <1.4'
+  text: '>=1.2 && <2.2'
+  time: '>=1.11 && <1.13'
+  unordered-containers: '>=0.2 && <0.3'
+  vector: '>=0.13 && <0.14'
+  vector-algorithms: '>=0.9 && <0.10'
+changelog: |
+  # Changelog
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+  and this project adheres to [PVP](https://pvp.haskell.org/) versioning.
+
+  ## [Unreleased]
+
+  ## [0.1.0.0] - 2026-05-19
+
+  First public release on Hackage.
+
+  ### Added (130: HPotfire Vega-Lite migration foundation)
+  - `Hanalyze.Viz.PlotConfig`: `PlotConfig` moved out of `Viz.Core` and gained
+    optional fields `plotColorScheme` / `plotFacetColumn` / `plotLegendPos`.
+    `Viz.Core` re-exports both `PlotConfig` and `defaultConfig`, so existing
+    imports keep working unchanged.
+  - `Hanalyze.Viz.PlotData`: source-agnostic intermediate
+    `PlotData { pdNumeric, pdText, pdLength }` plus a `ToPlotData` adapter type
+    class so future backends (DB / Parquet stream) can feed `*Spec` functions
+    without taking a hard `dataframe` dependency. Hackage `dataframe` adapter
+    lives in `Hanalyze.Viz.PlotData.DataFrame`.
+  - `Hanalyze.Viz.Core.vlJson :: VegaLite -> Text` — canonical JSON serialisation
+    helper for downstream consumers (HPotfire `/api/viz`).
+  - `Hanalyze.Viz.Scatter.scatterSpec` / `Histogram.histSpec` /
+    `Bar.barSpec` — `PlotConfig -> ... -> PlotData -> VegaLite` entry points.
+    Scatter honours `plotColorScheme` / `plotFacetColumn` / `plotLegendPos`.
+
+  ### Changed (130: Pareto Viz API)
+  - **BREAKING**: `Hanalyze.Viz.Pareto` rewritten on the `PlotData` convention.
+    All public functions (`paretoScatter` / `paretoPair` / `parallelCoordinates`
+    / `hypervolumeHistory` / `paretoCompare`) now take `PlotData` instead of
+    `[Solution]`. Use the new `solutionsToPlotData :: [Text] -> [Solution] ->
+    PlotData` helper to bridge from NSGA-II results.
+  - Demos `MaterialsMOODemo.hs` and `NSGADemo.hs` updated accordingly.
+
+  ### Added (090: GLM diagnostics + predict SE)
+  - `Hanalyze.Model.GLM` exports the previously-internal helpers `Link`,
+    `linkFnOf`, `glmDeviance`, `glmLogLik`, `glmVariance` (request 090-CD)
+    so HPotfire can drop its local re-implementations.
+  - `glmPearsonResiduals` / `glmDevianceResiduals` for diagnostics
+    (Q-Q / Scale-Location plots).
+  - `predictGlmEtaWithSE` and `predictGlmMuWithCI` (with `GlmPredictCI`
+    record) for proper Wald CI on η and μ scales — replaces the
+    `η ± 2·rse` approximation HPotfire has been using.
+
+  ### Added (100: GLMM SE)
+  - `Hanalyze.Model.GLMM.glmmFixedSE :: Matrix -> Vector Int -> GLMMResult ->
+    Vector Double` — exact LME (Gaussian) fixed-effect SE via
+    block-structured `(Xᵀ V⁻¹ X)⁻¹`; non-Gaussian families fall back to a
+    `σ² = 1` Gaussian approximation.
+  - `glmmBLUPSE :: Vector Int -> GLMMResult -> Vector Double` — posterior
+    SD of random-intercept BLUPs `(1/σ²_u + n_j/σ²)⁻¹^½`. Suitable for
+    forest plot whiskers.
+
+  ### Fixed (P1: RFF OOM)
+  - `Hanalyze.Model.RFF.medianPairwiseDist`: rewrote with BLAS gram matrix
+    (`Hanalyze.Stat.KernelDist.pairwiseSqDist`) + `Data.Vector.Algorithms.Intro.sort`
+    on a flat `Vector`. The previous implementation built an `O(n²)` list of pair
+    distances using `rows !! i` (each `O(i)`, so `O(n³)` walks total) and ran a
+    naive list quicksort, which exploded space to many GB of thunks and OOM-killed
+    WSL2 around `n=768` (e.g. inside `maximizeMarginalLikRBFMV`).
+  - `Hanalyze.Model.RFF.rbfKernelMat`: rewrote as
+    `LA.cmap (...) (KD.pairwiseSqDist x)`. The old nested list comprehension with
+    `rows !! i / rows !! j` shared the same `O(n³)` shape and hit the same WSL2
+    OOM via `logMarginalLikRBFMV`.
+  - Removed the file-local naive `qSort` from `RFF.hs`.
+  - New `bench-rff-oom` executable as a regression guard. Post-fix:
+    `maximizeMarginalLikRBFMV` with a 3·2·2 grid runs at `n=768` in ~10 s and
+    ~45 MiB peak residency (was OOM).
+
+  ### Fixed (P4: Tier-2 O(n²) helpers in Preprocess)
+  - `Hanalyze.DataIO.Preprocess.dropMissingRows`: cache per-column Text
+    `Vector` once instead of calling `tryColumnAsList` + @xs !! i@ inside
+    the inner row loop. O(rows² × cols) → O(rows × cols).
+  - `Hanalyze.DataIO.Preprocess.sliceColumn` (`tryAs`): convert the
+    column to a `Vector` once and use `unsafeIndex` instead of
+    @xs !! i@ in a list comprehension. O(n²) → O(n).
+
+  ### Fixed (P3: GC pressure / O(n²) helpers)
+  - `Hanalyze.Model.GP.buildKernelMatrix` (1D variant): rewrote with a
+    flat `Storable.Vector` filled via `runST + MVector` instead of
+    materialising the @|xs|·|xs'|@ lazy `[Double]` list that the old
+    `(n><m) [..]` form created (~30 MB of cons cells at `n=768`, pure
+    GC pressure). API is unchanged so the `Periodic` kernel keeps its
+    signed-difference behaviour.
+  - `Hanalyze.Model.GLMM.buildGroups`: replaced `sort . nub` with
+    `Set.toAscList . Set.fromList` (O(n log n) vs O(n²)). Important for
+    grouping vectors with thousands of distinct group IDs.
+
+  ### Fixed (P2: stray naive quicksorts)
+  - `Hanalyze.Model.Quantile.quantile`: replaced file-local naive list quicksort
+    with `Data.List.sort` (mergesort, O(n log n) / O(n) space). Pivot-bias could
+    push the old version to O(n²) space on adversarial inputs.
+  - `Hanalyze.Stat.Test.sortVec` and the file-local `qsort` used by
+    `mannWhitneyManual`: same replacement (`Data.List.sort` /
+    `sortBy (comparing fst)`). Both `qSort`/`qsort` definitions removed.
+
+  ## [0.1.0.1] - 2026-05-14
+
+  Initial Hackage release. (Version 0.1.0.0 was uploaded only as a
+  candidate and never published; the multi-output GP API was rearranged
+  before publication — see below.)
+
+  ### Multi-output GP — API のデフォルトを shared-HP に変更
+  - `Hanalyze.Model.MultiGP.fitMultiGP` / `fitMultiGPMV` の **挙動を sklearn 流
+    shared-HP 版に置き換え**。1 回の HP 最適化で全 q 出力の合算周辺尤度を
+    最大化し、`Ky = K + σ_n² I` の Cholesky を再利用する (RBF 専用、
+    `q > 1` で旧版比 ~q× 速い)。
+  - 旧来の per-output 独立 HP 版 (任意カーネル対応) は
+    `fitMultiGPIndep` / `fitMultiGPMVIndep` に **改名**。
+  - 旧 `fitMultiGPMVSharedHP` は新しい `fitMultiGPMV` に統合済 (削除)。
+  - 既存ユーザーは `fitMultiGP kern ...` を `fitMultiGPIndep kern ...` に
+    置き換えれば従来の挙動を維持できる。
+
+  ### LM diagnostics + Taguchi/Quality 拡張
+  - `Hanalyze.Model.LM.Diagnostics` (new module): inference and residual diagnostics
+    for OLS — `ciTValue`, `lmStdErrors[Multi]`, `CoefStats` /
+    `lmCoefStats[Multi]` (SE / t / two-sided p), `FStat` / `lmFStatistic`
+    (whole-model F, follows R-style df1 = p − 1, df2 = n − p), `ICs` /
+    `lmInformationCriteria` (R `lm()` convention with k = p + 1, σ counted),
+    `hatDiagonal`, `standardizedResiduals`, `cooksDistance`,
+    `predictorStdDevs`. Multi-output (Matrix p × q) is the canonical form;
+    Vector wrappers cover q = 1.
+  - `Hanalyze.Design.Orthogonal.OAMetadata` + `listArraysWithSize`: structured
+    metadata (name / runs / factors / levels / description) for the
+    standard L4–L18 arrays.
+  - `Hanalyze.Design.Taguchi.SNDetails` + `snRatioWithDetails`: SN ratio bundled
+    with sample mean / variance / N.
+  - `Hanalyze.Design.Taguchi.FactorEffectExt` + `factorEffectsTable`: factor-effect
+    rows enriched with `feeRange` and `feeContribution`.
+  - `Hanalyze.Design.Quality.Capability` + `processCapability` /
+    `processCapabilityUpper` / `processCapabilityLower`: Cp / Cpk for
+    two-sided and one-sided spec limits.
+
+  ### Performance (Phase 1-13)
+  - Build flags: added `-O2 -funbox-strict-fields` to all 75 stanzas (library +
+    executables + tests) via the new `common opt` block.
+  - Strict data: enabled `{-# LANGUAGE StrictData #-}` on 22 hot-path modules
+    (Optim.{NSGA,LBFGS,DE,CMAES,CMAESFull,SA,PSO,Common,BayesOpt,Acquisition,
+    Pareto,NelderMead,LineSearch}, Model.{GLM,Regularized,RFF,GP,Kernel},
+    Stat.{KernelDist,Cholesky}, MCMC.{HMC,NUTS}).
+  - INLINE pragmas on hot-path wrappers: `Hanalyze.Stat.Cholesky.{cholSolve,cholFactor,
+    cholSolveWithFactor}`, `Hanalyze.Stat.KernelDist.{diagAB,rowDotsAB,rowSqNorms}`,
+    `Hanalyze.Optim.Common.flipFor`, plus 9 polymorphic helpers in `Hanalyze.Stat.AD`.
+  - `Hanalyze.Stat.KernelDist.pairwiseSqDist` rewritten with `runST + Storable.Mutable`
+    flat-index loop; massiv dependency removed from this hot path
+    (16-26% speedup on KR/Gram benchmarks).
+  - `Hanalyze.Model.GLM.glmLogLik` switched from list-based `zipWith`+`sum` to
+    `VS.zipWith`+`VS.sum` (~20% speedup on GLM_logit_n=10000).
+  - `Hanalyze.Model.GLM.irlsStep` weight/working-response computation switched from
+    massiv `MA.map`/`MA.zipWith3` to `VS.map`/`VS.zipWith3`.
+  - `Hanalyze.Stat.ModelSelect.lmPosteriorLogLiks`/`glmPosteriorLogLiks` switched to
+    the same `VS.zipWith`-based pattern (avoids per-sample `LA.toList`
+    allocations).
+  - Benchmark infrastructure: added `bench-tasty` (focused tasty-bench
+    micro suite) and `bench-profile` (profiling runner with
+    `cabal.project.local: profiling-detail: late-toplevel`). Migrated
+    `bench-regression` and `bench-kernel` to use the new
+    `BenchUtil.timeitTasty` (adaptive iteration, 5% relative stdev) instead
+    of fixed-N `timeit`. CSV output schema is preserved.
+  - Reverted experiments documented for future reference (all in
+    `bench/results/perf_profile_findings.md`):
+    parallel `Strategies` on `Hanalyze.Stat.Bootstrap` (Storable allocator
+    contention), mutable axpy in Lasso CD (BLAS daxpy already optimal),
+    `VS.map`-based `mapMatrix`/`mapVector` (massiv's fused map wins on
+    large matrices).
+
+  ### Documentation
+  - Added Haddock `>>>` examples to a curated set of pure helpers
+    (`Hanalyze.Stat.Interpolate.interp1d`, `Hanalyze.Stat.AdaptiveGrid.uniformGrid`,
+    `Hanalyze.Optim.Common.projectToBounds` / `inBounds`, `Hanalyze.Model.MultiOutput.asMultiY`,
+    `Hanalyze.DataIO.Log.hasErrors`). The doctest runner test-suite is deferred until
+    the cabal/doctest package-db wiring is settled; the examples remain
+    valid as Haddock documentation.
+  - Updated `bench/results/SUMMARY.md` and `bench/results/OPEN_ISSUES.md`
+    to reflect Phase 1-13 numbers; deleted stale `bench/results/REPORT.md`
+    (Phase B0-B5) and the 160k-line auto-generated `bench/results/summary.md`.
+
+  ### Release engineering
+  - `cabal sdist` and `cabal haddock --haddock-for-hackage` both succeed
+    cleanly (`cabal check` reports no errors or warnings). Hackage candidate
+    upload is left as a manual step:
+    ```
+    cabal upload dist-newstyle/sdist/hanalyze-0.1.0.0.tar.gz                 # candidate
+    cabal upload --documentation dist-newstyle/hanalyze-0.1.0.0-docs.tar.gz   # candidate docs
+    cabal upload --publish dist-newstyle/sdist/hanalyze-0.1.0.0.tar.gz       # final
+    ```
+
+  ### Models
+  - Linear models: `Hanalyze.Model.LM`, `Hanalyze.Model.GLM` (Gaussian / Binomial / Poisson + IRLS),
+    `Hanalyze.Model.GLMM` (LME via exact EM, GLMM via Laplace).
+  - Smoothers: `Hanalyze.Model.Spline` (B-spline / natural cubic),
+    `Hanalyze.Model.Kernel` (Nadaraya-Watson + kernel ridge).
+  - Gaussian process: `Hanalyze.Model.GP` (RBF / Matérn / periodic, single + multi output),
+    `Hanalyze.Model.GPRobust` (Student-t / Cauchy via IRLS MAP),
+    `Hanalyze.Model.RFF` (random Fourier features, multi-output).
+  - Regularization: `Hanalyze.Model.Regularized` (ridge / lasso / elastic net).
+  - Probabilistic DSL: `Hanalyze.Model.HBM` (free monad with structure / log-joint / AD /
+    dependency interpretations).
+
+  ### MCMC and inference
+  - `Hanalyze.MCMC.MH`, `Hanalyze.MCMC.HMC`, `Hanalyze.MCMC.NUTS`, `Hanalyze.MCMC.Gibbs`, `Hanalyze.MCMC.Slice`.
+  - `Hanalyze.Stat.VI` (mean-field ADVI), `Hanalyze.Stat.ModelSelect` (WAIC / PSIS-LOO / pseudo-BMA),
+    `Hanalyze.Stat.MCMC` (split R-hat, ESS, autocorrelation, KDE).
+
+  ### Distributions
+  - `Hanalyze.Stat.Distribution`: 27 distributions including Truncated, Censored, MvNormal,
+    Dirichlet, LKJ, Multinomial, ZeroInflated, AR(1).
+
+  ### Design of Experiments
+  - `Hanalyze.Design.Factorial`, `Hanalyze.Design.Block`, `Hanalyze.Design.RSM`, `Hanalyze.Design.Optimal`,
+    `Hanalyze.Design.Anova`, `Hanalyze.Design.Power`, `Hanalyze.Design.Quality`, `Hanalyze.Design.MultiRSM`,
+    `Hanalyze.Design.Orthogonal` (L4-L18), `Hanalyze.Design.Taguchi` (4 SN ratios, inner/outer).
+
+  ### Optimization
+  - Single-objective: `Hanalyze.Optim.NelderMead`, `Hanalyze.Optim.LBFGS`, `Hanalyze.Optim.LineSearch`,
+    `Hanalyze.Optim.DifferentialEvolution`, `Hanalyze.Optim.CMAES`, `Hanalyze.Optim.CMAESFull`,
+    `Hanalyze.Optim.SimulatedAnnealing`, `Hanalyze.Optim.ParticleSwarm`.
+  - Multi-objective: `Hanalyze.Optim.NSGA`, `Hanalyze.Optim.Pareto`, `Hanalyze.Optim.Acquisition`,
+    `Hanalyze.Optim.BayesOpt`, `Hanalyze.Optim.Desirability`.
+  - Constrained: `Hanalyze.Optim.Constrained` (augmented Lagrangian + penalty).
+  - Unified `Hanalyze.Optim.Common.Bounds` API for box constraints across all algorithms.
+
+  ### Data I/O
+  - `Hanalyze.DataIO.CSV` with `loadAuto` / `loadAutoSafe` / `loadAutoSafeWith`,
+    `Hanalyze.DataIO.External` (Parquet / JSON via @dataframe@),
+    `Hanalyze.DataIO.Convert`, `Hanalyze.DataIO.Preprocess` (NA handling, group-by, melt, regrid).
+  - Dirty-data defense: `Hanalyze.DataIO.Log` (W001..W008), `Hanalyze.DataIO.Health`,
+    `Hanalyze.DataIO.Sniff` (delimiter / header / comment auto-detection),
+    `Hanalyze.DataIO.Clean` (column-cleaning DSL).
+  - Long-form regrid: `Hanalyze.Stat.Interpolate` (Linear / NaturalSpline / PCHIP),
+    `Hanalyze.Stat.AdaptiveGrid` (peak |dy/dz|-based grid), `regridLong`.
+
+  ### Visualization
+  - `Hanalyze.Viz.Core` (HTML / PNG / SVG via @vl-convert@), `Hanalyze.Viz.Bar`, `Hanalyze.Viz.Scatter`,
+    `Hanalyze.Viz.Histogram`, `Hanalyze.Viz.MCMC` (PyMC-style diagnostics),
+    `Hanalyze.Viz.ModelGraph` (Mermaid DAG via Track interpretation),
+    `Hanalyze.Viz.ReportBuilder` (compositional report API, 11 `Reportable` instances,
+    20+ section helpers including `secInterpolation`).
+
+  ### Command-line interface
+  - `hanalyze` with subcommands: `regress`, `info`, `hist`, `doe`, `taguchi`,
+    `ridge`, `kernel`, `spline`, `multireg`, `clean`, `melt`, `regrid`.
+
+  [Unreleased]: https://github.com/frenzieddoll/hanalyze/compare/v0.1.0.0...HEAD
+  [0.1.0.0]: https://github.com/frenzieddoll/hanalyze/releases/tag/v0.1.0.0
+changelog-type: markdown
+description: "# hanalyze\n\n> \U0001F310 **English** | [日本語](README.ja.md)\n\n[![License:
+  BSD-3](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](LICENSE)\n[![GHC](https://img.shields.io/badge/GHC-9.6.7-blueviolet.svg)](https://www.haskell.org/ghc/)\n\n**hanalyze**
+  is a Haskell-native statistical engineering toolkit: regression, GLMM, Bayesian
+  inference (HMC/NUTS/Gibbs/ADVI), Gaussian processes, design of experiments, multi-objective
+  optimisation, and HTML reporting integrated under one API.\nCore modelling and optimisation
+  logic is implemented in Haskell, with numerical linear algebra delegated to hmatrix/BLAS/LAPACK.
+  **No R/Stan/Python bridge required**.\nBenchmarks (see below) show competitive accuracy
+  with Python/R references in the tested cases. Performance varies by domain: optimisation
+  and small-to-medium MCMC workloads are often faster in these benchmarks, while large-scale
+  ML/GLM workloads are currently slower than sklearn.\n\n---\n\n## Highlights\n\n-
+  **Haskell-native**: types catch many dtype/API mismatches; shape checks happen at
+  runtime where needed\n- **Algorithms in Haskell, BLAS for numerics**: hmatrix/BLAS/LAPACK
+  powers linear algebra; no R/Stan/Python bridge\n- **HTML reporting**: MathJax/Mermaid
+  + Vega-Lite visualisations in one call; PNG/SVG export available for supported plots\n-
+  **Dirty-data defence**: 8 warning codes + auto-sniff (delim/header/encoding) + cleaning
+  DSL\n- **Hackage `dataframe`**: Polars-like DataFrame used directly; CSV native,
+  Parquet/JSON support through `dataframe`\n\n---\n\n## Capabilities\n\nFeatures grouped
+  by category. Each capability links to a usage doc and (where relevant) a theory
+  doc.\n\n### Statistical inference (`Hanalyze.Stat.*`)\n\n| Feature | Module | Usage
+  | Theory |\n|---|---|---|---|\n| 12 hypothesis tests (t/χ²/ANOVA/Wilcoxon/KS/Shapiro/Levene/Bartlett/...)
+  | `Hanalyze.Stat.Test` | [stat/01-test.md](docs/stat/01-test.md) | — |\n| Multiple-testing
+  correction (Bonferroni/Holm/BH/BY) | `Hanalyze.Stat.MultipleTesting` | [stat/06-multipletesting.md](docs/stat/06-multipletesting.md)
+  | — |\n| Bootstrap CI / permutation tests | `Hanalyze.Stat.Bootstrap` | [stat/07-bootstrap.md](docs/stat/07-bootstrap.md)
+  | — |\n| Effect size + power analysis (Cohen's d/η²/Cramér V/n estimation) | `Hanalyze.Stat.Effect`
+  | [stat/09-effect.md](docs/stat/09-effect.md) | — |\n| Cross-validation (k-fold/stratified/LOO)
+  + Grid search | `Hanalyze.Stat.CV` | [stat/04-cv.md](docs/stat/04-cv.md) | — |\n\n###
+  Regression (`Hanalyze.Model.*`)\n\n| Feature | Module | Usage | Theory |\n|---|---|---|---|\n|
+  Linear regression (LM) + inference stats (SE/t/p, F, AIC/BIC, leverage, Cook's)
+  | `Hanalyze.Model.LM` / `Hanalyze.Model.LM.Diagnostics` | [regression/01-lm.md](docs/regression/01-lm.md)
+  | [principles/lm.md](docs/principles/lm.md) |\n| GLM (Binomial / Poisson / Gaussian)
+  | `Hanalyze.Model.GLM` | [regression/02-glm.md](docs/regression/02-glm.md) | [principles/glm.md](docs/principles/glm.md)
+  |\n| GLMM / mixed-effects model (LME) | `Hanalyze.Model.GLMM` | [regression/03-glmm.md](docs/regression/03-glmm.md)
+  | [principles/glmm.md](docs/principles/glmm.md) |\n| Spline regression (B-spline
+  / NaturalCubic) | `Hanalyze.Model.Spline` | [regression/04-spline.md](docs/regression/04-spline.md)
+  | [regression/theory-regression-extensions.md](docs/regression/theory-regression-extensions.md)
+  |\n| Kernel regression (NW / Kernel Ridge) + multi-D inputs | `Hanalyze.Model.Kernel`
+  | [regression/04-kernel.md](docs/regression/04-kernel.md) | same |\n| Regularised
+  (Ridge / Lasso / ElasticNet) | `Hanalyze.Model.Regularized` | [regression/04-regularized.md](docs/regression/04-regularized.md)
+  | same |\n| Gaussian process (RBF / Matérn / Periodic + ARD + multi-input) | `Hanalyze.Model.GP`
+  | [regression/04-gp.md](docs/regression/04-gp.md) | [principles/gp.md](docs/principles/gp.md)
+  |\n| Random Fourier Features (large-scale GP approximation) | `Hanalyze.Model.RFF`
+  | [regression/04-rff.md](docs/regression/04-rff.md) | [regression/theory-regression-extensions.md](docs/regression/theory-regression-extensions.md)
+  |\n| Multivariate regression / Multi-output GP | `Hanalyze.Model.{Multivariate,MultiGP,MultiOutput}`
+  | [regression/05-multivariate.md](docs/regression/05-multivariate.md) | [regression/theory-multivariate.md](docs/regression/theory-multivariate.md)
+  |\n| Quantile regression | `Hanalyze.Model.Quantile` | [regression/06-quantile.md](docs/regression/06-quantile.md)
+  | [regression/theory-regression-extensions.md](docs/regression/theory-regression-extensions.md)
+  |\n| Generalized additive model (GAM) | `Hanalyze.Model.GAM` | [regression/06-gam.md](docs/regression/06-gam.md)
+  | same |\n| Random forest (regression) | `Hanalyze.Model.RandomForest` | [regression/06-randomforest.md](docs/regression/06-randomforest.md)
+  | same |\n| Multi-output regression + interactive HTML | `Hanalyze.Model.MultiOutput`
+  | [regression/07-multireg.md](docs/regression/07-multireg.md) | [regression/theory-multivariate.md](docs/regression/theory-multivariate.md)
+  |\n\n### Machine learning (`Hanalyze.Model.*` / `Hanalyze.Stat.*`)\n\n| Feature
+  | Module | Usage | Theory |\n|---|---|---|---|\n| PCA + cumulative variance + standardisation
+  | `Hanalyze.Model.PCA` | [stat/02-pca.md](docs/stat/02-pca.md) | — |\n| Clustering
+  (K-means + k-means++ + silhouette) | `Hanalyze.Model.Cluster` | [stat/05-cluster.md](docs/stat/05-cluster.md)
+  | — |\n| Decision tree (CART classifier) | `Hanalyze.Model.DecisionTree` | [regression/08-decisiontree.md](docs/regression/08-decisiontree.md)
+  | — |\n| Time series (ARIMA / Holt-Winters / STL / ACF / PACF) | `Hanalyze.Model.TimeSeries`
+  | [regression/09-timeseries.md](docs/regression/09-timeseries.md) | — |\n| Survival
+  analysis (Kaplan-Meier / Nelson-Aalen / Log-rank / Cox PH) | `Hanalyze.Model.Survival`
+  | [regression/10-survival.md](docs/regression/10-survival.md) | — |\n| Classification
+  metrics (Confusion / AUC / F1 / MCC / log-loss / Brier) | `Hanalyze.Stat.ClassMetrics`
+  | [stat/03-classmetrics.md](docs/stat/03-classmetrics.md) | — |\n| Model interpretation
+  (Permutation imp / PDP / ICE) | `Hanalyze.Stat.Interpret` | [stat/13-interpret.md](docs/stat/13-interpret.md)
+  | — |\n\n### Bayesian (`Hanalyze.MCMC.*` / `Hanalyze.Stat.*` / `Hanalyze.Model.HBM`)\n\n|
+  Feature | Module | Usage | Theory |\n|---|---|---|---|\n| 27 probability distributions
+  (Truncated/Censored/MvNormal/LKJ/Multinomial/...) | `Hanalyze.Stat.Distribution`
+  | [bayesian/01-distributions.md](docs/bayesian/01-distributions.md) | [bayesian/theory-distributions.md](docs/bayesian/theory-distributions.md)
+  |\n| Probabilistic model DSL (HBM polymorphic free monad, incl. `deterministic`
+  / `dataNamed`) | `Hanalyze.Model.HBM` | [bayesian/02-probabilistic-model.md](docs/bayesian/02-probabilistic-model.md)
+  | [principles/hbm.md](docs/principles/hbm.md) |\n| MCMC samplers (MH / HMC / NUTS
+  / Slice) | `Hanalyze.MCMC.{MH,HMC,NUTS,Slice}` | [bayesian/03-mcmc-samplers.md](docs/bayesian/03-mcmc-samplers.md)
+  | [bayesian/theory-mcmc.md](docs/bayesian/theory-mcmc.md) / [theory-hmc-nuts.md](docs/bayesian/theory-hmc-nuts.md)
+  |\n| Gibbs sampling (auto-conjugate detection + hybrid) | `Hanalyze.MCMC.Gibbs`
+  | [bayesian/04-gibbs.md](docs/bayesian/04-gibbs.md) | [bayesian/theory-mcmc.md](docs/bayesian/theory-mcmc.md)
+  |\n| Variational inference (ADVI mean-field Adam) | `Hanalyze.Stat.VI` | [bayesian/05-vi.md](docs/bayesian/05-vi.md)
+  | [bayesian/theory-advanced.md](docs/bayesian/theory-advanced.md) |\n| Model comparison
+  (WAIC / PSIS-LOO / Pseudo-BMA) | `Hanalyze.Stat.ModelSelect` | [bayesian/06-model-comparison.md](docs/bayesian/06-model-comparison.md)
+  | [bayesian/theory-bayesian-basics.md](docs/bayesian/theory-bayesian-basics.md)
+  |\n| Posterior predictive checks; selected PyMC-style modelling features | `Hanalyze.Stat.PosteriorPredictive`
+  | [02-pymc-comparison.md](docs/02-pymc-comparison.md) | — |\n\n### Optimisation
+  (`Hanalyze.Optim.*`)\n\n| Feature | Module | Usage | Theory |\n|---|---|---|---|\n|
+  Single-obj (gradient): NM / L-BFGS / Brent | `Hanalyze.Optim.NelderMead`<br>`Hanalyze.Optim.LBFGS`<br>`Hanalyze.Optim.LineSearch`
+  | [optim/01-singleobj.md](docs/optim/01-singleobj.md) | [optim/theory-singleobj.md](docs/optim/theory-singleobj.md)
+  |\n| Single-obj (evolutionary): DE / CMA-ES / SA / PSO | `Hanalyze.Optim.DifferentialEvolution`<br>`Hanalyze.Optim.CMAES`<br>`Hanalyze.Optim.SimulatedAnnealing`<br>`Hanalyze.Optim.ParticleSwarm`
+  | [optim/01-singleobj.md](docs/optim/01-singleobj.md) | [optim/theory-singleobj.md](docs/optim/theory-singleobj.md)
+  |\n| Multi-objective (NSGA-II + Pareto) | `Hanalyze.Optim.{NSGA,Pareto}` | [optim/02-multi-objective.md](docs/optim/02-multi-objective.md)
+  | [optim/theory-pareto-moo.md](docs/optim/theory-pareto-moo.md) |\n| Acquisition
+  functions (EHVI / ParEGO / EI / LCB / PI) | `Hanalyze.Optim.Acquisition` | [optim/02-multi-objective.md](docs/optim/02-multi-objective.md)
+  | [optim/theory-bayesopt.md](docs/optim/theory-bayesopt.md) |\n| Bayesian optimisation
+  (BO + GP-Hedge + analytic gradient) | `Hanalyze.Optim.BayesOpt` | [optim/01-singleobj.md](docs/optim/01-singleobj.md)
+  | [optim/theory-bayesopt.md](docs/optim/theory-bayesopt.md) |\n| Algorithm selection
+  guide | — | [optim/03-algorithm-guide.md](docs/optim/03-algorithm-guide.md) | —
+  |\n\n### Design of experiments (`Hanalyze.Design.*`)\n\n| Feature | Module | Usage
+  | Theory |\n|---|---|---|---|\n| DoE (Factorial / Block / Mixed / RSM / Optimal
+  / Power / Quality) | `Hanalyze.Design.{Factorial,Block,Mixed,RSM,Optimal,Power,Quality,MultiRSM,Anova}`
+  | [doe/01-doe.md](docs/doe/01-doe.md) | [doe/theory-doe.md](docs/doe/theory-doe.md)
+  |\n| Orthogonal arrays (L4/L8/L9/L12/L16/L18) + Taguchi (S/N + inner/outer) + process
+  capability (Cp/Cpk) | `Hanalyze.Design.{Orthogonal,Taguchi,Quality}` | [doe/02-orthogonal-taguchi.md](docs/doe/02-orthogonal-taguchi.md)
+  | [doe/theory-doe.md](docs/doe/theory-doe.md) |\n\n### Visualisation (`Hanalyze.Viz.*`)\n\n|
+  Feature | Module | Usage |\n|---|---|---|\n| Scatter / bar / histograms / MCMC diagnostics
+  / GP plot / Pareto plot | `Hanalyze.Viz.{Scatter,Bar,Histogram,MCMC,GP,Pareto,ModelGraph,Taguchi}`
+  | [visualization/01-visualization.md](docs/visualization/01-visualization.md) |\n|
+  Integrated HTML report (MathJax + Mermaid + interactive) | `Hanalyze.Viz.ReportBuilder`
+  | [visualization/02-report-builder.md](docs/visualization/02-report-builder.md)
+  |\n\n### Data I/O (`Hanalyze.DataIO.*`)\n\n| Feature | Module | Usage |\n|---|---|---|\n|
+  CSV/TSV/SSV (cassava) + Parquet/JSON (Hackage `dataframe`) | `Hanalyze.DataIO.{CSV,External,Convert}`
+  | [io/01-dirty-data.md](docs/io/01-dirty-data.md) |\n| Dirty-data defence (W001-W008
+  warnings + auto-sniff + clean DSL) | `Hanalyze.DataIO.{Health,Sniff,Clean,Log}`
+  | [io/01-dirty-data.md](docs/io/01-dirty-data.md) |\n| Reshape (pivot_wider / one-hot
+  / lag-lead / rolling window) | `Hanalyze.DataIO.Reshape` | [io/02-reshape.md](docs/io/02-reshape.md)
+  |\n| Preprocessing (impute / groupBy / derived columns / melt) | `Hanalyze.DataIO.Preprocess`
+  | [io/01-dirty-data.md](docs/io/01-dirty-data.md) |\n| Long-form regrid (`regridLong`)
+  | `Hanalyze.DataIO.Preprocess` + `Hanalyze.Stat.Interpolate` | [io/03-regrid.md](docs/io/03-regrid.md)
+  |\n\n---\n\n## Quick start\n\n### 30 seconds via CLI\n\n```bash\ngit clone https://github.com/frenzieddoll/hanalyze\ncd
+  hanalyze\ncabal build all\n\n# Regress sales on price + promo, write an HTML report.\nhanalyze
+  regress data/readme/sales.csv \"price promo\" sales --report sales.html\n# β₀=185.05
+  \ β(price)=-4.37  β(promo)=+32.29  R²=0.995\n```\n\n`data/readme/sales.csv` is a
+  20-row demo CSV shipped with the repository\n(`price`, `promo`, `sales`). The generated
+  `sales.html` includes coefficients,\nfit diagnostics, and an interactive prediction
+  widget — straight from one\ncommand.\n\n### 30 seconds via Haskell API\n\n```haskell\nimport
+  qualified Stat.Test as ST\nimport qualified Numeric.LinearAlgebra as LA\n\nmain
+  = do\n  let xs = LA.fromList [12, 14, 13, 15, 17, 11]\n      ys = LA.fromList [18,
+  22, 20, 19, 25, 17]\n      result = ST.tTestWelch xs ys ST.TwoSided\n  print (ST.trPValue
+  result, ST.trEffect result)\n  -- (0.012, Just (\"Cohen's d\", -1.85))\n```\n\nSee
+  [docs/01-quickstart.md](docs/01-quickstart.md) for a fuller introduction.\n\n---\n\n##
+  CLI\n\n```\nhanalyze help                     list subcommands\nhanalyze regress
+  <file> <x> <y>   LM/GLM/GP/HBM regression + HTML report\nhanalyze info <file>              per-column
+  type/statistics\nhanalyze hist <file> <col>        histogram with theoretical PDF
+  overlay\nhanalyze ridge <file> ...         regularised regression (Ridge/Lasso/EN)\nhanalyze
+  kernel <file> ...        kernel regression (NW/KR/RFF), multi-D inputs\nhanalyze
+  spline <file> ...        spline regression\nhanalyze multireg <file> ...      multi-output
+  regression + interactive HTML\nhanalyze melt <file> ...          long-form transform\nhanalyze
+  regrid <file> ...        time-axis grid alignment\nhanalyze doe ortho <NAME> -f
+  ...  orthogonal-array generation\nhanalyze taguchi sn / analyze     Taguchi method\nhanalyze
+  clean <file> --rule ...  dirty-data cleaning\n```\n\nFor per-command flags, run
+  `hanalyze <cmd> --help` or see [docs/01-quickstart.md](docs/01-quickstart.md).\n\n---\n\n##
+  Examples / demos\n\n`demo/` contains many demos (60+ as of this release). Highlights:\n\n|
+  Demo | Summary |\n|---|---|\n| `demo/regression/HBMRegressionDemo.hs` | HBM Bayesian
+  linear regression with NUTS + HTML |\n| `demo/regression/RFFDemo.hs` | Large-scale
+  GP via Random Fourier Features |\n| `demo/regression/RobustGPDemo.hs` | Robust GP
+  with Student-t observation likelihood |\n| `demo/doe-optim/NSGADemo.hs` | NSGA-II
+  + Pareto on the ZDT suite |\n| `demo/doe-optim/BayesOptDemo.hs` | BO on Branin /
+  Hartmann6 |\n| `demo/bayesian/HBMComparisonDemo.hs` | Compare HBMs with WAIC / LOO
+  |\n| `demo/bayesian/SimpsonParadoxDemo.hs` | Disentangle Simpson's paradox via hierarchical
+  model |\n| `demo/io/DirtyDataDemo.hs` | Auto-defend against 19 dirty CSV variants
+  |\n\nRun: `dist-newstyle/build/x86_64-linux/ghc-9.6.7/hanalyze-0.1.0.0/x/<demo-name>/build/<demo-name>/<demo-name>`.\n\n---\n\n##
+  Where hanalyze fits\n\nRather than a complete Python/R replacement, hanalyze targets
+  specific\nworkflows where Haskell integration, single-binary CLI, and tight reporting\nadd
+  value.\n\n**Strong fit**\n\n- Haskell-native pipelines that need stats/Bayes/optim
+  without calling out to Python\n- Single-binary CLI distribution (one `hanalyze`
+  binary, no Python venv)\n- Dirty-CSV defence + cleaning + analysis in one workflow\n-
+  DoE / Taguchi / orthogonal arrays for manufacturing and process tuning\n- HTML reports
+  straight from the analysis (no separate templating step)\n- Type-safe analysis pipelines
+  that catch dtype/API mismatches early\n\n**Not a goal — keep using existing tools
+  for**\n\n- Large-scale DataFrame work (pandas / polars / data.table)\n- GPU deep
+  learning (PyTorch / JAX)\n- The full breadth of scikit-learn's mature model zoo\n-
+  The full Stan / PyMC MCMC diagnostics ecosystem\n- The full expressive range of
+  ggplot2\n\n---\n\n## Comparison vs Python\n\n> R is included in the feature map
+  only — no numerical bench against R has been run.\n\nNumbers below come from `bench/results/{haskell,python}/*.csv`;
+  see\n[bench/results/SUMMARY.md](bench/results/SUMMARY.md) for the full table and\nbenchmark
+  conditions (`OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`,\nsingle-thread, deterministic
+  seeds).\n\n| Domain | Result in these benchmarks |\n|---|---|\n| **Single-objective
+  optim** (DE/CMAES/L-BFGS/NM) | Often faster than scipy in tested cases (Rosenbrock_2D/DE
+  134×, Ackley/CMAES 49×, Griewank/CMAES 54×). On Sphere_30D/L-BFGS the reported objective
+  value is 8.1e-40 vs scipy 2.6e-11 in this run. |\n| **Multi-objective optim** (NSGA-II)
+  | Comparable or favourable in the ZDT/DTLZ suite (DTLZ2_3 1.43× faster, ZDT1/2/3
+  within ±5% of pymoo). HV/IGD figures match or slightly improve on pymoo in these
+  runs. |\n| **Bayesian optim** (BO) | Comparable on Branin (1.15×); on Hartmann6
+  the best objective in this run was -3.07 vs skopt -2.77. |\n| **Simulated annealing**
+  (Tsallis SA) | Comparable; Rastrigin_10D reaches 0.0 in this run (scipy `dual_annealing`
+  reports 7.8e-14). |\n| **Classical regression** (LM/Ridge/Lasso/GLMM) | Comparable
+  in tested cases; LME 30× faster than statsmodels in our LME run. |\n| **Large-scale
+  GLM/Lasso** (n ≥ 10k) | Currently slower than sklearn (3-5× in tested cases) — sklearn's
+  Cython inner loops dominate. |\n| **Kernel/GP** | Currently slower than sklearn
+  (2.5-4.7× in tested cases). |\n| **Bayesian MCMC** (NUTS/HMC) | NUTS with ESS comparable
+  to blackjax (mu: 839 vs 810) on the 8-schools benchmark; 7.4× faster than PyMC;
+  2.8× slower than blackjax (JAX-JIT advantage). |\n| **HBM (probabilistic programming)**
+  | Polymorphic DSL with selected PyMC-style modelling features and selected distributions
+  (Truncated/Censored/MvNormal/LKJ/...). |\n| **VI / WAIC / LOO** | ADVI 3.0× faster
+  than numpyro SVI on a small logistic posterior; LOO 2.9× faster than arviz on (S=1000,
+  N=200) log-lik matrix. |\n| **Hypothesis tests / bootstrap / k-fold** | Welch t-test
+  39× faster, KS 11×, k-fold split 2.2× faster than scipy/sklearn in tested cases.
+  |\n| **Time series / Spline / GAM** | ARIMA 128× faster than statsmodels; Spline
+  PCHIP comparable to scipy; GAM ~1.6× slower than pygam in tested cases. |\n| **Survival
+  analysis** (KM/Cox PH) | Comparable to lifelines in tested cases (KM/CoxPH). |\n|
+  **Multi-output regression / Regrid** | MultiLM 2.3× faster than sklearn; `regridLong`
+  20× faster than a hand-written pandas+scipy synthesis. |\n| **Visualisation** |
+  Vega-Lite specs via hvega (grammar-of-graphics-style); HTML reports built-in. |\n\nSee
+  [docs/comparison/python-r.md](docs/comparison/python-r.md) for the feature map,
+  and [bench/results/SUMMARY.md](bench/results/SUMMARY.md) for numbers.\n\n---\n\n##
+  Benchmark highlights\n\nSelected results from `bench/results/SUMMARY.md`. Each entry
+  is a single\nbenchmark configuration; absolute objective values depend on iteration\ncounts,
+  seeds, and tolerances — see the SUMMARY for full conditions.\n\n- **NUTS 8-schools**
+  (warmup 500, samples 1000): hanalyze 1492 ms with ESS(mu) 839 vs blackjax 530 ms
+  / ESS 810 in this run\n- **Holt-Winters seasonal n=500 p=12**: hanalyze 0.19 ms
+  vs statsmodels MLE 96 ms in this run (note: hanalyze uses fixed α=0.3 closed-form;
+  statsmodels does MLE)\n- **Sphere_30D/DE**: hanalyze 1.0e-26 vs scipy 2.8e-5 on
+  this benchmark\n- **Sphere_30D/L-BFGS**: hanalyze 8.1e-40 vs scipy 2.6e-11 on this
+  benchmark\n- **Rastrigin_10D/SA**: hanalyze 0.0 vs scipy `dual_annealing` 7.8e-14
+  in this run\n- **Hartmann6/BO**: hanalyze -3.07 vs skopt -2.77 in this run\n- **DTLZ2_3/NSGA-II**:
+  hanalyze 528 ms vs pymoo 758 ms (1.43× faster in this run)\n- **DE Rosenbrock_2D**:
+  hanalyze 1.2 ms vs scipy 164 ms (134× faster in this run)\n- **Constrained Quad2D
+  (eq)**: hanalyze 0.062 ms vs scipy SLSQP 0.69 ms in this run\n- **regridLong on
+  jagged long-form**: hanalyze 0.99 ms vs pandas+scipy synthesis 19.4 ms in this run\n\nReproduce:
+  `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 cabal run bench-{regression,kernel,optim,mo,bo,mcmc-b7,mcmc-extras,ts-extras,optim-plus,stat-util,multi-output,regrid}`,
+  then `bench/python/bench_*.py` (see [bench/README.md](bench/README.md)).\n\n---\n\n##
+  Architecture\n\n```mermaid\ngraph TD\n  IO[DataIO.* CSV/Parquet/JSON]\n  IO -->
+  DF[Hackage dataframe]\n  DF --> Models[Model.* regression/ML/Bayesian/TS/Survival]\n
+  \ DF --> Stat[Stat.* tests/CV/effect/interpret]\n  Models --> Optim[Optim.* optimisation]\n
+  \ Models --> MCMC[MCMC.* samplers]\n  Models --> Viz[Viz.* HTML/PNG/SVG]\n  Stat
+  --> Viz\n  MCMC --> Viz\n  Optim --> Design[Design.* DoE/Taguchi]\n```\n\n**All
+  modules talk to Hackage `dataframe` directly**. The internal `DataFrame.Core` was
+  retired.\n\n---\n\n## Roadmap & API stability\n\n- **Stable** (API expected to remain
+  backward-compatible within minor versions): `Hanalyze.DataIO.*`, `Hanalyze.Stat.{Test,
+  Bootstrap, MultipleTesting, ClassMetrics, CV, Effect, Distribution}`, `Hanalyze.Model.{LM,
+  GLM, Spline, Regularized, RandomForest, DecisionTree, TimeSeries, Survival, GAM}`,
+  `Hanalyze.Optim.{NelderMead, LBFGS, DifferentialEvolution, CMAES, NSGA, BayesOpt,
+  SimulatedAnnealing, ParticleSwarm}`, `Hanalyze.Design.*`, `Hanalyze.Viz.{Scatter,
+  Bar, Histogram}`.\n- **Experimental** (API may evolve): `Hanalyze.Model.HBM` DSL,
+  `Hanalyze.MCMC.NUTS` (mass-matrix adaptation is opt-in), `Hanalyze.Stat.VI` (ADVI),
+  `Hanalyze.Model.{GP, RFF, GPRobust, GLMM}`, `Hanalyze.Viz.ReportBuilder`. Behaviour
+  is benchmarked but type signatures may shift.\n- **Future direction**: a unified
+  top-level `Hanalyze.*` re-export layer, a Pipeline-style `Unfitted → Fitted` API,
+  and a backend-abstraction typeclass for swapping hmatrix/Massiv/Accelerate are under
+  consideration but not on a fixed schedule.\n\n---\n\n## Module layout\n\n```\nsrc/\n
+  \ DataIO/      — CSV/JSON/Parquet IO + health checks + sniff + clean DSL + reshape
+  (9 mods)\n  Stat/        — tests/distributions/interpolation/effect/CV/bootstrap/interpret
+  etc. (21 mods)\n  Model/       — LM/GLM/GLMM/Spline/Kernel/GP/RFF/HBM/PCA/Cluster/Tree/TS/Survival
+  (23 mods)\n  Optim/       — single-obj (NM/LBFGS/DE/CMAES/SA/PSO) + multi-obj (NSGA/BO/Pareto)
+  (18 mods)\n  Design/      — Factorial/Block/RSM/Optimal/Orthogonal/Taguchi (11 mods)\n
+  \ Viz/         — Vega-Lite-based visualisation + ReportBuilder (15 mods)\n  MCMC/
+  \       — MH/HMC/NUTS/Gibbs/Slice (6 mods)\n```\n\nAs of this release: 103 modules,
+  238 tests.\n\n---\n\n## Build\n\n```bash\ncabal build all                  # library
+  + all executables (60+ demos)\ncabal test                       # hspec test suite\ncabal
+  repl                       # interactive REPL\n```\n\nMajor dependencies: `hmatrix`
+  (BLAS/LAPACK), `hvega` (Vega-Lite), `statistics`, `mwc-random`, `dataframe` (Hackage
+  Polars-like), `massiv` (parallel arrays), `ad` (auto-diff), `async`.\n\nTested on
+  GHC 9.6.7 + cabal 3.14.2.\n\n---\n\n## Running benchmarks\n\n```bash\n# 1. Generate
+  shared test data (fixed-seed, deterministic)\ncabal run bench-data-gen\n\n# 2. Haskell
+  side\nOPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \\\n  cabal run bench-regression
+  bench-kernel bench-optim bench-mo bench-bo\n\n# 3. Python side (need bench/venv
+  from bench/requirements.txt)\nOPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \\\n  bench/venv/bin/python
+  bench/python/bench_regression.py\n# (similarly for kernel, optim, mo, bo)\n\n# 4.
+  Aggregate (Markdown table)\nbench/venv/bin/python bench/aggregate.py > bench/results/SUMMARY.md\n```\n\n---\n\n##
+  Development\n\n- **Issues / PRs**: [github.com/frenzieddoll/hanalyze](https://github.com/frenzieddoll/hanalyze)\n-
+  **Adding tests**: append hspec specs in `test/Spec.hs`\n- **Adding benchmarks**:
+  place `bench/haskell/Bench*.hs` and matching Python script\n- **Coding rules**:
+  see `CONTRIBUTING.md` (no list-passing on hot paths, minimise `unsafe*`, ...)\n\n---\n\n##
+  License\n\nBSD-3-Clause License — see [LICENSE](LICENSE).\n\n## Author\n\nToshiaki
+  Honda <frenzieddoll@gmail.com>\n"
+description-type: markdown
+hash: 02816eb3cdaf660136ae7d476b2cf6c483f133274823bb45ff3d30165190d9ff
+homepage: https://github.com/frenzieddoll/hanalyze
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: frenzieddoll@gmail.com
+synopsis: A general-purpose statistical analysis, optimization and visualization toolkit
+test-bench-deps:
+  base: '>=4.14 && <5'
+  bytestring: '>=0.11 && <0.13'
+  dataframe: '>=0.3 && <2'
+  hanalyze: '>=0'
+  hmatrix: '>=0.20 && <0.22'
+  hspec: '>=2.10 && <2.12'
+  mwc-random: '>=0.15 && <0.16'
+  temporary: '>=1.3 && <1.4'
+  text: '>=1.2 && <2.2'
+  vector: '>=0.12 && <0.14'
