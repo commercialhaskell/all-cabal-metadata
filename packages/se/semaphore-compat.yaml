@@ -1,27 +1,98 @@
 all-versions:
 - 1.0.0
+- 2.0.0
 author: The GHC team
 basic-deps:
-  base: '>=4.11 && <4.22'
+  base: '>=4.11 && <4.23'
+  containers: '>=0.5 && <0.9'
+  directory: '>=1.3 && <1.4'
   exceptions: '>=0.7 && <0.11'
+  filepath: '>=1.4 && <1.6'
+  semaphore-compat: '>=0'
+  stm: '>=2.4 && <2.6'
   unix: '>=2.8.1.0 && <2.9'
-changelog: "### 1.0.0 (March 13, 2023)\r\n\r\n- First version of the `semaphore-compat`
-  package.\r\n"
+changelog: |
+  ### 2.0.0 (May 22, 2026)
+
+  - Major release introducing protocol v2:
+      - On Linux and other POSIX platforms, the implementation now uses
+        Unix domain sockets in place of POSIX named semaphores
+        (`sem_open(3)`), avoiding the libc-ABI issues that affected the
+        v1 implementation when a jobserver and its clients were built
+        against different C standard libraries (see
+        [GHC #25087](https://gitlab.haskell.org/ghc/ghc/-/issues/25087)
+        and [cabal #9993](https://github.com/haskell/cabal/issues/9993)).
+      - Windows is unaffected and continues to use Win32 named
+        semaphores; its reported protocol version remains v1.
+  - API overhaul:
+      - `Semaphore` has been renamed to `ClientSemaphore`.
+      - `ServerSemaphore` is a new type representing the server-side
+        identity of a semaphore, with full bookkeeping for crash
+        recovery on POSIX.  Use `serverClientSemaphore` to recover the
+        `ClientSemaphore` from a `ServerSemaphore`.
+      - `SemaphoreToken` is a new type representing a single held token;
+        `waitOnSemaphore` returns one and `releaseSemaphoreToken` (or
+        `withSemaphoreToken`) releases one.
+      - `SemaphoreName` is now a record carrying the protocol version
+        alongside the unversioned name; use `semaphoreIdentifier` to derive
+        the serialised name for transport between processes via flags like
+        `-jsem`.
+  - `versionsAreCompatible :: SemaphoreProtocolVersion ->
+    SemaphoreProtocolVersion -> Bool` exposed for use by jobservers
+    (e.g. cabal-install) to detect protocol mismatches before invoking a
+    jobclient (e.g. GHC).
+  - `waitOnSemaphore` is now interruptible: an asynchronous exception
+    delivered while a thread is blocked on the semaphore aborts the wait
+    safely.
+  - POSIX server-side crash recovery: when a client disconnects without
+    explicitly returning its tokens, the server returns them to the pool
+    automatically.  This is not available on Windows.
+
+  ### 1.0.0 (March 13, 2023)
+
+  - First version of the `semaphore-compat` package.
 changelog-type: markdown
-description: "# semaphore-compat\r\n\r\n`semaphore-compat` provides a cross-platform
-  implementation of system semaphores\r\nthat abstracts over the `unix` and `Win32`
-  libraries.\r\n\r\nIt supports:\r\n\r\n  - Creating (`createSemaphore`, `freshSemaphore`),
-  opening (`openSemaphore`)\r\n    and closing (`destroySemaphore`) semaphores.\r\n
-  \ - Waiting on a semaphore:\r\n     - without blocking with `tryWaitOnSemaphore`,\r\n
-  \    - blocking forever, with `waitOnSemaphore`,\r\n     - blocking, in a separate
-  thread and allowing interruption, with\r\n       `forkWaitOnSemaphoreInterruptible`
-  and `interruptWaitOnSemaphore`.\r\n  - Releasing tokens to a semaphore (`releaseSemaphore`).\r\n
-  \ - Querying the semaphore for its current value (`getSemaphoreValue`).\r\n"
+description: |
+  # semaphore-compat
+
+  `semaphore-compat` provides cross-platform semaphores that can be shared across processes.
+
+  It uses different backends on different platforms:
+
+    - POSIX: Unix domain sockets with automatic return of tokens from
+      disconnected clients.
+    - Windows: Win32 named semaphores. Tokens held by crashed clients are not
+      returned automatically.
+    - wasm/JavaScript: buildable stubs that throw unsupported-operation errors.
+      Avoid calling this code on these backends.
+
+  It supports:
+
+    - Creating server semaphores (`createSemaphore`, `freshSemaphore`).
+      - A server is the process that creates the semaphore and must stay alive for
+        the duration of its use.
+      - A server process can also act as a client and request/release tokens from the
+        semaphore.
+    - Opening client semaphores (`openSemaphore`).
+    - Waiting with `tryWaitOnSemaphore` or interruptible `waitOnSemaphore`,
+      which return `SemaphoreToken`s.
+    - Releasing tokens with `releaseSemaphoreToken` or `withSemaphoreToken`.
+    - Destroying semaphores with `destroyClientSemaphore` and
+      `destroyServerSemaphore`.
+    - Serialising names and checking versions with `semaphoreIdentifier` and
+      `versionsAreCompatible`.
 description-type: markdown
-hash: 2dff81c2c0ec9bac9f8bae364db497188654d2e1e4330f4a0e2f12310149f3e9
+hash: e2eee36b01e7f686cb3d5467e649466272207be2107b19e2c781c7f17862906d
 homepage: https://gitlab.haskell.org/ghc/semaphore-compat
-latest: 1.0.0
+latest: 2.0.0
 license-name: BSD-3-Clause
 maintainer: ghc-devs@haskell.org
 synopsis: Cross-platform abstraction for system semaphores
-test-bench-deps: {}
+test-bench-deps:
+  base: '>=4.11 && <4.23'
+  process: '>=1.6.16 && <1.8'
+  semaphore-compat: '>=0'
+  tasty: '>=0'
+  tasty-expected-failure: '>=0'
+  tasty-hunit: '>=0'
+  unix: '>=2.8.1.0 && <2.9'
