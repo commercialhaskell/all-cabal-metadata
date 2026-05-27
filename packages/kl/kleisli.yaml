@@ -1,6 +1,7 @@
 all-versions:
 - 0.0.1
 - 0.0.2
+- 0.0.3
 author: Tony Morris <tmorris@tmorris.net>
 basic-deps:
   adjunctions: '>=4.3 && <5'
@@ -16,6 +17,11 @@ basic-deps:
   semigroupoids: '>=5.2 && <7'
   transformers: '>=0.5 && <1'
 changelog: |
+  0.0.3
+
+  * Add `mkKleisli'`, `mkProKleisli'`, `mkContraKleisli'` for constructing
+    Identity-wrapped Kleisli values from plain profunctor values
+
   0.0.2
 
   * Add `pureKleisli`, `pureProKleisli`, `pureContraKleisli` for lifting
@@ -85,6 +91,105 @@ description: |
   kleisli' :: Iso (Kleisli' p a b) ... (p a b) ...
   ```
 
+  ## Design: types as interfaces
+
+  This library follows an approach where the **data type is the API** and
+  **type-class instances are the interface**. There are almost no top-level
+  functions — users interact with these newtypes entirely through standard
+  algebraic vocabulary (`fmap`, `>>=`, `lmap`, `arr`, `contramap`, `divide`,
+  etc.) that they already know.
+
+  ### How it works
+
+  A single representation (`p a (f b)`) is wrapped in three newtypes that differ
+  only in which type parameter is "outermost" — i.e. which parameter appears last
+  and therefore determines which type classes the newtype can inhabit. The
+  newtypes carry no runtime payload beyond what `p a (f b)` already is; they
+  exist solely to place the type in the right position for GHC's instance
+  resolution to fire.
+
+  The few top-level values that do exist cover the gaps that type classes cannot
+  express:
+
+  - **Isomorphisms** — there is no standard `IsomorphicTo` class that yields both
+    directions, so `_Kleisli_ProKleisli` and friends are explicit `Iso` values.
+  - **Natural-transformation maps** (`hoistKleisli`, `pureKleisli`, etc.) —
+    mapping over an inner functor layer is not captured by `Functor` (which
+    operates on the outermost parameter), so a small family of combinators is
+    provided.
+
+  Everything else is an instance.
+
+  ### Benefits
+
+  - **Vocabulary reuse.** Users do not learn a new API. If you know `Profunctor`
+    you already know how to use `ProKleisli`; if you know `Divisible` you already
+    know how to use `ContraKleisli`. Every generic combinator, tutorial, and
+    intuition that applies to those classes applies here without modification.
+
+  - **Composability for free.** Because the interface is expressed through
+    standard classes, values of these types compose with any other code written
+    against those same abstractions — lens combinators, servant routing,
+    contravariant logging, arrow notation, selective functors, and so on — with
+    no adapter or conversion layer.
+
+  - **Minimal surface area.** A small export list means fewer names to remember,
+    fewer possible breakages across versions, and fewer degrees of freedom for
+    API design mistakes. The type and its instances *are* the documentation.
+
+  - **Derivability.** `DerivingVia` lets GHC generate correct, law-abiding
+    instances mechanically from an existing carrier (`Star`, `ReaderT`,
+    `Arrow.Kleisli`, `Op`). The module author writes each instance at most once;
+    the compiler writes the rest.
+
+  ### Trade-offs
+
+  - **Discoverability.** The real functionality lives in instance heads, not in a
+    list of named functions. Users must know (or look up) which class provides
+    the operation they want. Haddock instance lists help, but they are less
+    immediately scannable than a flat function list.
+
+  - **Type errors.** When an instance is missing or a constraint doesn't match,
+    GHC's error messages refer to the class and the full newtype-wrapped type,
+    which can be verbose. Type aliases help at use sites but cannot simplify error
+    output.
+
+  - **Orphan-instance risk.** If a user needs an instance that this library did
+    not provide, they cannot add it without creating an orphan (since both the
+    class and the type are defined elsewhere relative to the user). In practice
+    this is mitigated by providing instances densely — if a lawful instance
+    exists, this module should already have it.
+
+  ### Performance implications
+
+  All three newtypes are strict newtypes — they vanish at runtime under GHC's
+  optimiser. The key mechanisms:
+
+  - **Newtype coercion.** GHC represents `Kleisli (->) a f b` identically to
+    `a -> f b` in memory. Wrapping, unwrapping, and converting between the three
+    newtypes via the provided isos are zero-cost (they compile to `id`/`coerce`
+    after optimisation).
+
+  - **INLINE pragmas.** Every top-level combinator and every hand-written instance
+    method carries an `INLINE` pragma, ensuring that after inlining the only code
+    that remains is the user's function and the functor operations — no dictionary
+    passing, no wrapper allocation.
+
+  - **DerivingVia and specialisation.** Instances derived via `Star`, `ReaderT`,
+    or `Arrow.Kleisli` are thin wrappers around those types' methods. With
+    optimisation enabled (`-O1` or above), GHC specialises and inlines through
+    the via-type, eliminating it entirely. The generated Core is the same as if
+    the instance had been written by hand.
+
+  - **No runtime indirection.** Because there is no existential, no GADT, and no
+    dictionary field stored in the type, using these newtypes has exactly the same
+    runtime cost as using the underlying `p a (f b)` directly. The abstraction is
+    purely a compile-time mechanism for selecting instances.
+
+  In summary: you pay nothing at runtime for the newtype layer. The only cost is
+  at compile time — more instances means more constraint solving — but in practice
+  this is negligible.
+
   ## Building
 
   ```
@@ -93,9 +198,9 @@ description: |
   cabal bench
   ```
 description-type: markdown
-hash: 18a8a96df606a696fe06f7ebc4b2942a65483a6b0f3afef4a7a988d9c1f28a26
+hash: 913ee8472215f1823360bf793c77554d158dc4e002b552074a2b550f6e223c35
 homepage: https://gitlab.com/tonymorris/kleisli
-latest: 0.0.2
+latest: 0.0.3
 license-name: BSD-3-Clause
 maintainer: Tony Morris <tmorris@tmorris.net>
 synopsis: Kleisli-like newtypes with different type parameter orderings
