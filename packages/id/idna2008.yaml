@@ -1,32 +1,197 @@
 all-versions:
 - 0.0.1.0
-author: Jon Kristensen
+- 1.0.0.0
+author: Viktor Dukhovni
 basic-deps:
-  base: '>=2 && <5'
-  punycode: ==0.0.1.0
-  split: '>=0'
-changelog: ''
-changelog-type: ''
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11 && <0.13'
+  idna2008: '>=0'
+  primitive: '>=0.9 && <0.10'
+  template-haskell: '>=2.20 && <2.25'
+  text: '>=2.0 && <2.2'
+changelog: |
+  # Changelog
+
+  ## 1.0.0.0
+
+  First public release of `idna2008`.  See `README.md` for the
+  feature list.
+
+  ## 0.1.0.0
+
+  - Deprecated, never completed, indepdently authored prototype.
+changelog-type: markdown
 description: |
-  The goal of this Haskell library is to support conversions of
-  (internationalized) domain names between the ASCII (ACE) and Unicode encodings
-  in accordance with IDNA2008 (RFC 5991: Internationalized Domain Names in
-  Applications (IDNA): Protocol).
+  # idna2008
 
-  The current version, 0.0.1.0, supports encoding a Unicode hostname to an ASCII
-  hostname. Note however that the code is currently prototyped and untested.
+  A Haskell library for parsing and validating internationalized
+  domain names: domain names that may contain characters from
+  non-Latin scripts (Greek, Hebrew, Arabic, CJK, ...) alongside the
+  conventional letters, digits, and hyphens.
 
-  A later version will add validation support.
+  ## What it does
 
-  Copyright © 2011, Jon Kristensen.
-  All rights reserved.
+  Given a domain name as a string (with whatever mix of ASCII and
+  non-ASCII characters the user typed), the library:
 
-  This library is licensed under a BSD-3 license. See LICENSE for details.
-description-type: text
-hash: 0e4177b0869d955d55119b947e5ec847e2bf2e3804dcd04fcb840e45237f0f97
-homepage: ''
-latest: 0.0.1.0
+    * Checks that every label (the parts between dots) is allowed.
+    * Encodes valid non-ASCII Unicode IDN labels (U-labels) to their
+      ACE-prefixed (`xn--...`) ASCII (A-label) forms, suitable for
+      inclusion in zone files or use in DNS queries.
+    * Tells the caller what kind of label each one is (see below),
+      and lets the caller pick which kinds are accepted in the first
+      place — strict IDN, hostname-shaped, every form a DNS zone
+      file might carry plus U-labels, or anything in between.
+    * Optionally normalises display-form input (case folding, NFC,
+      full-width to ASCII, alternate label separators) before parsing.
+    * Optionally renders the parsed name back to display form
+      (Unicode where possible, ASCII where not).
+
+  ## Per-label classification
+
+  A single domain name often mixes different kinds of labels.  The
+  library reports each label as one of:
+
+  | Class       | What it is                                              |
+  |-------------|---------------------------------------------------------|
+  | `LDH`       | A valid label consisting of letters, digits and hyphens.|
+  | `RLDH`      | Legacy reserved labels with `--` at positions 3-4.      |
+  | `FAKEA`     | An ACE-prefixed label that isn't a valid A-label.       |
+  | `ALABEL`    | An ACE-prefixed label that encodes a valid IDN label.   |
+  | `ULABEL`    | A non-ASCII label that can be part of a valid IDN.      |
+  | `ATTRLEAF`  | An underscore-prefixed label (e.g. `_25._tcp`).         |
+  | `OCTET`     | A label with characters outside the LDH alphabet.       |
+  | `WILDLABEL` | The DNS wildcard label `*`.                             |
+  | `LAXULABEL` | A U-label that fails strict IDN validation.             |
+
+  A name like `_25._tcp.müllers.example.de` parses cleanly with
+  five labels in three different classes (`ATTRLEAF`, `ULABEL`,
+  `LDH`).  Most existing IDNA libraries don't make these
+  distinctions; they typically support only LDH + ALABEL + ULABEL.
+
+  The caller controls which classes are admitted via a
+  `LabelFormSet`.  Pre-built sets cover the common policies:
+
+    * `idnLabelForms` — strict IDN: `LDH` + `ALABEL` + `ULABEL`.
+    * `hostnameLabelForms` — the IDN set plus `RLDH` and `FAKEA`,
+      for hostname-shaped names from the wild where unusual but
+      syntactically valid LDH labels do appear.
+    * `allLabelForms` — every label class a DNS zone file might
+      carry (`LDH`, `RLDH`, `FAKEA`, `ALABEL`, `ATTRLEAF`, `OCTET`,
+      `WILDLABEL`) plus `ULABEL`.  Zone files are 8-bit and contain
+      no U-labels in practice, but admitting U-labels alongside
+      the on-the-wire forms matches what this library is for —
+      parsing presentation-form input that may carry either.
+
+  `LAXULABEL` is excluded from every pre-built set: admitting a
+  U-label that fails strict IDN validation is a deliberate choice
+  the caller makes by writing it in, e.g. `idnLabelForms <+>
+  LAXULABEL`.
+
+  ## What's distinctive
+
+  * **Strict.**  Some browsers and language standard libraries use
+    a more permissive variant of the IDNA standard that accepts
+    characters strict IDNA2008 rejects.  This library does not use
+    that variant; if a name is admitted, it's by-the-book valid.
+
+  * **Bidirectional-text rules in two layers.**  When right-to-left
+    scripts (Hebrew, Arabic) appear in a domain name, special rules
+    prevent visual confusion with neighbouring left-to-right text.
+    The library splits these rules into a per-label check (does the
+    label make sense on its own?) and a cross-label check (do the
+    labels make sense together?), each independently configurable.
+    An ASCII-fallback option lets display code show a safe ASCII
+    spelling when the cross-label check would otherwise reject the
+    name.
+
+  * **Up-to-date Unicode coverage.**  The Unicode Consortium
+    publishes new versions of its character database every year or
+    so; this library derives its tables directly from those
+    publications and stays current.
+
+  * **Conformance test vectors.**  Test cases are published as
+    JSON, reusable by ports to other programming languages.
+
+  ## Status
+
+  Initial public release (`1.0.0.0`).  The conformance suite in
+  `tests/` carries 186 JSON test vectors with a documented schema
+  so ports to other languages can reuse the fixtures.
+
+  ## Demo
+
+  Given the below `demo.hs`:
+  ```haskell
+  {-# LANGUAGE TemplateHaskell #-}
+  {-# LANGUAGE OverloadedStrings #-}
+  module Main(main) where
+  import qualified Data.Text.IO as T
+  import Text.IDNA2008
+
+  -- Strict default: idnLabelForms + defaultIdnaFlags.
+  ex1 :: Domain
+  ex1 = $$(dnLit mkDomain "αβγ.gr")
+
+  -- Enable mappings via @(parseDomainOpts forms flags)@:
+  ex2 :: Domain
+  ex2 = $$(let forms = idnLabelForms
+               flags = defaultIdnaFlags <> allIdnaMappings
+               parser = parseDomainOpts forms flags
+            in dnLit (fmap fst . parser) "ΑβΓ.GR")
+
+  main :: IO()
+  main = do
+      -- Print A-label form
+      ascOut ex1
+      -- Print U-label form
+      uniOut ex1
+      -- Print A-label + U-label forms and label types:
+      mapM_ dump $ parseDomain allLabelForms "_25._tcp.*.\\097bc.αβγ.gr"
+      -- An invalid domain, with code point 95 ('_') in the second label.
+      -- Only LDH ASCII characters can appear in a U-label.  The offset
+      -- within that label is non-specific because it may have gone
+      -- through some "mappings" that mask the real byte offset.
+      print $ parseDomain idnLabelForms "foo.αβ_γδ.gr"
+    where
+      ascOut, uniOut :: Domain -> IO ()
+      ascOut = T.putStrLn . domainToAscii
+      uniOut = T.putStrLn . domainToUnicode
+      dump (dom, inf) = do
+          ascOut dom
+          uniOut dom
+          print inf
+  ```
+  Compiling and running it we get the below output:
+  ```
+  xn--mxacd.gr
+  αβγ.gr
+  _25._tcp.*.abc.xn--mxacd.gr
+  _25._tcp.*.abc.αβγ.gr
+  [ATTRLEAF,ATTRLEAF,WILDLABEL,OCTET,ULABEL,LDH]
+  Left (ErrLabelInvalid 1 (DisallowedCodepoint 95))
+  ```
+
+  ## License
+
+  BSD-3-Clause.
+description-type: markdown
+hash: 60eaa6e8f9edb02a03d86246cb49c402ce1703d071dd5f7d7f564c110b4515ae
+homepage: https://github.com/dnsbase/idna2008
+latest: 1.0.0.0
 license-name: BSD-3-Clause
-maintainer: jon.kristensen@pontarius.org
-synopsis: Converts Unicode hostnames into ASCII
-test-bench-deps: {}
+maintainer: ietf-dane@dukhovni.org
+synopsis: Strict IDNA2008 for Haskell
+test-bench-deps:
+  aeson: '>=2.2 && <2.4'
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11 && <0.13'
+  containers: '>=0.6 && <0.9'
+  directory: '>=1.0 && <1.4'
+  idna2008: '>=0'
+  primitive: '>=0.9 && <0.10'
+  tasty: '>=1.5 && <1.6'
+  tasty-hunit: '>=0.10 && <0.11'
+  template-haskell: '>=2.20 && <2.25'
+  text: '>=2.0 && <2.2'
+  zlib: '>=0.6 && <0.8'
