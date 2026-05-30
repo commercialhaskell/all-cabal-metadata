@@ -1,13 +1,18 @@
 all-versions:
 - 0.1.0.0
 - 0.2.0.0
+- 0.3.0.0
 author: Michael Chavinda, Junji Hashimoto
 basic-deps:
   base: '>=4 && <5'
-  bytestring: '>=0.11 && <0.13'
+  bytestring: '>=0.10 && <0.13'
+  conduit: '>=1.3 && <1.4'
   containers: '>=0.6.7 && <0.9'
-  dataframe: ^>=0.4
+  dataframe-core: ^>=1.0
+  dataframe-operations: ^>=1.0
   persistent: '>=2.14 && <3'
+  persistent-sqlite: '>=2.13 && <3'
+  resourcet: '>=1.2 && <2'
   template-haskell: '>=2.0 && <3'
   text: '>=2.0 && <3'
   time: '>=1.12 && <2'
@@ -20,81 +25,435 @@ changelog: |-
   ## 0.1.0.0
   * Initial version supporting reading dataframes from SQL using Persistent.
 changelog-type: markdown
-description: "# dataframe-persistent\n\nPersistent database integration for the Haskell
-  DataFrame library.\n\n## Overview\n\nThis package provides seamless integration
-  between the `dataframe` library and the `persistent` database library, allowing
-  you to:\n\n- Load database entities directly into DataFrames\n- Perform DataFrame
-  operations on database data  \n- Save DataFrame results back to the database\n-
-  Work with type-safe database entities\n\n## Installation\n\nAdd to your `package.yaml`:\n\n```yaml\ndependencies:\n-
-  dataframe ^>= 0.4\n- dataframe-persistent ^>= 0.1\n- persistent >= 2.14\n- persistent-sqlite
-  >= 2.13  # or your preferred backend\n```\n\nOr to your `.cabal` file:\n\n```cabal\nbuild-depends:\n
-  \ dataframe ^>= 0.4,\n  dataframe-persistent ^>= 0.1,\n  persistent >= 2.14,\n  persistent-sqlite
-  >= 2.13\n```\n\n## Quick Start\n\n```haskell\n{-# LANGUAGE DataKinds #-}\n{-# LANGUAGE
-  DerivingStrategies #-}\n{-# LANGUAGE FlexibleInstances #-}\n{-# LANGUAGE GADTs #-}\n{-#
-  LANGUAGE GeneralizedNewtypeDeriving #-}\n{-# LANGUAGE MultiParamTypeClasses #-}\n{-#
-  LANGUAGE OverloadedStrings #-}\n{-# LANGUAGE QuasiQuotes #-}\n{-# LANGUAGE StandaloneDeriving
-  #-}\n{-# LANGUAGE TemplateHaskell #-}\n{-# LANGUAGE TypeApplications #-}\n{-# LANGUAGE
-  TypeFamilies #-}\n{-# LANGUAGE UndecidableInstances #-}\n\nimport Control.Monad.IO.Class
-  (liftIO)\nimport Database.Persist\nimport Database.Persist.Sqlite\nimport Database.Persist.TH\nimport
-  qualified DataFrame as DF\nimport qualified DataFrame.Functions as F\nimport DataFrame.IO.Persistent\nimport
-  DataFrame.IO.Persistent.TH\nimport qualified Data.Vector as V\n\nimport DataFrame.Functions
-  ((.<))\n\n-- Define your entities\nshare [mkPersist sqlSettings, mkMigrate \"migrateAll\"]
-  [persistLowerCase|\nTestUser\n    name Text\n    age Int\n    active Bool\n    deriving
-  Show Eq\n|]\n\n-- Derive DataFrame instances\n$(derivePersistentDataFrame ''TestUser)\n\n--
-  Example usage\nmain :: IO ()\nmain = runSqlite \"example.db\" $ do\n    -- Run migrations\n
-  \   runMigration migrateAll\n    \n    -- Insert some test data\n    _ <- insert
-  $ TestUser \"Alice\" 25 True\n    _ <- insert $ TestUser \"Bob\" 30 False\n    _
-  <- insert $ TestUser \"Charlie\" 35 True\n    \n    -- Load from database\n    allUsersDF
-  <- fromPersistent @TestUser []\n    liftIO $ putStrLn $ \"Loaded \" ++ show (nRows
-  allUsersDF) ++ \" users\"\n    \n    -- Load with filters\n    activeUsersDF <-
-  fromPersistent @TestUser [TestUserActive ==. True]\n    liftIO $ putStrLn $ \"Active
-  users: \" ++ show (nRows activeUsersDF)\n    \n    -- Process with DataFrame operations\n
-  \   -- Expressions are automaticaly generated.\n    let youngUsers = DF.filterWhere
-  (test_user_age .< 30) allUsersDF\n        ages = V.toList $ DF.columnAsVector test_user_age
-  youngUsers\n    liftIO $ putStrLn $ \"Young user ages: \" ++ show ages\n    \n    --
-  Custom configuration\n    let config = defaultPersistentConfig \n                    {
-  pcIdColumnName = \"user_id\"\n                    , pcIncludeId = True\n                    }\n
-  \   customDF <- fromPersistentWith @TestUser config []\n    liftIO $ putStrLn $
-  \"Columns with custom config: \" ++ show (DF.columnNames customDF)\n```\n\n## Features\n\n-
-  **Type-safe conversions** between Persistent entities and DataFrames\n- **Template
-  Haskell support** for automatic instance generation\n- **Configurable loading**
-  with batch size and column selection\n- **Column name cleaning** - removes table
-  prefixes automatically (e.g., `test_user_name` → `name`)\n- **Automatically generate
-  typed expressions** - creates expressions in snake case prefixed by table name (e.g
-  `test_user_name`).\n- **Type preservation** - maintains proper types for Text, Int,
-  Bool, Day, etc.\n- **Empty DataFrame support** - preserves column structure even
-  with no data\n- **Support for all Persistent backends** (SQLite, PostgreSQL, MySQL,
-  etc.)\n\n## Configuration Options\n\n```haskell\ndata PersistentConfig = PersistentConfig\n
-  \   { pcBatchSize :: Int        -- Number of records to fetch at once (default:
-  10000)\n    , pcIncludeId :: Bool       -- Whether to include entity ID as column
-  (default: True)\n    , pcIdColumnName :: Text    -- Name for the ID column (default:
-  \"id\")\n    }\n```\n\n## Advanced Usage\n\n### Custom Field Extraction\n\nYou can
-  also extract fields from individual entities:\n\n```haskell\nlet user = TestUser
-  \"Alice\" 25 True\n    columns = persistFieldsToColumns user\n-- Result: [(\"name\",
-  SomeColumn [\"Alice\"]), (\"age\", SomeColumn [25]), (\"active\", SomeColumn [True])]\n```\n\n###
-  Working with Vector Data\n\n```haskell\n-- Extract specific column data\nlet names
-  = V.toList $ DF.columnAsVector test_user_name df\n    ages = V.toList $ DF.columnAsVector
-  test_user_age df\n    activeFlags = V.toList $ DF.columnAsVector test_user_active
-  df\n```\n\n## Examples\n\nFor comprehensive examples and test cases, see:\n- [`tests/PersistentTests.hs`](tests/PersistentTests.hs)
-  - Full test suite with examples\n- [`../docs/persistent_integration.md`](../docs/persistent_integration.md)
-  - Detailed integration guide\n\n## Status\n\nThis package is **actively maintained**
-  and tested. Current test coverage includes:\n- ✅ Entity loading with and without
-  filters\n- ✅ Custom configuration options\n- ✅ DataFrame operations on Persistent
-  data\n- ✅ Empty result set handling\n- ✅ Field extraction utilities\n- ✅ Multi-table
-  relationships\n\n## Documentation\n\nFor detailed documentation, see:\n- [Main dataframe
-  documentation](https://github.com/mchav/dataframe)\n- [Persistent integration guide](../docs/persistent_integration.md)\n\n##
-  License\n\nGPL-3.0-or-later (same as the main dataframe package)"
+description: |
+  <!--
+    This file is the runnable scripths source for dataframe-persistent's README.
+    Every ```haskell block executes in order in one shared session against
+    ./data/chinook.db. Regenerate the rendered README with:
+
+        scripths docs/base_scripts/base_readme.md -o README.md
+
+    Run it from THIS directory (dataframe-persistent/) so ./data/... resolves and
+    the local package is picked up. Every ```haskell block runs, including the
+    compile-time $(declareTable ...) / $(declareEntity ...) splices.
+  -->
+
+  # dataframe-persistent
+
+  Load SQLite into a [`dataframe`](https://hackage.haskell.org/package/dataframe). The schema is read
+  for you: at runtime when you're exploring, or at compile time when you want type safety. You don't
+  write a `persistent` entity, a `persistLowerCase` block, or any instances.
+
+  > **This README is a runnable [scripths](https://github.com/DataHaskell/scripths) notebook.**
+  > Every Haskell block runs top-to-bottom in one shared session against
+  > [`./data/chinook.db`](./data/chinook.db). Reproduce every output below with
+  > `scripths docs/base_scripts/base_readme.md -o README.md` run from `dataframe-persistent/`.
+
+  ## Three ways in
+
+  | Tier | You write | You get |
+  |------|-----------|---------|
+  | **Runtime** | `readTable db "artists"` | a `DataFrame`, types inferred from the schema |
+  | **Typed** | `$(declareTable db "artists")` + `readTableTyped @Schema` | a compile-time schema type; columns checked by `col @"Name"` |
+  | **Persistent** | `$(declareEntity db "artists")` | a full `persistent` entity: typed `Filter` DSL, write-back |
+
+  ## Tier 0: runtime reads
+
+  This is the quickest way in, similar to pandas' `read_sql_table` / `read_sql`. You point at a file
+  and a table.
+
+  ```haskell
+  -- cabal: build-depends: dataframe, dataframe-persistent, text
+  -- cabal: default-extensions: OverloadedStrings, TemplateHaskell, DataKinds
+  -- cabal: default-extensions: TypeApplications, TypeOperators, FlexibleContexts
+  import qualified DataFrame as D
+  import DataFrame.IO.Persistent.Read
+  import Data.Function ((&))
+  ```
+
+  > <!-- scripths:mime text/plain -->
+
+  What tables are in this database?
+
+  ```haskell
+  listTables "./data/chinook.db"
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > ["albums","artists","customers","employees","genres","invoice_items","invoices","media_types","playlist_track","playlists","tracks"]
+
+  `describeTable` shows a table's columns and their inferred types before you load it (it returns a
+  `describeColumns`-style `DataFrame`):
+
+  ```haskell
+  D.toMarkdown' <$> describeTable "./data/chinook.db" "artists"
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | Column Name<br>Text | Type<br>Text | SQLite Type<br>Text | Nullable<br>Bool | Primary Key<br>Bool |
+  > | --------------------|--------------|---------------------|------------------|-------------------- |
+  > | ArtistId            | Int          | INTEGER             | False            | True                |
+  > | Name                | Maybe Text   | NVARCHAR(120)       | True             | False               |
+
+  Load the whole table. The column types (and nullability) come from the schema:
+
+  ```haskell
+  D.toMarkdown' . D.take 5 <$> readTable "./data/chinook.db" "artists"
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | ArtistId<br>Int |    Name<br>Maybe Text    |
+  > | ----------------|------------------------- |
+  > | 1               | Just "AC/DC"             |
+  > | 2               | Just "Accept"            |
+  > | 3               | Just "Aerosmith"         |
+  > | 4               | Just "Alanis Morissette" |
+  > | 5               | Just "Alice In Chains"   |
+
+  Tables larger than memory? Filter them in the database. Raw SQL works as you'd expect:
+
+  ```haskell
+  D.toMarkdown' <$> readSql "./data/chinook.db" "SELECT * FROM artists WHERE Name LIKE 'A%' LIMIT 5"
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | ArtistId<br>Int |   Name<br>Text    |
+  > | ----------------|------------------ |
+  > | 1               | AC/DC             |
+  > | 2               | Accept            |
+  > | 3               | Aerosmith         |
+  > | 4               | Alanis Morissette |
+  > | 5               | Alice In Chains   |
+
+  Or push a `WHERE` / `LIMIT` down to a named table with a `ReadQuery` value:
+
+  ```haskell
+  D.toMarkdown' <$> readTableWith "./data/chinook.db" "artists" (allRows & limit 3)
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | ArtistId<br>Int | Name<br>Maybe Text |
+  > | ----------------|------------------- |
+  > | 1               | Just "AC/DC"       |
+  > | 2               | Just "Accept"      |
+  > | 3               | Just "Aerosmith"   |
+
+  ## Tier 1: typed schema
+
+  `declareTable` reads the schema at compile time and emits just the schema type. You read into it
+  with `readTableTyped`, where the schema is a type argument and the database and table are ordinary
+  values. Column references go through `col @"Name"`, checked against the schema, so a typo or a wrong
+  type is a compile error. Nothing is keyed on a generated function name.
+
+  ```haskell
+  import qualified DataFrame.Typed as DT
+  import DataFrame.Typed ((.==.))
+  import DataFrame.IO.Persistent.Schema (declareTable)
+  ```
+
+  > <!-- scripths:mime text/plain -->
+
+  The splice brings one thing into scope, the type
+  `type ArtistsSchema = '[Column "ArtistId" Int, Column "Name" (Maybe Text)]`:
+
+  ```haskell
+  $(declareTable "./data/chinook.db" "artists")
+  ```
+
+  > <!-- scripths:mime text/plain -->
+
+  `readTableTyped @ArtistsSchema` reads any database/table into a `TypedDataFrame ArtistsSchema` (it
+  validates the schema as it reads). You can bind your own reader:
+
+  ```haskell
+  artists = readTableTyped @ArtistsSchema "./data/chinook.db" "artists"
+  ```
+
+  > <!-- scripths:mime text/plain -->
+
+  `thaw` drops a typed frame back to an untyped `DataFrame`:
+
+  ```haskell
+  D.toMarkdown' . D.take 5 . DT.thaw <$> artists
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | ArtistId<br>Int |    Name<br>Maybe Text    |
+  > | ----------------|------------------------- |
+  > | 1               | Just "AC/DC"             |
+  > | 2               | Just "Accept"            |
+  > | 3               | Just "Aerosmith"         |
+  > | 4               | Just "Alanis Morissette" |
+  > | 5               | Just "Alice In Chains"   |
+
+  Column access is checked against the schema. `col @"Name"` only compiles because `"Name"` is a
+  column of `ArtistsSchema` (its element type is `Maybe Text`):
+
+  ```haskell
+  DT.columnAsList @"Name" . DT.take 3 <$> artists
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > [Just "AC/DC",Just "Accept",Just "Aerosmith"]
+
+  A filter on a column that doesn't exist (or has the wrong type) is a compile error rather than a
+  runtime surprise:
+
+  ```haskell
+  D.toMarkdown' . DT.thaw . DT.filterWhere (DT.col @"Name" .==. DT.lit (Just "Accept")) <$> artists
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | ArtistId<br>Int | Name<br>Maybe Text |
+  > | ----------------|------------------- |
+  > | 2               | Just "Accept"      |
+
+  Because the database is a value, reading the same table from two sources to join them is just two
+  calls with the same `@ArtistsSchema`:
+
+  ```text
+  a <- readTableTyped @ArtistsSchema "europe.sqlite" "artists"
+  b <- readTableTyped @ArtistsSchema "us.sqlite"     "artists"
+  -- DT.thaw a / DT.thaw b, then DataFrame.innerJoin on "ArtistId", etc.
+  ```
+
+  (`readSqlTyped @cols db "SELECT ... JOIN ..."` does the same for an arbitrary query. The Postgres
+  section below reads this same `ArtistsSchema` from a different backend.)
+
+  ## Tier 2: generate a `persistent` entity
+
+  If you want the full `persistent` experience (the typed `Filter` DSL, relations, write-back),
+  `declareEntity` builds the entity from the live schema, so you skip the `persistLowerCase` block. It
+  needs the usual `persistent` extensions and unqualified `Text` / `Int64` in scope:
+
+  ```haskell
+  -- cabal: build-depends: persistent, persistent-sqlite
+  -- cabal: default-extensions: GADTs, TypeFamilies, FlexibleInstances, MultiParamTypeClasses
+  -- cabal: default-extensions: StandaloneDeriving, DerivingStrategies, GeneralizedNewtypeDeriving
+  -- cabal: default-extensions: UndecidableInstances
+  import Data.Int (Int64)
+  import Data.Text (Text)
+  import Database.Persist (Filter, SelectOpt (..), (<-.), (==.))
+  import Database.Persist.Sqlite (runSqlite)
+  import DataFrame.IO.Persistent.Schema (declareEntity)
+  ```
+
+  > <!-- scripths:mime text/plain -->
+
+  This generates the `Albums` entity (`Id`, `title`, `artistId`), bound to the real
+  `albums` / `AlbumId` / `Title` / `ArtistId` SQLite names, plus its `EntityField` constructors:
+
+  ```haskell
+  $(declareEntity "./data/chinook.db" "albums")
+  ```
+
+  > <!-- scripths:mime text/plain -->
+
+  Now load it with `selectToDataFrame`. It's a generic loader: it works for any `persistent` entity,
+  so the one `declareEntity` splice is all the boilerplate.
+
+  ```text
+  selectToDataFrame
+      :: (MonadIO m, PersistEntity r, PersistEntityBackend r ~ SqlBackend)
+      => [Filter r]      -- persistent's typed WHERE DSL, e.g. [AlbumsArtistId ==. 1]
+      -> [SelectOpt r]   -- ordering / paging,        e.g. [Asc AlbumsTitle, LimitTo 10]
+      -> ReaderT SqlBackend m DataFrame
+  ```
+
+  It runs persistent's `selectList filters opts` and turns the `[Entity Albums]` into a `DataFrame`:
+  the entity key becomes an `id` column and each field becomes a column (named by its
+  Haskell field, e.g. `title`, `artistId`), with element types decoded from the stored values. The
+  `[Filter Albums]` and `[SelectOpt Albums]` you pass are persistent's own, checked against the
+  entity, so a filter for the wrong field won't compile.
+
+  Find AC/DC's albums (`ArtistId` 1):
+
+  ```haskell
+  D.toMarkdown' <$> runSqlite "./data/chinook.db" (selectToDataFrame [AlbumsArtistId ==. 1] [])
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | id<br>Int |             title<br>Text             | artistId<br>Int |
+  > | ----------|---------------------------------------|---------------- |
+  > | 1         | For Those About To Rock We Salute You | 1               |
+  > | 4         | Let There Be Rock                     | 1               |
+
+  You can use both arguments together: filter and order/page in one query. Here are the albums by
+  AC/DC or Alanis Morissette (`ArtistId` 1 or 4), sorted by title, capped at 5. (`<-.` is persistent's
+  "field in list"; an empty filter list loads everything.)
+
+  ```haskell
+  D.toMarkdown' <$> runSqlite "./data/chinook.db"
+      (selectToDataFrame [AlbumsArtistId <-. [1, 4]] [Asc AlbumsTitle, LimitTo 5])
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | id<br>Int |             title<br>Text             | artistId<br>Int |
+  > | ----------|---------------------------------------|---------------- |
+  > | 1         | For Those About To Rock We Salute You | 1               |
+  > | 6         | Jagged Little Pill                    | 4               |
+  > | 4         | Let There Be Rock                     | 1               |
+
+  ## Hand-off between dataframe and persistent
+
+  The `...Conn` readers run on a `ReaderT SqlBackend m`, so a raw read, an entity read, and ordinary
+  `persistent` queries all compose in one `runSqlite` transaction (this works on Postgres/MySQL too).
+  Here both reads share one connection and return each frame's `(rows, columns)`:
+
+  ```haskell
+  runSqlite "./data/chinook.db" $ do
+      artists <- readTableConn "artists"                       -- raw → DataFrame
+      albums  <- selectToDataFrame ([] :: [Filter Albums]) []  -- entity → DataFrame
+      pure (D.dimensions artists, D.dimensions albums)
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > ((275,2),(347,3))
+
+  ## PostgreSQL (and other backends)
+
+  Everything except the file-path helpers and the compile-time splices is backend-agnostic: the
+  `...Conn` readers and `selectToDataFrame` run on any `persistent` `SqlBackend`. Introspection picks
+  `PRAGMA` for SQLite and `information_schema` for PostgreSQL/MySQL. The library doesn't depend on
+  `persistent-postgresql`; you bring the connection.
+
+  These examples run against a real PostgreSQL with the same `artists` / `albums` data, and the
+  notebook starts it itself. The block below uses GHCi's `:!` shell escape to spin up a throwaway
+  cluster on port 54329 and load the two tables from the SQLite fixture. It needs `postgres` and
+  `sqlite3` on `PATH` (e.g. `brew install postgresql@16`). A matching teardown runs at the end of the
+  section.
+
+  ```haskell
+  :! bash scripts/pg-setup.sh
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > postgres ready on port 54329 (db chinook: artists + albums)
+
+  Open a connection (you supply `persistent-postgresql`; `runPg` is the usual `runSqlConn` wrapper):
+
+  ```haskell
+  -- cabal: build-depends: persistent, persistent-postgresql, transformers, resourcet, monad-logger
+  import Control.Monad.Trans.Reader (ReaderT)
+  import Control.Monad.Trans.Resource (ResourceT, runResourceT)
+  import Control.Monad.Logger (NoLoggingT, runNoLoggingT)
+  import Database.Persist.Sql (SqlBackend)
+  import Database.Persist.Postgresql (runSqlConn, withPostgresqlConn)
+
+  runPg :: ReaderT SqlBackend (ResourceT (NoLoggingT IO)) a -> IO a
+  runPg act =
+      runNoLoggingT (runResourceT (withPostgresqlConn "host=localhost port=54329 dbname=chinook user=postgres" (runSqlConn act)))
+  ```
+
+  > <!-- scripths:mime text/plain -->
+
+  Discovery and reads use the same functions as SQLite, just `...Conn` wrapped in `runPg`:
+
+  ```haskell
+  runPg listTablesConn
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > ["albums","artists"]
+
+  ```haskell
+  D.toMarkdown' <$> runPg (describeTableConn "artists")
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | Column Name<br>Text | Type<br>Text | SQLite Type<br>Text | Nullable<br>Bool | Primary Key<br>Bool |
+  > | --------------------|--------------|---------------------|------------------|-------------------- |
+  > | ArtistId            | Int          | integer             | False            | True                |
+  > | Name                | Maybe Text   | text                | True             | False               |
+
+  ```haskell
+  D.toMarkdown' . D.take 5 <$> runPg (readTableConn "artists")
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | ArtistId<br>Int |    Name<br>Maybe Text    |
+  > | ----------------|------------------------- |
+  > | 1               | Just "AC/DC"             |
+  > | 2               | Just "Accept"            |
+  > | 3               | Just "Aerosmith"         |
+  > | 4               | Just "Alanis Morissette" |
+  > | 5               | Just "Alice In Chains"   |
+
+  The typed reader is backend-agnostic too. The same `ArtistsSchema` generated from the SQLite file in
+  Tier 1 validates this PostgreSQL read, so it's one schema type across two databases:
+
+  ```haskell
+  D.toMarkdown' . D.take 3 . DT.thaw <$> runPg (readTableTypedConn @ArtistsSchema "artists")
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | ArtistId<br>Int | Name<br>Maybe Text |
+  > | ----------------|------------------- |
+  > | 1               | Just "AC/DC"       |
+  > | 2               | Just "Accept"      |
+  > | 3               | Just "Aerosmith"   |
+
+  The `Albums` entity generated from SQLite at compile time is a plain `persistent` entity, so the
+  same `declareEntity` splice and `selectToDataFrame` run unchanged against PostgreSQL:
+
+  ```haskell
+  D.toMarkdown' <$> runPg (selectToDataFrame [AlbumsArtistId <-. [1, 4]] [Asc AlbumsTitle, LimitTo 5])
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > | id<br>Int |             title<br>Text             | artistId<br>Int |
+  > | ----------|---------------------------------------|---------------- |
+  > | 1         | For Those About To Rock We Salute You | 1               |
+  > | 6         | Jagged Little Pill                    | 4               |
+  > | 4         | Let There Be Rock                     | 1               |
+
+  Tear the throwaway cluster back down (again via `:!`):
+
+  ```haskell
+  :! bash scripts/pg-teardown.sh
+  ```
+
+  > <!-- scripths:mime text/plain -->
+  > postgres stopped and removed
+
+  ## How types are inferred
+
+  SQLite type affinities map to Haskell element types as below. `NOT NULL` columns are non-null,
+  everything else becomes `Maybe`. You can override a column with `typeOverride` in `DeclareOptions`
+  (`declareTableWith` / `declareEntityWith`).
+
+  | SQLite declared type | Haskell type |
+  |----------------------|--------------|
+  | `INTEGER`, `INT...` | `Int` |
+  | `REAL`, `FLOAT`, `DOUBLE`, `NUMERIC`, `DECIMAL` | `Double` |
+  | `TEXT`, `VARCHAR`, `CHAR`, `CLOB` | `Text` |
+  | `BOOLEAN` | `Bool` |
+  | `BLOB` / no declared type | `ByteString` |
+  | `DATE` | `Day` |
+  | `DATETIME`, `TIMESTAMP` | `UTCTime` |
+  | `TIME` | `TimeOfDay` |
+
+  ## Install
+
+  ```
+  build-depends: dataframe, dataframe-persistent, persistent-sqlite
+  ```
+
+  The classic path still works and is unchanged: hand-write a `persistent` entity with
+  `share`/`persistLowerCase` and `derivePersistentDataFrame`, then load with `fromPersistent`.
 description-type: markdown
-hash: 07cdc590d6cc33cbffaf1e2232a85628378894fd99bcb3ff01682f86e260c7c2
+hash: 9feb156e088f01519a7ace46aba16bb9dc811244bc84e4737b84b8a228f0bcfc
 homepage: ''
-latest: 0.2.0.0
-license-name: GPL-3.0-or-later
+latest: 0.3.0.0
+license-name: MIT
 maintainer: mschavinda@gmail.com
 synopsis: Persistent database integration for the dataframe library
 test-bench-deps:
   HUnit: ^>=1.6
   base: '>=4 && <5'
-  dataframe: ^>=0.4
+  dataframe: '>=1 && <3'
+  dataframe-core: ^>=1.0
+  dataframe-operations: ^>=1.0
   dataframe-persistent: '>=0'
   monad-logger: '>=0.3 && <0.4'
   persistent: '>=2.14 && <3'
