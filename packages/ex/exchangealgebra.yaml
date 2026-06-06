@@ -1,5 +1,6 @@
 all-versions:
 - 0.4.0.0
+- 0.4.1.0
 author: Kaya Akagi
 basic-deps:
   Chart: '>=1.9 && <1.10'
@@ -25,6 +26,41 @@ basic-deps:
   vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog for ExchangeAlgebra
+
+  ## 0.4.1.0 - 2026-06-06
+
+  ### Added
+  - `nearlyEqScaled` — scale-aware approximate equality
+    (`|x - y| <= atol + rtol * max |x| |y|`, with `atol = 1e-13`, `rtol = 1e-12`).
+
+  ### Fixed
+  - `bases` ignored the `_notSide` Seq and iterated `_hatSide` twice
+    (`src/ExchangeAlgebra/Algebra.hs`, regression existed since the introduction of the
+    HashMap-backed `Liner` representation). The previous implementation produced
+    `length (bases x) != length (vals x)` whenever the Hat-side and Not-side Seqs of any
+    base had different lengths, dropped entries whose Hat-side Seq was empty, and
+    duplicated Hat-side entries with the wrong label. A 1-character fix
+    (`hs` → `ns` in the outer fold) restores the intended behaviour, covered by a
+    new `testBasesNotSideRegression` unit test.
+
+  ### Changed
+  - Reconciliation comparators (`bar` / `(.-)`, `balance`, `diffRL`, `barNormPair`) now use a
+    scale-aware tolerance instead of a fixed `1e-13` absolute tolerance. **Behaviour change:**
+    near-balanced values at large magnitudes no longer retain floating-point rounding noise as a
+    spurious residual, and `balance` / `diffRL` no longer use exact `==` / `>` comparisons.
+  - `isNearlyNum` returns `False` (instead of raising `error`) when a NaN makes every ordered
+    comparison fail, so non-finite inputs can no longer crash the check.
+
+  ### Internal
+  - `Journal.toAlg` avoids materializing an intermediate `Map.elems base` list.
+  - Removed an unused `Control.Parallel.Strategies` import from `ExchangeAlgebra.Algebra`.
+
+  ### Documentation
+  - Documented the spill-to-disk path (`runSimulationWithSpill` / `runScenariosWithSpill` with
+    `SpillDeletePolicy`) as the recommended approach for constant-memory large-scale simulations,
+    in the README and the `ExchangeAlgebra.Simulate` module header (example: `sim2`).
+  - Added the original axiomatic source (Deguchi & Nakano, *Axiomatic Foundations of Vector
+    Accounting*, Systems Research 3(1):31–39, 1986) to the README References section.
 
   ## 0.4.0.0 - 2026-05-18
 
@@ -187,9 +223,9 @@ description: |
   # then edit freely as a starting point
   ```
 
-  A Git sparse-checkout with a standalone `examples/stack.yaml` is planned so that
-  `cd examples && stack build` works after a sparse-clone; this will land together
-  with the first Hackage release.
+  A standalone `examples/stack.yaml` (pinned to the Hackage release) is checked in,
+  so `cd examples && stack build` works after a sparse-clone or `degit` without
+  needing the rest of the repository.
 
   ## Module Overview
 
@@ -258,6 +294,37 @@ description: |
   type or `EA.proj`, for example). **Using Journal as the unqualified umbrella and pulling the
   Algebra layer in as `EA` qualified is the idiomatic style for this library.**
 
+  ## Large-scale simulations (constant memory)
+
+  `runSimulation` keeps the entire world state in memory for the whole run, so peak memory
+  grows with the number of terms. For long horizons or large agent populations, use the
+  **spill-to-disk** variants instead — they periodically write ledger chunks to disk and evict
+  old terms, so peak memory becomes **independent of the number of terms**:
+
+  ```haskell
+  import qualified ExchangeAlgebra.Simulate as ES
+
+  opts :: ES.SpillOptions Term World Transaction
+  opts = (ES.mkBinarySpillOptions everyNTerms spillPath extractPayload)
+           -- keep only the most recent N terms resident; older terms live on disk
+           { ES.spillDeletePolicy = ES.KeepRecentTerms 2 }
+
+  main = do
+      _world <- ES.runSimulationWithSpill opts gen env
+      -- restore spilled chunks later with ES.readBinarySpillFile / restoreJournalFromBinarySpill
+      pure ()
+  ```
+
+  - `ES.runSimulationWithSpill` / `ES.runScenariosWithSpill` are drop-in replacements for
+    `runSimulation` / `runScenarios` that add periodic spilling.
+  - `ES.SpillDeletePolicy` bounds resident memory: `KeepRecentTerms n` keeps a sliding window,
+    `DeleteSpilledChunk` evicts each chunk right after it is written, `NoDelete` keeps everything.
+  - Restore spilled data with `ES.readBinarySpillFile` (binary format) or the
+    `restoreJournalFromBinarySpill` helper.
+
+  A runnable end-to-end example (multi-scenario run with binary spill, `KeepRecentTerms`, and
+  restore) is `examples/basic/simulateEx2.hs` (the `sim2` executable).
+
   ## A note on visualization
 
   `ExchangeAlgebra.Simulate.Visualize` provides Chart-based PNG rendering, but **we recommend
@@ -321,6 +388,7 @@ description: |
   stack build
   stack exec -- ebex1      # Introductory bookkeeping example
   stack exec -- sim1       # 100-term simulation (+ Python visualization)
+  stack exec -- sim2       # spill-to-disk simulation (constant memory, binary spill + restore)
   stack exec -- ripple     # 10-agent ripple-effect simulation
   stack exec -- cge        # CGE model
   ```
@@ -352,6 +420,18 @@ description: |
 
   ## References
 
+  - Hiroshi Deguchi and Bunpei Nakano.
+    *Axiomatic Foundations of Vector Accounting.*
+    Systems Research, Vol. 3, No. 1, pp. 31–39, 1986.
+    Pergamon Press.
+    DOI: [10.1002/sres.3850030105](https://doi.org/10.1002/sres.3850030105)
+
+    The axiomatic origin of Exchange Algebra. This paper formalises double-entry
+    bookkeeping as an accounting vector space over the extended basis
+    `Γ = Λ ∪ Λ̂` (account titles and their dual hats), introduces the five
+    transaction axioms, and derives the debit/credit partition and the balance
+    principle (`|y_L| = |y_R|`) purely algebraically.
+
   - Hiroshi Deguchi. *Economics as an Agent-Based Complex System:
     Toward Agent-Based Social Systems Sciences.* Springer, 2004.
     ISBN 978-4-431-20985-0.
@@ -359,9 +439,9 @@ description: |
   - Hiroshi Deguchi. Exchange Algebra (PDF).
     <https://repository.kulib.kyoto-u.ac.jp/dspace/bitstream/2433/82987/1/0809-7.pdf>
 description-type: markdown
-hash: f6315502135b4861d8dec96fc98fe15c0833b11018ec370736e37a1723fce037
+hash: 6869cff6d2dc045e91844ccf40d34a5ee38e4d9ef5b759964aed55aac288d564
 homepage: https://github.com/yakagika/ExchangeAlgebra#readme
-latest: 0.4.0.0
+latest: 0.4.1.0
 license-name: LicenseRef-OtherLicense
 maintainer: yakagika@icloud.com
 synopsis: Exchange Algebra for bookkeeping and economic simulation
