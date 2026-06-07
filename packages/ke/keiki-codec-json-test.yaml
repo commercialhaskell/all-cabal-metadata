@@ -1,0 +1,168 @@
+all-versions:
+- 0.1.0.0
+author: Nadeem Bitar
+basic-deps:
+  QuickCheck: ^>=2.15
+  aeson: ^>=2.2
+  base: ^>=4.21
+  bytestring: ^>=0.12
+  hspec: ^>=2.11
+  keiki: ^>=0.1
+  keiki-codec-json: ^>=0.1
+  quickcheck-instances: ^>=0.3
+  text: ^>=2.1
+changelog: |
+  # Changelog
+
+  All notable changes to this package are documented in this file.
+  The format follows [Keep a Changelog](https://keepachangelog.com/),
+  and this project adheres to the
+  [Haskell PVP](https://pvp.haskell.org).
+
+
+  ## [Unreleased]
+
+
+  ## [0.1.0.0] — 2026-06-07
+
+  Initial Hackage release. Co-released with `keiki-0.1.0.0` and
+  `keiki-codec-json-0.1.0.0`.
+
+  ### Added
+
+  - `Keiki.Codec.JSON.Test.Golden` — the case-#10 detector:
+    `data SlotGolden a = SlotGolden { sgInput :: a, sgBytes :: LBS.ByteString }`
+    and `slotGoldenSpec :: (Aeson.ToJSON a, Aeson.FromJSON a, Eq a, Show a)
+    => String -> SlotGolden a -> Hspec.Spec`. Pins a per-slot-type
+    golden bytes value; fails loudly when the slot's `ToJSON`
+    instance silently changes (the schema-evolution failure mode the
+    shape hash cannot detect by design).
+  - `Keiki.Codec.JSON.Test` — library-ised exposure of the EP-36 M3
+    round-trip and sensitivity disciplines:
+    - `class ArbitraryRegFile (rs :: [Slot])` with inductive
+      `arbRegFile :: Gen (RegFile rs)`.
+    - `regFileCodecProps @rs :: Spec` — four QuickCheck properties
+      (Value-path round-trip, Encoding-path round-trip, within-path
+      determinism on both paths).
+    - `data SomeKnownRegFileShape`, `someKnownShape @rs`,
+      `regFileShapeSensitivitySpec` — parameterised baseline +
+      mutation list; asserts each mutation flips the shape hash.
+
+  ### Validated against
+
+  - GHC 9.12.2 locally on macOS aarch64 and in CI on Ubuntu Linux
+    x86_64 (see `.github/workflows/ci.yml`).
+  - 7 self-test assertions exercising every public helper against a
+    toy `Email` slot type and `DemoSlots` / `DemoSlotsRenamed`
+    baseline + mutation pair.
+changelog-type: markdown
+description: |
+  # keiki-codec-json-test
+
+  Property-test toolkit for downstream consumers of
+  [`keiki-codec-json`](../keiki-codec-json/README.md).
+
+  Use this package in test suites that persist `RegFile rs` snapshots as
+  JSON and want release-time protection against schema drift. Production
+  code that only needs JSON encoding and decoding should depend on
+  `keiki-codec-json`, not this package.
+
+  ## What this is for
+
+  The primary tool is the **case-#10 detector**: a per-slot-type golden-byte
+  test that catches a silent change to a slot type's `Aeson.ToJSON`
+  instance. This is the schema-evolution failure mode the shape hash
+  in [`Keiki.Shape`](../src/Keiki/Shape.hs) cannot detect by design —
+  the hash is over the slot type's *TypeRep*, not over its encoding.
+  If a consumer edits the `ToJSON` instance to change the on-the-wire
+  shape, the hash stays the same and old snapshots silently fail to
+  decode. `slotGoldenSpec` is the contract anchor that makes the drift
+  loud and obvious.
+
+  The secondary helpers expose the in-tree property disciplines as
+  library functions parameterised over the consumer's own slot list:
+  Value-path and Encoding-path round-trip, within-path determinism, and
+  structural sensitivity.
+
+  ## Using
+
+  ```haskell
+  import Data.Proxy (Proxy (..))
+  import qualified Data.Text as T
+  import Test.Hspec (describe, hspec)
+
+  import Keiki.Codec.JSON.Test
+    ( regFileCodecProps
+    , regFileShapeSensitivitySpec
+    , someKnownShape
+    )
+  import Keiki.Codec.JSON.Test.Golden
+    ( SlotGolden (..)
+    , slotGoldenSpec
+    )
+
+  -- Your slot type and slot lists:
+  -- data Email = Email Text deriving (...)
+  -- type MySlots = '[ '("email", Email), '("count", Int) ]
+  -- type MySlotsRenamed = '[ '("emailAddress", Email), '("count", Int) ]
+
+  main :: IO ()
+  main = hspec $ do
+    -- Case-#10 detector. Add one slotGoldenSpec per slot type whose
+    -- ToJSON / FromJSON instances you want to pin.
+    slotGoldenSpec "Email" (SlotGolden
+      { sgInput = Email (T.pack "alice@example.com")
+      , sgBytes = "\"alice@example.com\""
+      })
+
+    -- Round-trip + determinism over the snapshot's slot list.
+    describe "props: MySlots" (regFileCodecProps @MySlots)
+
+    -- Sensitivity: every named mutation must flip the shape hash.
+    describe "sensitivity: MySlots" $
+      regFileShapeSensitivitySpec
+        (Proxy @MySlots)
+        [ ("rename email", someKnownShape @MySlotsRenamed) ]
+  ```
+
+  The toolkit assumes each slot type has `Aeson.ToJSON`,
+  `Aeson.FromJSON`, `Arbitrary` (for the property suite),
+  `CanonicalTypeName` (for the shape hash; default `Typeable`-based
+  instance is usually enough), `Eq`, and `Show`. If your slot type
+  lacks `Arbitrary`, write one — it is typically a one-liner via
+  `quickcheck-instances` for the standard library types.
+
+  ## When you don't need this
+
+  `keiki-codec-json` alone is sufficient for production use. This
+  package is opt-in for test suites. Pulling it in adds `QuickCheck`,
+  `hspec`, and `quickcheck-instances` as transitive deps; if you only
+  want the codec in production, do not depend on this package.
+
+  ## Running the self-test
+
+  ```sh
+  cabal test keiki-codec-json-test:keiki-codec-json-test-test
+  ```
+
+  The self-test exercises every public helper against a small toy
+  fixture (`Email`, `DemoSlots`, `DemoSlotsRenamed`). Expected
+  output: 7 examples, 0 failures.
+description-type: markdown
+hash: 8592c4ae15d160d31fb3c80cf126e06395e96ab336578848581a3300fc347b2e
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: nadeem@gmail.com
+synopsis: Property-test toolkit for keiki-codec-json downstream consumers.
+test-bench-deps:
+  QuickCheck: ^>=2.15
+  aeson: ^>=2.2
+  base: ^>=4.21
+  bytestring: ^>=0.12
+  hspec: ^>=2.11
+  keiki: ^>=0.1
+  keiki-codec-json: ^>=0.1
+  keiki-codec-json-test: ^>=0.1
+  quickcheck-instances: ^>=0.3
+  text: ^>=2.1
