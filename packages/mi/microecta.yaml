@@ -1,0 +1,233 @@
+all-versions:
+- 0.1.0.0
+author: Jimmy Koppel, Matthias Pall Gissurarson
+basic-deps:
+  base: '>=4.13 && <5'
+  containers: '>=0.7 && <0.8'
+  equivalence: '>=0.4.1 && <0.5'
+  hashable: '>=1.5.1.0 && <1.6'
+  hashtables: '>=1.4.2 && <1.5'
+  intern: '>=0.9.6 && <0.10'
+  mtl: '>=2.3.1 && <2.4'
+  text: '>=2.1.2 && <2.2'
+  transformers: '>=0.6.1.2 && <0.7'
+  unordered-containers: '>=0.2.21 && <0.3'
+changelog: |
+  # Changelog
+
+  ## 0.1.0.0 - 2026-06-09
+
+  * Initial release of microecta
+  * Extract the small ECTA core and term-search compatibility layer into a
+    Cabal-only package.
+  * Add ECTA pruning
+  * Add sparse path tries, a dependency-light benchmark harness, and baked
+    compile-time RTS caps so optimized builds stay inside the 512M target.
+  * Document the main API, pruning callbacks, module map, dependency surface,
+    and benchmark baseline.
+changelog-type: markdown
+description: |
+  # microecta
+
+  `microecta` is a small equality-constrained tree automata library extracted
+  from the [`ecta`](https://hackage.haskell.org/package/ecta) package.
+
+  It keeps the core ECTA engine and the tiny term-search compatibility layer used
+  by downstream projects.
+
+  The intent is similar to the relationship between `microlens` and `lens`: keep
+  the useful core small, direct, and quick to build.
+
+  ## Core API
+
+  The main entry point is `Data.ECTA`.
+
+  ```haskell
+  import Data.ECTA
+  import Data.ECTA.Paths
+  import Data.ECTA.Term
+  ```
+
+  An ECTA is a `Node`, which is a set of outgoing `Edge`s. An `Edge` has a symbol,
+  child nodes, and optional equality constraints over paths into those children.
+
+  ```haskell
+  intType :: Node
+  intType = Node [Edge "Int" []]
+
+  maybeIntType :: Node
+  maybeIntType = Node [Edge "Maybe" [intType]]
+
+  sameChildren :: Edge
+  sameChildren =
+    mkEdge
+      "Pair"
+      [intType, intType]
+      (mkEqConstraints [[path [0], path [1]]])
+  ```
+
+  Useful operations:
+
+  - `union` combines alternatives.
+  - `intersect` keeps terms accepted by both automata.
+  - `reducePartially` propagates equality constraints and removes impossible
+    alternatives.
+  - `withoutRedundantEdges` removes alternatives implied by other alternatives.
+  - `nodeRepresents` checks concrete term membership.
+  - `nodeRepresentsTemplate` checks pruning-template membership; a template
+    symbol named `<v>` acts as a wildcard.
+  - `getAllTerms` and `getAllTermsPrune` enumerate accepted terms.
+
+  ## Pruning API
+
+  `getAllTermsPrune` exposes partially enumerated `TermFragment`s to pruning
+  oracles. `Data.ECTA` also exports `fragRepresents`, the helper used by the
+  original pruning path to compare those fragments against known concrete
+  `Term`s.
+
+  A pruning oracle receives the caller's state, the UVar being expanded, and
+  either:
+
+  - `Right node`, before that ECTA node is expanded
+  - `Left fragment`, after a `TermFragment` has been produced
+
+  Return `True` to discard the current nondeterministic branch, or `False` to
+  keep enumerating with the updated state.
+
+  ```haskell
+  prunedTerms :: [Term] -> Node -> [Term]
+  prunedTerms forbidden =
+    getAllTermsPrune () $ \() _ event ->
+      case event of
+        Right node ->
+          pure (any (nodeRepresentsTemplate node) forbidden, ())
+        Left fragment -> do
+          represented <- fragRepresents True fragment forbidden
+          pure (represented, ())
+  ```
+
+  For repeated reduction, downstream code usually wants:
+
+  ```haskell
+  reduceFully :: Node -> Node
+  reduceFully = fixUnbounded (withoutRedundantEdges . reducePartially)
+  ```
+
+  `Application.TermSearch.TermSearch` exports that helper directly.
+
+  ## Term-Search Compatibility Layer
+
+  The `Application.TermSearch.*` modules are intentionally tiny. They provide only
+  the pieces that downstream projects still use:
+
+  - `TypeSkeleton`
+  - `typeToFta`
+  - `filterType`
+  - small type constructors and helpers: `arrowType`, `mkDatatype`, `typeConst`,
+    `genVar`, and `constFunc`
+
+  ## Module Map
+
+  - `Data.ECTA` is the main ECTA API: node and edge construction, intersection,
+    reduction, traversal, and enumeration.
+  - `Data.ECTA.Paths` and `Data.ECTA.Term` expose the public path, equality
+    constraint, symbol, and concrete term types used by `Data.ECTA`.
+  - `Application.TermSearch.*` is the small compatibility layer for downstream
+    term-search-shaped type encodings.
+  - `Data.ECTA.Internal.*` contains the equality-constrained tree automata
+    engine. These modules are exposed for downstream code that already relies on
+    lower-level operations, but new code should start with `Data.ECTA`.
+  - `Data.Interned.Extended.HashTableBased`, `Data.Memoization`,
+    `Data.Persistent.UnionFind`, and `Utility.*` are support modules used by the
+    engine. Import them directly only when extending or debugging the internals.
+
+  ## Dependency Surface
+
+  The library dependency set is intentionally small:
+
+  - `containers`, `unordered-containers`
+  - `hashable`, `hashtables`, `intern`
+  - `mtl`, `transformers`
+  - `text`
+  - `equivalence`
+
+  `equivalence` is retained for equality-constraint closure in the path logic.
+
+  ## Performance Notes
+
+  The core still uses the original hash-consing, memoization, union-find,
+  recursive-node, and path/equality-constraint machinery. Those are the hard parts
+  of ECTA and are intentionally kept.
+
+  The old dense `PathTrie` representation compiled poorly at `-O2` under a
+  512M compiler memory cap. `microecta` uses a sparse `PathTrie` with a compact
+  single-child fast path. In the current benchmark suite this preserves the
+  important runtime shape while allowing the library and benchmark to build at
+  `-O2` with the baked 512M cap.
+
+  Run the benchmark suite with:
+
+  ```sh
+  cabal v2-bench bench:micro-bench --enable-optimization=2 --ghc-options=-O2 --benchmark-options='1 +RTS -s -M512M -RTS'
+  ```
+
+  The benchmark harness is deliberately dependency-light and prints CSV:
+
+  ```text
+  benchmark,cpu_seconds,repeats,checksum
+  ```
+
+  The suite covers the current high-risk core paths:
+
+  - path lookup in term-search-shaped nodes
+  - equality-constraint construction and descent
+  - finite and recursive intersection
+  - recursive-path reduction
+  - filtered term-search reduction and enumeration
+
+  The current optimized local snapshot, using GHC 9.12.2, multiplier `1`, and
+  `+RTS -s -M512M -RTS`, is about 5.436 GB allocated, 4.29 MB maximum residency,
+  and roughly 1.1-1.2s elapsed on the maintainer machine. Treat that as a
+  regression guard, not a portable absolute number.
+
+  Use a larger first argument for longer runs:
+
+  ```sh
+  cabal v2-bench bench:micro-bench --enable-optimization=2 --ghc-options=-O2 --benchmark-options='3 +RTS -s -M512M -RTS'
+  ```
+
+  ## Build
+
+  This package is Cabal-only.
+
+  ```sh
+  cabal v2-build all -j1
+  cabal v2-test unit-tests -j1
+  ```
+
+  The library has compiler RTS options baked in:
+
+  ```text
+  +RTS -K512M -M512M -RTS
+  ```
+
+  That cap is intentional: it catches compile-time memory regressions before they
+  kill small development environments.
+description-type: markdown
+hash: 380c01cf43db01a74966855f49faf1ab9e5c031cb1973ccab5f7f677a5a78aac
+homepage: https://github.com/Tritlo/microecta#readme
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: mpg@mpg.is
+synopsis: Small equality-constrained tree automata core
+test-bench-deps:
+  QuickCheck: '>=0'
+  base: '>=4.13 && <5'
+  containers: '>=0'
+  equivalence: '>=0.4.1 && <0.5'
+  hashable: '>=0'
+  hspec: '>=0'
+  microecta: '>=0'
+  mtl: '>=0'
+  text: '>=0'
+  unordered-containers: '>=0'
