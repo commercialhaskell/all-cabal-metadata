@@ -13,6 +13,7 @@ all-versions:
 - 0.1.9.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.4.0.0
 author: Devon Tomlin
 basic-deps:
   array: '>=0.5 && <0.6'
@@ -32,10 +33,23 @@ basic-deps:
   process: '>=1.6 && <1.7'
   regex-tdfa: '>=1.3 && <1.4'
   sqlite-simple: '>=0.4 && <0.5'
+  tar: '>=0.7.1 && <0.8'
   text: '>=2.0 && <2.2'
   time: '>=1.9 && <1.15'
+  zstd: '>=0.1 && <0.2'
 changelog: |
   # Changelog
+
+  ## 0.4.0.0 — 2026-06-10
+
+  ### Milestone: The First Native Windows Build
+
+  `nova-nix build pkgs/windows/hello.nix` compiles and runs a C program through a Nix derivation, natively on Windows: evaluation records the derivation closure, the builder realizes 17 fixed-output fetches and a toolchain unpack in dependency order, and a compiler that is itself a store path produces `C:\nix\store\…-hello\hello.exe`. The first package built natively on Windows by a Nix implementation.
+
+  - **New: `builtin:unpack`** — an in-process archive extractor, the counterpart to `builtin:fetchurl`: the unpacker is the thing being bootstrapped, so it cannot be a store tool, and ambient `tar` is unpinned. Extracts `.tar.zst`/`.tar` archives listed in `srcs` into the single `out` output, in order. MSYS2 packages share the `mingw64/` prefix, so a package set merges into one working toolchain root. Symlink and hardlink entries are materialized as copies (store outputs must not require Developer Mode), pacman per-package metadata is skipped, and cross-archive file collisions and path traversal fail the build loudly. MSYS2's zstd frames carry no pledged content size, so decompression is streaming. New dependencies: `tar >= 0.7.1`, `zstd`.
+  - **New: `pkgs/windows/seed.nix`** — stage 0 of the native Windows stdenv: the 17-package runtime closure of `mingw-w64-x86_64-gcc`, sha256-pinned against `repo.msys2.org`, fetched and merged into a single toolchain root. `pkgs/windows/hello.nix` is the proof build; its recipe also documents the Windows DLL rule (a subprocess resolves DLLs via `PATH`, not RPATH, so dependencies' `bin` dirs go on the build `PATH`).
+  - **Fix: the build driver materializes eval-coerced source paths** — `src = ./file` produced only the source store path *text* during evaluation (eval performs no store writes — the parity runner's store is not writable), so input validation failed on the missing path. The driver now copies each coerced source into the store, marks it read-only, and registers it with its real NAR hash before building.
+  - **`data/nix/fetchurl.nix` documentation rewritten as original prose** — the functional content is fixed byte-for-byte by derivation-hash parity and is unchanged (CI-verified).
 
   ## 0.3.0.0 — 2026-06-06
 
@@ -276,7 +290,23 @@ description: |
 
   ## Status
 
-  nova-nix evaluates real nixpkgs. `import <nixpkgs> {}` resolves the top-level package set (~23,000 attributes) to weak head normal form, and a package evaluates through the stdenv bootstrap down to a derivation:
+  nova-nix builds natively on Windows. The toolchain is itself a store path (fetched, hash-verified, and unpacked through derivations), and the builder runs it directly:
+
+  ```console
+  $ nova-nix build pkgs\windows\hello.nix
+    [build]  mingw-w64-x86_64-gcc-16.1.0-5-any.pkg.tar.zst
+    ...      (17 fixed-output fetches, one per MSYS2 package)
+    [build]  mingw-w64-seed
+    [build]  hello
+  C:\nix\store\4lv3zydln7y7wg0znf56dfmzf5s59h9g-hello
+
+  $ C:\nix\store\4lv3zydln7y7wg0znf56dfmzf5s59h9g-hello\hello.exe
+  Hello from the first native Windows Nix build.
+  ```
+
+  The seed (`pkgs/windows/seed.nix`) is stage 0 of a native Windows stdenv: the sha256-pinned runtime closure of MinGW-w64 GCC, merged into one toolchain root by in-process fetch and unpack builtins.
+
+  It also evaluates real nixpkgs. `import <nixpkgs> {}` resolves the top-level package set (~23,000 attributes) to weak head normal form, and a package evaluates through the stdenv bootstrap down to a derivation:
 
   ```console
   $ NIX_PATH=nixpkgs=/path/to/nixpkgs \
@@ -284,7 +314,7 @@ description: |
   "/nix/store/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv"
   ```
 
-  That `drvPath`, and the 253-derivation closure behind it, byte-matches upstream `nix-instantiate` — verified in CI on the same nixpkgs tree. It targets the Nix 2.24 language. Evaluation and derivation-hash parity are done; *building* on Windows is the work ahead.
+  That `drvPath`, and the 253-derivation closure behind it, byte-matches upstream `nix-instantiate` — verified in CI on the same nixpkgs tree. It targets the Nix 2.24 language.
 
   ## Quickstart
 
@@ -311,7 +341,7 @@ description: |
   Six layers — Haskell for logic, C99 for data:
 
   1. **Parser** (`Nix.Parser`, `Nix.Expr`) — hand-rolled recursive descent; the full Nix grammar to a 19-constructor AST.
-  2. **Evaluator** (`Nix.Eval`) — the AST compiles to a flat 24-opcode bytecode that a lazy, thunk-memoizing evaluator runs. Recursive `let`/`rec` are knot-tied; reference cycles are caught by blackhole detection. The evaluator is polymorphic over its effect via `MonadEval` — `PureEval` for tests, `EvalIO` for the real thing.
+  2. **Evaluator** (`Nix.Eval`) — the AST compiles to a flat 24-opcode bytecode that a lazy, thunk-memoizing evaluator runs. Recursive `let`/`rec` are knot-tied; reference cycles are caught by blackhole detection. The evaluator is polymorphic over its effect via `MonadEval`: `PureEval` for tests, `EvalIO` for the real thing.
   3. **Data layer** (`cbits/nn_*.c`) — nine arena-allocated C99 modules (interned symbols, sorted attrsets, thunks, environments, lists, context strings, bytecode, lambdas) hold evaluation data off the GHC heap. Haskell calls C to create and query it; C never calls back.
   4. **Store** (`Nix.Store`) — content-addressed `/nix/store` (`C:\nix\store` on Windows) with SQLite metadata and reference scanning.
   5. **Builder** (`Nix.Builder`) — dependency graph, topological sort, and binary-cache substitution before local builds.
@@ -331,13 +361,13 @@ description: |
 
   ## Roadmap
 
-  **Done** — parser, lazy bytecode evaluator, the Nix `builtins` set, the C99 data layer, content-addressed store, derivation builder, binary-cache substituter, `import <nixpkgs> {}` evaluation, and derivation-hash parity with upstream Nix (`hello`'s 253-derivation closure byte-matches `nix-instantiate`).
+  **Done** — parser, lazy bytecode evaluator, the Nix `builtins` set, the C99 data layer, content-addressed store, derivation builder, binary-cache substituter, `import <nixpkgs> {}` evaluation, derivation-hash parity with upstream Nix (`hello`'s 253-derivation closure byte-matches `nix-instantiate`), and native Windows builds from a store-pinned MinGW-w64 toolchain (stage 0).
 
   **Next**
 
-  - Windows stdenv — MinGW GCC + MSYS2 coreutils bootstrap for native builds.
+  - Windows stdenv stage 1 — a setup script and compiler wrappers over the seed; rebuild coreutils and bash from source.
   - Parity across more of nixpkgs — extend the byte-match check beyond `hello`'s closure.
-  - Substituter — XZ decompression and real NAR hashing (currently uncompressed-only, with a placeholder hash).
+  - Substituter — XZ decompression.
 
   ## Library usage
 
@@ -367,9 +397,9 @@ description: |
 
   <p align="center"><sub>BSD-3-Clause · <a href="https://github.com/Novavero-AI">Novavero AI</a></sub></p>
 description-type: markdown
-hash: 64595028e7fe51050e951e516d1855cc87ab0f3b218fd641d12c4c4d04160f12
+hash: d3c2ce258c8960322c06e730a1a816c1be006cf0514e77a3417f64d64eca51f2
 homepage: https://github.com/Novavero-AI/nova-nix
-latest: 0.3.0.0
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: devon.tomlin@novavero.ai
 synopsis: Windows-native Nix implementation in Haskell and C99
@@ -379,6 +409,9 @@ test-bench-deps:
   containers: '>=0.6 && <0.8'
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
+  nova-cache: '>=0.3.0 && <0.4'
   nova-nix: '>=0'
   process: '>=1.6 && <1.7'
+  tar: '>=0.7.1 && <0.8'
   text: '>=2.0 && <2.2'
+  zstd: '>=0.1 && <0.2'
