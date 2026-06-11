@@ -14,31 +14,44 @@ all-versions:
 - 0.2.0.0
 - 0.3.0.0
 - 0.4.0.0
+- 0.5.0.0
 author: Devon Tomlin
 basic-deps:
   array: '>=0.5 && <0.6'
   base: '>=4.16 && <5'
   bytestring: '>=0.11 && <0.13'
-  containers: '>=0.6 && <0.8'
-  crypton: '>=1.0 && <1.1'
+  containers: '>=0.6 && <0.9'
+  crypton: '>=1.1 && <2'
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
   http-client: '>=0.7 && <0.8'
-  http-client-tls: '>=0.3 && <0.4'
+  http-client-tls: '>=0.3 && <0.5'
   http-types: '>=0.12 && <0.13'
-  memory: '>=0.18 && <1'
   mtl: '>=2.2 && <2.4'
-  nova-cache: '>=0.3.0 && <0.4'
+  nova-cache: '>=0.4.2 && <0.5'
   nova-nix: '>=0'
   process: '>=1.6 && <1.7'
+  ram: '>=0.20 && <1'
   regex-tdfa: '>=1.3 && <1.4'
   sqlite-simple: '>=0.4 && <0.5'
   tar: '>=0.7.1 && <0.8'
   text: '>=2.0 && <2.2'
-  time: '>=1.9 && <1.15'
+  time: '>=1.9 && <1.17'
   zstd: '>=0.1 && <0.2'
 changelog: |
   # Changelog
+
+  ## 0.5.0.0 — 2026-06-11
+
+  ### Milestone: Push and Pull Against a Binary Cache
+
+  A native Windows build can now publish its outputs to a binary cache and substitute them back on another machine. The toolchain seed and the `hello` build push to `cache.novavero.ai` with `nova-nix push`, and a fresh store realizes them by signed download instead of rebuilding.
+
+  - **New: `nova-nix push`** — uploads store paths and their full reference closure to a binary cache. Each path is NAR-serialized (via `nova-cache`), its NAR uploaded before its narinfo so a client never sees metadata pointing at absent data, and the server signs each narinfo on receipt. Already-cached paths are skipped via one `GET /narinfo-hashes` diff, the recorded NAR hash is cross-checked against the store database before upload, and a signed round-trip is verified at the end. Published narinfos use the canonical `/nix/store` path form. Usage: `nova-nix push --cache URL --key-file KEY (--all | <paths>)`.
+  - **New: `build --substituter URL --trusted-key K`** — try a binary cache before building. The trusted key (`name:base64`) is required alongside the substituter, since substituting without signature verification would be unsafe; the build falls back to local compilation for any path the cache lacks.
+  - **New: `--store DIR`** — run a command against an alternate store directory instead of the platform default, so a build or push can target a scratch store.
+  - **Reproducible `hello`** — `hello.nix` links with `-Wl,--no-insert-timestamp`, and the builder pins `SOURCE_DATE_EPOCH` (1980-01-01) for every build, so determinism-aware tools write fixed timestamps. Two cold bootstraps produce a byte-identical `hello.exe`.
+  - **Dependencies modernized** — builds against `nova-cache >= 0.4.2` (Ed25519 signing, `normalizeKeyText`), `crypton >= 1.1` with `ram` replacing the deprecated `memory`, and current upper bounds for `containers`, `http-client-tls`, and `time`. No source change beyond the dependency swap; derivation-hash parity is unaffected (CI-verified).
 
   ## 0.4.0.0 — 2026-06-10
 
@@ -298,9 +311,9 @@ description: |
     ...      (17 fixed-output fetches, one per MSYS2 package)
     [build]  mingw-w64-seed
     [build]  hello
-  C:\nix\store\4lv3zydln7y7wg0znf56dfmzf5s59h9g-hello
+  C:\nix\store\zr07i99kqnv48q29n706qxar7h1gfins-hello
 
-  $ C:\nix\store\4lv3zydln7y7wg0znf56dfmzf5s59h9g-hello\hello.exe
+  $ C:\nix\store\zr07i99kqnv48q29n706qxar7h1gfins-hello\hello.exe
   Hello from the first native Windows Nix build.
   ```
 
@@ -333,8 +346,25 @@ description: |
 
   $ nova-nix eval FILE.nix                       # evaluate a file
   $ nova-nix build FILE.nix                       # build a derivation
+  $ nova-nix push --cache URL --key-file KEY --all # publish the store to a cache
   $ nova-nix --nix-path nixpkgs=/path eval FILE.nix
   ```
+
+  ## Binary cache
+
+  Built outputs are content-addressed, so they can be served and substituted like any Nix store path. `nova-nix push` uploads a path and its closure to a cache (NAR before narinfo, skipping what the cache already has, signed server-side); `build --substituter` pulls from one before compiling.
+
+  ```console
+  $ nova-nix build pkgs\windows\hello.nix \
+      --store C:\scratch\store \
+      --substituter https://cache.novavero.ai \
+      --trusted-key cache.novavero.ai-1:9gQ7tLWMM+2tdC9H5sKMJltDIPfD7X2GWlZe8Aa8hHQ=
+    [subst]  mingw-w64-x86_64-gcc-16.1.0-5-any.pkg.tar.zst
+    ...      (signed download instead of a rebuild)
+    [subst]  hello
+  ```
+
+  A public instance runs at `cache.novavero.ai`, seeded with the MinGW-w64 toolchain and the `hello` build.
 
   ## How it works
 
@@ -361,13 +391,13 @@ description: |
 
   ## Roadmap
 
-  **Done** — parser, lazy bytecode evaluator, the Nix `builtins` set, the C99 data layer, content-addressed store, derivation builder, binary-cache substituter, `import <nixpkgs> {}` evaluation, derivation-hash parity with upstream Nix (`hello`'s 253-derivation closure byte-matches `nix-instantiate`), and native Windows builds from a store-pinned MinGW-w64 toolchain (stage 0).
+  **Done** — parser, lazy bytecode evaluator, the Nix `builtins` set, the C99 data layer, content-addressed store, derivation builder, binary-cache substituter and `push`, `import <nixpkgs> {}` evaluation, derivation-hash parity with upstream Nix (`hello`'s 253-derivation closure byte-matches `nix-instantiate`), and native Windows builds from a store-pinned MinGW-w64 toolchain (stage 0), published to and substituted from a binary cache.
 
   **Next**
 
   - Windows stdenv stage 1 — a setup script and compiler wrappers over the seed; rebuild coreutils and bash from source.
   - Parity across more of nixpkgs — extend the byte-match check beyond `hello`'s closure.
-  - Substituter — XZ decompression.
+  - Cache — serve large NARs from object storage, and compress them.
 
   ## Library usage
 
@@ -397,19 +427,19 @@ description: |
 
   <p align="center"><sub>BSD-3-Clause · <a href="https://github.com/Novavero-AI">Novavero AI</a></sub></p>
 description-type: markdown
-hash: d3c2ce258c8960322c06e730a1a816c1be006cf0514e77a3417f64d64eca51f2
+hash: c0ce77081e360e552ebf22810928183b19f093e25a7c4d894042c43294deb266
 homepage: https://github.com/Novavero-AI/nova-nix
-latest: 0.4.0.0
+latest: 0.5.0.0
 license-name: BSD-3-Clause
 maintainer: devon.tomlin@novavero.ai
 synopsis: Windows-native Nix implementation in Haskell and C99
 test-bench-deps:
   base: '>=4.16 && <5'
   bytestring: '>=0.11 && <0.13'
-  containers: '>=0.6 && <0.8'
+  containers: '>=0.6 && <0.9'
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
-  nova-cache: '>=0.3.0 && <0.4'
+  nova-cache: '>=0.4.2 && <0.5'
   nova-nix: '>=0'
   process: '>=1.6 && <1.7'
   tar: '>=0.7.1 && <0.8'
