@@ -1,0 +1,118 @@
+all-versions:
+- 0.1.0.0
+author: Nadeem Bitar
+basic-deps:
+  baikai: ^>=0.1.0
+  base: '>=4.20 && <5'
+  effectful-core: '>=0'
+  streamly: '>=0.11 && <0.13'
+  streamly-core: '>=0.3 && <0.5'
+  text: ^>=2.1
+  vector: '>=0'
+changelog: ''
+changelog-type: ''
+description: |
+  # baikai-effectful
+
+  A thin, **policy-free** [`effectful`](https://hackage.haskell.org/package/effectful)
+  binding over [baikai](../baikai)'s transport. It exposes one dynamic effect, `Baikai`,
+  whose operations mirror baikai's transport functions, plus interpreters that run those
+  operations against a real or isolated provider registry.
+
+  It is the *seam*, not the framework: it adds **no** retries, backoff, rate limiting,
+  budgets, caching, or error remapping. Failures propagate exactly as baikai produces them —
+  the blocking path throws `Baikai.Error.BaikaiError`; the streaming paths surface baikai's
+  terminal `EventError` event in-band. Policy belongs one layer up, written *in terms of* this
+  effect.
+
+  ## The effect
+
+  ```haskell
+  data Baikai :: Effect where
+    Complete      :: Model -> Context -> Options -> Baikai m Response
+    StreamCollect :: Model -> Context -> Options -> Baikai m [AssistantMessageEvent]
+    StreamEach    :: Model -> Context -> Options -> (AssistantMessageEvent -> m ()) -> Baikai m ()
+  ```
+
+  ## Operations
+
+  | Operation                         | Meaning                                                        |
+  | --------------------------------- | ------------------------------------------------------------- |
+  | `complete m c o`                  | Blocking completion → `Response`. Throws `BaikaiError`.       |
+  | `streamCollect m c o`             | Drain the stream into the full `[AssistantMessageEvent]`.     |
+  | `streamEach m c o k`              | Run callback `k` once per event, in order, inside `Eff`.      |
+
+  `streamEach` preserves incrementality (the callback sees events as they arrive); a terminal
+  `EventError` appears in-band rather than as a thrown exception, matching baikai.
+
+  ## Interpreters
+
+  ```haskell
+  runBaikai     :: (IOE :> es) => Eff (Baikai : es) a -> Eff es a                       -- global registry
+  runBaikaiWith :: (IOE :> es) => ProviderRegistry -> Eff (Baikai : es) a -> Eff es a   -- explicit registry
+  ```
+
+  The *operations* are registry-agnostic; the *interpreter* picks the registry, mirroring
+  baikai's own `completeRequest` vs `completeRequestWith` split. Because `Baikai` is a dynamic
+  effect, you can re-interpret the same operations — stub them in tests, record/replay,
+  intercept, or (one layer up) wrap them with retries/caching/tracing — without touching any
+  call site.
+
+  ## Example
+
+  ```haskell
+  import Baikai.Effectful
+  import Effectful (Eff, runEff)
+
+  describe :: (Baikai :> es) => Model -> Context -> Options -> Eff es Response
+  describe = complete
+
+  main :: IO ()
+  main = do
+    -- against baikai's process-global registry (providers registered elsewhere):
+    r <- runEff . runBaikai $ describe model ctx opts
+    print r
+  ```
+
+  For a hermetic test, register a stub provider in an isolated registry with
+  `Baikai.Provider.Registry.newProviderRegistry` / `registerApiProviderWith` and drive the
+  operations through `runEff . runBaikaiWith reg`. See `test/` in this package.
+
+  ## Live demo
+
+  The test suite includes a live, network-touching demo gated on an environment variable, so
+  the default run stays hermetic:
+
+  ```bash
+  # hermetic (default): no network, no key — the live case prints a skip line and passes
+  cabal test baikai-effectful-test
+
+  # live: registers the OpenAI provider and makes one real call
+  BAIKAI_EFFECTFUL_LIVE=1 OPENAI_API_KEY=sk-... cabal test baikai-effectful-test
+  ```
+
+  ## Why a separate package
+
+  The core `baikai` package deliberately carries no `effectful` dependency, and most baikai
+  users do not use `effectful`. Shipping the binding as its own artifact keeps the core
+  dependency-light while giving any `effectful` program a reusable baikai↔effectful seam — the
+  same way `baikai-claude` / `baikai-openai` layer on `baikai`.
+description-type: markdown
+hash: c1d4ad7aa90bcad2a61d6fb170ccd1af7d987fd20f84e39b7f391f187a105949
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: nadeem@gmail.com
+synopsis: effectful binding for the baikai AI-provider transport
+test-bench-deps:
+  baikai: '>=0'
+  baikai-effectful: '>=0'
+  baikai-openai: '>=0'
+  base: '>=4.20 && <5'
+  effectful-core: '>=0'
+  streamly: '>=0'
+  streamly-core: '>=0'
+  tasty: '>=0'
+  tasty-hunit: '>=0'
+  text: '>=0'
+  vector: '>=0'
