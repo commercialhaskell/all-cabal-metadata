@@ -3,6 +3,7 @@ all-versions:
 - 0.2.0.0
 - 0.2.0.1
 - 0.2.1.0
+- 0.2.2.0
 author: Nadeem Bitar
 basic-deps:
   base: '>=4.18 && <5'
@@ -20,6 +21,15 @@ basic-deps:
   unix: '>=2.8 && <2.9'
 changelog: |
   # Changelog
+
+  ## 0.2.2.0
+
+  ### Bug Fixes
+
+  - Make initdb cache creation atomic by copying into a same-parent temporary
+    directory and publishing it with an atomic rename. Concurrent cold-cache
+    writers now treat an existing final cache as success instead of exposing a
+    partially-copied `data` directory.
 
   ## 0.2.1.0
 
@@ -228,6 +238,16 @@ description: |
       pure ()
     pure ()
   ```
+
+  ### Suite-level fixtures with template databases
+
+  For larger integration suites where many examples need the same migrated
+  schema, consider starting one cached PostgreSQL server for the whole suite,
+  migrating a template database once, and cloning clean per-example databases
+  with PostgreSQL's `CREATE DATABASE ... TEMPLATE ...`.
+
+  See [Suite-level template databases](docs/suite-template-databases.md) for the
+  full pattern, tradeoffs, and a complete fixture implementation.
 
   ### Manual Lifecycle Management
 
@@ -502,20 +522,85 @@ description: |
   Ensure you have write access to the temporary directory. By default, the
   system temp directory is used.
 
+  ## Tracing
+
+  OpenTelemetry tracing is available through the optional companion
+  package `ephemeral-pg-opentelemetry`, which lives next to this library
+  in the same repository. It mirrors the `EphemeralPg` lifecycle API and
+  emits one span per public operation:
+
+  | Wrapper                      | Span name                       |
+  | ---------------------------- | ------------------------------- |
+  | `withTraced`                 | `ephemeralpg.with`              |
+  | `withCachedTraced`           | `ephemeralpg.with_cached`       |
+  | `startTraced`                | `ephemeralpg.start`             |
+  | `stopTraced`                 | `ephemeralpg.stop`              |
+  | `restartTraced`              | `ephemeralpg.restart`           |
+  | `createSnapshotTraced`       | `ephemeralpg.snapshot.create`   |
+  | `restoreSnapshotTraced`      | `ephemeralpg.snapshot.restore`  |
+  | `deleteSnapshotTraced`       | `ephemeralpg.snapshot.delete`   |
+  | `dumpTraced`                 | `ephemeralpg.dump`              |
+  | `restoreTraced`              | `ephemeralpg.restore`           |
+
+  Each span carries the standard database attributes
+  (`db.system.name`/`db.system`, `db.namespace`/`db.name`) plus
+  library-specific ones (`ephemeralpg.port`,
+  `ephemeralpg.shutdown.mode`). Attribute name selection obeys
+  `OTEL_SEMCONV_STABILITY_OPT_IN` exactly the way upstream HTTP
+  instrumentation does — set it to `http` for stable names, `http/dup`
+  for both stable and legacy. Errors from `EphemeralPg.start` are
+  recorded uniformly with `error.type` (constructor name), span status
+  `Error`, and a `recordException` event.
+
+  The wrappers are designed to nest under a parent test span. Combined
+  with `hs-opentelemetry-instrumentation-hspec`, a test that calls
+  `withTraced` produces a tree of the form:
+
+      Run tests
+        └─ ephemeral-pg under OpenTelemetry
+           └─ emits a span tree under withTraced
+              └─ ephemeralpg.with
+                 ├─ ephemeralpg.start
+                 ├─ ephemeralpg.with.body
+                 └─ ephemeralpg.stop
+
+  Add the dependency to your test-suite (the package is not yet on
+  Hackage; reference it via the local `cabal.project`):
+
+  ```cabal
+  build-depends:
+    ephemeral-pg-opentelemetry,
+    hs-opentelemetry-api,
+    hs-opentelemetry-sdk,
+    hs-opentelemetry-instrumentation-hspec,
+  ```
+
+  See `ephemeral-pg-opentelemetry/test/Demo.hs` for a runnable example.
+
   ## License
 
   BSD-3-Clause
 description-type: markdown
-hash: 25d8025d6e0c0414a3cb64d601dfe3caffb54a9e2294b6b3c70c0ddedaca7350
+hash: 6f9e6af0babb6492ffeb0c424b3d6d8ec92c1c81c325f3d53a889a9e1f4426cd
 homepage: ''
-latest: 0.2.1.0
+latest: 0.2.2.0
 license-name: BSD-3-Clause
 maintainer: Nadeem Bitar
 synopsis: Temporary PostgreSQL databases for testing
 test-bench-deps:
   QuickCheck: '>=2.14 && <2.16'
   base: '>=0'
+  bytestring: '>=0'
+  directory: '>=0'
   ephemeral-pg: '>=0'
+  filepath: '>=0'
+  hashable: '>=0'
   hasql: '>=0'
   hspec: '>=2.11 && <2.12'
+  network: '>=0'
+  process: '>=0'
+  temporary: '>=0'
   text: '>=0'
+  transformers: '>=0'
+  typed-process: '>=0'
+  unix: '>=0'
