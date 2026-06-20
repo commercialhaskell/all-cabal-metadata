@@ -6,15 +6,28 @@ all-versions:
 - 0.1.0.4
 - 0.1.0.5
 - 0.1.1.0
+- 0.1.2.0
 author: Michael Chavinda
 basic-deps:
   base: '>=4.11 && <5'
   bytestring: '>=0.11 && <0.14'
+  deepseq: '>=1.4 && <1.6'
   snappy-hs: '>=0.1 && <1'
   time: '>=1.14 && <1.15'
 changelog: |
   # Revision history for snappy-hs
 
+
+  ## 0.1.2.0 -- 2026-06-19
+
+  * Major throughput work bringing decompression to roughly C parity and
+    compression to ~2–3x of C (was ~2–6x, and ~130x on incompressible data).
+  * Encoder now follows C Snappy's `CompressFragment`: an exponential skip
+    heuristic over incompressible data, match chaining, word-at-a-time match
+    extension via trailing-zero count, and an input-sized hash table
+    (32-bit slots, capped at 2^14) instead of a fixed 256 KB table.
+  * Decoder uses wide (8-byte) literal and overlapping-copy writes backed by
+    output over-allocation slack.
 
   ## 0.1.0.5 -- 2026-02-23
 
@@ -51,7 +64,25 @@ description: |
 
   ## Performance
 
-  In informal benchmarks, this implementation is roughly **2–3× slower** than native Snappy.
+  Measured against the native C library (the `snappy` bindings) on the Google Snappy
+  test corpus, GHC 9.12 / aarch64, library built with `-O2`:
+
+  | dataset (size)        | decompress vs C | compress vs C |
+  | --------------------- | --------------- | ------------- |
+  | html (100 KB)         | 1.8x            | 2.3x          |
+  | alice29.txt (149 KB)  | 1.5x            | 3.1x          |
+  | geo.protodata (116 KB)| 1.8x            | 2.4x          |
+  | urls.10K (686 KB)     | 2.1x            | 2.6x          |
+  | fireworks.jpeg (120 KB, incompressible) | 1.0x | 1.8x |
+
+  **Decompression runs at roughly C parity** (~1-2x) and compression is ~2-3x of C.
+  The gap that remains is GHC's native code generator versus a C compiler, not the
+  algorithm — the encoder mirrors C Snappy's `CompressFragment` (skip heuristic,
+  word-at-a-time match extension, input-sized hash table). Output is validated to be
+  byte-compatible with the C library in both directions.
+
+  Reproduce with `cabal bench` (criterion, needs the C `snappy` library installed)
+  or `cabal run snappy-bench` (pure, no C dependency).
 
   ## When to use
 
@@ -60,15 +91,19 @@ description: |
 
   ## When not to use
 
-  * You need **maximum throughput** (use the native library or an FFI-based binding instead)
+  * You need **maximum throughput** (use the native library or an FFI-based binding instead).
+    You would get a lot of mileage from the library too however.
 description-type: markdown
-hash: fe2da43d2ba4c8f909ca90662487676290dd8e5b1516311019bf9160d6dad2be
+hash: c3877c4ae400e3b024e8efc600b4867e218eeda86ce6788c91037f43eadd3bba
 homepage: https://github.com/mchav/snappy-hs
-latest: 0.1.1.0
+latest: 0.1.2.0
 license-name: MIT
 maintainer: mschavinda@gmail.com
 synopsis: Snappy compression library.
 test-bench-deps:
   base: '>=4.11 && <5'
   bytestring: '>=0.11 && <0.14'
+  criterion: '>=1 && <=1.6.4.0'
+  deepseq: '>=1.4 && <1.6'
+  snappy: ^>=0.2
   snappy-hs: '>=0'
