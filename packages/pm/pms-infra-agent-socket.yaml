@@ -1,5 +1,6 @@
 all-versions:
 - 0.0.1.0
+- 0.0.2.0
 author: phoityne.hs@gmail.com
 basic-deps:
   aeson: '>=0'
@@ -21,6 +22,10 @@ basic-deps:
   transformers: '>=0'
 changelog: |
   # Revision history for pms-infra-agent-socket
+
+  ## 0.0.2.0 -- 2026-06-15
+
+  * Added pms-infra-agent-server: TCP server listen/accept functionality for AI agents.
 
   ## 0.0.1.0 -- 2026-05-31
 
@@ -60,20 +65,89 @@ description: "# pms-infra-agent-socket\n\n----\n## ⚠️ Caution\n\n**Do not gr
   the specified **hex string** and writes the resulting bytes to the active socket
   connection.  \nUse this for binary protocols or when precise byte-level control
   is required.\n\n- `data` — Uppercase hex string to decode and write (e.g., `DEADBEEF0D0A`)
-  \ \n\n---\n\n## \U0001F4A1 Usage Notes\n\n### IAC / Telnet negotiation\nTelnet IAC
-  processing is the **responsibility of the agent**, not the library.  \nUse `agent-socket-read-byte`
-  and `agent-socket-write-byte` to handle IAC sequences at the byte level.\n\nExample
-  negotiation flow:\n```\n← FFFD18FFFD20FFFD23FFFD27   (Server: IAC DO TERMINAL-TYPE/SPEED/X-DISPLAY/NEW-ENVIRON)\n→
-  FFFC18FFFC20FFFC23FFFC27   (Agent:  IAC WONT x4)\n← FFFB03FFFD01FFFD1FFFFB05   (Server:
-  IAC WILL SGA / DO ECHO / DO NAWS / WILL STATUS)\n→ FFFD03FFFB01FFFC1FFFFD05   (Agent:
-  \ IAC DO SGA / WILL ECHO / WONT NAWS / DO STATUS)\n← \"localhost login: \"         (Login
-  prompt — read as UTF-8 string)\n→ \"phoityne\\r\\n\"              (Username — send
-  as bytes: 70686F6974796E650D0A)\n← \"Password: \"                (Password prompt)\n```\n\n###
-  Unix Domain Socket on Windows\nUnix Domain Socket (`file` parameter) is supported
-  on **Windows 10 build 1803 and later** at the OS level.  \nHowever, the socket server
-  side must be implemented in a runtime that supports `AF_UNIX` on Windows.\n\n- **Python
-  3.13.7 (Windows)**: `socket.AF_UNIX` is unavailable unless **Developer Mode** is
-  enabled.\n- **PowerShell / .NET**: `System.Net.Sockets.UnixDomainSocketEndPoint`
+  \ \n\n---\n\n## \U0001F4A1 Usage Notes\n\n### AI-to-AI communication\n\nAny two
+  AI agents that each have a `pty-mcp-server` instance can communicate with each other
+  directly over TCP — no shared infrastructure, message broker, or custom integration
+  required.\n\nOne agent uses the `agent-server-*` tools to act as a TCP server; the
+  other uses the `agent-socket-*` tools (this library) to act as a TCP client. The
+  agents exchange messages using a lightweight text protocol, and each agent interprets
+  and responds to the other's messages autonomously.\n\n```\n┌─────────────────────────────┐
+  \        ┌─────────────────────────────┐\n│        AI Agent A           │         │
+  \       AI Agent B           │\n│  (e.g. Claude on Machine A) │         │  (e.g.
+  GPT on Machine B)    │\n│                             │         │                             │\n│
+  \ pty-mcp-server             │  TCP    │  pty-mcp-server             │\n│  agent-server-listen
+  :19999 │◄───────►│  agent-socket-open          │\n│  agent-server-write         │
+  \        │  agent-socket-read          │\n│  agent-server-events        │         │
+  \ agent-socket-write         │\n└─────────────────────────────┘         └─────────────────────────────┘\n
+  \        Server role                              Client role\n```\n\n#### What
+  this enables\n\n- **Collaborative task solving** — Agent A breaks down a problem
+  and delegates subtasks to Agent B, collecting results over the socket.\n- **Cross-model
+  review** — One model generates code or text; another model on a different machine
+  reviews it and sends back comments.\n- **Heterogeneous agent pipelines** — Chain
+  agents of different models or specialisations (Claude, GPT, Gemini, …) into a processing
+  pipeline across machines.\n- **Autonomous negotiation** — Agents can exchange proposals,
+  counter-proposals, and decisions without human involvement in each round-trip.\n-
+  **Distributed tool use** — Agent B may have access to tools (databases, sensors,
+  local files) that Agent A does not. Agent A requests operations from Agent B over
+  the socket.\n\n#### Communication protocol\n\nThe `pty-mcp-server` ecosystem ships
+  a lightweight handshake and messaging protocol for AI-to-AI sessions. Prompt skills
+  (`skill_agent_server.md` / `skill_agent_client.md`) are provided so each agent knows
+  exactly how to play its role.\n\n**Handshake sequence:**\n```\nServer → Client :
+  HELLO? name?\\r\\n\nServer ← Client : NAME: <name>\\r\\n\nServer → Client : RULES:
+  MSG:<content>\\r\\n | REPLY:<content>\\r\\n | BYE\\r\\n | HEX:<hex>\\r\\n\nServer
+  ← Client : ACK\\r\\n\n```\n\n**Conversation:**\n```\nServer → Client : MSG: <content>\\r\\n\nServer
+  ← Client : REPLY: <content>\\r\\n\n```\n\n**Graceful shutdown (server-initiated):**\n```\nServer
+  → Client : BYE\\r\\n\nServer ← Client : ACK\\r\\n    ← server waits for this before
+  closing\nServer           : agent-server-close\n```\n\n#### Full session example\n\nThe
+  following shows a complete exchange where Agent A (server role) delegates a task
+  to Agent B (client role).\n\n**Agent A — server side**\n```\nagent-server-listen
+  host=172.16.0.43 port=19999\n  → \"listening.\"\n\n--- Agent B connects ---\n\nagent-server-events\n
+  \ → [{ \"tag\": \"ClientConnected\" }]\n\nagent-server-write-byte  \"48454C4C4F3F206E616D653F0D0A\"
+  \  (\"HELLO? name?\\r\\n\")\n\nagent-server-events  (poll until BytesReceived)\n
+  \ → bytes: \"4E414D453A20416765742D420D0A\"   (\"NAME: Agent-B\\r\\n\")\n\nagent-server-write-byte
+  \ \"<hex of RULES: MSG:... | REPLY:... | BYE\\r\\n>\"\n\nagent-server-events  (poll
+  for ACK)\n  → bytes: \"41434B0D0A\"   (\"ACK\\r\\n\")\n\n--- handshake complete
+  ---\n\nagent-server-write-byte  \"<hex of MSG: Please summarise this text: ...\\r\\n>\"\n\nagent-server-events
+  \ (poll for REPLY)\n  → bytes: \"<hex of REPLY: Here is the summary: ...\\r\\n>\"\n\nagent-server-write-byte
+  \ \"<hex of BYE\\r\\n>\"\n\nagent-server-events  (poll for ACK)\n  → bytes: \"41434B0D0A\"
+  \  (\"ACK\\r\\n\")\n\nagent-server-close\n```\n\n**Agent B — client side**\n```\nagent-socket-open
+  host=172.16.0.43 port=19999\n  → socket connected to 172.16.0.43:19999\n\nagent-socket-read
+  length=256\n  → \"HELLO? name?\\r\\n\"\n\nagent-socket-write-byte  \"<hex of NAME:
+  Agent-B\\r\\n>\"\n\nagent-socket-read length=256\n  → \"RULES: MSG:<content>\\r\\n
+  | REPLY:<content>\\r\\n | BYE\\r\\n | HEX:<hex>\\r\\n\"\n\nagent-socket-write-byte
+  \ \"<hex of ACK\\r\\n>\"\n\n--- handshake complete ---\n\nagent-socket-read length=1024\n
+  \ → \"MSG: Please summarise this text: ...\\r\\n\"\n\n--- Agent B processes the
+  request autonomously ---\n\nagent-socket-write-byte  \"<hex of REPLY: Here is the
+  summary: ...\\r\\n>\"\n\nagent-socket-read length=256\n  → \"BYE\\r\\n\"\n\nagent-socket-write-byte
+  \ \"<hex of ACK\\r\\n>\"\n\nagent-socket-close\n```\n\n> \U0001F4A1 Always use `agent-socket-write-byte`
+  (not `agent-socket-write`) to ensure `\\r\\n` is sent as correct CRLF bytes.  \n>
+  Generate hex strings with: `python3 -c \"print('your message\\r\\n'.encode().hex())\"`\n\n---\n\n###
+  IAC / Telnet negotiation\nTelnet IAC processing is the **responsibility of the agent**,
+  not the library.  \nUse `agent-socket-read-byte` and `agent-socket-write-byte` to
+  handle IAC sequences at the byte level.\n\nExample negotiation flow:\n```\n← FFFD18FFFD20FFFD23FFFD27
+  \  (Server: IAC DO TERMINAL-TYPE/SPEED/X-DISPLAY/NEW-ENVIRON)\n→ FFFC18FFFC20FFFC23FFFC27
+  \  (Agent:  IAC WONT x4)\n← FFFB03FFFD01FFFD1FFFFB05   (Server: IAC WILL SGA / DO
+  ECHO / DO NAWS / WILL STATUS)\n→ FFFD03FFFB01FFFC1FFFFD05   (Agent:  IAC DO SGA
+  / WILL ECHO / WONT NAWS / DO STATUS)\n← \"localhost login: \"         (Login prompt
+  — read as UTF-8 string)\n→ \"phoityne\\r\\n\"              (Username — send as bytes:
+  70686F6974796E650D0A)\n← \"Password: \"                (Password prompt)\n```\n\nFull
+  login session example (confirmed with a real Linux Telnet server):\n```\nagent-socket-open
+  host=172.16.0.171 port=23\n  → socket connected to 172.16.0.171:23\n\n← FFFD18FFFD20FFFD23FFFD27\n
+  \   (IAC DO TERMINAL-TYPE / DO TERMINAL-SPEED / DO X-DISPLAY / DO NEW-ENVIRON)\n→
+  FFFC18FFFC20FFFC23FFFC27\n    (IAC WONT x4)\n\n← FFFB03FFFD01FFFD1FFFFB05FFFD21\n
+  \   (IAC WILL SGA / DO ECHO / DO NAWS / WILL STATUS / DO REMOTE-FLOW-CONTROL)\n→
+  FFFD03FFFB01FFFC1FFFFD05FFFC21\n    (IAC DO SGA / WILL ECHO / WONT NAWS / DO STATUS
+  / WONT REMOTE-FLOW-CONTROL)\n\n← FFFE01FFFB01 + \"Kernel 6.12.0-...\\r\\nlocalhost
+  login: \"\n→ 61692D6167656E740D0A   (\"ai-agent\\r\\n\"  — username as bytes)\n\n←
+  \"ai-agent\\r\\nPassword: \"\n→ 61692D6167656E740D0A   (\"ai-agent\\r\\n\"  — password
+  as bytes)\n\n← \"Last login: ...\\r\\n[ai-agent@localhost ~]$ \"\n\n→ 686F73746E616D650D0A
+  \  (\"hostname\\r\\n\")\n← \"hostname\\r\\nlocalhost.localdomain\\r\\n[ai-agent@localhost
+  ~]$ \"\n\n→ 657869740D0A   (\"exit\\r\\n\")\n← \"exit\\r\\nlogout\\r\\n\"\n\nagent-socket-close\n
+  \ → socket is closed.\n```\n\n### Unix Domain Socket on Windows\nUnix Domain Socket
+  (`file` parameter) is supported on **Windows 10 build 1803 and later** at the OS
+  level.  \nHowever, the socket server side must be implemented in a runtime that
+  supports `AF_UNIX` on Windows.\n\n- **Python 3.13.7 (Windows)**: `socket.AF_UNIX`
+  is unavailable unless **Developer Mode** is enabled.\n- **PowerShell / .NET**: `System.Net.Sockets.UnixDomainSocketEndPoint`
   works without Developer Mode.\n- **pty-mcp-server (Haskell)**: Confirmed working
   on Windows 11 via `Network.Socket` with `AF_UNIX`.\n\n---\n\n## \U0001F3D7️ Architecture\n\n###
   Module Structure\n\n```\nPMS.Infra.Agent.Socket\n├── DM.Type        -- Data type
@@ -93,9 +167,9 @@ description: "# pms-infra-agent-socket\n\n----\n## ⚠️ Caution\n\n**Do not gr
   Gemini 3 Flash, GPT-5.5\n- **Direction & Policy:** phoityne\n- **License:** Apache-2.0
   — see [LICENSE](./LICENSE)\n\n---\n"
 description-type: markdown
-hash: d3af446e66e7c48ac2be5527ed86f41efb85fa4e1906aca1ef4f08ebf74a2370
+hash: 2f4b0d84afbc277e6bc8cd4995b666596c0d98f993c85d738e1eb67aceb8d79f
 homepage: https://github.com/phoityne/pms-infra-agent-socket
-latest: 0.0.1.0
+latest: 0.0.2.0
 license-name: Apache-2.0
 maintainer: phoityne.hs@gmail.com
 synopsis: pms-infra-agent-socket

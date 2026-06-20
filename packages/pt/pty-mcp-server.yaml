@@ -20,6 +20,7 @@ all-versions:
 - 0.1.8.0
 - 0.1.9.0
 - 0.2.0.0
+- 0.2.1.0
 author: phoityne.hs@gmail.com
 basic-deps:
   base: '>=4.18 && <5'
@@ -29,6 +30,7 @@ basic-deps:
   pms-domain-service: '>=0'
   pms-infra-agent-process: '>=0'
   pms-infra-agent-serial: '>=0'
+  pms-infra-agent-server: '>=0'
   pms-infra-agent-socket: '>=0'
   pms-infra-cmdrun: '>=0'
   pms-infra-filesystem: '>=0'
@@ -43,6 +45,12 @@ basic-deps:
   safe-exceptions: '>=0'
 changelog: |
   # Revision history for pty-mcp-server
+
+  ## 0.2.1.0 -- 2026-06-15
+
+  * Added pms-infra-agent-server: TCP server listen/accept functionality for AI agents.
+  * New tools: agent-server-listen, agent-server-close, agent-server-status, agent-server-events, agent-server-read, agent-server-write, agent-server-read-byte, agent-server-write-byte.
+  * Added skill prompts: skill_agent_server.md, skill_agent_client.md for AI-to-AI TCP communication.
 
   ## 0.2.0.0 -- 2026-05-31
 
@@ -188,60 +196,77 @@ description: "# pty-mcp-server\n\n----\n## ⚠️ Caution\n\n**Do not grant unre
   and returns the data as an uppercase hex string.\n\n- **`agent-socket-write`**\n
   \ Writes the specified UTF-8 string to the active agent socket connection.\n\n-
   **`agent-socket-write-byte`**\n  Decodes the specified hex string and writes the
-  resulting bytes to the active agent socket connection.\n\n- **`agent-serial-open`**\n
-  \ Opens a serial port connection for subsequent agent-serial-read, agent-serial-write,
-  agent-serial-read-byte, and agent-serial-write-byte operations. Only one port can
-  be active at a time.\n\n- **`agent-serial-close`**\n  Closes the active serial port
-  connection.\n\n- **`agent-serial-read`**\n  Reads up to the specified number of
-  bytes from the active serial port and returns the data as a UTF-8 string. Returns
-  an empty string if no data is available before timeout.\n\n- **`agent-serial-read-byte`**\n
-  \ Reads up to the specified number of bytes from the active serial port and returns
-  the data as an uppercase hex string (e.g. FF0A1B41).\n\n- **`agent-serial-write`**\n
-  \ Writes the specified UTF-8 string to the active serial port.\n\n- **`agent-serial-write-byte`**\n
-  \ Decodes the specified hex string and writes the resulting bytes to the active
-  serial port. Accepts uppercase or lowercase hex, e.g. FF0A1BFF or 000a1bff.\n\n-
-  **`pms-list-dir`**  \n  List the contents of a directory at the specified path.\n\n-
-  **`pms-make-dir`**  \n  Create a directory at the specified path. Missing parent
-  directories will also be created.\n\n- **`pms-read-file`**  \n  Read the contents
-  of a file at the specified path. Optionally specify startLine/endLine (1-based,
-  inclusive) to read only a partial range of lines.\n\n- **`pms-write-file`**  \n
-  \ Write contents to a file at the specified path.\n\n- **`pms-file-info`**  \n  Return
-  basic metadata for a file: total line count and byte size. Use this before pms-read-file
-  to understand the file's scale, and use the line count with pms-read-file partial-read
-  to avoid loading more than necessary.\n\n- **`pms-grep-file`**  \n  Search a file
-  for lines matching a POSIX extended regular expression. Returns a JSON array of
-  hit objects, each with: 'line' (1-based line number), 'text' (full content of the
-  matching line), and 'cols' (array of 1-based column offsets where the pattern matches
-  within that line). Returns an empty array when no lines match. Use the returned
-  line numbers with pms-read-file partial-read to efficiently retrieve surrounding
-  context.\n\n- **`pms-replace-file`**  \n  Replace literal text in a file. Each replacement
-  is applied in order, and every occurrence of oldText found at that step is replaced
-  with newText. This is not a regular expression replacement.\n\n- **`pms-patch-file`**
-  \ \n  Apply a unified diff patch to a file at the specified path. The patch must
-  be in unified diff format (e.g., @@ -1,3 +1,3 @@). On success, returns the path
-  of the patched file. On failure, returns an error message such as HunkMismatch.
-  NOTE: When using multiple hunks, each hunk's line numbers (both - and + sides) must
-  account for the cumulative line count delta (additions minus deletions) of all preceding
-  hunks.\n\n- **`socket-open`**  \n  This tool initiates a socket connection to the
-  specified host and port. (Deprecated: This tool is duplicated by agent-socket-open,
+  resulting bytes to the active agent socket connection.\n\n- **`agent-server-listen`**\n
+  \ Binds to the specified host and port, starts listening for incoming TCP connections,
+  and launches a background accept thread. Returns immediately after the listener
+  is ready. Only one listener can be active at a time.\n\n- **`agent-server-close`**\n
+  \ Closes the active accepted connection (if any). If no connection is active, also
+  closes the listener. Call twice to close both the connection and the listener.\n\n-
+  **`agent-server-status`**\n  Returns the current server status as a JSON object
+  with `isListening` and `isConnected` boolean fields.\n\n- **`agent-server-events`**\n
+  \ Dequeues and returns all server-side events accumulated since the last call (e.g.
+  ClientConnected, BytesReceived, ClientDisconnected). Returns an empty array if no
+  events are pending.\n\n- **`agent-server-read`**\n  Reads data from the active accepted
+  connection and returns it as a UTF-8 string. Returns an empty string if no data
+  is available before timeout.\n\n- **`agent-server-read-byte`**\n  Reads data from
+  the active accepted connection and returns it as an uppercase hex string.\n\n- **`agent-server-write`**\n
+  \ Writes the specified UTF-8 string to the active accepted connection. Note: `\\r\\n`
+  is sent as literal characters; use agent-server-write-byte for correct CRLF.\n\n-
+  **`agent-server-write-byte`**\n  Decodes the specified hex string and writes the
+  resulting bytes to the active accepted connection. Hex string must not contain spaces
+  or newlines.\n\n- **`agent-serial-open`**\n  Opens a serial port connection for
+  subsequent agent-serial-read, agent-serial-write, agent-serial-read-byte, and agent-serial-write-byte
+  operations. Only one port can be active at a time.\n\n- **`agent-serial-close`**\n
+  \ Closes the active serial port connection.\n\n- **`agent-serial-read`**\n  Reads
+  up to the specified number of bytes from the active serial port and returns the
+  data as a UTF-8 string. Returns an empty string if no data is available before timeout.\n\n-
+  **`agent-serial-read-byte`**\n  Reads up to the specified number of bytes from the
+  active serial port and returns the data as an uppercase hex string (e.g. FF0A1B41).\n\n-
+  **`agent-serial-write`**\n  Writes the specified UTF-8 string to the active serial
+  port.\n\n- **`agent-serial-write-byte`**\n  Decodes the specified hex string and
+  writes the resulting bytes to the active serial port. Accepts uppercase or lowercase
+  hex, e.g. FF0A1BFF or 000a1bff.\n\n- **`pms-list-dir`**  \n  List the contents of
+  a directory at the specified path.\n\n- **`pms-make-dir`**  \n  Create a directory
+  at the specified path. Missing parent directories will also be created.\n\n- **`pms-read-file`**
+  \ \n  Read the contents of a file at the specified path. Optionally specify startLine/endLine
+  (1-based, inclusive) to read only a partial range of lines.\n\n- **`pms-write-file`**
+  \ \n  Write contents to a file at the specified path.\n\n- **`pms-file-info`**  \n
+  \ Return basic metadata for a file: total line count and byte size. Use this before
+  pms-read-file to understand the file's scale, and use the line count with pms-read-file
+  partial-read to avoid loading more than necessary.\n\n- **`pms-grep-file`**  \n
+  \ Search a file for lines matching a POSIX extended regular expression. Returns
+  a JSON array of hit objects, each with: 'line' (1-based line number), 'text' (full
+  content of the matching line), and 'cols' (array of 1-based column offsets where
+  the pattern matches within that line). Returns an empty array when no lines match.
+  Use the returned line numbers with pms-read-file partial-read to efficiently retrieve
+  surrounding context.\n\n- **`pms-replace-file`**  \n  Replace literal text in a
+  file. Each replacement is applied in order, and every occurrence of oldText found
+  at that step is replaced with newText. This is not a regular expression replacement.\n\n-
+  **`pms-patch-file`**  \n  Apply a unified diff patch to a file at the specified
+  path. The patch must be in unified diff format (e.g., @@ -1,3 +1,3 @@). On success,
+  returns the path of the patched file. On failure, returns an error message such
+  as HunkMismatch. NOTE: When using multiple hunks, each hunk's line numbers (both
+  - and + sides) must account for the cumulative line count delta (additions minus
+  deletions) of all preceding hunks.\n\n- **`socket-open`**  \n  This tool initiates
+  a socket connection to the specified host and port. (Deprecated: This tool is duplicated
+  by agent-socket-open, which provides equivalent functionality with a more agent-friendly
+  interface.)\n\n- **`socket-close`**  \n  This tool close active socket connection
+  that was previously established using the 'socket-open' tool. (Deprecated: This
+  tool is duplicated by agent-socket-close, which provides equivalent functionality
+  with a more agent-friendly interface.)\n\n- **`socket-read`**  \n  Reads the specified
+  number of bytes from the socket. The 'size' parameter indicates how many bytes to
+  read. (Deprecated: This tool is duplicated by agent-socket-read-byte, which provides
+  equivalent functionality with a more agent-friendly interface.)\n\n- **`socket-write`**
+  \ \n  Write a sequence of bytes to the socket. (Deprecated: This tool is duplicated
+  by agent-socket-write-byte, which provides equivalent functionality with a more
+  agent-friendly interface.)\n\n- **`socket-message`**  \n  This tool sends a message
+  over the active socket connection. (Deprecated: This tool is duplicated by agent-socket-write,
   which provides equivalent functionality with a more agent-friendly interface.)\n\n-
-  **`socket-close`**  \n  This tool close active socket connection that was previously
-  established using the 'socket-open' tool. (Deprecated: This tool is duplicated by
-  agent-socket-close, which provides equivalent functionality with a more agent-friendly
-  interface.)\n\n- **`socket-read`**  \n  Reads the specified number of bytes from
-  the socket. The 'size' parameter indicates how many bytes to read. (Deprecated:
-  This tool is duplicated by agent-socket-read-byte, which provides equivalent functionality
-  with a more agent-friendly interface.)\n\n- **`socket-write`**  \n  Write a sequence
-  of bytes to the socket. (Deprecated: This tool is duplicated by agent-socket-write-byte,
-  which provides equivalent functionality with a more agent-friendly interface.)\n\n-
-  **`socket-message`**  \n  This tool sends a message over the active socket connection.
-  (Deprecated: This tool is duplicated by agent-socket-write, which provides equivalent
-  functionality with a more agent-friendly interface.)\n\n- **`socket-telnet`**  \n
-  \ A simple Telnet-like communication tool over raw TCP sockets. This tool connects
-  to a specified host and port, sends and receives data, and removes any Telnet IAC
-  (Interpret As Command) sequences from the communication stream. Note: This is a
-  simplified Telnet implementation and does not support full Telnet protocol features.
-  (Deprecated: This tool is duplicated by agent-socket-open, agent-socket-read-byte,
+  **`socket-telnet`**  \n  A simple Telnet-like communication tool over raw TCP sockets.
+  This tool connects to a specified host and port, sends and receives data, and removes
+  any Telnet IAC (Interpret As Command) sequences from the communication stream. Note:
+  This is a simplified Telnet implementation and does not support full Telnet protocol
+  features. (Deprecated: This tool is duplicated by agent-socket-open, agent-socket-read-byte,
   and agent-socket-write-byte, which provide equivalent functionality with a more
   agent-friendly interface.)\n\n- **`serial-open`**  \n  Opens a serial port connection
   to a specified device with a given baud rate. Commonly used to access on-premises
@@ -542,6 +567,7 @@ description: "# pty-mcp-server\n\n----\n## ⚠️ Caution\n\n**Do not grant unre
   [`pms-infrastructure`](https://github.com/phoityne/pms-infrastructure)\n- [`pms-infra-cmdrun`](https://github.com/phoityne/pms-infra-cmdrun)\n-
   [`pms-infra-procspawn`](https://github.com/phoityne/pms-infra-procspawn)\n- [`pms-infra-agent-process`](https://github.com/phoityne/pms-infra-agent-process)\n-
   [`pms-infra-agent-socket`](https://github.com/phoityne/pms-infra-agent-socket)\n-
+  [`pms-infra-agent-server`](https://github.com/phoityne/pms-infra-agent-server)\n-
   [`pms-infra-agent-serial`](https://github.com/phoityne/pms-infra-agent-serial)\n-
   [`pms-infra-serial`](https://github.com/phoityne/pms-infra-serial)\n- [`pms-infra-socket`](https://github.com/phoityne/pms-infra-socket)\n-
   [`pms-infra-watch`](https://github.com/phoityne/pms-infra-watch)\n- [`pms-infra-filesystem`](https://github.com/phoityne/pms-infra-filesystem)\n-
@@ -571,9 +597,9 @@ description: "# pty-mcp-server\n\n----\n## ⚠️ Caution\n\n**Do not grant unre
   the original case study\nfrom which the [Core Projection Architecture (CPA)](https://github.com/lambda-tuber/core-projection-architecture/blob/main/README_en.md)
   was derived.\n\n----\n"
 description-type: markdown
-hash: ce019f497f85f8c546275be935fa7e89a5108ef9a67bb473c0979fa18f6e3dd0
+hash: a52410c3071e8b42dd2e482260c8434831892bd37b42592445d1bfbe0c5938dd
 homepage: https://github.com/phoityne/pty-mcp-server
-latest: 0.2.0.0
+latest: 0.2.1.0
 license-name: Apache-2.0
 maintainer: phoityne.hs@gmail.com
 synopsis: pty-mcp-server
