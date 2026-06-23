@@ -1,0 +1,139 @@
+all-versions:
+- 0.1.0.0
+author: Baldur Blöndal
+basic-deps:
+  base: '>=4.18 && <5'
+  ghc: '>=9.6 && <9.16'
+changelog: |
+  # Changelog
+
+  ## 0.1.0.0
+
+  Initial release.
+
+  * A GHC type-checker plugin that synthesizes class instances for the
+    `Stock` / `Stock1` / `Stock2` newtype wrappers, used through `DerivingVia`
+    — no `Generic`, no hand-written boilerplate.
+  * Built-in classes — `Stock`: `Eq`, `Ord`, `Show`, `Read`, `Semigroup`,
+    `Monoid`, `Enum`, `Bounded`, `Ix`, `Generic`; `Stock1`: `Functor`,
+    `Contravariant`, `Foldable`, `Applicative`, `Generic1`, `Eq1`, `Ord1`,
+    `Show1`, `Read1`, `Traversable`, `TestEquality`, `TestCoercion`;
+    `Stock2`: `Bifunctor`, `Bifoldable`,
+    `Eq2`, `Ord2`, `Show2`, `Read2`, `Category`, `Bitraversable`.
+    `Traversable`/`Bitraversable` are synthesized at the wrapper and used
+    directly or via the one-liner `traverse g = fmap unStock1 . traverse g
+    . Stock1` (a bare `deriving via` can't coerce them onto your type — the
+    result `f (t b)` puts the wrapper under an abstract applicative).
+  * Extensible: satellite packages add new classes with no configuration
+    change, via `DeriveStock` instances on the `Stock.Derive` SDK.
+  * Per-field deriving modifiers via `Stock.Override`: `deriving C via Stock
+    (Override T cfg)` (or the type-first synonym `Overriding T cfg`) rewrites
+    individual fields' types during synthesis (per-field `DerivingVia`,
+    zero-cost). Fields are addressed by name, type, or position (`At`); each
+    modifier is pinned (`Sum Int`) or broadcast to the field's own type (`Sum`).
+    The same `-fplugin Stock` also lowers a lowercase surface —
+    `Override T [ x via Sum, C at 0 via Product ]` — to that marker form at
+    parse time.
+  * Synthesized instances verified against GHC's stock-derived twins and
+    benchmarked to identical performance; all evidence passes `-dcore-lint`.
+    `Eq`/`Ord`/`Enum`/`Functor`/`Bounded`/`Foldable` optimise to
+    byte-identical Core (machine-checked with `inspection-testing`);
+    `Traversable`/`Bitraversable` are byte-identical to the natural
+    hand-written definition. `Read` (and `Read1`) build `readPrec` as GHC's
+    derived `Read` does, so they are byte-faithful including the order of
+    ambiguous infix parses.
+  * Tested on GHC 9.6, 9.8, 9.10, 9.12 and 9.14 (`stock-deepseq`: 9.8+).
+changelog-type: markdown
+description: "# stock\n\nConstraint solving plugin that enables extensible, composable
+  deriving\nwithout `GHC.Generics`.\n\nIt enables deriving through a `Stock(1,2)`
+  newtype that the plugin\ngenerates instances for at compile-time: `Cls (Stock A)`.
+  This\nsynthesises class instances directly in GHC Core, same as\nhand-written, with
+  no `Generic` deriving.\n\nThe classes each wrapper synthesises:\n\n+ `Stock`: `Eq`,
+  `Ord`, `Show`, `Read`, `Semigroup`, `Monoid`, `Enum`, `Bounded`, `Ix`, `Generic`
+  (that's right)\n+ `Stock1`: `Functor` / `Contravariant`, `Foldable`, `Applicative`,
+  `Generic1`, `Eq1`, `Ord1`, `Show1`, `Read1`, `Traversable`†\n+ `Stock2`: `Bifunctor`,
+  `Bifoldable`, `Eq2`, `Ord2`, `Show2`, `Read2`, `Category`, `Bitraversable`†\n\n(`unpack`
+  / unboxed-strict fields are rejected, with a clear error)\n\n† `Traversable` / `Bitraversable`
+  are synthesized at the wrapper (`Stock1\nF` / `Stock2 P`) and usable directly, or
+  put on your own type with a\none-liner:\n\n```haskell\ninstance Traversable F where\n
+  \ traverse g = fmap unStock1 . traverse g . Stock1\n```\n\nA bare `deriving via
+  Stock1 F` can't reach them: `traverse`'s result `f\n(t b)` puts the wrapper under
+  an *abstract* applicative `f`, and\ncoercing under an abstract `f` (nominal role)
+  is unsound — the same wall\nthat stops `GeneralizedNewtypeDeriving`. The instance
+  itself is perfectly\nordinary (it's what GHC's own `DeriveTraversable` builds),
+  so the\none-liner — which re-wraps with a real `fmap`, not a coercion — gives you\nthe
+  instance, and it honours `Override1` / `Override2` (which\n`deriving stock Traversable`
+  can't).\n\n```haskell\n{-# options_ghc -fplugin Stock #-}\n\n{-# language DerivingVia
+  #-}\n\nimport Stock\n\ndata Colour = Red | Green | Blue\n  deriving (Eq, Ord, Show,
+  Read, Enum, Bounded, Ix) via \n    Stock Colour\n\ndata Tree a = Leaf | Node (Tree
+  a) a (Tree a)\n  deriving (Eq, Ord, Show) via \n    Stock (Tree a)\n\ndata Trio
+  a = Trio Int a [a]\n  deriving (Functor, Foldable) via \n    Stock1 Trio\n```\n\nThe
+  plugin must be enabled (`-fplugin Stock`, in `ghc-options` or a\nper-file `options_ghc`).
+  \n\n## How it works\n\nFor a wanted `Cls (Stock T)` the plugin unwraps the newtype
+  with its\ncoercion, matches `T`'s constructors and builds the _Cls_-class\ndictionary
+  directly as Core, requesting each field's own instance as a\nfresh wanted (GHC solves
+  `Eq Int` etc. itself). It's direct synthesis\nof the wrapped constraint, not delegation.\n\n##
+  Per-field modifiers\n\n```haskell\nnewtype Override a config = Override a\n```\n\n`Override`
+  reshapes individual fields during synthesis by specifying\ntheir behaviour (zero-cost).\n\n```haskell\ndata
+  One = One { x :: Int, y :: Int }\n  deriving (Semigroup, Monoid)\n  via Overriding
+  One\n    [ x via Sum, y via Product ]\n```\n\ncombines `x` additively and `y` multiplicatively.\n\nThere
+  are a few methods of addressing a field, the plugin allows minor\nnotational conveniences.\n\n+
+  `x via F` (`\"x\" := F`), modifies the field with the `F` wrapper\n+ `Int via F`
+  (`Int := F`), modifies every `Int` field\n+ `Con at 0 via F` (`At Con 0 := F`),
+  modifies field 0 of constructor\n+ `'Con --> F`, a path: modifies every field of
+  `Con`; `'Con --> 0 --> F`\n  only its field 0. Each non-terminal hop is a constructor,
+  a position\n  (`Nat`) or a label (`Symbol`); the terminal hop is the modifier\n+
+  `'[ [F, _] ]` (`'[ [F, Keep] ]`), modifies field 0 only, `_` keeps field\n\nEach
+  modifier is either particular via field `F Int`, a constructor to\nmodify `F` or
+  a blank `_` (or `Keep`) which leaves a field untouched.\nA function-typed modifier
+  needs no parentheses: `x via a -> f b` reads as\n`x := (a -> f b)`, since `via`
+  binds looser than `->`.\n\n**The surface plugin.** The lowercase, quote-free surface
+  (`x via Sum`,\n`Con at 0`, the `_` blank) is lowered to the honest marker form the\nsolver
+  reads (`\"x\" := Sum`, `At Con 0`, `Keep`) by the same `-fplugin\nStock` at parse
+  time (`Stock.Surface`). The generated markers (`:=`,\n`At`, `Keep`) are qualified
+  to match however you imported\n`Stock.Override`, so `import Stock.Override qualified
+  as O` with\n`O.Override … '[ … via Sum, _ ]` resolves too.\n\n### Higher-order\n\n`Override1`
+  / `Override2` lift the same idea over type constructors\ninstead of types.\n\n```haskell\ndata
+  Zip a = Zip [a]\n  deriving \n    (Functor, Applicative, Foldable) \n  via\n  Overriding1
+  Zip '[ '[ZipList] ]\n```\n\n## Adding a class\n\nA companion package introduces
+  a new class _Cls_ for synthesis by\nwriting a `DeriveStock Cls` instance.\n\nThe
+  `-fplugin Stock` plugin discovers it: looks up the instance, loads\nthe deriver
+  with GHC's own plugin loader, and runs it for `deriving\nCls via Stock T`.\n\n```haskell\ninstance
+  DeriveStock Semigroup where \n  deriveStock :: Deriver\n  deriveStock = Deriver
+  \\cls datatype -> do\n    let (<+>) = head (classMethods cls)\n    a <- fresh (dtVia
+  datatype) \"a\"\n    b <- fresh (dtVia datatype) \"b\"\n    body <- fromProduct
+  datatype (dtVia datatype) (Var a) \\xs ->    -- (match)  a = C x..\n            fromProduct
+  datatype (dtVia datatype) (Var b) \\ys ->    -- (match)  b = C y..\n            toProduct
+  datatype <$> czipFields cls                   -- (build)  C (x <> y)..\n              (\\ft
+  d x y -> mkApps (Var (<+>)) [Type ft, d, x, y]) (productCon datatype) xs ys\n    EvExpr
+  <$> classDictWith cls (dtVia datatype) [] [(0, mkLams [a, b] body)]\n```\n\nThe
+  deriver must live in a different module from where it's used.  The\nplugin loads
+  it as *compiled* code, same-module instances won't\nwork. A normal dependency (separate
+  package, or just a separate module\nbuilt with `-dynamic-too`) works.\n\n## Performance\n\n`cabal
+  bench bench` runs identical workloads against a type defined three ways:\n`via Stock`,
+  GHC's stock `deriving`, and hand-written. All three give matching\nchecksums and
+  run within noise of each other — verified by rebuilding and\nre-running on GHC 9.8
+  – 9.14:\n\n```\nOrd: sort 100000 3-field records      via Stock 0.075s  stock 0.074s
+  \ hand 0.073s\nFunctor: fmap (+1) x50 over 100000    via Stock 0.136s  stock 0.136s
+  \ hand 0.137s\n```\n\n## Conclusions / realizations\n\nUsing _inspection-testing_
+  shows that the code we generate is\nbyte-identical to stock (`==-`). `Eq`, `Ord`,
+  `Enum`, `Functor`\noptimise to the *same Core* as GHC's own `deriving` on a twin
+  type.\n\n`Read` (and `Read1`) build `readPrec` exactly as GHC's derived `Read`\ndoes
+  — the same `ReadPrec` combinators — and let `readsPrec` come from\nthe class default,
+  so the result is byte-faithful *including* the order\nof ambiguous infix parses.
+  A parity harness (`test/Twin.hs`) checks the\nfull `readsPrec` output against GHC's
+  own derived `Read` on a\nname-identical twin, over valid / whitespace / parenthesised
+  / negative\n/ garbage inputs at several precedences.\n\n## Acknowledgments\n\nDeveloped
+  with substantial assistance from Claude (Anthropic).\n\n## License\n\nBSD-3-Clause.\n"
+description-type: markdown
+hash: cbe838bcff3d9ea9e104ec18009010392d92f1f2f5e35b788cfff751ba83364a
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: baldur.blondal@iohk.io
+synopsis: Stock-style deriving via coercion, with no Generic
+test-bench-deps:
+  base: '>=4.18 && <5'
+  inspection-testing: '>=0'
+  stock: '>=0'
+  transformers: <0.7
