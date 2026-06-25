@@ -3,14 +3,17 @@ all-versions:
 - 0.1.0.0
 - 0.1.0.1
 - 0.2.0.0
+- 0.3.0.0
 author: Jakob Schöttl, Omar Elbeltagui
 basic-deps:
   aeson: '>=0'
+  aeson-pretty: '>=0'
   base: '>=4.7 && <5'
   bytestring: '>=0'
   http-client: '>=0'
   http-types: '>=0'
   network-uri: '>=0'
+  scientific: '>=0'
   text: '>=0'
   time: '>=0'
 changelog: |
@@ -19,6 +22,54 @@ changelog: |
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and this project adheres to the
   [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## [0.3.0.0] - 2026-06-25
+  ### Fixed
+
+  - `getDocList`: When the list of requested fields was not exhaustive
+    to parse into the specified record type, `getDocList` ended up to
+    parse the response into `Ok _ _ []` instead of `Err _ _`. With this
+    bug the response looked like we got no results but in reality it was
+    just wrong API use.
+  - Fix parsing bug in transformation script `gen-openapi-yaml.sh`
+    related with comments.
+
+  ### Changed
+
+  - Fix names in public API because these functions actually don't
+    operate on DocTypes but on documents:
+    - `getDocTypeList` -> `getDocList`
+    - `getDocType` -> `getDoc`
+    - `postDocType` -> `postDoc`
+    - `putDocType` -> `putDoc`
+    - `deleteDocType` -> `deleteDoc`
+  - Renamed modules `QueryStringParams` and `Filters` to singular.
+
+  ### Added
+
+  - `getAllFieldnames` to fetch names of all fields for a given DocType.
+  - `getDocListAllFields` to fetch list of documents with all their
+    fields without explicitly naming them.
+  - `systemFieldnames` to define some fixed fieldnames like `_user_tags` and `_assign`.
+  - `IsString` instance for `FilterValue` so that `"my value"` is
+    automatically converted to `FilterText "my value"`.
+  - `showJsonPretty`, `showJsonResponsePretty`, and `showApiResponseDebug`
+    for debugging and pretty-printing JSON API responses (adds dependency `aeson-pretty`).
+  - `andThen` and `andThenWith` to concatenate two API calls passing the
+    result of A directly to B.
+  - Module `ERPNext.Client.Simple` for simple versions of the CRUD
+    functions to work JSON `Value` objects instead of strict record types.
+  - Module `ERPNext.Client.Types` for helpers and types dealing with
+    DocType status and booleans.
+  - Helper functions `isNotFound` and `isForbidden` for easy error
+    response interpretation.
+
+  ## [0.2.1.0] - 2026-03-13
+
+  ### Added
+
+  - Added `docName` method to `IsDocType` class to get the document ID.
+  - Add doc for `getDocTypeList` about default number of rows.
 
   ## [0.2.0.0] - 2025-04-12
 
@@ -56,15 +107,15 @@ description: |
 
   CRUD operations on a given DocType are:
 
-  -   `GET` list of all documents of a DocType (`getDocTypeList`)
-  -   `POST` to create a new document (`postDocType`)
-  -   `GET` a document by name (`getDocType`)
-  -   `PUT` to update a document by name (`putDocType`)
-  -   `DELETE` a document by name (`deleteDocType`)
+  - `GET` list of all documents of a DocType (`getDocList`)
+  - `POST` to create a new document (`postDoc`)
+  - `GET` a document by name (`getDoc`)
+  - `PUT` to update a document by name (`putDoc`)
+  - `DELETE` a document by name (`deleteDoc`)
 
   Note: Remote method calls and file uploads are not yet supported.
 
-  DocTypes in ERPNext can be extended and newly created by users. This is
+  In ERPNext, DocTypes can be extended and newly created by users. This is
   why this library does not come with any predefined types for DocTypes.
   Instead, users can provide their own types with only the fields they
   need.
@@ -81,7 +132,9 @@ description: |
   {-# LANGUAGE OverloadedStrings #-}
 
   import ERPNext.Client
-  import Network.HTTP.Client
+  import System.Environment
+  import Data.Text (pack)
+  import Network.HTTP.Client.TLS
   import Data.Aeson
   import GHC.Generics
 
@@ -90,40 +143,175 @@ description: |
     } deriving Generic
 
   instance FromJSON Customer
-  instance ToJSON Customer
   instance IsDocType Customer where
     docTypeName = "Customer"
+    docName = error "not implemented"
 
   main :: IO ()
   main = do
-    let config = mkConfig "https://erpnext.example.com" "api-key" (mkSecret "api-secret")
-    manager <- newManager defaultManagerSettings
-    response <- getDocType manager config "Company A" :: IO (ApiResponse Customer)
+    url <- pack <$> getEnv "ERPNEXT_BASE_URL" -- e.g. "https://my-erpnext.frappe.cloud/api"
+    apiKey <- pack <$> getEnv "ERPNEXT_API_KEY"
+    apiSecret <- mkSecret . pack <$> getEnv "ERPNEXT_API_SECRET"
+
+    let config = mkConfig url apiKey apiSecret
+    manager <- newTlsManager
+    response <- ERPNext.Client.getDoc manager config "Company A" :: IO (ApiResponse Customer)
     case response of
       Ok _ _ c -> putStrLn $ name c
-      Err r _ -> print r
+      Err r _  -> putStrLn $ show r
+  ```
+
+  For running the example, define these variables in a `.env` file:
+
+  ``` bash
+  export ERPNEXT_BASE_URL=https://my-test.frappe.cloud/api
+  export ERPNEXT_API_KEY=xxxxxx
+  export ERPNEXT_API_SECRET=yyyyyy
+  ```
+
+  Then, inside this repository directory you can run:
+
+  ``` bash
+  . .env
+  stack runhaskell --package http-client-tls example1.hs
+  ```
+
+  ## Interactive testing in GHCi
+
+  ``` example
+  . .env
+  stack ghci --package http-client-tls
+  ```
+
+  ``` haskell
+  {-# LANGUAGE OverloadedStrings #-}
+  import ERPNext.Client qualified as Client
+  import ERPNext.Client.Simple qualified as Simple
+  import ERPNext.Client.QueryStringParam
+  import ERPNext.Client.Filter
+  import Network.HTTP.Client.TLS
+  import System.Environment
+  import Data.Aeson
+  import GHC.Generics
+
+  url <- pack <$> getEnv "ERPNEXT_BASE_URL"
+  apiKey <- pack <$> getEnv "ERPNEXT_API_KEY"
+  apiSecret <- mkSecret . pack <$> getEnv "ERPNEXT_API_SECRET"
+
+  let config = mkConfig url apiKey apiSecret
+  manager <- newTlsManager
+
+  -- Explicitly name the doctype to fetch, "DocType" in this example:
+  Ok _ jsonResponse _ <- Simple.getDoc manager config "DocType" "Task"
+  putStrLn $ showJsonPretty jsonResponse
+
+  -- Define a DocType. Use :{ and :} in GHCi to paste multi-line Haskell code.
+  data Customer = Customer
+    { name :: Text
+    , customer_name :: Text
+    } deriving (Show, Generic)
+  instance FromJSON Customer
+  instance IsDocType Customer where
+    docTypeName = "Customer"
+    docName = name
+
+  -- Get a customer, infer doctype via type system:
+  Ok _ jsonResponse parsedCustomer <- Client.getDoc @Customer manager config "Company A"
+  print parsedCustomer
+  print $ docName parsedCustomer
+
+  -- Get a filtered list of customers, infer doctype via type system:
+  Ok _ jsonResponse parsedCustomerList <- Client.getDocList @Customer manager config [Fields ["name", "customer_name"], AndFilter [Like "name" "%Test%"]]
+  print parsedCustomerList
+
+  ```
+
+  ## Advanced example use
+
+  ``` haskell
+  {-# LANGUAGE OverloadedStrings #-}
+  {-# LANGUAGE OverloadedRecordDot #-}
+  {-# LANGUAGE DuplicateRecordFields #-}
+
+  import ERPNext.Client
+  import ERPNext.Client.Filter as Filter
+  import ERPNext.Client.QueryStringParam
+  import System.Environment
+  import Data.Text (Text, pack, unpack, intercalate)
+  import Network.HTTP.Client.TLS
+  import Data.Aeson
+  import GHC.Generics
+
+  data Customer = Customer
+    { name :: Text
+    , customer_name :: Text
+    } deriving Generic
+
+  instance FromJSON Customer
+  instance IsDocType Customer where
+    docTypeName = "Customer"
+    docName = error "not implemented"
+
+  data SalesOrder = SalesOrder
+    { name :: Text
+    , customer :: Text
+    } deriving Generic
+
+  instance FromJSON SalesOrder
+  instance IsDocType SalesOrder where
+    docTypeName = "Sales Order"
+    docName = error "not implemented"
+
+  main :: IO ()
+  main = do
+    url <- pack <$> getEnv "ERPNEXT_BASE_URL" -- e.g. "https://my-erpnext.frappe.cloud/api"
+    apiKey <- pack <$> getEnv "ERPNEXT_API_KEY"
+    apiSecret <- mkSecret . pack <$> getEnv "ERPNEXT_API_SECRET"
+
+    let cfg = mkConfig url apiKey apiSecret
+    mgr <- newTlsManager
+
+    -- Get all customers with given customer name:
+    customersRes <- getDocList @Customer mgr cfg [Fields ["name", "customer_name"], AndFilter [Filter.Eq "customer_name" "Test Customer"]]
+    case customersRes of
+      Ok _ _ customers -> putStrLn $ show (length customers) ++ " customer(s)"
+      err  -> putStrLn $ "error: \n" ++ showJsonResponsePretty err
+
+    -- Get customer linked to sales order:
+    let andThenWithCustomer = andThenWith (\o -> o.customer)
+    (salesOrderRes, mCustomerRes) <- getDoc @SalesOrder mgr cfg "SAL-ORD-2026-00002"
+                                `andThenWithCustomer` getDoc @Customer mgr cfg
+    case (salesOrderRes, mCustomerRes) of
+      (Ok _ _ salesOrder, Just (Ok _ _ customer)) -> putStrLn $ unpack salesOrder.name ++ ": " ++ unpack customer.customer_name
+      (x, my) -> putStrLn $ "error: \n" ++ showJsonResponsePretty x ++ "\n" ++ maybe "" showJsonResponsePretty my
+
+    res <- getAllFieldnames @Customer mgr cfg
+    case res of
+      Ok _ _ fieldnames -> putStrLn $ unpack $ intercalate ", " (take 5 fieldnames) <> ", ..."
+      err -> putStrLn $ "error: \n" ++ showJsonResponsePretty res
   ```
 
   ``` bash
-  stack runhaskell example1.hs
+  . .env
+  stack runhaskell --package http-client-tls example2.hs
   ```
 
   ## Scope and Limits
 
-  -   Only [token-based
-      authentication](https://docs.frappe.io/framework/user/en/api/rest#1-token-based-authentication)
-      is supported.
-  -   [Remote Method
-      Calls](https://docs.frappe.io/framework/user/en/api/rest#remote-method-calls)
-      are not yet supported.
-  -   [File
-      Uploads](https://docs.frappe.io/framework/user/en/api/rest#file-uploads)
-      are not yet supported.
+  - Only [token-based
+    authentication](https://docs.frappe.io/framework/user/en/api/rest#1-token-based-authentication)
+    is supported.
+  - [Remote Method
+    Calls](https://docs.frappe.io/framework/user/en/api/rest#remote-method-calls)
+    are not yet supported.
+  - [File
+    Uploads](https://docs.frappe.io/framework/user/en/api/rest#file-uploads)
+    are not yet supported.
 
   ## Data records for DocTypes
 
   Haskell record types for the DocTypes can be coded by hand which
-  requires some boiler plate like Aeson instances, handling `null` or
+  requires some boilerplate like Aeson instances, handling `null` or
   missing values, and writing helper functions like `mkCustomer`.
 
   This library provides tooling to generate Haskell record types from a
@@ -132,17 +320,18 @@ description: |
 
   1.  A script generates an [OpenAPI
       Specification](https://swagger.io/specification/) file in `yaml`
-      format.
+      format from your models file.
   2.  The
       [Haskell-OpenAPI-Client-Code-Generator](https://github.com/Haskell-OpenAPI-Code-Generator/Haskell-OpenAPI-Client-Code-Generator/)
       generates an Haskell API client, from which only the type
       definitions can be used.
 
   The resulting files are a separate Haskell package which can be added as
-  dependency. The resulting record types can be used together with this
+  a dependency. The resulting record types can be used together with this
   API client but the `IsDocType` instance must still be defined by hand.
 
-  **The API client part generated from the OpenAPI spec can not be used.**
+  **Note: The API client part generated from the OpenAPI spec can not be
+  used.**
 
   Example models file:
 
@@ -157,6 +346,19 @@ description: |
   SalesOrderItem
     name Text
     Required name
+
+  Item
+    item_code Text
+    item_name Text
+    item_group Text
+    default_warehouse Text
+    country_of_origin Text
+    disabled Int
+    is_purchase_item Int
+    is_sales_item Int
+    is_stock_item Int
+    stock_uom Text
+    Required item_code item_name is_purchase_item is_sales_item is_stock_item
   ```
 
   ``` example
@@ -180,9 +382,102 @@ description: |
   │   │   ├── Types     <---- here are the generated types
   │   │   │   ├── SalesOrder.hs
   │   │   │   ├── SalesOrderItem.hs
+  │   │   │   ├── Item.hs
   │   │   └── Types.hs
   │   └── ERPNextAPI.hs
   └── stack.yaml
+  ```
+
+  To include the generated model types in your stack project:
+
+  Add to your `stack.yaml`:
+
+  ``` example
+  extra-deps:
+  - …
+  - ./api-client/
+  ```
+
+  In your `package.yaml`:
+
+  ``` example
+  dependencies:
+  - …
+  - erpnext-api-client-models
+  ```
+
+  In your Haskell code:
+
+  ``` haskell
+  import ERPNext.Client -- the erpnext-api-client
+  import ERPNextAPI.Types -- the generated types
+
+  …
+
+  -- And here some orphan instances:
+
+  instance IsDocType SalesOrder where
+    docTypeName = "Sales Order"
+
+  instance IsDocType Customer where
+    docTypeName = "Customer"
+  ```
+
+  ### Notes on `Maybe` and `Nullable`
+
+  In the DocType definition model,
+
+  - `Maybe` becomes `Nullable` meaning that the field value can be `null`
+    (or `Null` in Haskell).
+
+  - Fields **not** listed after `Required` become `Maybe` meaning that the
+    fields are optional and `Nothing` will be left out in the JSON
+    representation.
+
+  Type level:
+
+  ``` example
+  Project
+    name Text
+    project_name Text
+    status Text
+    project_type Text Maybe
+    Required name project_name
+
+  data Project = Project
+    { projectName :: Text
+    , projectProject_name :: Text
+    , projectStatus :: Maybe Text
+    , projectProject_type :: Maybe (Nullable Text)
+    } deriving (Show, Eq)
+
+  data ProjectPartial = ProjectPartial
+    { projectPartialName :: Maybe Text
+    , projectPartialProject_name :: Maybe Text
+    , projectPartialStatus :: Maybe Text
+    , projectPartialProject_type :: Maybe (Nullable Text)
+    } deriving (Show, Eq)
+  ```
+
+  For each DocType, two types are generated, e.g. `Project` and
+  `ProjectPartial`. The `*Partial` version has no required fields i.e. all
+  fields are `Maybe` and are left out when assigned to `Nothing`.
+
+  Value level:
+
+  ``` example
+  Project                                             {
+    { projectName = "PROJ-001"                          "name": "PROJ-001",
+    , projectProject_name = "My Project"      =>        "project_name": "My Project",
+    , projectStatus = Nothing
+    , projectProject_type = Just Null                   "project_type": null
+    }                                                 }
+  ```
+
+  ``` example
+  mkProjectPartial                                    {
+    { projectProject_name = Just "My Project 2"   =>    "project_name": "My Project"
+    }                                                 }
   ```
 
   ## Note on TLS problems
@@ -195,7 +490,6 @@ description: |
   settings like this:
 
   ``` haskell
-  import Network.HTTP.Client
   import Network.HTTP.Client.TLS (mkManagerSettings)
   import Network.Connection (TLSSettings (..))
 
@@ -205,8 +499,6 @@ description: |
         mkManagerSettings
           ( TLSSettingsSimple
               { settingDisableCertificateValidation = True
-              , settingDisableSession = False
-              , settingUseServerName = False
               }
           )
           Nothing
@@ -214,18 +506,22 @@ description: |
   …
   ```
 
+  Edit the example code from the first section accordingly and run it
+  with:
+
   ``` bash
   stack runhaskell --package crypton-connection --package http-client-tls example1.hs
   ```
 description-type: markdown
-hash: c13663460e706e5c60a4542289f1cfb18fdbc9b13d669c7473192e35c5a495f6
+hash: 3edb74ca5e9998eea357f5c14679129dd76527326e0e6d3c2fb8f9dee65aa1fc
 homepage: https://github.com/schoettl/erpnext-api-client
-latest: 0.2.0.0
+latest: 0.3.0.0
 license-name: MIT
 maintainer: jakob.schoettl@intensovet.de
 synopsis: Generic API client library for ERPNext
 test-bench-deps:
   aeson: '>=0'
+  aeson-pretty: '>=0'
   base: '>=0'
   bytestring: '>=0'
   doctest: '>=0.22.2 && <1'
@@ -236,5 +532,6 @@ test-bench-deps:
   http-client: '>=0'
   http-types: '>=0'
   network-uri: '>=0'
+  scientific: '>=0'
   text: '>=0'
   time: '>=0'
