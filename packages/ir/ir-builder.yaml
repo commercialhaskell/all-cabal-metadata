@@ -1,0 +1,218 @@
+all-versions:
+- 0.1.0.0
+author: Heikki Johannes Hildén
+basic-deps:
+  base: '>=4.7 && <5'
+  bytestring: '>=0.10 && <0.13'
+  containers: '>=0.6 && <0.8'
+  mtl: '>=2.2 && <2.4'
+  text: '>=1.2 && <3'
+changelog: |
+  # Changelog
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+  ## [Unreleased]
+
+  ## [0.1.0.0] - 2026-06-30
+
+  ### Added
+
+  - Initial release of ir-builder
+  - Monadic DSL for constructing LLVM IR programmatically
+  - Complete instruction set support including:
+    - Arithmetic operations (add, sub, mul, div, rem)
+    - Bitwise operations (and, or, xor, shifts)
+    - Floating-point operations (fadd, fsub, fmul, fdiv, fneg)
+    - Comparison operations (icmp, fcmp)
+    - Memory operations (alloca, load, store, gep)
+    - Type conversion operations (bitcast, sext, zext, trunc, etc.)
+    - Control flow (phi, select, branch, conditional branch, switch)
+    - Function calls (call, callVoid with tail call support)
+    - Aggregate operations (extractValue, insertValue)
+    - Vector operations (extractElement, insertElement, shuffleVector)
+    - Atomic operations (atomicRMW, cmpXchg, fence)
+  - Terminators (ret, retVoid, br, condbr, switch, unreachable)
+  - Annotation support for inline comments via the `(<##>)` operator
+  - Pure renderer for serializing IR modules to LLVM assembly text
+  - Comprehensive error handling with typed IRBuilderError
+  - RecursiveDo support for forward references in phi nodes and loops
+  - Function and global declaration support
+  - Examples demonstrating common patterns
+
+  [Unreleased]: https://codeberg.org/laserpants/ir-builder/compare/v0.1.0.0...HEAD
+  [0.1.0.0]: https://codeberg.org/laserpants/ir-builder/releases/tag/v0.1.0.0
+changelog-type: markdown
+description: "# ir-builder\n\nA Haskell library for constructing LLVM IR programmatically.
+  It provides a\nmonadic DSL for building modules, functions, blocks, and instructions,
+  along\nwith a pure renderer that serializes the result to LLVM assembly.\n\n## Overview\n\nThe
+  library is structured as a pipeline:\n\n```\nIRBuilder (monadic DSL)  →  IRModule
+  (data types)  →  renderModule  →  Text\n```\n\nYou describe an IR module using the
+  `IRBuilder` monad. When you run\n`compileModule`, the builder produces an `IRModule`
+  value. `renderModule`\nthen converts that value to the textual LLVM IR format that
+  can be passed\nto `llc`, `clang`, or `lli`.\n\n```haskell\nimport LLVM.IR\n\nexample
+  :: Text\nexample = compileModule \"example\" $ do\n  define i32 \"add_one\" [(i32,
+  \"x\")] LExternal [] $ do\n    beginBlock \"entry\"\n    r <- add i32 (OLocal i32
+  \"x\") (OConstant (CInt 32 1))\n    ret r\n```\n\n## Building\n\nRequires [Stack](https://docs.haskellstack.org/).\n\n```\nstack
+  build        # build the library\nstack test         # run the test suite\n```\n\n##
+  Quick example: Hello, World!\n\n```haskell\n{-# LANGUAGE OverloadedStrings #-}\n\nmodule
+  Examples.HelloWorld (helloWorld) where\n\nmport LLVM.IR\n\nhelloWorld :: IRBuilder
+  ()\nhelloWorld = do\n  declare \"puts\" i32 [ptr]\n  emitGlobal (IRString LPrivate
+  \".str\" \"Hello, World!\\0\")\n\n  define i32 \"main\" [] LExternal [] $ do\n    beginBlock
+  \"entry\"\n    r1 <- gep (TArray 14 i8) (OGlobal TPtr \".str\")\n              [OConstant
+  (CInt 32 0), OConstant (CInt 32 0)]\n    callVoid NoTail i32 (OGlobal i32 \"puts\")
+  [r1]\n    ret (OConstant (CInt 32 0))\n```\n\nRunning `compileModule \"hello_world\"
+  helloWorld` produces:\n\n```llvm\n@.str = private constant [14 x i8] c\"Hello, World!\\00\"\ndeclare
+  i32 @puts(ptr)\n\ndefine i32 @main() {\nentry:\n  %1 = getelementptr [14 x i8],
+  ptr @.str, i32 0, i32 0\n  call i32 @puts(ptr %1)\n  ret i32 0\n}\n```\n\n## Quick
+  example: Iterative factorial with `mdo`\n\nThe `IRBuilder` monad supports `MonadFix`.
+  You can use `mdo` to refer to\nSSA values before they are emitted, which is necessary
+  for `phi` nodes in\nloops:\n\n```haskell\n{-# LANGUAGE OverloadedStrings #-}\n{-#
+  LANGUAGE RecursiveDo #-}\n\nmodule Examples.Factorial (factorialModule) where\n\nimport
+  LLVM.IR\n\nfactorialModule :: IRBuilder ()\nfactorialModule = do\n  declareVarArg
+  \"printf\" i32 [ptr]\n  emitGlobal (IRString LPrivate \".fmt\" \"fact(5) = %ld\\n\\0\")\n\n
+  \ define i64 \"fact\" [(i64, \"n\")] LExternal [] $ mdo\n    beginBlock \"entry\"\n
+  \   br \"loop\"\n\n    beginBlock \"loop\"\n    accPhi <- phi i64 [(OConstant (CInt
+  64 1), \"entry\"), (newAcc, \"body\")]\n    nPhi   <- phi i64 [(OLocal i64 \"n\",
+  \       \"entry\"), (newN,   \"body\")]\n    cond   <- icmp ICmpSGt i64 nPhi (OConstant
+  (CInt 64 0))\n    condbr cond \"body\" \"exit\"\n\n    beginBlock \"body\"\n    newAcc
+  <- mul i64 accPhi nPhi\n    newN   <- sub i64 nPhi (OConstant (CInt 64 1))\n    br
+  \"loop\"\n\n    beginBlock \"exit\"\n    ret accPhi\n\n  define i32 \"main\" []
+  LExternal [] $ do\n    beginBlock \"entry\"\n    result <- call NoTail i64 (OGlobal
+  i64 \"fact\") [OConstant (CInt 64 5)]\n    callVoid NoTail i32 (OGlobal i32 \"printf\")
+  [OGlobal ptr \".fmt\", result]\n    ret (OConstant (CInt 32 0))\n```\n\n## Patterns\n\n###
+  Conditional with phi merge\n\nWhen both branches converge at a single exit point,
+  `phi` selects the\nappropriate value based on which predecessor block control arrived
+  from:\n\n```haskell\ndefine i32 \"max\" [(i32, \"a\"), (i32, \"b\")] LExternal []
+  $ do\n  beginBlock \"entry\"\n  cond <- icmp ICmpSGt i32 (OLocal i32 \"a\") (OLocal
+  i32 \"b\")\n  condbr cond \"then_\" \"else_\"\n\n  beginBlock \"then_\"\n  br \"merge\"\n\n
+  \ beginBlock \"else_\"\n  br \"merge\"\n\n  beginBlock \"merge\"\n  r <- phi i32
+  [(OLocal i32 \"a\", \"then_\"), (OLocal i32 \"b\", \"else_\")]\n  ret r\n```\n\n```llvm\ndefine
+  i32 @max(i32 %a, i32 %b) {\nentry:\n  %1 = icmp sgt i32 %a, %b\n  br i1 %1, label
+  %then_, label %else_\nthen_:\n  br label %merge\nelse_:\n  br label %merge\nmerge:\n
+  \ %2 = phi i32 [ %a, %then_ ], [ %b, %else_ ]\n  ret i32 %2\n}\n```\n\n### Switch\n\n`switch`
+  dispatches on an integer value with a mandatory default case and\nzero or more literal
+  arms. Each arm is a `(IRConstant, IRName)` pair:\n\n```haskell\ndefine i32 \"classify\"
+  [(i32, \"n\")] LExternal [] $ do\n  beginBlock \"entry\"\n  switch (OLocal i32 \"n\")
+  \"default_\"\n    [ (CInt 32 0, \"zero\")\n    , (CInt 32 1, \"one\")\n    ]\n\n
+  \ beginBlock \"zero\"\n  ret (OConstant (CInt 32 10))\n\n  beginBlock \"one\"\n
+  \ ret (OConstant (CInt 32 20))\n\n  beginBlock \"default_\"\n  ret (OConstant (CInt
+  32 (-1)))\n```\n\n## Type system\n\nLLVM types are represented by the `IRType` data
+  type:\n\n| Constructor | Description |\n|---|---|\n| `TInt n` | Integer with bit
+  width `n` (e.g. `TInt 32`) |\n| `TFloat` | 32-bit IEEE float |\n| `TDouble` | 64-bit
+  IEEE float |\n| `TVoid` | Void type |\n| `TPtr` | Opaque pointer |\n| `TFun ret
+  params` | Function type |\n| `TStruct fields` | Struct (anonymous) |\n| `TArray
+  n elem` | Fixed-size array |\n| `TVector n elem` | SIMD vector |\n| `TNamed name`
+  | Named type reference (e.g. `%Node`) |\n| `TOpaque name` | Forward-declared opaque
+  type |\n\n`LLVM.IRType.Constructors` exports shorthand aliases: `i1`, `i8`, `i16`,\n`i32`,
+  `i64`, `i128`, `float`, `double`, `ptr`, `void`, and constructor\nhelpers `struct`,
+  `array`, `vector`, `fun`, `named`.\n\n## Linkage\n\n`IRLinkage` controls symbol
+  visibility and is the fourth argument to `define`:\n\n| Value | Description |\n|---|---|\n|
+  `LExternal` | Visible outside the module (default for most functions) |\n| `LInternal`
+  | Module-local; may be renamed to avoid clashes during linking |\n| `LPrivate` |
+  Module-local and excluded from the symbol table |\n\n## Function attributes\n\n`IRAttribute`
+  values form the fifth argument to `define` as a list:\n\n| Value | Description |\n|---|---|\n|
+  `NoReturn` | Function never returns normally |\n| `NoUnwind` | Function never throws
+  (no stack unwinding) |\n| `ReadOnly` | Function only reads memory, no writes |\n|
+  `ReadNone` | Function neither reads nor writes memory |\n| `AlwaysInline` | Always
+  inline at call sites |\n| `NoInline` | Never inline |\n| `TailCall` | Mark as eligible
+  for tail-call optimisation |\n| `MustTailCall` | Require tail-call elimination |\n|
+  `Cold` | Rarely executed path |\n| `Hot` | Frequently executed path |\n| `InlineHint`
+  | Hint to inline |\n| `NoAlias` | Return value does not alias any existing pointer
+  |\n| `GC Text` | Specify a garbage collector by name, e.g. `GC \"shadow-stack\"`
+  |\n\n## Instruction set\n\nAll instruction-emitting functions are in `LLVM.IRInstruction.Constructors`\nand
+  share the constraint `(MonadIRBuilder m)`. Terminator-emitting functions\nare in
+  `LLVM.IRTerminator.Constructors`.\n\n### Arithmetic\n\n```haskell\nadd, sub, mul,
+  sdiv, udiv, srem, urem :: IRType -> IROperand -> IROperand -> m IROperand\n```\n\n###
+  Bitwise\n\n```haskell\nand, or, xor, shl, lshr, ashr :: IRType -> IROperand -> IROperand
+  -> m IROperand\n```\n\n### Floating-point\n\n```haskell\nfadd, fsub, fmul, fdiv
+  :: IRType -> IROperand -> IROperand -> m IROperand\nfneg                   :: IRType
+  -> IROperand -> m IROperand\n```\n\n### Comparison\n\n```haskell\nicmp :: IRICmpCond
+  -> IRType -> IROperand -> IROperand -> m IROperand\nfcmp :: IRFCmpCond -> IRType
+  -> IROperand -> IROperand -> m IROperand\n```\n\n### Memory\n\n```haskell\nalloca
+  :: IRType -> IROperand -> m IROperand           -- alloca <type>, <count>\nload
+  \  :: IRType -> IROperand -> m IROperand           -- load <type>, ptr <ptr>\nstore
+  \ :: IROperand -> IROperand -> m ()               -- store <val>, ptr <ptr>\ngep
+  \   :: IRType -> IROperand -> [IROperand] -> m IROperand\n```\n\n### Type casts\n\n```haskell\nbitcast
+  \ :: IROperand -> IRType -> m IROperand\nsext     :: IROperand -> IRType -> m IROperand\nzext
+  \    :: IROperand -> IRType -> m IROperand\ntrunc    :: IROperand -> IRType -> m
+  IROperand\ninttoptr :: IROperand -> IRType -> m IROperand\nptrtoint :: IROperand
+  -> IRType -> m IROperand\n```\n\n### Calls\n\n```haskell\ncall     :: IRTailMarker
+  -> IRType -> IROperand -> [IROperand] -> m IROperand\ncallVoid :: IRTailMarker ->
+  IRType -> IROperand -> [IROperand] -> m ()\n```\n\n`IRTailMarker` is one of `NoTail`,
+  `Tail`, or `MustTail`.\n\n### Miscellaneous\n\n```haskell\nphi    :: IRType -> [(IROperand,
+  IRName)] -> m IROperand\nselect :: IRType -> IROperand -> IROperand -> IROperand
+  -> m IROperand\nfreeze :: IROperand -> m IROperand\n```\n\n### Aggregates\n\n```haskell\nextractValue
+  :: IRType -> IROperand -> [Int] -> m IROperand\ninsertValue  :: IROperand -> IROperand
+  -> [Int] -> m IROperand\n```\n\n### Vectors\n\n```haskell\nextractElement :: IRType
+  -> IROperand -> IROperand -> m IROperand\ninsertElement  :: IROperand -> IROperand
+  -> IROperand -> m IROperand\nshuffleVector  :: IRType -> IROperand -> IROperand
+  -> [Int] -> m IROperand\n```\n\nUse `-1` in the mask to indicate an `undef` slot
+  in `shuffleVector`.\n\n### Atomics\n\n```haskell\natomicRMW :: IRAtomicOrdering
+  -> IRAtomicOp -> IROperand -> IROperand -> m IROperand\ncmpXchg   :: IRAtomicOrdering
+  -> IRAtomicOrdering -> IROperand -> IROperand -> IROperand -> m IROperand\nfence
+  \    :: IRAtomicOrdering -> m ()\n```\n\n`IRAtomicOrdering`: `Unordered`, `Monotonic`,
+  `Acquire`, `Release`, `AcqRel`, `SeqCst`.  \n`IRAtomicOp`: `ARMWAdd`, `ARMWSub`,
+  `ARMWAnd`, `ARMWOr`, `ARMWXor`, `ARMWXchg`,\n`ARMWMax`, `ARMWMin`, `ARMWUMax`, `ARMWUMin`,
+  `ARMWFAdd`, `ARMWFSub`, `ARMWFMax`,\n`ARMWFMin`, `ARMWNand`.\n\n`cmpXchg` returns
+  an operand of type `{ <ty>, i1 }`.\n\n### Terminators\n\n```haskell\nret         ::
+  IROperand -> m ()\nretVoid     :: m ()\nbr          :: IRName -> m ()\ncondbr      ::
+  IROperand -> IRName -> IRName -> m ()\nswitch      :: IROperand -> IRName -> [(IRConstant,
+  IRName)] -> m ()\nunreachable :: m ()\n```\n\n## Globals and declarations\n\n```haskell\n--
+  Declare an external function\ndeclare :: IRName -> IRType -> [IRType] -> m ()\n\n--
+  Declare a variadic external function\ndeclareVarArg :: IRName -> IRType -> [IRType]
+  -> m ()\n\n-- Emit a named type declaration (%Name = type { ... })\nemitTypeDecl
+  :: IRName -> IRType -> m ()\n\n-- Emit any IRGlobal directly\nemitGlobal :: IRGlobal
+  -> m ()\n```\n\n`IRGlobal` constructors:\n\n| Constructor | Description |\n|---|---|\n|
+  `IRString linkage name bytes` | String literal (stored as `[n x i8]`) |\n| `IRConstant
+  linkage name type val` | Immutable global |\n| `IRVar linkage name type val` | Mutable
+  global |\n| `IRExtern name retType argTypes isVariadic` | External declaration |\n\n##
+  Annotations\n\nInstructions can carry an `IRAnnotation` metadata value. The `(<##>)`
+  operator\nattaches a comment to an instruction result:\n\n```haskell\nr <- add i32
+  a b <##> \"compute sum\"\n```\n\nThis renders as a trailing inline comment on the
+  same line as the instruction:\n\n```llvm\n%1 = add i32 %a, %b  ; compute sum\n```\n\n##
+  Verification\n\nTwo post-hoc checks are available on a compiled `IRModule`:\n\n```haskell\nverifyModule
+  \   :: IRModule -> Either String ()\ntypeCheckModule :: IRModule -> Either String
+  ()\n```\n\n`verifyModule` checks structural properties: no duplicate block labels,\nno
+  duplicate SSA names within a function, and all branch targets are\ndefined blocks.\n\n`typeCheckModule`
+  checks that operand types are consistent with instruction\nsemantics: arithmetic
+  operands match the declared type, `phi` incoming\nvalues match the declared type,
+  `load`/`store` pointer operands are `ptr`,\n`alloca` counts are integers, sign-extension/truncation
+  constraints hold,\nand so on.\n\nNeither function is called automatically by `compileModule`
+  — you invoke\nthem when needed.\n\n## Module reference\n\n| Module | Contents |\n|---|---|\n|
+  `LLVM.IR` | Single-import façade — re-exports the complete public API |\n| `LLVM.IRBuilder`
+  | Builder monad: `compileModule`, `define`, `beginBlock`, `emitInstruction`, `declare`,
+  `declareVarArg`, `emitGlobal`, `emitTypeDecl`, `(<##>)` |\n| `LLVM.IRInstruction.Constructors`
+  | All instruction smart constructors |\n| `LLVM.IRTerminator.Constructors` | `ret`,
+  `retVoid`, `br`, `condbr`, `switch`, `unreachable` |\n| `LLVM.IROperand.Constructors`
+  | Constant and operand helpers (`int`, `float`, `nullPtr`, …) |\n| `LLVM.IRType.Constructors`
+  | Type aliases (`i32`, `ptr`, `float`, …) |\n| `LLVM.IRAnnotation.Constructors`
+  | Comment helpers: `comment`, `commentBlock`, `withComment` |\n| `LLVM.IRRenderer`
+  | `renderModule :: IRModule -> Text` |\n| `LLVM.IRModule` | `IRModule`, `IRFunction`,
+  `IRBlock`, `IRGlobal`, `IRLinkage`, `IRAttribute`, `verifyModule`, `typeCheckModule`
+  |\n| `LLVM.IRInstruction` | `IRInstrOp`, `IRInstruction`, `IRICmpCond`, `IRFCmpCond`,
+  `IRTailMarker`, `IRAtomicOrdering`, `IRAtomicOp` |\n| `LLVM.IROperand` | `IROperand`,
+  `IRConstant`, `IRTerminator`, `operandType`, `constantType` |\n| `LLVM.IRType` |
+  `IRType` |\n| `LLVM.IRBuilder.Class` | `MonadIRBuilder` typeclass (for transformer
+  stacks) |\n| `LLVM.IRBuilder.Error` | `IRBuilderError`, `displayError` |\n\n## Dependencies\n\n-
+  `base`\n- `text` — `Text` is used throughout for names and rendered output\n- `bytestring`
+  — string literal globals\n- `containers` — `Set` in verification\n- `mtl` — `StateT`,
+  `ExceptT`, `MonadFix`\n"
+description-type: markdown
+hash: bfd39f2970ea4ba07635f8e85807e3ec98e803bb385130f3d54d14ee55457909
+homepage: https://codeberg.org/laserpants/ir-builder
+latest: 0.1.0.0
+license-name: MIT
+maintainer: hildenjohannes@gmail.com
+synopsis: Monadic DSL for constructing LLVM IR
+test-bench-deps:
+  base: '>=4.7 && <5'
+  bytestring: '>=0.10 && <0.13'
+  containers: '>=0.6 && <0.8'
+  hspec: '>=2.10.0'
+  ir-builder: '>=0'
+  mtl: '>=2.2 && <2.4'
+  text: '>=1.2 && <3'
