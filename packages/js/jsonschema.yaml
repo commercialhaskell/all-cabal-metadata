@@ -1,6 +1,7 @@
 all-versions:
 - 0.2.0.0
 - 0.2.0.1
+- 0.3.0.0
 author: DPella AB
 basic-deps:
   aeson: '>=2.2 && <2.3'
@@ -12,6 +13,22 @@ basic-deps:
   vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog
+
+  ## 0.3.0.0
+  - Add value-directed schema construction: a structured `Schema` type (with `Field`,
+    `AdditionalProperties`, and `SchemaDocument`) plus `schemaToValue` /
+    `schemaDocumentToValue` renderers, re-exported from `Data.JSON.JSONSchema`. Build a
+    schema from runtime values when your "types" are data rather than Haskell types.
+    The `SRaw` constructor is an escape hatch for embedding an arbitrary schema `Value`
+    (any keyword outside the structured subset) at any node.
+  - Expose the detailed-error validation API through `Data.JSON.JSONSchema`:
+    `validate`, `validateWithErrors`, and `ValidationError(..)` are now re-exported
+    alongside `validateJSONSchema` (fixes the README's broken `JSONSchema.Validation`
+    import; resolves #1).
+  - Fix derived schemas for non-record products (tuples): emit `minItems`/`maxItems`
+    to pin the exact array length. Previously only `items: false` was emitted, which
+    caps the upper bound but wrongly accepted arrays shorter than the constructor's
+    arity. This changes the generated schema for such types (hence the major bump).
 
   ## 0.2.0.1
   - Widen dependency bounds to support GHC 9.12.2.
@@ -28,6 +45,8 @@ changelog-type: markdown
 description: |
   # jsonschema
 
+  [![Hackage](https://img.shields.io/hackage/v/jsonschema.svg)](https://hackage.haskell.org/package/jsonschema)
+
   Haskell library for deriving and validating JSON Schema (2020-12).
 
   This library provides:
@@ -43,7 +62,7 @@ description: |
   ## Features
 
   - Derive schemas with the `ToJSONSchema` type class; generic default handles most ADTs.
-  - Records become JSON objects with named properties, emit `"required"` for every field, and forbid extras via `additionalProperties: false`. Non-record products become arrays with `prefixItems` and `items: false`.
+  - Records become JSON objects with named properties, emit `"required"` for every field, and forbid extras via `additionalProperties: false`. Non-record products become fixed-length arrays with `prefixItems`, `items: false`, and `minItems`/`maxItems` pinning the exact length.
   - Sum types are modeled with discriminator tags:
     - Record constructors: object with a required `tag` (constructor name) and the record fields.
     - Non-record constructors: object `{ tag, contents }`, both required, where `contents` carries the constructor’s payload (array/object).
@@ -67,8 +86,7 @@ description: |
   import Data.Aeson (ToJSON, Value, object, (.=))
   import Data.Proxy (Proxy(..))
   import Data.Text (Text)
-  import Data.JSON.JSONSchema      -- ToJSONSchema(..), Proxy(..), validateJSONSchema
-  import JSONSchema.Validation     -- validate / validateWithErrors (optional)
+  import Data.JSON.JSONSchema      -- ToJSONSchema(..), Proxy(..), validateJSONSchema, validate, validateWithErrors, ValidationError(..)
   ```
 
   ### 1) Derive a schema for your type
@@ -139,7 +157,7 @@ description: |
   Or collect all validation errors:
 
   ```haskell
-  import JSONSchema.Validation (validate, validateWithErrors, ValidationError(..))
+  import Data.JSON.JSONSchema (validate, validateWithErrors, ValidationError(..))
 
   case validate personSchema (toJSON (Person "Alice" 30)) of
     Right ()   -> putStrLn "OK"
@@ -158,7 +176,42 @@ description: |
   ```
 
 
-  ### 3) Custom schemas for special types
+  ### 3) Value-directed construction
+
+  When your "types" are runtime *values* rather than Haskell types — e.g. an
+  interpreter whose type AST is a single datatype — derivation via `ToJSONSchema`
+  does not apply. Instead, fold your value into a `Schema` and render it; the library
+  owns the JSON encoding:
+
+  ```haskell
+  import Data.JSON.JSONSchema  -- Schema(..), Field(..), AdditionalProperties(..), SchemaDocument(..), schemaToValue, schemaDocumentToValue
+
+  userDoc :: SchemaDocument
+  userDoc = SchemaDocument
+    { schemaDefs = [("Code", SString (Just "^[a-z]+$"))]   -- a named $def
+    , schemaRoot = SObject
+        [ Field "code"  True  (SRef "Code")                -- required, references the $def
+        , Field "count" False SInteger                     -- optional
+        ]
+        APForbidden                                        -- additionalProperties: false
+    }
+
+  userSchema :: Value
+  userSchema = schemaDocumentToValue userDoc
+
+  ok  = validateJSONSchema userSchema (object ["code" .= ("abc" :: Text), "count" .= (3 :: Int)])  -- True
+  bad = validateJSONSchema userSchema (object ["code" .= ("ABC" :: Text)])                         -- False (off-pattern)
+  ```
+
+  A homogeneous map/dictionary is `SObject [] (APSchema valueSchema)`
+  (`additionalProperties: <schema>`). The `pattern` field is matched with TDFA
+  regexes (POSIX ERE), not the full ECMA-262 dialect, so keep patterns simple.
+
+  `Schema` covers the data-shape subset; for any keyword outside it (e.g.
+  `minLength`, numeric bounds, `title`), use the `SRaw` escape hatch to embed an
+  arbitrary schema `Value` at any node — e.g. `Field "name" True (SRaw (object ["type" .= ("string" :: Text), "minLength" .= (3 :: Int)]))`.
+
+  ### 4) Custom schemas for special types
 
   Provide an explicit instance when you need a specific schema shape:
 
@@ -193,9 +246,9 @@ description: |
 
   Released under the Mozilla Public License 2.0 by DPella AB. See `LICENSE` for details.
 description-type: markdown
-hash: 32f465b1b4f94574a3e081c9d339b7ea0346fd364eacaa17955425b6be5d5342
+hash: cff50f18d8a4ab56ba4c02ef2853cfca9531996ea1368b74e015eab370eb9dbe
 homepage: https://github.com/DPella/jsonschema
-latest: 0.2.0.1
+latest: 0.3.0.0
 license-name: MPL-2.0
 maintainer: |-
   matti@dpella.io,
