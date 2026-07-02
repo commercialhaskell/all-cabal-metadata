@@ -1,12 +1,13 @@
 all-versions:
 - '0.11'
+- '0.12'
 author: prozak
 basic-deps:
   MissingH: '>=1.6 && <1.7'
   ansi-terminal: '>=1.0 && <1.2'
   array: '>=0.5 && <0.6'
-  base: '>=4.17 && <4.19'
-  containers: '>=0.6 && <0.7'
+  base: '>=4.17 && <4.23'
+  containers: '>=0.6 && <0.9'
   directory: '>=1.3 && <1.4'
   haskell-src-exts: '>=1.23 && <1.24'
   haskell-src-meta: '>=0.8 && <0.9'
@@ -17,8 +18,8 @@ basic-deps:
   pretty-show: '>=1.10 && <1.11'
   rtk: '>=0'
   syb: '>=0.7 && <0.8'
-  template-haskell: '>=2.19 && <2.21'
-  time: '>=1.12 && <1.13'
+  template-haskell: '>=2.19 && <2.25'
+  time: '>=1.12 && <1.16'
 changelog: |
   # Changelog
 
@@ -27,7 +28,219 @@ changelog: |
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-  ## [Unreleased]
+  ## [0.12] - 2026-07-02
+
+  ### Changed
+  - Widened GHC support: the boot-library bounds now span GHC 9.4 through 9.14
+    (`base < 4.23`, `template-haskell < 2.25`, `containers < 0.9`,
+    `time < 1.16`). The endpoints are CI-tested — the pinned 9.4.7 toolchain
+    runs the full battery and the newest-GHC canary builds `-Werror` and runs
+    the cabal suites on 9.14.1. 0.11 capped `base` at 4.19 (GHC 9.6), which
+    made the package uninstallable on current compilers and failed Hackage's
+    own doc builder (GHC 9.8). Version bounds are now also stated once per
+    dependency instead of repeated across components, per Hackage guidance —
+    the executable's own stale `base < 4.19` copy is exactly the drift this
+    prevents
+
+  ### Added
+  - Block layout for generated pretty-printers (task 9b), the "pretty" layer on
+    top of 9a's correct-not-pretty printer. `rtk --generate-pp --pp-layout=block`
+    emits a `<Name>PP.hs` that indents and line-breaks bracket-structured
+    languages so the output reads like hand-written source; `--pp-layout=flat`
+    (the default) keeps 9a's one-line-per-construct output byte-for-byte.
+    Indentation is derived purely structurally from *block lists* — statement /
+    declaration lists (an `STMany` with no separator over a statement-shaped
+    element, or a `;`-separated list) — which wrap their elements in an
+    indented, line-broken block. The flanking delimiters (`{` `}` for C/Java,
+    `begin` `end` for PL/0) need no special handling and there is no bracket
+    charset baked into rtk: they render inline and the list supplies the indent,
+    so a grammar with no block lists simply degrades to flat. The generated
+    module stays dependency-free (it carries an in-module ~20-line layout
+    engine; no `pretty`/`prettyprinter` pulled into users' code).
+
+    Correctness is inherited and unbreakable: layout is whitespace, every corpus
+    grammar ignores whitespace, so block layout cannot change the parse —
+    `parse (print ast) == ast` holds by construction. The round-trip test
+    (`make test-pp`) gains block-mode cases (a small bracket grammar `block.pg`
+    and the c-compiler tutorial `c.pg`) that stay green, and `block.pg` opts into
+    a block-mode PP golden (`test/golden/block/BlockPP.hs`, gated through
+    `TestSupport.ppGoldenGrammars`) so the indented output is pinned and
+    reviewable. A forward guard (`GenPP.layoutSensitive`, `TODO(#95)`) falls back
+    to flat should a layout-sensitive (offside) lexer ever land (task 12); it is
+    a no-op today.
+
+    Honest scope — this is heuristic readability for bracket/terminator
+    languages, not universal beauty. `c.pg` and `block.pg` read idiomatically;
+    PL/0 reads well bar a minor wart (its top-level `procedure` list, being a
+    no-separator block list, indents one level); Java's statement/class bodies
+    indent correctly but its top-level preamble (package/import/type decls,
+    which are not a single broken list) runs together and multi-line doc-comment
+    tokens disturb the indentation, so Java is best left on flat for now. All of
+    these still round-trip green in block mode — only quality varies, never
+    correctness. Alignment, operator-aware wrapping and configurable width are
+    explicitly out of scope (later opt-in layers).
+  - Pretty-printer generation (task 9), the "emit" third of "Rewrite ToolKit".
+    `rtk --generate-pp <grammar> <out>` emits an opt-in fifth artifact
+    `<Name>PP.hs`: a module of `pp<Type>` functions that turn the AST RTK
+    generates for a grammar back into source text. `--debug-pp-spec` dumps the
+    printer to stdout. The generated module depends only on `base` (it imports
+    its grammar's `<Name>Parser` AST and `Data.List`) — no rtk imports, no new
+    packages, the same dependency discipline as the generated lexer/parser/
+    quasi-quoter. The flag is off by default, so the default invocation is
+    byte-for-byte unchanged and non-users see zero golden churn.
+
+    v1 is correctness-first, not pretty: exactly one space between tokens, no
+    indentation or alignment, and parenthesization is whatever the grammar's
+    own structure produces (no precedence/paren-insertion engine). The single
+    guarantee is the semantic round-trip `parse (print ast) == ast` — NOT
+    byte-faithful reproduction; comments and the original whitespace are lost
+    (the AST is lossy). That guarantee is enforced by a generated round-trip
+    test over a corpus (`make test-pp`, wired into CI): it parses each fragment,
+    prints, reparses, and asserts equality. 7b's position-transparent `RtkPos`
+    makes the reparsed AST (different source positions) compare `==` to the
+    original with no stripping, so under-parenthesization or a dropped token
+    becomes a failing test rather than a silently wrong program. The grammars
+    `p` and `sandbox` opt in to a PP golden snapshot (`<Name>PP.hs` in
+    `test/golden/`, gated through `TestSupport.ppGoldenGrammars` and compiled
+    by `make test-compile-goldens`); every other grammar stays opted out.
+
+    Dogfooding capstone: the printer RTK generates for its own grammar language
+    (`grammar.pg`) compiles and round-trips representative grammar ASTs — string
+    literals, regexes, typed/func/lifted rules, repetition/option/delimiter
+    forms and an imports block — so **RTK prints its own language**. Known v1
+    limitation: `grammar.pg`'s *own source* does not fully round-trip, because
+    its `str`/`regexplit`/`bigstr` rules use repetition over an
+    un-parenthesized alternation (e.g. `([^\\'] | backslash .)*`), which a
+    structural printer without a paren engine re-associates on reparse. This is
+    precisely the under-parenthesization the round-trip oracle is built to
+    catch; auto-parenthesization is a deliberately separate later task.
+
+    Supersedes #84 (predated the 8a–8c AST migration and pursued a "smart"
+    layout-hint design out of scope for the correctness-first v1).
+
+  ### Changed
+  - The pipeline computes directly over the generated AST (task 8c): the
+    historic `InitialGrammar`/`IRule`/`IClause` types — the hand-written
+    parsed-grammar representation dating back to the original `Parser.y` —
+    are retired. String-literal normalization, clause normalization and the
+    lexical-clause translation in GenX now consume `GrammarParser`'s
+    `Grammar`/`Rule`/`Clause` (compiled from the `test/golden/grammar/`
+    snapshot), the same types the compiled-in `GrammarQQ` quotes produce, so
+    normalization-level rewrites can be expressed as quasi-quoted patterns
+    (task 8d). The hand-written reference front end stays as the equivalence
+    oracle: `Parser.y`'s actions construct generated-AST values (same
+    constructors, spines and first-symbol positions), and the AST-equality
+    suite now also projects and compares the position of every node, since
+    `RtkPos` is equality-transparent. The `ASTAdapter` conversion layer is
+    replaced by `src/generated/Frontend.hs` (parse entry points, generated-AST
+    helpers, and the now-shared token-text cleanup: both lexers keep raw token
+    text and a single `cleanGrammarTokens` pass strips delimiters and
+    processes escapes after parsing). Generated artifacts are byte-identical
+    for every corpus grammar. The bootstrap coupling is now structural — a
+    grammar.pg change that reshapes the AST breaks the in-tree build until the
+    snapshot is re-accepted and the pipeline's matches are fixed; see
+    "Changing the grammar language" in BOOTSTRAP.md
+  - Normalization diagnostics point at the offending CLAUSE instead of the
+    rule header: the generated AST carries a source position on every node,
+    so errors like "a lifted (,) clause cannot be mixed with other clauses",
+    "repetition over the lexical rule ...", and the constructor-label checks
+    (case, reserved prefixes, duplicates — including the "first used at"
+    cross-reference) now report the line and column of the clause or label
+    itself, still with the rule named as context
+
+  ### Added
+  - Rewrites as quasi-quoted patterns (task 8d) — the headline: the "rewrite
+    toolkit" finally means it. Every generated `<Name>QQ` now comes with a
+    documented, tested rewrite recipe ("Rewriting parsed Java" in
+    docs/java-quasi-quotation-tests.md, exercised by `make
+    test-java-rewrite`): a rewrite is an ordinary function whose match arms
+    are quasi-quoted patterns and whose results are quasi-quoted
+    expressions, applied to every node of any AST value with SYB's
+    `everywhere`/`extT` — the packages generated code already depends on, so
+    there is no new API surface and no change to generated artifacts. The
+    same patterns drive queries via `everything`/`mkQ`. rtk eats this
+    cooking: its own pipeline now matches clause shapes with its own
+    compiled-in quoter — `Frontend.altElems`/`seqElems` flatten the `'|'`
+    and juxtaposition spines by matching `[clause| $cl1 | $cl2 |]` /
+    `[clause| $cl1 $cl2 |]`, `StringLiterals` picks string literals out of
+    syntax rules with `[clause| $StrLit:s |]`, and `Normalize`'s
+    repetition/option shaping matches `[clause| $cl1 * ~ $cl2 |]`-style
+    patterns — each conversion landed golden-neutral (artifacts
+    byte-identical, bootstrap fixed point intact). Steps where the
+    constructor spelling reads better (wildcard tests, scalar-`Name`
+    binders, state-threading plumbing) deliberately stay plain; the
+    conversion record and the discovered pattern-matching boundaries live
+    in docs/qq-grammar-rewrites-plan.md §8d
+  - Named constructors (task 8a): an alternative may carry a leading label —
+    `Expr = Add: Expr '+' Term | Term ;` — that names its generated AST
+    constructor (`Add RtkPos Expr Term`) instead of the positional
+    `Ctr__<Rule>__<index>` default, so code and quasi-quote patterns written
+    against generated ASTs survive alternative reordering and insertion. The
+    label binds tighter than `|`, scopes over one alternative's sequence, and
+    works inside parenthesized groups (naming the extracted group's
+    constructor, including under repetition through the list-proxy
+    machinery). Unlabeled alternatives keep today's generated names
+    byte-for-byte. Misuse is rejected with positioned diagnostics: names
+    must start uppercase, the generated-name prefixes `Ctr__`/`Anti_` are
+    reserved, explicit names must be unique across the whole grammar (all
+    constructors share one generated Haskell module, and the shared-type
+    constructor deduplication in GenAST would otherwise silently merge
+    duplicates), and lifted (`,Rule`) alternatives — which produce no
+    constructor — cannot be named, nor can anything in a lexical rule.
+    Surface syntax chosen over a trailing `@ctor(Name)` annotation after
+    proving LALR feasibility: the labeled grammar.pg's generated parser has
+    0 happy conflicts (as before) and the reference `Parser.y` keeps exactly
+    its 4 pre-existing state-6 reduce/reduce conflicts
+  - The generated quasi-quoter for RTK's own grammar language (`GrammarQQ`) is
+    compiled into rtk, beside `GrammarLexer`/`GrammarParser` in the snapshot
+    front-end component — possible since 0.11 made generated quasi-quoters
+    dependency-light (`template-haskell`, a GHC boot library, is the only
+    dependency the quasi-quoter adds). Grammar fragments can now be quoted
+    in-tree, and the unit suite smoke-tests it: `[clause| Name * |]` parses at
+    rtk's own compile time, `$cl`-style metavariables splice and bind through
+    the `Anti_*` constructors in both expression and pattern context. The
+    quotes produce the generated AST types, not the pipeline's
+    `InitialGrammar`; migrating the pipeline onto the generated AST so
+    normalization rewrites can be quasi-quoted is the follow-up (tasks 8c/8d
+    in docs/qq-grammar-rewrites-plan.md)
+  - PL/0 compiler tutorial (`tutorials/pl0-compiler/`): the language of Brian
+    Callahan's "Let's write a compiler" tutorial series, at the series'
+    parts 1-3 ("validator") milestone. Baseline Wirth PL/0 — empty statements
+    via `StatementOpt`, unary signs, `{ ... }` comments — generated from
+    `pl0.pg` into a conflict-free Happy parser that is byte-identical under
+    both front ends. Ships a validator driver (`Main.hs`), a valid/invalid
+    test corpus with positioned-diagnostic checks (`run_tests.sh`), and a
+    quasi-quotation test suite (`TestQQ.hs`) exercising construction,
+    splicing, pattern matching with metavariables (a miniature PL/0 → C code
+    generator) and SYB-based AST rewrite rules; wired into CI via
+    `make -C tutorials/pl0-compiler test`
+  - Lisp interpreter tutorial (`tutorials/lisp-interpreter/`): Peter
+    Norvig's lis.py ported to RTK — the reader is generated from a 15-line
+    grammar (`scheme.pg`), and the interpreter's special-form dispatch and
+    macro expansion (`let`, `when`, `unless`, `and`, `or`) are written as
+    quasi-quotation patterns; `make -C tutorials/lisp-interpreter test`
+    (wired into CI) runs Norvig's own test cases plus the examples, and the
+    tutorial's README is a section-by-section walkthrough against the
+    original essay
+
+  ### Changed
+  - grammar.pg names every constructor-producing alternative (`RuleSimple`,
+    `Star`, `Labeled`, `Ref`, ...), so the generated grammar front end's AST
+    reads like prose and `src/generated/ASTAdapter.hs` no longer references
+    any positional `Ctr__*` constructor — the ergonomics prerequisite for
+    retiring `InitialGrammar` (task 8c). The two `?`-rules whose
+    empty/present alternatives are synthesized (and therefore unnameable) —
+    `ImportsOpt` and `OptDelim` — are restructured away: the imports block is
+    inlined into `Grammar`'s two alternatives (`GrammarDef`/`GrammarImports`)
+    and the `~` delimiter into `Star`/`StarDelim`/`Plus`/`PlusDelim`. The
+    accepted language is unchanged; only grammar.pg's own AST shape moved
+
+  ### Fixed
+  - The reference lexer (`Lexer.x`) now accepts underscores in identifiers,
+    as grammar.pg's `id = [a-zA-Z][A-Za-z0-9_]*` has always specified; it
+    used to stop at the first `_` with a lexical error while the generated
+    (default) front end accepted the name — an invisible front-end
+    divergence until label names like `Mk_1` exercised it
 
   ## [0.11] - 2026-06-12
 
@@ -69,8 +282,8 @@ changelog: |
     `<Name>Lexer.x`/`<Name>Parser.y` pair and typechecks the result with
     `ghc -fno-code`. The golden suite diffs text only and sat green while the
     debug-test and t1 snapshots did not compile; the gate closes that
-    test-architecture hole (QQ goldens join once the regex-posix dependency
-    is dropped, task 8b)
+    test-architecture hole (the `<Name>QQ.hs` goldens are gated too, since
+    generated quasi-quoters dropped their regex dependency — see Fixed)
   - Source positions in generated ASTs: every constructor that generated
     parsers build (except the quasi-quotation-only `Anti_*` splice
     constructors) now stores the position of its alternative's first symbol
@@ -310,6 +523,17 @@ changelog: |
     declaration context compiled into nonsense. Both now `fail` in `TH.Q`,
     making the misuse a GHC compile error at the splice site ("this
     quasi-quoter cannot be used in a type/declaration context")
+  - A `$name` metavariable at the end of a line (or of the whole quote body)
+    silently stayed unrewritten, failing with a confusing parse error at the
+    `$`: the generated quasi-quoter's metavariable scan used regex-posix,
+    whose default newline option made the terminator class never match `\n`.
+    The scan is now a plain character function with the documented semantics
+    preserved (`$$` escapes, explicit `$Type:name` passthrough, the
+    unknown-metavariable error). Generated QQ modules consequently import no
+    regex packages at all — `regex-posix`/`regex-base` (which were never
+    declared rtk dependencies and compiled only as transitive flukes) are
+    gone from every user's generated-code dependency footprint, and the
+    README/cabal generated-code dependency lists shrank accordingly
   - Writing into a missing output directory no longer escapes as a raw
     `IOException`: `rtk g.pg /tmp/does/not/exist` now creates the directory
     and succeeds; IO failures that remain (no permission, a file where the
@@ -474,6 +698,8 @@ changelog-type: markdown
 description: |
   # RTK - Rewrite ToolKit
 
+  [![Hackage](https://img.shields.io/hackage/v/rtk.svg)](https://hackage.haskell.org/package/rtk)
+
   RTK generates parser and rewrite facilities from grammar specifications. It produces Alex lexer and Happy parser files, with support for quasi-quotation to embed parsed syntax directly in Haskell code.
 
   ## Features
@@ -514,6 +740,27 @@ description: |
   happy <Grammar>Parser.y --ghc -o <Grammar>Parser.hs
   ```
 
+  #### Optional: a pretty-printer (`--generate-pp`)
+
+  `--generate-pp` writes a fifth, opt-in artifact `<Grammar>PP.hs`: a
+  `base`-only module of `pp<Type>` functions that turn a parsed AST back into
+  source text. It guarantees only the *semantic* round-trip
+  `parse (print ast) == ast`, never byte-faithful reproduction: comments and the
+  original whitespace are lost because the AST is lossy. The flag is off by
+  default, so output is unchanged unless you ask for it.
+
+  Two layouts are available via `--pp-layout`:
+
+  - `flat` (default) — one space between tokens, no indentation; correct, not
+    pretty.
+  - `block` — indents and line-breaks bracket-structured languages (C-like
+    braces, PL/0-style `begin`/`end`) so output reads like hand-written source.
+    Indentation is derived structurally from statement/declaration lists, so it
+    adds no parentheses and degrades to flat for grammars without such lists.
+
+  Layout is whitespace, so `block` never changes the parse — it is heuristic
+  readability, and the round-trip guarantee holds in either mode.
+
   ### Using the generated code
 
   The generated modules are compiled as part of *your* project, so your project
@@ -531,6 +778,13 @@ description: |
   ```
   build-depends: base, array, syb, containers, template-haskell
   ```
+
+  The quasi-quoter is also the rewrite facility: quasi-quoted patterns as
+  match arms plus SYB's `everywhere`/`everything` rewrite and query parsed
+  ASTs with no further API — see "Rewriting parsed Java" in
+  [docs/java-quasi-quotation-tests.md](docs/java-quasi-quotation-tests.md)
+  for the worked recipe (rtk's own pipeline and the
+  write-you-a-haskell tutorial use the same shape).
 
   ## Grammar Format
 
@@ -556,6 +810,31 @@ description: |
   Ignore: ws  = [ \t\n]+ ;
   ```
 
+  ### Named constructors
+
+  By default the constructor generated for an alternative is positional
+  (`Ctr__<Rule>__<index>`), so inserting or reordering alternatives silently
+  renames constructors. An alternative may opt in to a stable name with a
+  leading label:
+
+  ```
+  Expr = Add: Expr '+' Term
+       | Sub: Expr '-' Term
+       | Term ;
+  ```
+
+  generates `data Expr = Add RtkPos Expr Term | Sub RtkPos Expr Term |
+  Ctr__Expr__0 RtkPos Term | ...` — code and quasi-quote patterns written
+  against `Add`/`Sub` survive grammar edits. The label binds tighter than `|`
+  and names exactly one alternative; it also works inside parenthesized
+  groups (`(Pair: key '=' value)*` names the extracted group's constructor).
+  Unlabeled alternatives keep their generated names. Explicit names must
+  start with an uppercase letter, must be unique across the whole grammar
+  (all constructors share one generated module), must avoid the reserved
+  `Ctr__`/`Anti_` prefixes, and cannot name a lifted (`,Rule`) alternative —
+  it passes a value through and produces no constructor. rtk rejects each of
+  these with a positioned diagnostic.
+
   See `test-grammars/grammar.pg` for the grammar language described in itself —
   that file is the authoritative definition of the grammar language: rtk parses
   your grammar with the parser it generated from it (self-hosting).
@@ -566,6 +845,11 @@ description: |
   - `java.pg` - Java language grammar
   - `grammar.pg` - Grammar for the grammar language itself (bootstrap)
   - `haskell.pg` - Haskell subset grammar
+
+  The `tutorials/` directory contains self-contained projects built with RTK,
+  including a C compiler and a port of Peter Norvig's lis.py Lisp interpreter
+  (quasi-quotation for special-form dispatch and macro expansion); see
+  [tutorials/README.md](tutorials/README.md).
 
   ## Building from Source
 
@@ -586,17 +870,17 @@ description: |
 
   Generated code (lexers, parsers, quasi-quoters) produced by RTK is exempt from this license and may be used without restriction.
 description-type: markdown
-hash: 6b713ecfe8ae07309d38850f25247227ce8ee5720cb6cd4d7985afc856f495d5
+hash: 542355fbfb8ee74bfb3f3f889b1431b306eba1f239a0996ec850776941b0aeff
 homepage: https://github.com/prozak/rtk
-latest: '0.11'
+latest: '0.12'
 license-name: MIT
 maintainer: nickolay.lysenko@gmail.com
 synopsis: Parser and rewrite facility generator from grammar specifications
 test-bench-deps:
   HUnit: '>=1.6 && <1.7'
-  base: '>=4.17 && <4.19'
-  containers: '>=0.6 && <0.7'
-  directory: '>=1.3 && <1.4'
+  base: '>=0'
+  containers: '>=0'
+  directory: '>=0'
   filepath: '>=1.4 && <1.6'
   rtk: '>=0'
-  syb: '>=0.7 && <0.8'
+  syb: '>=0'
