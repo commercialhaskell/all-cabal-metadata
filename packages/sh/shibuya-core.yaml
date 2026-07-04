@@ -7,20 +7,19 @@ all-versions:
 - 0.6.0.0
 - 0.7.0.0
 - 0.7.1.0
+- 0.8.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: ^>=2.2
+  atomic-primops: ^>=0.8.8
   base: ^>=4.21.0.0
   bytestring: ^>=0.12.2.0
   containers: ^>=0.7
   deepseq: ^>=1.5
   effectful: ^>=2.6.1.0
-  effectful-core: ^>=2.6.1.0
-  generic-lens: ^>=2.3.0.0
   hs-opentelemetry-api: ^>=1.0
   hs-opentelemetry-propagator-w3c: ^>=1.0
   hs-opentelemetry-semantic-conventions: ^>=1.40
-  lens: ^>=5.3.5
   nqe: ^>=0.6
   random: ^>=1.2
   stm: ^>=2.5
@@ -30,10 +29,109 @@ basic-deps:
   time: ^>=1.14
   unliftio: ^>=0.2
   unordered-containers: ^>=0.2
-  uuid: ^>=1.3
-  vector: ^>=0.13
 changelog: |
   # Changelog
+
+  ## 0.8.0.0 — 2026-07-04
+
+  ### Breaking Changes
+
+  - New application code should import the `Shibuya` umbrella module. It
+    re-exports the stable app, handler, batch, retry, policy, metrics, and
+    tracing surface. `Shibuya.Core` remains as a deprecated compatibility
+    re-export for this release.
+  - Runner internals moved under `Shibuya.Internal.Runner.*` and carry no PVP
+    stability guarantee. The public moves are:
+    `Shibuya.Runner.Metrics` -> `Shibuya.Core.Metrics`;
+    `Shibuya.Runner.{Master,Supervised,Batcher,BatchProcessor}` ->
+    `Shibuya.Internal.Runner.*`; `Shibuya.Runner.{Halt,Ingester}` ->
+    `Shibuya.Internal.Runner.*` as hidden implementation modules.
+    `Shibuya.Runner.Serial` and `Shibuya.Runner.Processor` were deleted.
+    `Shibuya.Prelude` is no longer exposed.
+  - `AppHandle` and `Master` are now opaque in public modules. Use
+    `getAppMaster`, `getAppMetrics`, `waitApp`, `stopApp`, and
+    `stopAppGracefully` instead of record fields. Metrics servers should import
+    `Master`, `getAllMetricsIO`, and `getProcessorMetricsIO` from
+    `Shibuya.App`.
+  - `runApp` now takes an `AppConfig` record and validates `inboxSize`.
+    Invalid sizes return `Left (AppConfigInvalid (InvalidInboxSize n))`
+    instead of crashing or stalling.
+
+    ```haskell
+    -- before
+    runApp IgnoreFailures 100 processors
+
+    -- after
+    runApp defaultAppConfig processors
+
+    -- custom strategy/size
+    runApp defaultAppConfig {strategy = IgnoreFailures, inboxSize = 100} processors
+    ```
+
+  - Handlers now receive `Message es msg` instead of `Ingested es msg`.
+    Handlers that only use `.envelope` or `.lease` need a signature update;
+    handlers can no longer call the adapter finalizer directly. The framework
+    owns finalization and calls `AckHandle.finalize` after the handler returns
+    or throws. Adapter finalizers should remain idempotent or phase-tracked.
+  - `BatchHandler` likewise receives `NonEmpty (Message es msg)` instead of
+    `NonEmpty (Ingested es msg)`.
+  - Removed dead or misleading surface: `HandlerError.HandlerTimeout`,
+    `RuntimeError.InboxOverflow`, `StreamStats.dropped`, `incDropped`,
+    the always-zero `shibuya_messages_dropped_total` Prometheus metric, and
+    `Shibuya.Telemetry.Config`.
+  - Renamed `Ordering` to `OrderingPolicy`, eliminating the need for
+    `import Prelude hiding (Ordering)`. `runSupervised` also takes the ordering
+    policy before `Concurrency`.
+  - `BatchingProcessor` now rejects `PartitionedInOrder` combined with `Ahead`
+    or `Async`, because batches are scheduled by `BatchKey`, not
+    `Envelope.partition`.
+  - Renamed `Shibuya.Stream.batchStream` to `chunksOf`.
+
+  ### New Features
+
+  - Added `mkEnvelope :: MessageId -> msg -> Envelope msg`. It fills optional
+    metadata with defaults; set optional fields with record update syntax. This
+    is the recommended construction path because future optional `Envelope`
+    fields can then be added without forcing adapter code to change, avoiding
+    the kind of major bumps required by 0.5.0.0 and 0.7.0.0.
+  - Added `mkIngested :: Envelope msg -> AckHandle es -> Ingested es msg`.
+  - Added `Message es msg`, the read-only handler view containing envelope and
+    optional lease.
+  - `PartitionedInOrder` with `Ahead` or `Async` is now enforced for
+    single-message processors. Messages sharing an `Envelope.partition` key are
+    processed and acknowledged in arrival order, distinct partitions run
+    concurrently up to the configured bound, and messages with no partition key
+    are unconstrained.
+
+  ### Bug Fixes
+
+  - Handler exceptions on the single-message runner path now finalize the message
+    with `AckRetry (RetryDelay 0)` using the same bounded finalizer retry helper
+    as batch processing, so adapters observe a disposition instead of silently
+    losing or stranding the delivery. Exhausted finalizer retry now halts the
+    processor loudly with the failed message id.
+  - Batch accumulation failures, including exceptions from user-provided
+    `batchKey` functions, now fail the processor loudly instead of letting the
+    batcher consumer die while the processor reports clean completion.
+  - Batch processing now isolates `AckHalt`: batches already emitted after a halt
+    no longer re-enter the user batch handler, and their messages are finalized
+    with `AckRetry (RetryDelay 0)` instead of being left unacknowledged.
+  - The keyed batch scheduler now keeps its pending queue bounded and owns its
+    reader and worker threads with structured cleanup, preventing unbounded pulls
+    under slow handlers and preventing finalization after forced shutdown returns.
+
+  ### Other Changes
+
+  - Corrected `Ahead` documentation. It preserves stream-yield order only;
+    handler execution and acknowledgement may complete in any order.
+  - `TraceHeaders` remains a type alias with the same representation as
+    `Headers`; its docs now clarify that it is only the parsed W3C trace-context
+    projection, while `Headers` is the complete broker header set.
+  - `shibuya-pgmq-adapter` and `shibuya-kafka-adapter` should migrate envelope
+    construction to `mkEnvelope` in their next releases.
+  - Removed unused dependencies from `shibuya-core`: `effectful-core`,
+    `generic-lens`, `lens`, `uuid`, and `vector`. Internal unlift imports now use
+    the stable top-level `Effectful` exports.
 
   ## 0.7.1.0 — 2026-06-15
 
@@ -206,9 +304,9 @@ description: |-
   Provides unified queue abstraction, NQE-based supervision, backpressure
   via bounded inbox, explicit ack semantics, and OpenTelemetry tracing.
 description-type: haddock
-hash: d884e84313a09c0639da8aa03475c06ce3c4ddbcff3cad98bcbcfb4b8041bbd3
+hash: 00b73ce9156bfff007e802150a6f5bc243272c70d454849a70e29f6a9132de87
 homepage: ''
-latest: 0.7.1.0
+latest: 0.8.0.0
 license-name: MIT
 maintainer: nadeem@gmail.com
 synopsis: Supervised queue processing framework for Haskell
@@ -216,6 +314,7 @@ test-bench-deps:
   QuickCheck: ^>=2.15
   base: ^>=4.21.0.0
   bytestring: '>=0'
+  containers: '>=0'
   effectful: '>=0'
   hs-opentelemetry-api: '>=0'
   hs-opentelemetry-exporter-in-memory: ^>=1.0
@@ -229,4 +328,3 @@ test-bench-deps:
   time: '>=0'
   unliftio: '>=0'
   unordered-containers: '>=0'
-  vector: '>=0'
