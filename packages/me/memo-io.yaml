@@ -1,0 +1,121 @@
+all-versions:
+- 1.0.0
+author: Brandon Chinn <brandonchinn178@gmail.com>
+basic-deps:
+  base: <5
+  ghc-prim: '>=0'
+  hashable: '>=0'
+  unordered-containers: '>=0'
+changelog: |
+  # v1.0.0
+
+  Initial release, with:
+
+  * `memoIO`
+  * `globalIO`
+  * `Global.newIORef`
+  * `Global.newMVar`
+  * `Global.newEmptyMVar`
+  * `Global.newTVar`
+changelog-type: markdown
+description: |
+  # memo-io
+
+  [![GitHub Actions](https://img.shields.io/github/actions/workflow/status/brandonchinn178/memo-io/ci.yml?branch=main)](https://github.com/brandonchinn178/memo-io/actions?query=branch%3Amain)
+  [![](https://img.shields.io/hackage/v/memo-io)](https://hackage.haskell.org/package/memo-io)
+
+  This library contains two main functions:
+
+  * `memoIO :: IO a -> IO (IO a)`: Return an IO action that will memoize the result of the given action for all subsequent calls.
+  * `globalIO :: (Typeable a) => IO a -> IO a`: Ensure the given IO action runs at most once.
+
+  This library also contains `MemoIO.Global` containing the following helpers for defining top-level global variables using `globalIO`. While global variables should usually be avoided, it's sometimes helpful in certain situations. `NOINLINE` is recommended in these cases for performance, but it's not required.
+
+  * `newIORef :: (Typeable a) => a -> IORef a`
+  * `newMVar :: (Typeable a) => a -> MVar a`
+  * `newEmptyMVar :: (Typeable a) => MVar a`
+  * `newTVar :: (Typeable a) => a -> TVar a`
+
+  This library has very minimal dependencies. If you want absolutely zero dependencies other than `base`, and only want to use `memoIO`, turn off the `global-io` flag.
+
+  ## Usage
+
+  ```hs
+  import Data.IORef
+  import Data.Time (getCurrentTime)
+  import MemoIO (memoIO)
+  import qualified MemoIO.Global as Global
+
+  myRef :: IORef Int
+  myRef = Global.newIORef 0
+  {-# NOINLINE myRef #-}
+
+  main :: IO ()
+  main = do
+    getCurrentTimeOnce <- memoIO getCurrentTime
+    t1 <- getCurrentTimeOnce
+    t2 <- getCurrentTimeOnce
+    -- t1 == t2
+
+    modifyIORef' myRef (+ 1)
+    r <- readIORef myRef
+    -- r == 1
+  ```
+
+  ## FAQ
+
+  ### I don't want a dependency! How can I do this myself?
+
+  If you want to avoid a dependency for `memoIO`, you could simply reimplement it yourself. The source code in `MemoIO.Internal.Memo` only depends on `base` and can be vendored into your library.
+
+  To avoid a dependency for global variables, the key technique is to do the following:
+
+  ```hs
+  import GHC.Exts (noinline)
+  import System.IO.Unsafe (unsafePerformIO)
+
+  myRef_caf, myRef :: IORef Int
+  myRef_caf = unsafePerformIO (newIORef 0)
+  myRef = noinline myRef_caf
+  ```
+
+  The `noinline` function from `GHC.Exts` is specially designed to avoid inlining, which is a stronger guarantee than the `NOINLINE` pragma, which is best-effort and might not prevent some advanced optimizations GHC makes. But it does require breaking out a separate definition, so that the `noinline myRef_caf` expression itself could be inlined, while the `unsafePerformIO ...` expression won't.
+
+  If GHC < 9.0, import `noinline` from `GHC.Prim` from `ghc-prim` instead.
+
+  ### Global variables bad!
+
+  Agreed. In most cases, there are better techniques available. But in some cases, global variables is just the only way to provide the API one wants. If this is the case, you want a semantic guarantee that the compiler respects the global variable.
+
+  Some examples:
+  * [random](https://hackage.haskell.org/package/random) uses a global variable for the global RNG ([ref](https://github.com/haskell/random/blob/v1.3.0/src/System/Random/Internal.hs#L799-L802))
+  * GHC itself uses a few global variables, for example caching GCC search directories ([ref](https://gitlab.haskell.org/ghc/ghc/-/blob/ghc-9.14/compiler/GHC/Linker/Loader.hs#L1550-L1555))
+
+  ### Why not just `unsafePerformIO` + `NOINLINE`?
+
+  The standard idiom for global variables has been:
+
+  ```hs
+  myRef :: IORef Int
+  myRef = unsafePerformIO $ newIORef 0
+  {-# NOINLINE myRef #-}
+  ```
+
+  This should work in most cases, but the `NOINLINE` pragma is best effort, and people have anecdotally shared that it doesn't prevent inlining in all cases. See also: [I don't want a dependency! How can I do this myself?](#i-dont-want-a-dependency-how-can-i-do-this-myself)
+
+  ## Related work
+
+  * [`global-variables`](https://hackage.haskell.org/package/global-variables) is another package doing something similar, but it hasn't been updated since 2012, requires manually specifying a String identifier, and only exports the functions for defining global variables without the general machinery
+  * [Top level mutable state](https://wiki.haskell.org/index.php?oldid=64612) discussion in the Haskell Wiki
+  * [Rejected GHC proposal](https://github.com/ghc-proposals/ghc-proposals/pull/766) for adding language support
+description-type: markdown
+hash: 947eb40f422e4873e54ba3bdc546cd696fd070c2c3890498a8bd2d444ec9684b
+homepage: https://github.com/brandonchinn178/memo-io#readme
+latest: 1.0.0
+license-name: BSD-3-Clause
+maintainer: Brandon Chinn <brandonchinn178@gmail.com>
+synopsis: Memoize and global IO utilities.
+test-bench-deps:
+  base: <5
+  memo-io: '>=0'
+  time: '>=0'
