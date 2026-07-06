@@ -1,11 +1,13 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Masahiro Sakai
 basic-deps:
   base: '>=4.7 && <5'
   containers: '>=0.6 && <0.8'
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
+  hashable: '>=1.3 && <1.6'
   language-smtlib: '>=0'
   megaparsec: '>=9.0 && <10'
   parser-combinators: '>=1.0 && <1.4'
@@ -21,7 +23,43 @@ changelog: |
   and this project adheres to the
   [Haskell Package Versioning Policy](https://pvp.haskell.org/).
 
-  ## Unreleased
+  ## 0.2.0.0 - 2026-07-06
+
+  - Add `UnknownCommand` (to `Command`) and `ROther` (to `CommandResponse`) so a
+    syntactically well-formed but unrecognized command or solver response can be
+    kept verbatim for the application to handle, instead of failing the parse.
+    Command parsing stays strict by default (`parseScript`/`pCommand` reject an
+    unknown head keyword); the new lenient parsers `pCommandLenient` /
+    `pScriptLenient` (in `Language.SMTLIB.Parser.Command`, run via `parseWith`)
+    produce `UnknownCommand` instead.  The fallback fires only on an unknown head
+    keyword — a recognized command with malformed arguments still fails.
+    Solver-response parsing (`pCommandResponse`) is always lenient, keeping an
+    unrecognized response as `ROther`.
+  - `language-smtlib-fmt` gains a `--lenient` flag that formats scripts
+    containing unrecognized commands (via `pScriptLenient`) instead of failing;
+    without it the formatter stays strict as before.
+  - Derive `Ord`, `Generic` and `Hashable` for every AST type (and `SrcSpan`),
+    so syntax trees can be used as `Data.Map`/`Data.HashMap` keys.  These
+    comparisons and hashes are structural and follow the existing `Eq`
+    (numeric literals compare by raw lexeme; annotations participate, so erase
+    them with `noAnn` for annotation-insensitive keys).  This adds a dependency
+    on the `hashable` package (`>= 1.3 && < 1.6`).
+  - Read the `test/samples/smt/` sample files as UTF-8 explicitly, so the test
+    suite no longer fails on the non-ASCII samples under a non-UTF-8 locale
+    (e.g. `C`/`POSIX`).
+  - `Language.SMTLIB.Parser` now re-exports the `Language.SMTLIB.Parser.Command`
+    and `Language.SMTLIB.Parser.Response` combinators, making it the single,
+    complete public parsing API.  The command combinators (including the lenient
+    `pCommandLenient` / `pScriptLenient` variants) are therefore now reachable
+    from the umbrella `Language.SMTLIB` module too, matching the response
+    combinators and removing the need to import `Language.SMTLIB.Parser.Command`
+    separately.  The umbrella drops its own direct `Language.SMTLIB.Parser.Response`
+    re-export, as it now arrives transitively through `Language.SMTLIB.Parser`.
+  - Rename the developer executable `language-smtlib-exe` to `language-smtlib-fmt`,
+    and replace the `conformance` build flag with a broader manual `tools` flag
+    that now gates **both** `language-smtlib-fmt` and `language-smtlib-conformance`.
+    Neither executable is built by a plain `stack build` anymore; pass
+    `--flag language-smtlib:tools` to build them.
 
   ## 0.1.0.0 - 2026-06-08
 
@@ -51,6 +89,7 @@ description: |
   # language-smtlib
 
   [![build](https://github.com/msakai/language-smtlib/actions/workflows/build.yaml/badge.svg)](https://github.com/msakai/language-smtlib/actions/workflows/build.yaml)
+  [![Hackage](https://img.shields.io/hackage/v/language-smtlib.svg)](https://hackage.haskell.org/package/language-smtlib)
 
   A robust, `Text`-based Haskell library for reading, writing and incrementally
   streaming the [SMT-LIB 2](https://smt-lib.org/) format.
@@ -60,7 +99,9 @@ description: |
   - **Full SMT-LIB 2.7 grammar** — commands, terms, sorts, datatypes
     (`declare-datatype(s)`, `match`, `par`), the 2.7 additions (`lambda`,
     `declare-sort-parameter`, `define-const`, the `_` wildcard pattern), and
-    solver command responses.
+    solver command responses. See [docs/conformance.md](docs/conformance.md) for
+    the exact conformance boundaries, benign supersets, and how solver-specific
+    extensions are handled.
   - **`Text`-based** throughout, with rich parse errors from
     [megaparsec](https://hackage.haskell.org/package/megaparsec).
   - **Optional source spans.** Every AST node carries a final annotation type
@@ -127,22 +168,6 @@ description: |
   | `Language.SMTLIB.Printer` | rendering to `Text` |
   | `Language.SMTLIB.Reader` / `.Reader.Handle` | pure / `Handle`-based incremental readers |
 
-  ## Conformance notes
-
-  - Targets SMT-LIB **2.7** as the baseline. The string-escape rules and
-    reserved-word set are isolated in `Language.SMTLIB.Syntax.Constant` and
-    `Language.SMTLIB.Internal.Lexical` for easy verification against the 2.7
-    reference. The `->` map sort parses as an ordinary sort application; the
-    higher-order apply operator `_` is parsed where it coincides with the
-    indexed-identifier syntax (`(_ f x)`), matching the 2.7 concrete grammar
-    (Appendix B), which adds no dedicated application production.
-  - As a benign superset, Unicode letters are accepted in simple symbols (so
-    identifiers like `あいうえお` need no quoting), and `(push)` / `(pop)` without
-    a numeral are read as `(push 1)` / `(pop 1)`.
-  - Numeric literals (decimal/hex/binary) keep their raw lexeme, so printing
-    round-trips byte-for-byte; use the interpreters in
-    `Language.SMTLIB.Syntax.Constant` for their values.
-
   ## Building
 
   ```
@@ -150,13 +175,28 @@ description: |
   stack test     # round-trip properties, framer units, and sample files
   ```
 
+  ## Testing tools
+
+  Two developer tools exercise the parser and printer against real-world corpora.
+  Both are gated behind the manual `tools` flag, so they stay off by default — out
+  of a plain `stack build`/`stack test`, and never a burden on downstream
+  consumers. CI builds them behind the flag so they cannot bit-rot, but does not
+  run them:
+
+  ```
+  stack build --flag language-smtlib:tools
+  ```
+
+  - `language-smtlib-fmt` parses a file/stdin and re-emits it canonically (the
+    corpus script below drives it);
+  - `language-smtlib-conformance` round-trips large external benchmark suites.
+
   ### Testing against large external benchmarks
 
   To stress-test the parser and printer against the full SMT-LIB / SMT-COMP
-  benchmark suites on [Zenodo](https://zenodo.org/), there is an optional
-  `language-smtlib-conformance` driver, built only behind the `conformance` flag
-  (so it is never part of the normal build, test suite, or CI) and run on
-  benchmark data that is downloaded separately and never committed. See
+  benchmark suites on [Zenodo](https://zenodo.org/), use the
+  `language-smtlib-conformance` driver. Running it requires benchmark data that is
+  downloaded separately and never committed. See
   [`conformance/README.md`](conformance/README.md).
 
   ### Round-trip checking a corpus of `.smt2` files
@@ -164,8 +204,9 @@ description: |
   For a quick, dependency-free check against an arbitrary collection of `.smt2`
   files (for example the example/regression suites shipped with cvc5, OpenSMT,
   Yices2, or Z3), use [`scripts/roundtrip-check.sh`](scripts/roundtrip-check.sh).
-  It drives the `language-smtlib-exe` front end (parse → render) over every file
-  and verifies that the canonical rendering is idempotent:
+  It drives the `language-smtlib-fmt` front end (parse → render) over every file
+  and verifies that the canonical rendering is idempotent (the script builds it
+  with the `tools` flag when run with `--build`):
 
   ```
   scripts/roundtrip-check.sh [--build] [--out DIR] [PATH...]
@@ -197,17 +238,19 @@ description: |
   scripts/roundtrip-check.sh --build --out /tmp/rt misc
   ```
 description-type: markdown
-hash: ed9833fd336801464fe45c7f6658030e116b6d62113da648734711f825e064a3
+hash: c46bf3f2e49f544548b66da06aa0c352e5194fefd279e45de1217d460b6e7b49
 homepage: https://github.com/msakai/language-smtlib#readme
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: masahiro.sakai@gmail.com
 synopsis: Parsing, printing and incremental I/O for the SMT-LIB 2 format
 test-bench-deps:
   QuickCheck: '>=0'
   base: '>=4.7 && <5'
+  containers: '>=0'
   directory: '>=0'
   filepath: '>=0'
+  hashable: '>=0'
   language-smtlib: '>=0'
   megaparsec: '>=0'
   quickcheck-instances: '>=0'
@@ -215,3 +258,4 @@ test-bench-deps:
   tasty-hunit: '>=0'
   tasty-quickcheck: '>=0'
   text: '>=0'
+  unordered-containers: '>=0'
