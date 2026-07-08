@@ -1,5 +1,6 @@
 all-versions:
 - 1.0.0.0
+- 1.1.0.0
 author: Zoey McBride
 basic-deps:
   array: ^>=0.5
@@ -13,6 +14,45 @@ changelog: |
 
   Major release 1.0
   -----------------
+
+  ## Version 1.1.0.0 (07-08-2026)
+
+  This version revamps the class interface for `BinaryTranscoder`. Functions now
+  are named with octets in mind rather than bytes so that functions specific to
+  the `BinaryTranscoder` are easy to spot. Namely, the following functions got
+  renamed:
+
+  | Old              | New              |
+  |------------------|------------------|
+  | `lengthBytes`    | `totalOctets`    |
+  | `lengthBytes`    | `totalOctets`    |
+  | `serializeValue` | `unpackSerial`   |
+  | `packBytes`      | `packOctets`     |
+  | `unpackBytes`    | `unpackOctets`   |
+  | `pushByte`       | `pushOctetTop`   |
+  | `pushByteEnd`    | `pushOctetEnd`   |
+  | `takeBytes`      | `takeOctetsTop`  |
+  | `takeBytesEnd`   | `takeOctetsEnd`  |
+  | `dropBytes`      | `dropOctetsTop`  |
+  | `dropBytesEnd`   | `dropOctetsEnd`  |
+  | `splitAtByte`    | `splitOffset`    |
+  | `spanBytes`      | `spanOctetsTop`  |
+  | `spanBytesEnd`   | `spanOctetsEnd`  |
+  | `replicateByte`  | `replicateOctet` |
+  | `singleton`      | `fromOctet`      |
+
+  The `unpackValue` function was replaced with the `unpackValueCPU`,
+  `unpackValueBE`, and `unpackValueLE` functions, so endianness of the unpacked
+  value can be specified.
+
+  Also the `packValue` function got the same change. The functions `packValueBE`
+  and `packValueLE` replace it.
+
+  The function `swapOrder` is introduced so that the internal order of the
+  transcoder can be flipped without unpacking the value.
+
+  Unit tests for xcodec can now be found as part of [ipfshs](
+  https://git.sr.ht/~z0/ipfshs/).
 
   ## Version 1.0.0.0 (05-21-2026)
 
@@ -86,19 +126,14 @@ changelog: |
   ```
 changelog-type: markdown
 description: |
-  xcodec
-  ------
-
-  <!-- TODO: replace header with this to get badges
   xcodec [![hackage.haskell.org](
   https://img.shields.io/badge/hackage%2Ehaskell%2Eorg-5C5181?logo=haskell)](
   https://hackage.haskell.org/package/xcodec)[![builds.sr.ht status](
-  https://builds.sr.ht/~z0/xcodec/commits/main/xcodec-testing.yml.svg)](
-  https://builds.sr.ht/~z0/xcodec/commits/main/xcodec-testing.yml?)
-  -----------------------------------------------------------------
-  -->
+  https://builds.sr.ht/~z0/xcodec/commits/main/ipfshs-ci.yml.svg)](
+  https://builds.sr.ht/~z0/xcodec/commits/main/ipfshs-ci.yml?)
+  ------------------------------------------------------------
 
-  The `XCodec` Haskell library provides a type-class for generic programming on
+  The `xcodec` Haskell library provides a type-class for generic programming on
   bit data for writing encoders and decoders for codecs. The `BinaryTranscoder`
   class provides a common interface of methods for processing binary data, and
   default instances for the `bytestring` types: `ByteString`, `ShortByteString`,
@@ -109,10 +144,10 @@ description: |
   Why?
   ----
 
-  `XCodec` exists to abstract common patterns that arise when writting code with
+  `xcodec` exists to abstract common patterns that arise when writing code with
   the `bytestring` library in Haskell:
   - Reusing code for `ShortByteString`, `ByteString` and `LazyByteString`.
-  - Having common interface for transfering into the bytestring `Builder` type.
+  - Having common interface for transferring into the bytestring `Builder` type.
   - Reading to and from numeric values for bitwise manipulation or initializing
   from constant values.
 
@@ -124,7 +159,7 @@ description: |
   Examples
   --------
 
-  Using `XCodec` we can easily read numeric bit data to binary formats,
+  Using `xcodec` we can easily read numeric bit data to binary formats,
   programmatically:
 
   ```haskell
@@ -140,43 +175,52 @@ description: |
 
   -- Infers: packValue :: Integer -> LazyByteString
   exLazy :: LazyByteString
-  exLazy = packValue (0xf000000000000000000000000000000000000000000d :: Integer)
+  exLazy = packValue (0xf0000000000000000000000d :: Integer)
 
   -- Infers: packValue :: Word16 -> ShortByteString
   exShort :: ShortByteString
   exShort = packValue (0xcafe :: Word16)
   ```
 
-  And then serialize them through a common interface:
+  And then serialize them through a common interface which makes it easy to
+  intersperse data from different formats:
 
   ```haskell
-  import Data.ByteString.Builder (toLazyByteString, string8)
+  import Data.ByteString.Builder qualified as Builder
+  import Data.ByteString.Lazy (LazyByteString)
   import Data.XCodec.BinaryTranscoder (serializeValue)
 
-  deadbeefThreeTimes :: LazyByteString
-  deadbeefThreeTimes =
-    toLazyByteString . mconcat $
-      [ serializeValue exLazy,
-        serializeValue exStrict,
-        serializeValue exShort,
-        string8 "Hello, World!"
+  -- We can join several BXCs and Builders into a single unit of data.
+  exBuilder :: LazyByteString
+  exBuilder =
+    Builder.toLazyByteString . mconcat $
+      [ serializeValue exLazy, -- serializeValue :: LazyByteString -> Builder
+        serializeValue exStrict, -- serializeValue :: ByteString -> Builder
+        serializeValue exShort, -- serializeValue :: ShortByteString -> Builder
+        Builder.string8 "Hello, World!" -- string8 :: String -> Builder
       ]
   ```
 
   It also enables extracting binary data into `Integer` format so that bitwise
-  transformations can be performed on large sets of binary data in *O(n)* time:
+  transformations can be performed on large sets of binary data in *O(n)* time
+  with a specified [byte-order](https://en.wikipedia.org/wiki/Endianness):
 
   ```haskell
-  import Data.Bits ((.<<.), (.&.))
-  import Data.Word (Word8)
-  import Data.XCodec.BinaryTranscoder (unpackValue)
+  import Data.Bits ((.>>.), (.&.))
+  import Data.Word (Word32)
+  import Data.XCodec.BinaryTranscoder (BinaryTranscoder, unpackValue)
 
-  -- Extracts the byte at the bit number (LSB=0).
-  byteWindowAt :: (BinaryTranscoder bxc) => bxc -> Int -> Word8
-  byteWindowAt bxc idx = fromIntegral $ (unpackValue bxc .>>. idx) .&. 0xFF
+  -- We can easily read an entire bit-set representation of transcoder data,
+  -- directly from LazyByteString because it derives BinaryTranscoder. This
+  -- function produces its big-endian representation
+  largeBitSet :: Integer
+  largeBitSet = unpackValueBE exBuilder
+
+  -- Now, we can perform bitwise operations on the value, for instance, extracting
+  -- the lower bits 32nd-63rd bits from a little-endian value
+  extract32bits :: Word32
+  extract32bits = fromIntegral ((unpackValueLE exBuilder .>>. 32) .&. 0xFFFFFFFF)
   ```
-
-  <!-- TODO: add unit testing for xcodec
 
   Development
   -----------
@@ -184,8 +228,6 @@ description: |
   Unit tests are provided on the main [ipfshs repo](https://git.sr.ht/~z0/ipfshs),
   and bugs can be reported on [ipfshs ticket tracker](
   https://todo.sr.ht/~z0/ipfshs).
-
-  -->
 
   Licensing
   ---------
@@ -196,9 +238,9 @@ description: |
   Copyright © 2026 Zoey McBride | [zoeymcbride@mailbox.org](
   mailto:zoeymcbride@mailbox.org)
 description-type: markdown
-hash: 3b98f2617be940a2985906f17b74ea114b7495aa24448319a3bc519ee70e8795
+hash: 750ca27746e0a097e881c91db3b31d277ef6fc6bb05a8b38c08d439bdfc10be1
 homepage: ''
-latest: 1.0.0.0
+latest: 1.1.0.0
 license-name: BSD-3-Clause
 maintainer: zoeymcbride@mailbox.org
 synopsis: Classes for working with generically typed codecs.
