@@ -1,13 +1,18 @@
 all-versions:
 - 0.1.0
 - 0.2.0
+- 1.0.0
 author: Gusten Isfeldt
 basic-deps:
-  base: '>=4.7 && <4.15'
+  base: '>=4.7 && <5'
+  bytestring: '>=0.10 && <1'
+  containers: '>=0.6 && <1'
   directory: '>=1.3.3 && <1.4'
+  futhark-manifest: ==1.9.0.0
   futhask: '>=0'
   raw-strings-qq: '>=1.1 && <1.2'
   split: '>=0.2.3 && <0.3'
+  text: '>=2.0.1 && <3'
 changelog: |-
   # Changelog for futhask
 
@@ -15,72 +20,127 @@ changelog: |-
   Change in the name of the Monad from `FT` to `Fut`. This is a breaking change, but in principle a simple search and replace should fix it. The motivation for the change is both that it is more descriptive, and the introduction of the transformer. `FutT` simply looks better then `FTT`, especially in names using CamelCase. The original name `FT` was inspired by `ST`, since they both use rigid type variables for similar purposes.
 changelog-type: markdown
 description: "# Futhask\nFuthask is a code generator that aims to create safe, Haskell
-  friendly wrappers for Futhark libraries.\n\n## Installation\n    stack install\n\n##
-  Use\n### Generate Code\n    futhask [Backend] [Futhark.h] [HaskellSourceDir] [ModuleName]\n\n####
-  Example\n    futhark opencl --library myprogram.fut\n    futhask opencl myprogram.h
-  src MyLibrary\n\nFor a simple example of how generated haskell code can be used,
-  see [FuthaskExample](https://gitlab.com/Gusten_Isfeldt/futhaskexample)\n\n### Import
-  Code\n    import [ModuleName]\n    import [ModuleName].Entries\n    \nIf using `stack`
-  add `c-sources: [Futhark.c]` to the `library` section of `package.yaml`\n\n####
-  OpenCL\n    extra-libraries: OpenCL \n\n#### CUDA\n    include-dirs: /opt/cuda/include\n
-  \   extra-lib-dirs: /opt/cuda/lib\n    extra-libraries: cuda cudart nvrtc\n\n###
-  Dependencies\n`transformers` and `massiv` are required for all backends.\nThe codes
-  generated for OpenCL and CUDA, both refer to types from the `OpenCL` and `cuda`
-  packages respectively. This is only relevant if one wants to use certain functions
-  in the raw interface, but, without modification, the generated code will not compile
-  without these dependencies.\n\n## Generated Code\nThe generated code can be split
-  in two main parts, raw and wrapped. The raw interface is simply the C-functions
-  wrapped in the `IO`-monad, providing no added safety and requiring manual memory
-  management. The wrapped interface uses `newForeignPtr` to introduce all Futhark
-  pointers to the GC, and provides function types closer to those used within Futhark,
-  returning tuples instead of writing to pointers.\n\n### Context Generation\n    getContext
-  :: [ContextOption] -> IO Context\n\nAvailable context options will depend on backend
-  used.\n\n### The Fut monad\nTo make the wrappers safe, and reduce clutter from explicitly
-  passing around the context, the `Fut` monad is introduced. The `Fut` monad is an
-  environment monad that implicitly passes the context around as necessary. Like the
-  `ST` monad, the `Fut` monad is parameterised by a rigid type variable to prevent
-  references to the context from escaping the monad.\n\nTo run computations, the function\n\n
-  \   runFutIn :: Context -> (forall c. Fut c a) -> a\n\nis used. Additionally\n\n
-  \   runFutWith :: [ContextOption] -> (forall c. Fut c a) -> a\n    runFut :: (forall
-  c. Fut c a) -> a\n\nare defined for convienience for cases where the context doesn't
-  need to be reused.\n\n### The FutT transformer\nFor more flexibility, the FutT monad
-  transformer can be used. For convenience the type synonyms\n\n    type Fut c = FutT
-  c Identity\n    type FutIO c = FutT c IO\n\nare defined, but entry-points are in
-  the general `Monad m => FutT c m`.\n\nTo run the transformer \n    \n    runFutTIn
-  :: Context -> (forall c. FutT c m a) -> m a\n    runFutTWith :: [ContextOption]
-  -> (forall c. FutT c m a) -> m a\n    runFutT :: (forall c. FutT c m a) -> m a\n\nFor
-  lifting\n\n    mapFutT :: (m a -> n b) -> FutT c m a -> FutT c n b\n    map2FutT
-  :: (m a -> n b -> k c) -> FutT c' m a -> FutT c' n b -> FutT c' k c\n    pureFut
-  :: Monad m => Fut c a -> FutT c m a\n    unsafeFromFutIO :: FutIO c a -> Fut c a\n\n####
-  Running transformer stacks\nWhen using `FutT c` with other transformers in a stack
-  the type of the function running the monad may need to be defined explicitly. \nIn
-  the same way as `runFutT`, these signatures require an explicit `forall` to force
-  `c` to be fully polymorphic.\n\n    runMyMonad :: (forall c. MyMonad c a) -> a \n\nThis
-  requires the `RankNTypes` extension.\n\n### Input and Output\nFor conversion between
-  Futhark values and Haskell values, two classes are defined.\n\n    class Input fo
-  ho where\n        toFuthark :: Monad m => ho -> FutT c m (fo c) \n\n    class Output
-  fo ho where\n        fromFuthark :: Monad m => fo c -> FutT c m ho\n\nInstances
-  of Input and Output are generated for all transparent Futhark-arrays. The Haskell
-  representation is `Array S` from `Data.Massiv.Array`. The absence of functional
-  dependencies in the definitions might require more explicit type signatures, but
-  gives more flexibility to define new instances. For tuples of instances, functions
-  on the form `fromFutharkTN`, where `N` is the tuple size, are defined.\n\n### Memory
-  management\nAll of the wrapped values have finalizers, and should *eventually* be
-  garbage collected. However, GHCs GC does not know how much memory the context is
-  using, and so collection will not always be triggered frequently enough. This is
-  primarily an issue when the program iterates on Futhark values, without any Haskell-side
-  allocations.\n\nOne way to deal with this is to manually manage the memory using\n\n
-  \   finalizeFO :: (MonadIO m, FutharkObject wrapped raw) => wrapped c -> FutT c
-  m ()\n\nAs with any manual memory management, the programmer is responsible for
-  ensuring that the finalized value will not be used afterwards. For cases where the
-  object is used in more than one thread without synchronisation,\n\n    addReferenceFO
-  :: (MonadIO m, FutharkObject wrapped raw) => wrapped c -> FutT c m ()\n\ncan be
-  used. `addReferenceFO` increments the reference counter of the object and `finalizeFO`
-  will just decrement this counter until it's `0`.\n\n\n"
+  friendly wrappers for Futhark libraries.\n\n## Installation\n```Shell\ncabal install
+  futhask\n```\n\n## Generating code \n### Syntax\n```Shell\nfuthask [LIBNAME] [LIBVER]
+  [PROGRAM.c] [PROGRAM.json] [DEST]\n```\n\n#### Example\n```Shell\nfuthark opencl
+  --library myprogram.fut\nfuthask mylib 1.0 myprogram.c myprogram.json mylibrary\n```\n\n###
+  Using the generated code\nTo use local libraries, add them to the `cabal.project`\n
+  \   \n    packages:\n        DEST/*.cabal\n        *.cabal\n    \nThen add them
+  as imports in the cabal file as usual\n```cabal\n    ...\n    build-depends:\n        ...\n
+  \       mylib\n        ...\n```\nand then \n\n```haskell\nimport Mylib\n```\n\nto
+  get the basic interface which should be sufficient for many cases. For more granular
+  imports, or if the access to the raw interface is desired, The following submodules
+  are available\n\n - `Context` wrapped context instance\n - `Monad` Fut monad definition\n
+  - `TypeDec` wrapped type declarations\n - `TypeOps` instances of various classes
+  for the wrapped types \n - `Types` reexports `TypeDec` and `TypeOps`\n - `Conversion`
+  instances of `Convertible`\n - `EntryPoints` wrapped entry points\n - `Raw` simply
+  the C-API imported with the FFI\n    - `Context` context and config functions\n
+  \   - `TypeDec` raw type declarations\n    - `TypeOps` type specific utility functions\n
+  \   - `Types` reexports `TypeDec` and `TypeOps`\n    - `EntryPoints` raw entry points\n
+  - `Unpacked` \n    - `Types` Unpacked futhark types, useful for constructing or
+  deconstructing values\n - `Native`\n    - `Types` Native type equivalents for (almost
+  all) futhark types\n\n#### Code example\nGiven the futhark file \n```futhark\ntype
+  someopaque = (f32, i64)\n\nentry foo (input:f32) : someopaque = (input, i64.f32
+  input)\n\nentry bar (input:someopaque) : []f32 = replicate (input.1) (input.0)\n```\n\nthe
+  generated library can be used like\n\n```haskell\nmodule FutharkUsageExample where\nimport
+  Mylib\n\n-- `foobar` composes `foo` and `bar`,\n-- and converts the output array
+  to a haskell native array\nfoobar :: Monad m => F32 -> m (Array F32)\nfoobar input
+  = runFutT $ do\n    foores <- foo input\n    barres <- bar foores\n    fromFuthark
+  barres\n\n-- `foobar'` does the same thing as `foobar` \n-- but also immediately
+  finalizes the intermediate results\nfoobar' :: MonadIO m => F32 -> m (Array F32)\nfoobar'
+  input = runFutT $ do\n    foores <- foo input\n    barres <- bar foores\n    finalizeFO
+  foores\n    native_barres <- fromFuthark barres\n    finalizeFO barres\n    pure
+  native_barres\n```        \n\n## Documentation\nThe base library contains basic
+  documentation on the general classes and other core functions. `cabal haddock` can
+  be used to obtain documentation specific to the generated library. \n\n## Generated
+  Code\nThe generated code can be split in two main parts, raw and wrapped. The raw
+  interface is simply the C-functions wrapped in the `IO`-monad, providing no added
+  safety and requiring manual memory management. The wrapped interface uses `newForeignPtr`
+  to introduce all Futhark pointers to the GC, and provides function types closer
+  to those used within Futhark. In particular, unnamed tuple structures are transparent,
+  so the arguments and return values have the same structure as in the futhark type
+  declaration. \n\n### Primitive types\nPrimitive types are given aliases based on
+  their name in futhark. \nFor example the haskell type `Float` is called `F32`. These
+  aliases are used in all generated type signatures.\n\n### Tuples\nUnnamed tuples
+  are recursively unpacked in all function arguments and return values in the wrapped
+  interface, and as such are simply tuples in Haskell too. This adds a little bit
+  of overhead at each use but can be convenient when values need to be composed or
+  when multiple return values are desired. If unpacking is undesired, simply make
+  a type synonym in futhark.\n\n### Opaques\nOpaque values are values such as records,
+  sums, nonprimitive arrays, and any type with an alias in the futhark file with the
+  entry points. Unnamed types are given a name by parsing and reformatting the futhark
+  type to a format allowed in Haskell. Since these names often end up fairly long
+  and a little cryptic, it is recommended to name the types that are intended to be
+  used. \n\n#### Value composition and decomposition\nFor opaque types instances of\n\n```haskell\nclass
+  (FutharkObject fo) => FutharkComposite fo where\n    type Unpacked fo :: Type ->
+  Type\n    pack :: (Monad m) => Unpacked fo c -> FutT c m (fo c)\n    unpack :: (Monad
+  m) => fo c -> FutT c m (Unpacked fo c) \n```\n\ncan be used to compose and decompose
+  values with their `Unpacked` type as an intermediate.\n\n#### Haskell-native Types\nIn
+  order to facilitate input and output, it is convenient to have a Haskell-native
+  representation of the types used in the Futhark program. These are defined in the
+  `Native.Types` submodule. \n\nUnnamed types are give a name based on the futhark
+  type, and for arrays this is just a type synonym for the native array type of the
+  element.\nNamed types retain their futhark name (but capitalized), and in the case
+  of arrays this is a `newtype` around the native array type of the element.\n\nAll
+  types are instances of the `Element` class provided by `futhark-base` which defines
+  array types for them and allows the use of generic array functions like `map`, `tabulate`,
+  etc, to be used.\n\n#### Conversion\nFor conversion between Futhark values and Haskell
+  native values, instances of \n\n```haskell\nclass Convertible fo where\n    Native
+  fo \n    toFuthark :: Monad m => Native fo -> FutT c m (fo c) \n    fromFuthark
+  :: Monad m => fo c -> FutT c m (Native fo)\n```\n\nare defined. Currently instances
+  should exist for all futhark types except those containing arrays of sum types.
+  Note that this does not mean that all Native values can be converted to Futhark
+  values, as only those used by the entrypoints will be defined on the futhark side.
+  Additionally care should be taken when converting nested arrays to Futhark values,
+  as the native array type currently does not enforce regular arrays.\n\n\n### Context
+  Options\nThese options can be used change how the context operates. For more information
+  see the [C-API documentation](https://futhark.readthedocs.io/en/stable/c-api.html).\n####
+  All backends\n - `TuningParameters [(String, CSize)]`\n - `CacheFile String` Sets
+  a cachefile for the context. Highly recommended to reduce startup times.\n - `Debug
+  Int`\n - `Log Int`\n - `Profile Int`\n#### All GPU backends\n - `Device String`\n
+  - `DefaultThreadBlockSize Int`\n - `DefaultGridSize Int`\n - `DefaultTileSize`\n####
+  OpenCL\n - `Platform String`\n - `BuildOptions [String]`\n#### Cuda\n - `NvrtcOptions
+  [String]`\n#### Multicore\n - `NumThreads Int`\n \n\n### The Fut monad\nTo make
+  the wrappers safe, and reduce clutter from explicitly passing around the context,
+  the `Fut` monad is introduced. The `Fut` monad is an environment monad that implicitly
+  passes the context around as necessary. Like the `ST` monad, the `Fut` monad is
+  parameterised by a rigid type variable to prevent references to the context from
+  escaping the monad.\n\nTo run computations, the function\n```\nmkContext :: [ContextOption]
+  -> IO (Context, [String])\n``` \nto create a context, and then run the monad with\n\n```haskell\nrunFutIn
+  :: Context -> (forall c. Fut c a) -> a\n```\n\nAdditionally\n\n```haskell\nrunFutWith
+  :: [ContextOption] -> (forall c. Fut c a) -> a\nrunFut :: (forall c. Fut c a) ->
+  a\n```\n\nare defined for convienience for cases where the context doesn't need
+  to be reused.\n\n### The FutT transformer\nFor more flexibility, the FutT monad
+  transformer can be used. For convenience the type synonyms\n\n```haskell\ntype Fut
+  c = FutT c Identity\ntype FutIO c = FutT c IO\n```\n\nare defined, but entry-points
+  and most other functions are in the polymorphic `Monad m => FutT c m`.\n\nActually
+  these are just specialized versions of the more general transformer defined in the
+  `Futhask` base library.\n\nTo run the transformer \n\n```haskell    \nrunFutTIn
+  :: Context -> (forall c. FutT c m a) -> m a\nrunFutTWith :: [ContextOption] -> (forall
+  c. FutT c m a) -> m a\nrunFutT :: (forall c. FutT c m a) -> m a\n```\n\nFor lifting\n\n```haskell\nmapFutT
+  :: (m a -> n b) -> FutT c m a -> FutT c n b\nmap2FutT :: (m a -> n b -> k c) ->
+  FutT c' m a -> FutT c' n b -> FutT c' k c\npureFut :: Monad m => Fut c a -> FutT
+  c m a\nunsafeFromFutIO :: FutIO c a -> FutT c m a\n```\n\n#### Running transformer
+  stacks\nWhen using `FutT c` with other transformers in a stack the type of the function
+  running the monad may need to be defined explicitly. \nIn the same way as `runFutT`,
+  these signatures require an explicit `forall` to force `c` to be fully polymorphic.\n\n```haskell\nrunMyMonad
+  :: (forall c. MyMonad c a) -> a \n```\n\nThis requires the `RankNTypes` extension.\n\n###
+  Memory management\nAll of the wrapped values have finalizers, and should *eventually*
+  be garbage collected. However, GHCs GC does not know how much memory the context
+  is using, and so collection will not always be triggered frequently enough. This
+  is primarily an issue when the program iterates on Futhark values, without any Haskell-side
+  allocations.\n\nOne way to deal with this is to manually manage the memory using\n\n```haskell\nfinalizeFO
+  :: (MonadIO m, FutharkObject fo) => fo c -> FutT c m ()\n```\n\nAs with any manual
+  memory management, the programmer is responsible for ensuring that the finalized
+  value will not be used afterwards. For cases where the object is used in more than
+  one thread without synchronisation,\n\n```haskell\naddReferenceFO :: (MonadIO m,
+  FutharkObject fo) => fo c -> FutT c m ()\n``` \n\ncan be used. `addReferenceFO`
+  increments the reference counter of the object and `finalizeFO` will just decrement
+  this counter until it's `0`.\n\n\n"
 description-type: markdown
-hash: 6de73ffd251cc00df6e6b64f7321c430f5bd8e57602f35b27d626395e8d187f9
+hash: 95632d6d0ba505c2813cb706b7e0c3b787276e9dea2d2889b8b017391896972b
 homepage: ''
-latest: 0.2.0
+latest: 1.0.0
 license-name: BSD-3-Clause
 maintainer: isfeldt@kth.se
 synopsis: Generate Haskell wrappers for Futhark libraries
