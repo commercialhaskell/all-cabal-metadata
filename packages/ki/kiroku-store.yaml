@@ -1,6 +1,7 @@
 all-versions:
 - 0.1.0.0
 - 0.2.0.0
+- 0.3.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.1 && <2.3'
@@ -17,6 +18,7 @@ basic-deps:
   hasql-transaction: '>=1.1 && <1.3'
   lens: '>=5.2 && <5.4'
   mmzk-typeid: '>=0.6 && <0.8'
+  mtl: '>=2.3 && <2.4'
   stm: '>=2.5 && <2.6'
   streamly-core: '>=0.3 && <0.4'
   text: '>=2.0 && <2.2'
@@ -28,6 +30,207 @@ changelog: |
   # Changelog
 
   ## Unreleased
+
+  ## 0.3.0.0 — 2026-07-11
+
+  This release requires migrations `0003`–`0007` from `kiroku-store-migrations`.
+
+  ### Breaking Changes
+
+  * Backward reads now paginate. `readStreamBackward` and `readAllBackward` treat a
+    nonzero cursor as an *exclusive upper bound*, so a page returns events older
+    than the cursor instead of newer ones. The interpreter maps the caller cursor
+    `0` to `maxBound`, so `StreamVersion 0` / `GlobalPosition 0` still means "start
+    from the latest event" (versions and positions start at 1, so the sentinel can
+    never collide with a real value). Previously a nonzero cursor read in the wrong
+    direction, which made backward pagination impossible: feeding the last returned
+    version back in returned the same newest page again. Any caller passing a
+    nonzero backward cursor gets different results, and any mock `Store`
+    interpreter must mirror the `0 -> maxBound` mapping.
+  * Oversized stream names are rejected before any database work. `StoreError`
+    gains `StreamNameTooLong !StreamName !Int` (the `Int` is the offending UTF-8
+    byte length), and `Kiroku.Store.Error` exports `maxStreamNameBytes` (512) and
+    `validateStreamName :: StreamName -> Either StoreError ()`. Every
+    application-stream entry point — `appendToStream`, `appendMultiStream`,
+    `linkToStream`, `softDeleteStream`, `hardDeleteStream`, `undeleteStream`, and
+    the `runTransactionAppending*` wrappers — runs the same validation (reserved
+    `$all` plus the length bound) up front instead of only rejecting `$all`. The
+    bound exists because the append notification payload embeds the stream name and
+    PostgreSQL rejects `pg_notify` payloads of 8,000 bytes or more; a name that
+    used to fail late as an opaque trigger error now fails immediately with a typed
+    error. Exhaustive matches on `StoreError` must handle the new constructor.
+  * Publisher queues are created only for non-group `AllStreams` subscriptions.
+    `Category` subscriptions and all consumer-group members no longer register a
+    bounded queue with the `EventPublisher`; they are DB-driven in live mode. As a
+    consequence `SubscriptionConfig.queueCapacity` and
+    `SubscriptionConfig.overflowPolicy` have no effect for those targets, and they
+    can no longer be paused, dropped, or terminated with `SubscriptionOverflowed`.
+    In the exposed `Kiroku.Store.Subscription.Worker` module, `runWorker`'s
+    signature changed from taking a `TBQueue (Vector RecordedEvent)` plus a `TVar
+    SubscriberStatus` to taking a single new exported sum `LiveSource
+    (LiveFromPublisherQueue | LiveFromCategoryNotify | LiveFromGroupPolling)`,
+    fixed at `subscribe` time from the config's `(consumerGroup, target)` shape.
+  * Empty append batches are rejected. `StoreError` gains `EmptyAppendBatch
+    !StreamName` and `AppendConflict` gains `EmptyAppendBatchConflict !StreamName`
+    (mapped by `appendConflictToStoreError`). `appendToStream` with `[]` now fails
+    with `EmptyAppendBatch` before any pool work; previously it took the global
+    `$all` row lock, fired NOTIFY triggers, created an empty stream under
+    `NoStream`, and surfaced a misleading `WrongExpectedVersion` /
+    `StreamNotFound`. `appendMultiStream []` is an explicit no-op returning `[]`
+    without a round trip, while a per-stream empty event list inside a non-empty op
+    list is rejected with `EmptyAppendBatch`.
+  * Link failures are typed. `StoreError` gains `EventAlreadyLinked !StreamName
+    !(Maybe EventId)` (the `23505` unique violation on `stream_events_pkey`,
+    carrying the offending event id when PostgreSQL's detail string is parseable)
+    and `LinkSourceEventMissing !StreamName` (the `23502` not-null violation raised
+    when `linkToStream` references an event id that does not exist; the whole batch
+    rolls back). Both previously surfaced as an opaque `ConnectionError` carrying a
+    stringified `UsageError`.
+  * `StreamInfo` gains a `truncateBefore :: !StreamVersion` field. Code
+    constructing or exhaustively matching `StreamInfo` must be updated.
+  * The `Store` effect gains `SetStreamTruncateBefore :: StreamName ->
+    StreamVersion -> Store m (Maybe StreamId)` and `EventExistsInStream ::
+    StreamName -> EventId -> Store m Bool`. Mock and test interpreters of the
+    `Store` effect must add arms for both.
+  * `Kiroku.Store.SQL`'s hard-delete statements were resplit.
+    `deleteStreamJunctionsStmt` is removed, replaced by `deleteAllRowsForOriginStmt`,
+    `deleteJunctionsByEventIdsStmt`, `deleteStreamOwnJunctionsStmt`, and
+    `deleteDeadLettersForOrphanedEventsStmt`, which the interpreter runs in sequence
+    before `deleteOrphanedEventsStmt`.
+  * Checkpoint-load failures now fail the subscription loudly. A `UsageError` while
+    reading a subscription's saved checkpoint at startup surfaces through the
+    handle's `wait` as `Left e` and the worker stops; it no longer falls back to
+    `GlobalPosition 0` and silently re-processes the whole history.
+  * `subscriptionAckStream` and `subscriptionStream` reject a zero buffer, throwing
+    the new `InvalidStreamBufferSize` exception (exported from
+    `Kiroku.Store.Subscription.Stream`) when `bufferSize` is `0`; a zero-capacity
+    `TBQueue` would deadlock the bridge handler on its first delivery.
+  * Duplicate events inside transaction bodies are typed. `runTransaction`,
+    `runTransactionNoRetry`, and the `runTransactionAppending*` wrappers map a
+    `23505` violation on `events_pkey` / `stream_events_pkey` to `DuplicateEvent
+    (Just eid)` (new `mapTransactionUsageError` in `Kiroku.Store.Error`) instead of
+    the previous opaque `ConnectionError`.
+
+  ### New Features
+
+  * Logical truncate-before marker (close-the-book compaction).
+    `Kiroku.Store.Lifecycle.setStreamTruncateBefore :: StreamName -> StreamVersion
+    -> Eff es (Maybe StreamId)` and `clearStreamTruncateBefore :: StreamName -> Eff
+    es (Maybe StreamId)` set a per-stream cursor below which ordered per-stream
+    reads hide events. `readStreamForward`, `readStreamBackward`, and the paged
+    `readStreamForwardStream` return only events whose `streamVersion` is at or
+    above the marker; the `$all` global log, `readCategory`, subscriptions, and
+    existence probes are deliberately unaffected, so global history stays complete
+    and future projections can still be built from it. No events are deleted and
+    the operation is fully reversible. The typical use is snapshot-and-compact:
+    append a snapshot event at version `V`, then call `setStreamTruncateBefore name
+    V` so rehydration starts there. The marker is surfaced on
+    `StreamInfo.truncateBefore` via `getStream`, is idempotent, returns `Nothing`
+    for a missing or soft-deleted stream, and rejects `$all` with
+    `ReservedStreamName`. Backed by the new `streams.truncate_before` column
+    shipped by `kiroku-store-migrations`.
+  * `Kiroku.Store.Read.eventExistsInStream` adds an indexed point lookup for
+    idempotency checks that need to know whether a specific event id is present in
+    a live stream without scanning that stream. Soft-deleted streams report
+    `False`, matching `readStreamForward` visibility.
+  * `Kiroku.Store.Types` exports `categoryName :: StreamName -> CategoryName` (the
+    substring before the first `-`) and its dual `streamNameInCategory ::
+    CategoryName -> Text -> StreamName`. This is the canonical Haskell mirror of
+    the `streams.category` generated column and of the rule used by `readCategory`
+    and category-targeted subscriptions; previously every consumer hand-rolled it.
+    `Notification.categoryFromPayload` now routes through `categoryName`, so the
+    rule has one definition.
+  * New observability event `KirokuEventPublisherLoopError !SomeException`, emitted
+    when the publisher's broadcast iteration throws a synchronous non-`UsageError`
+    exception (typically a user-supplied `decodeHook` or observability handler).
+    Exhaustive matches on `KirokuEvent` must handle it.
+
+  ### Bug Fixes
+
+  * The publisher survives failing callbacks. A synchronous exception from the
+    broadcast iteration is caught, reported as `KirokuEventPublisherLoopError`, and
+    retried on the next notification or the 30-second safety poll without advancing
+    `lastPublished`; previously it killed the publisher loop and stalled every live
+    subscription. All store-internal threads (publisher, worker, notifier) now emit
+    observability events through a hardened `emitOrDrop` that drops synchronous
+    exceptions thrown by the handler and rethrows async ones, so a throwing
+    metrics or logging callback can no longer kill a store thread.
+  * Streamly bridges terminate with the worker's outcome. `subscriptionStream` and
+    `subscriptionAckStream` end the stream normally when the worker stops cleanly
+    or is cancelled, and rethrow the worker's exception from the next stream pull
+    when it dies for any other reason (overflow, handler exception, dead-letter
+    database error, decode-hook exception); previously the consumer blocked
+    forever. The cancel action no longer writes a sentinel into the bounded queue,
+    so it cannot block behind a full bridge buffer.
+  * Subscription startup no longer leaks registrations. The pre-fork window in
+    `subscribe` is masked and each acquired registration is paired with
+    `bracketOnError` cleanup, so an exception between publisher registration and
+    the worker fork can no longer leave a subscriber registered with no reader.
+    Notifier startup releases its connection if `LISTEN` fails.
+  * Hard delete purges dead letters. `hardDeleteStream` deletes
+    `kiroku.dead_letters` rows for exactly the events whose payloads it orphans,
+    before deleting those payloads. Because `dead_letters.event_id` has a foreign
+    key to `events(event_id)` with no cascade, hard-deleting a stream that had
+    dead-lettered events previously failed on that constraint.
+  * Single-stream appends retry transient conflicts. `appendToStream` retries once
+    when the first attempt fails with PostgreSQL `40001` (serialization failure) or
+    `40P01` (deadlock detected) — the same SQLSTATE set `hasql-transaction`
+    retries. Event ids are prepared before the first attempt, so the retry is
+    idempotent.
+  * `appendToStream` and `appendMultiStream` surface duplicate events raised from
+    inside transaction bodies as `DuplicateEvent` rather than a stringified
+    connection error.
+
+  ### Performance
+
+  * `appendMultiStream` now pipelines its deterministic pre-lock and per-stream
+    append statements through Hasql pipeline mode, while preserving all-or-nothing
+    rollback and transient deadlock retry behavior. The local benchmark regression
+    gate measured `All.reliability-audit.appendMultiStream 3 existing streams` at
+    268 us, 29% faster than the refreshed baseline.
+  * The publisher does no row fetches while idle. With an empty subscriber registry
+    the publisher loop advances `lastPublished` from the `$all` tail with a
+    single-row query instead of fetching and decoding full event rows, so a store
+    whose only subscriptions are `Category` or consumer-group members pays no
+    fan-out cost. It re-checks registry emptiness in the same STM transaction as
+    the position write, and offers an in-flight batch to subscribers that
+    registered after the snapshot, so a subscriber attaching mid-tick never skips
+    events.
+  * No empty read round trips. `readStreamForwardStream` stops after a page shorter
+    than `pageSize` rather than always probing for one more empty page (an exact
+    multiple of `pageSize` still costs one final probe), flattens pages without an
+    intermediate list, and `lookupStreamNames []` short-circuits to an empty map in
+    the interpreter with no database round trip.
+  * Index hygiene and `streams` fillfactor tuning (migration `0005`).
+
+  ### Other Changes
+
+  * `GlobalPosition`'s documented contract is weakened to "strictly increasing and
+    totally ordered" — nothing more. Treat values as opaque cursors: construct one
+    only from `0` or from a value this store returned, never by arithmetic, and
+    never assume density (`pos + 1` may not exist). The current implementation
+    still assigns contiguous positions, but contiguity is now explicitly an
+    implementation detail, not an API guarantee.
+  * `linkToStream` is marked provisional. It is the only public feature that
+    requires the `stream_events` junction-table layout, which a future
+    global-position migration may replace; it may be removed or redesigned.
+  * `RetryPolicy.retryMaxAttempts` is documented as a bound on total deliveries,
+    not redeliveries: the first delivery counts as attempt 1, so
+    `defaultRetryPolicy` (5) means the first delivery plus four redeliveries before
+    `DeadLetterMaxAttempts`. Behavior is unchanged; the previous haddock was wrong.
+  * `appendToStreamTx` and the `runTransactionAppending*` wrappers document the
+    `$all` lock-hold hazard: the append updates Kiroku's global `$all` row and
+    PostgreSQL holds that row lock until the transaction ends, so every statement
+    the continuation runs afterwards blocks all other appends store-wide. Keep
+    continuations minimal and run append-independent work first.
+  * `WrongExpectedVersion` and `WrongExpectedVersionConflict`'s third field is
+    documented as a placeholder: the append statement returns zero rows on a
+    mismatch and the store does not issue an extra read, so it is always
+    `StreamVersion 0`. Callers needing the live version must use `getStream`.
+  * The append NOTIFY trigger is now split into INSERT/UPDATE triggers that exclude
+    the internal `$all` row and only fire when `stream_version` actually advances,
+    so soft-delete and undelete no longer emit spurious append notifications
+    (migration `0003`).
 
   ## 0.2.0.0 — 2026-05-31
 
@@ -419,9 +622,9 @@ description: |-
   provides append, read, link, lifecycle, transaction, subscription, consumer
   group, and observability primitives around immutable domain events.
 description-type: haddock
-hash: f777201ac80ed2cc63d0f7e82256af61134bc4394cb082add9db13ba70101ccd
+hash: 172bb1bbafa8211393e91eaa36c511d3c64a1d78356377edc393514ea34ec764
 homepage: https://github.com/shinzui/kiroku
-latest: 0.2.0.0
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: High-performance PostgreSQL event store
@@ -440,6 +643,7 @@ test-bench-deps:
   filepath: '>=1.4'
   generic-lens: '>=2.2 && <2.4'
   hasql: '>=1.10 && <1.11'
+  hasql-notifications: '>=0.2 && <0.3'
   hasql-pool: '>=1.2 && <1.5'
   hasql-transaction: '>=1.1 && <1.3'
   hedgehog: '>=1.4 && <1.8'
@@ -448,8 +652,8 @@ test-bench-deps:
   kiroku-store: '>=0'
   kiroku-test-support: '>=0'
   lens: '>=5.2 && <5.4'
-  mmzk-typeid: '>=0.6'
-  shibuya-core: '>=0.6 && <0.7'
+  mmzk-typeid: '>=0.6 && <0.8'
+  shibuya-core: '>=0.8 && <0.9'
   stm: '>=2.5 && <2.6'
   streamly: '>=0.11'
   streamly-core: '>=0.3 && <0.4'

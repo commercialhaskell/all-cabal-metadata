@@ -1,26 +1,78 @@
 all-versions:
 - 0.1.0.0
 - 0.1.1.0
+- 0.2.0.0
 author: Nadeem Bitar
 basic-deps:
+  aeson: '>=2.1 && <2.3'
   base: '>=4.18 && <5'
   bytestring: '>=0.11 && <0.13'
-  codd: '>=0.1.8 && <0.2'
-  file-embed: '>=0.0.15 && <0.0.17'
+  containers: '>=0.6 && <0.8'
+  filepath: '>=1.4 && <1.6'
+  hasql: '>=1.10 && <1.11'
   kiroku-store-migrations: '>=0'
-  streaming: '>=0.2 && <0.3'
+  optparse-applicative: '>=0.17 && <0.20'
+  pg-migrate: '>=1.0.0.0 && <1.1'
+  pg-migrate-cli: ^>=1.0.0.0
+  pg-migrate-embed: ^>=1.0.0.0
+  pg-migrate-import-codd: ^>=1.0.0.0
+  template-haskell: '>=2.20 && <2.24'
   text: '>=2.0 && <2.2'
-  time: '>=1.12 && <1.15'
 changelog: |
   # Changelog
 
   ## Unreleased
 
+  ## 0.2.0.0 — 2026-07-11
+
+  ### Breaking Changes
+
+  * Migrated the package's runtime from Codd to `pg-migrate`. The public API now
+    exports the native `kirokuMigrations` component and `kirokuMigrationPlan`
+    instead of Codd settings, runner, ledger-status, and schema-check wrappers.
+  * Replaced timestamped runtime identities with manifest-ordered `0001` through
+    `0007` identities while preserving every SQL payload byte.
+  * Replaced the Codd CLI and `CODD_*` configuration surface with the standard
+    `pg-migrate-cli` command tree and `DATABASE_URL`. `verify` now compares the
+    declared plan with the `pgmigrate` ledger; it does not compare live schema
+    objects with an expected-schema snapshot.
+
+  ### New Features
+
+  * Added a manifest-backed, compile-time-embedded migration component that
+    applications can compose with other libraries in explicit dependency order.
+  * Added checked-in Codd history mappings and `SamePayload` evidence for safe,
+    non-replaying import from current `codd` and legacy `codd_schema` ledgers.
+    Shared-ledger consumers can combine Kiroku's exported payloads and mappings
+    with their own components before importing.
+  * Added the standard `pg-migrate-cli` planning, inspection, execution,
+    verification, status, and numeric migration-authoring commands.
+  * Added fresh-apply, rerun, concurrent-apply, strict ledger verification, Codd
+    import, partial-row rejection, audit, and source-preservation coverage. The
+    full Kiroku store suite now consumes the same native plan through
+    `kiroku-test-support`.
+  * Appended `0008-schema-management-comment`, a non-destructive observable
+    native-runner canary. Fresh and imported-prefix tests prove it applies once,
+    verifies strictly, and reruns as `AlreadyApplied` without changing historical
+    payloads or Codd mappings.
+
+  ### Changed
+
+  * Preserved the seven historical SQL payloads byte-for-byte while moving their
+    authoritative ordering to `migrations/manifest`; `migrations.lock` remains
+    the source evidence used during Codd history import.
+  * Removed Codd, `codd-extras`, `file-embed`, and `postgresql-simple` from the
+    normal library and executable dependency closure.
+  * Removed the orphaned Codd expected-schema snapshot, its writer executable, the
+    Cabal flag that gated it, and the accompanying Nix closure workaround. Codd
+    ledger history import remains supported independently through
+    `pg-migrate-import-codd`.
+
   ## 0.1.1.0 — 2026-05-31
 
   ### New Features
 
-  * Forward migration `2026-05-26-00-00-00-add-subscription-dead-letters.sql`:
+  * Forward migration `2026-05-29-15-26-04-add-subscription-dead-letters.sql`:
     creates the `kiroku.dead_letters` table (per consumer-group member, with a
     foreign key to `kiroku.events`) and its recency index, supporting per-event
     dead-letter recording for subscriptions (MasterPlan 6 / plan 40).
@@ -40,63 +92,141 @@ changelog-type: markdown
 description: |
   # kiroku-store-migrations
 
-  `kiroku-store-migrations` owns schema evolution for `kiroku-store`.
-  It embeds Kiroku's timestamped SQL migrations and runs them through
-  `codd`, so a service can migrate its database before opening
-  `Kiroku.Store.withStore`.
+  `kiroku-store-migrations` owns Kiroku's PostgreSQL schema as one native
+  `pg-migrate` component named `kiroku`. The component embeds an ordered manifest
+  and seven immutable SQL payloads, so applications can compose it with other
+  libraries without copying Kiroku SQL.
 
-  Run the executable with codd's standard environment variables:
-
-  ```bash
-  CODD_CONNECTION='host=/tmp port=5432 dbname=kiroku user=kiroku_admin' \
-  CODD_MIGRATION_DIRS=unused-for-embedded-migrations \
-  CODD_EXPECTED_SCHEMA_DIR=unused-for-unverified-embedded-migrations \
-  CODD_SCHEMAS=kiroku \
-  kiroku-store-migrate
-  ```
-
-  The bootstrap migration creates a dedicated `kiroku` schema and installs
-  every Kiroku table, index, function, and trigger inside it, leaving
-  `public` free for application objects. `CODD_SCHEMAS=kiroku` tells codd to
-  track that schema. The runtime role therefore needs privileges on the
-  `kiroku` schema (for example `USAGE` plus the table privileges it uses),
-  not on `public`.
-
-  After migrations run, start the application normally:
+  ## Public API
 
   ```haskell
-  withStore (defaultConnectionSettings connString) app
+  import Kiroku.Store.Migrations
+
+  kirokuMigrations :: Either DefinitionError MigrationComponent
+  kirokuMigrationPlan :: Either PlanError MigrationPlan
   ```
 
-  `codd` is forward-only. Once a migration has run in production,
-  reverting the Haskell package does not undo the database change. Repair
-  state by restoring from backup or by shipping another forward migration.
+  Applications with more than one component should consume `kirokuMigrations`
+  and build their own explicit dependency-ordered plan. The single-component
+  `kirokuMigrationPlan` is convenient for Kiroku-only deployments.
 
-  This first implementation runs without codd expected-schema verification
-  because Kiroku does not yet ship a checked-in codd expected-schema
-  snapshot. `CODD_EXPECTED_SCHEMA_DIR` is still required by codd's settings
-  parser, but this executable does not read from it. Operators should treat
-  the migration table as the source of applied-version truth until strict
-  snapshots are added.
+  Existing databases can import their Codd ledger through
+  `Kiroku.Store.Migrations.History.Codd`:
+
+  ```haskell
+  kirokuCoddHistoryMappings :: NonEmpty HistoryMapping
+  kirokuCoddSourcePayloads :: Map FilePath ByteString
+  kirokuCoddManifestText :: Text
+
+  kirokuCoddSourceConfig
+    :: ConnectionProvider
+    -> Bool
+    -> Text
+    -> Confirmation
+    -> Either CoddDefinitionError CoddSourceConfig
+  ```
+
+  The mapping selects the seven historical timestamped Codd names, verifies the
+  checked-in `migrations.lock` SHA-256 evidence against the exact embedded native
+  bytes, and maps them to `kiroku/0001-kiroku-bootstrap` through
+  `kiroku/0007-stream-truncate-before`. Import writes only the `pgmigrate` ledger;
+  it never executes already-applied SQL. Consumers with a shared Codd ledger can
+  combine the exported names, payload map, manifest text, and history mappings
+  with their own component evidence before constructing one atomic import.
+
+  ## CLI
+
+  `kiroku-store-migrate` mounts the standard `pg-migrate-cli` command groups:
+
+  ```bash
+  kiroku-store-migrate --help
+  kiroku-store-migrate plan
+  kiroku-store-migrate list
+  kiroku-store-migrate check kiroku-store-migrations/migrations/manifest
+  kiroku-store-migrate up --database-url "$DATABASE_URL"
+  kiroku-store-migrate verify --database-url "$DATABASE_URL"
+  kiroku-store-migrate status --database-url "$DATABASE_URL"
+  ```
+
+  Database commands accept `--database-url`. When it is omitted the executable
+  uses `DATABASE_URL`. Local `plan`, `list`, `check`, and `new` commands need no
+  database environment variable. `verify` compares the declared plan strictly
+  with the `pgmigrate` ledger; it is not a live schema snapshot comparison.
+
+  For Haskell callers:
+
+  ```haskell
+  import Database.PostgreSQL.Migrate
+  import Hasql.Connection.Settings qualified as Settings
+  import Kiroku.Store.Migrations
+
+  main :: IO ()
+  main = do
+    plan <- either (fail . show) pure kirokuMigrationPlan
+    result <- runMigrationPlan defaultRunOptions (Settings.connectionString databaseUrl) plan
+    either (fail . show) (const (pure ())) result
+  ```
+
+  ## Authoring
+
+  The authoritative source is `migrations/manifest`; each line names one SQL file
+  in execution order. Create the next numeric file with the standard CLI:
+
+  ```bash
+  kiroku-store-migrate new \
+    --manifest kiroku-store-migrations/migrations/manifest \
+    --description "add widget index"
+  ```
+
+  The helper exclusively creates the inferred file and atomically appends its
+  name to the manifest. Never edit a released payload. Correct mistakes with a
+  new forward migration. The seven initial payloads intentionally retain their
+  exact historical bytes, including old comments, because Codd import uses
+  `SamePayload` evidence.
+
+  Run the package suite after every migration change:
+
+  ```bash
+  cabal test kiroku-store-migrations:kiroku-store-migrations-test
+  ```
+
+  It proves manifest order, legacy SHA-256 parity, fresh apply, strict verify,
+  idempotent rerun, concurrent locking, current Codd V5 import, legacy
+  `codd_schema` import, partial-row rejection, import audit records, and
+  source-ledger preservation. `cabal test kiroku-store:kiroku-store-test` consumes
+  the same native plan through `kiroku-test-support` and proves the complete store
+  behavior, including append and read scenarios.
+
+  ## Recovery
+
+  Migrations are forward-only. Before a persistent upgrade, take a backup. If an
+  applied migration is bad, either restore that backup or append a corrective
+  migration. Do not delete or rewrite an applied `pgmigrate.migrations` row except
+  through the reviewed `pg-migrate` repair workflow.
+
+  The historical script under `ledger-fixups/` remains checked in only as source
+  evidence for databases that previously needed Codd timestamp repair. New native
+  migrations use component-local numeric identities and do not use timestamped
+  filenames.
 description-type: markdown
-hash: 9c292617327e7f0d916d5a792c1cb72b6351c815683a77c1da0a99c96f123855
+hash: 64d74e6fde50047c8b1902589559578bc28872d68a5038dc423b5d21543088de
 homepage: https://github.com/shinzui/kiroku
-latest: 0.1.1.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Schema migrations for kiroku-store
 test-bench-deps:
-  aeson: '>=2.1 && <2.3'
-  attoparsec: '>=0'
+  async: '>=0'
   base: '>=4.18 && <5'
-  codd: '>=0'
-  containers: '>=0.6 && <0.8'
+  bytestring: '>=0.11 && <0.13'
+  directory: '>=1.3'
   ephemeral-pg: '>=0.2 && <0.3'
+  filepath: '>=1.4 && <1.6'
   hasql: '>=1.10 && <1.11'
-  hasql-pool: '>=1.2 && <1.5'
   hspec: '>=2.10 && <2.12'
-  kiroku-store: ^>=0.2
   kiroku-store-migrations: '>=0'
+  pg-migrate: ^>=1.0.0.0
+  pg-migrate-import-codd: ^>=1.0.0.0
+  pg-migrate-test-support: ^>=1.0.0.0
+  temporary: '>=1.3 && <1.4'
   text: '>=2.0 && <2.2'
-  time: '>=1.12 && <1.15'
-  vector: '>=0.13 && <0.14'
