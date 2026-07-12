@@ -11,10 +11,12 @@ all-versions:
 - 0.3.1.0
 - 0.4.0.0
 - 0.4.1.0
+- 0.4.2.0
 author: An Long
 basic-deps:
   aeson: '>=2.0 && <2.3'
   base: '>=4.7 && <5'
+  base64-bytestring: '>=1.2 && <1.3'
   bytestring: '>=0.10.12 && <0.13'
   case-insensitive: '>=1.2.1 && <1.3'
   http-client: '>=0.6.4 && <0.8'
@@ -52,11 +54,11 @@ description: |
   import qualified Data.ByteString as BS
 
   -- Using shortcuts
-  resp <- get "https://api.leancloud.cn/1.1/date"
+  resp <- get "https://httpbin.org/uuid" :: IO (Response String)
   print resp.status        -- 200
 
   -- Or construct a Request manually
-  let req = Request { method = GET, url = "https://api.leancloud.cn/1.1/date", headers = [], body = () }
+  let req = Request { method = GET, url = "https://httpbin.org/uuid", headers = [], body = () }
 
   -- Response with ByteString body
   responseBS <- send req :: IO (Response BS.ByteString)
@@ -90,6 +92,7 @@ description: |
   - `()` → empty body, no Content-Type
   - `ByteString` / lazy `ByteString` / `Text` / `String` → `text/plain; charset=utf-8`
   - Any type with a `ToJSON` instance → auto JSON encoding + `application/json`
+  - `Form a` (where `a` has a `ToForm` instance) → URL-encoded + `application/x-www-form-urlencoded`
 
   The `Content-Type` is automatically inferred from the body type. You can override it by setting the header manually:
 
@@ -136,18 +139,17 @@ description: |
   import Data.Aeson (FromJSON)
   import GHC.Generics (Generic)
 
-  data Date = Date
-    { __type :: String
-    , iso :: String
+  data UUID = UUID
+    { uuid :: String
     } deriving (Show, Generic)
 
-  instance FromJSON Date
+  instance FromJSON UUID
 
   main :: IO ()
   main = do
-    response <- get "https://api.leancloud.cn/1.1/date" :: IO (Response Date)
+    response <- get "https://httpbin.org/uuid" :: IO (Response UUID)
     print response.status  -- 200
-    print response.body    -- Date { __type = "Date", iso = "..." }
+    print response.body    -- UUID { uuid = "550e8400-e29b-41d4-a716-446655440000" }
   ```
 
   If JSON decoding fails, an `AesonException` will be thrown, which can be caught with `Control.Exception.catch` or `try`.
@@ -173,6 +175,70 @@ description: |
     print response.status  -- 200
   ```
 
+  ## Form Support
+
+  For `application/x-www-form-urlencoded` requests (login forms, OAuth token endpoints, classic web APIs), wrap your body in the `Form` newtype. The `Content-Type` is set automatically and values are percent-encoded.
+
+  ### From a list of pairs
+
+  ```haskell
+  import Network.HTTP.Request
+
+  main :: IO ()
+  main = do
+    response <- post "https://httpbin.org/post"
+                     (Form [("username", "alice"), ("password", "s3cret")])
+                :: IO (Response String)
+    print response.status  -- 200
+    -- Body sent: username=alice&password=s3cret
+  ```
+
+  Values are `ByteString` keys and values. Special characters (spaces, Unicode, reserved chars) are percent-encoded for you:
+
+  ```haskell
+  post "https://api.example.com/search"
+       (Form [("q", "hello world"), ("lang", "zh-CN")])
+  -- Body sent: q=hello%20world&lang=zh-CN
+  ```
+
+  ### From a custom type
+
+  For your own record types, define a `ToForm` instance. This mirrors the `ToJSON` pattern:
+
+  ```haskell
+  import Network.HTTP.Request
+  import qualified Data.Text as T
+  import qualified Data.Text.Encoding as T
+
+  data Login = Login
+    { username :: T.Text
+    , password :: T.Text
+    }
+
+  instance ToForm Login where
+    toForm l = [ ("username", T.encodeUtf8 l.username)
+               , ("password", T.encodeUtf8 l.password)
+               ]
+
+  main :: IO ()
+  main = do
+    response <- post "https://api.example.com/login"
+                     (Form (Login "alice" "s3cret"))
+                :: IO (Response String)
+    print response.status
+  ```
+
+  ### The two new pieces of API
+
+  ```haskell
+  class ToForm a where
+    toForm :: a -> [(ByteString, ByteString)]
+
+  newtype Form a = Form a
+  ```
+
+  The `Form` newtype is required to disambiguate the form-encoding path from JSON. Without it, a type that has both `ToJSON` and `ToForm` instances would be ambiguous; with it, `post url x` always means JSON and `post url (Form x)` always means form.
+
   ## Shortcuts
 
   As you expected, there are some shortcuts for the most used scenarios.
@@ -187,6 +253,20 @@ description: |
 
   These shortcuts' definitions are simple and direct. You are encouraged to add your own if the built-in does not match your use cases, like add custom headers in every request.
 
+  ## Authentication
+
+  Use `basicAuth` or `bearerAuth` to add an `Authorization` header to a request:
+
+  ```haskell
+  let basicReq = basicAuth "username" "password" (Request GET url [] ())
+  basicResponse <- send basicReq :: IO (Response String)
+
+  let bearerReq = bearerAuth "token" (Request GET url [] ())
+  bearerResponse <- send bearerReq :: IO (Response String)
+  ```
+
+  Both helpers replace an existing `Authorization` header, regardless of the header name's casing.
+
   ## Without Language Extensions
 
   If you prefer not to use the language extensions, you can still use the library with the traditional syntax:
@@ -196,12 +276,11 @@ description: |
 
   ```haskell
   import Network.HTTP.Request
-  import qualified Data.ByteString as BS
 
   -- Construct a Request using positional arguments
-  let req = Request GET "https://api.leancloud.cn/1.1/date" [] ()
+  let req = Request GET "https://httpbin.org/uuid" [] ()
   -- Send it
-  res <- send req
+  res <- send req :: IO (Response String)
   -- Access the fields using prefixed accessor functions
   print $ responseStatus res
   ```
@@ -306,9 +385,9 @@ description: |
 
   Request is distributed by a [BSD license](https://github.com/aisk/request/tree/master/LICENSE).
 description-type: markdown
-hash: 0a92fe061298a48963ed6403dca465e25b060db15e5c9853d1f69d824c1f22ec
+hash: fb370ef47ce2fc89d8cc911974e82e49d17eaaf050b22364ea7a92201ab3ca9c
 homepage: https://github.com/aisk/request#readme
-latest: 0.4.1.0
+latest: 0.4.2.0
 license-name: BSD-3-Clause
 maintainer: aisk1988@gmail.com
 synopsis: ''
