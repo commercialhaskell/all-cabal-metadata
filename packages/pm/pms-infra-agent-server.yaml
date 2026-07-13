@@ -1,5 +1,6 @@
 all-versions:
 - 0.0.1.0
+- 0.0.2.0
 author: phoityne.hs@gmail.com
 basic-deps:
   aeson: '>=0'
@@ -24,21 +25,146 @@ basic-deps:
 changelog: |+
   # Revision history for pms-infra-agent-server
 
+  ## 0.0.2.0 -- 2026-07-05
+
+  * Modify readme.md.
+
   ## 0.0.1.0 -- 2026-06-02
 
   * First version.
 
 changelog-type: markdown
-description: |-
-  Provides agent-server-* MCP tools: bind/listen/accept thread,
-  event queue, read/write over accepted connections.
-description-type: haddock
-hash: ffd42cb61d5506b6491c002c9b8b61c8cc8cd7ad2f6fd22643a952e438c457ba
-homepage: https://hackage.haskell.org/package/pty-mcp-server
-latest: 0.0.1.0
+description: "# pms-infra-agent-server\n\n----\n## ⚠️ Caution\n\n**Do not grant unrestricted
+  control to AI.**\n\nUnsupervised use or misuse may lead to unintended consequences.\nAll
+  AI systems must remain strictly under human oversight and control.\nUse responsibly,
+  with full awareness and at your own risk.\n\n----\n## \U0001F4D8 Overview\n\n**`pms-infra-agent-server`**
+  is a Haskell infrastructure library that enables AI agents to act as a **TCP server**,
+  accepting inbound connections from external clients and exchanging arbitrary data
+  at the byte level.\n\nUnlike client-oriented socket libraries, this library exposes
+  server-side listen, accept, and I/O operations as MCP tools. The agent retains full
+  control over protocol handling — whether Telnet, HTTP, custom binary frames, or
+  AI-to-AI communication protocols.\n\nThe library is a core component of the [`pty-mcp-server`](https://github.com/phoityne/pty-mcp-server)
+  ecosystem and implements the `agent-server-*` family of MCP tools.\n\n---\n\n##
+  \U0001F527 Provided MCP Tools\n\n### `agent-server-listen`\nBinds to the specified
+  host and port, starts listening for incoming TCP connections, and launches a background
+  accept thread. Returns immediately after the listener is ready.\nOnly one listener
+  can be active at a time.\n\n- `host` — Bind address (e.g. `0.0.0.0` for all interfaces,
+  `127.0.0.1` for loopback)\n- `port` — Port number to listen on (e.g. `19999`)\n\n###
+  `agent-server-close`\nCloses the active accepted connection (if any). If no connection
+  is active, also closes the listener.\nCall twice to close both the accepted connection
+  and the listener independently.\n\n### `agent-server-status`\nReturns the current
+  server status as a JSON object.\n\n```json\n{ \"isListening\": true, \"isConnected\":
+  false }\n```\n\n- `isListening` — Whether the listener socket is active\n- `isConnected`
+  — Whether an accepted connection is currently open\n\n### `agent-server-events`\nDequeues
+  and returns all server-side events accumulated since the last call.\nReturns an
+  empty array if no events are pending.\n\nEvent types:\n- `ClientConnected` — A client
+  has been accepted\n- `BytesReceived` — Bytes received from the client (hex-encoded)\n-
+  `ClientDisconnected` — The client has closed the connection\n\n```json\n[\n  { \"tag\":
+  \"ClientConnected\", \"handleName\": \"default\" },\n  { \"tag\": \"BytesReceived\",
+  \"handleName\": \"default\", \"bytes\": \"68656C6C6F0D0A\" },\n  { \"tag\": \"ClientDisconnected\",
+  \"handleName\": \"default\" }\n]\n```\n\n### `agent-server-read`\nReads data from
+  the active accepted connection and returns it as a **UTF-8 string**.\nReturns an
+  empty string if no data is available before timeout.\n\n> ⚠️ If the received data
+  contains non-UTF-8 bytes or binary protocol frames, use `agent-server-read-byte`
+  instead.\n\n### `agent-server-read-byte`\nReads data from the active accepted connection
+  and returns it as an **uppercase hex string** (e.g. `FF0A1B41`).\nUse this for binary
+  protocols or when precise byte-level inspection is required.\n\n### `agent-server-write`\nWrites
+  the specified **UTF-8 string** to the active accepted connection.\n\n- `data` —
+  Text data to write\n\n> ⚠️ `\\r\\n` in the string is sent as the two literal characters
+  `\\` and `r`, not as CRLF bytes.\n> Use `agent-server-write-byte` when correct CRLF
+  (or any exact byte sequence) is required.\n\n### `agent-server-write-byte`\nDecodes
+  the specified **hex string** and writes the resulting bytes to the active accepted
+  connection.\nUse this for binary protocols or when precise byte-level control is
+  required.\n\n- `data` — Hex string to decode and write (e.g. `48656C6C6F0D0A`; uppercase
+  and lowercase are accepted, no spaces or newlines)\n\n---\n\n## \U0001F4A1 Usage
+  Notes\n\n### Busy rejection\nIf a second client attempts to connect while a connection
+  is already active, the server automatically sends `busy\\r\\n` to the second client
+  and closes it immediately. The existing connection is unaffected.\n\n### CRLF and
+  binary sending\nAlways use `agent-server-write-byte` when the protocol requires
+  exact CRLF bytes or binary content.\nGenerate hex strings with:\n```bash\npython3
+  -c \"print('HELLO\\r\\n'.encode().hex())\"\n```\n> The hex string passed to `agent-server-write-byte`
+  must not contain spaces or newlines.\n\n### Receiving data\nThere is no blocking
+  read tool. Data arrives asynchronously via the internal event queue.\nPoll `agent-server-events`
+  to retrieve `BytesReceived` events and decode the hex bytes.\n\n### Closing sequence\nWhen
+  initiating a graceful shutdown, send a `BYE\\r\\n` signal to the client **and wait
+  for the client's `ACK\\r\\n`** (polled via `agent-server-events`) before calling
+  `agent-server-close`.\nClosing immediately after sending `BYE` may cause the client
+  to miss the message.\n\n```\nServer → Client : BYE\\r\\n\nServer ← Client : ACK\\r\\n
+  \  ← wait for this via agent-server-events\nServer  agent-server-close\n```\n\n###
+  AI-to-AI communication protocol\nThis library ships with two MCP prompt skills for
+  AI-to-AI TCP communication:\n\n| Skill | File | Trigger examples |\n|-------|------|------------------|\n|
+  Server role | `skill_agent_server.md` | \"start the server\", \"listen on port 19999\"
+  |\n| Client role | `skill_agent_client.md` | \"connect to 172.16.0.43:19999\", \"connect
+  to the AI server\" |\n\nHandshake protocol:\n```\nServer → Client : HELLO? name?\\r\\n\nServer
+  ← Client : NAME: <name>\\r\\n\nServer → Client : RULES: MSG:<content>\\r\\n | REPLY:<content>\\r\\n
+  | BYE\\r\\n | HEX:<hex>\\r\\n\nServer ← Client : ACK\\r\\n\n--- conversation ---\nServer
+  → Client : BYE\\r\\n\nServer ← Client : ACK\\r\\n\n```\n\n---\n\n## \U0001F680 Usage
+  Examples\n\n### Example 1: Telnet client session\n\nThis example shows a full session
+  where a telnet client connects, sends `hello`, and disconnects.\n\n**Step 1 — Start
+  listening**\n```\n[Agent] agent-server-listen host=\"0.0.0.0\" port=19999\n→ \"listening.\"\n```\n\n**Step
+  2 — Client connects (telnet 172.16.0.43 19999)**\n```\n[Agent] agent-server-events\n→
+  [{ \"tag\": \"ClientConnected\", \"handleName\": \"default\" }]\n```\n\n**Step 3
+  — Client sends \"hello\" and disconnects (Ctrl+] → quit)**\n```\n[Agent] agent-server-events\n→
+  [\n    { \"tag\": \"BytesReceived\", \"handleName\": \"default\", \"bytes\": \"68656C6C6F0D0A\"
+  },\n    { \"tag\": \"ClientDisconnected\", \"handleName\": \"default\" }\n  ]\n```\n`68656C6C6F0D0A`
+  decodes to `hello\\r\\n`.\n\n**Step 4 — Confirm listener is still active after disconnect**\n```\n[Agent]
+  agent-server-status\n→ { \"isListening\": true, \"isConnected\": false }\n```\n\n**Step
+  5 — Stop listening**\n```\n[Agent] agent-server-close\n→ \"listener closed.\"\n\n[Agent]
+  agent-server-status\n→ { \"isListening\": false, \"isConnected\": false }\n```\n\n---\n\n###
+  Example 2: Busy rejection\n\nWhen a second client connects while a connection is
+  already active, the server automatically rejects it.\n\n```\n[Agent] agent-server-listen
+  host=\"0.0.0.0\" port=19999\n→ \"listening.\"\n\n--- Client A connects: telnet 172.16.0.43
+  19999 (connection maintained) ---\n\n--- Client B connects: telnet 172.16.0.43 19999
+  ---\nClient B receives: \"busy\"\nClient B sees:     \"Connection closed by foreign
+  host.\"\n\n[Agent] agent-server-status\n→ { \"isListening\": true, \"isConnected\":
+  true }   ← Client A is still connected\n\n[Agent] agent-server-events\n→ []   ←
+  busy rejection does not produce events\n```\n\n---\n\n### Example 3: HTTP response
+  via curl\n\nThis example shows the agent acting as an HTTP server, receiving a `GET`
+  request from `curl` and responding with an HTML document.\n\n**Step 1 — Start listening**\n```\n[Agent]
+  agent-server-listen host=\"0.0.0.0\" port=19999\n→ \"listening.\"\n```\n\n**Step
+  2 — curl sends an HTTP request**\n```bash\n$ curl http://172.16.0.43:19999/\n```\n\n**Step
+  3 — Read the HTTP request from the event queue**\n```\n[Agent] agent-server-events\n→
+  [{\n    \"tag\": \"BytesReceived\",\n    \"handleName\": \"default\",\n    \"bytes\":
+  \"474554202F20485454502F312E310D0A486F73743A203137322E31362E302E34333A31393939390D0A557365722D4167656E743A206375726C2F382E31322E310D0A4163636570743A202A2F2A0D0A0D0A\"\n
+  \ }]\n```\nDecoded:\n```\nGET / HTTP/1.1\\r\\n\nHost: 172.16.0.43:19999\\r\\n\nUser-Agent:
+  curl/8.12.1\\r\\n\nAccept: */*\\r\\n\n\\r\\n\n```\n\n**Step 4 — Send the HTTP response
+  using `agent-server-write-byte`**\n\nGenerate the hex for the response:\n```bash\npython3
+  -c \"print((\n  'HTTP/1.1 200 OK\\r\\n'\n  'Content-Type: text/html; charset=utf-8\\r\\n'\n
+  \ 'Content-Length: 46\\r\\n'\n  'Connection: close\\r\\n'\n  '\\r\\n'\n  '<html><body>Hello
+  from AI Agent!</body></html>'\n).encode().hex())\"\n```\n\n```\n[Agent] agent-server-write-byte
+  data=\"<hex string above>\"\n[Agent] agent-server-close\n```\n\n**Result on the
+  curl side:**\n```\n$ curl http://172.16.0.43:19999/\n<html><body>Hello from AI Agent!</body></html>\n```\n\n>
+  ⚠️ Always use `agent-server-write-byte` (not `agent-server-write`) for HTTP responses.\n>
+  `agent-server-write` sends `\\r\\n` as two literal characters, not as CRLF bytes,\n>
+  causing `curl` to report `Recv failure`.\n\n---\n\n\n### Module Structure\n\n```\nPMS.Infra.Agent.Server\n├──
+  CoreModel\n│   └── Type          -- Data type definitions (AppData, command types,
+  event types)\n├── ProjectedContext\n│   └── Core          -- Core domain service
+  logic (recvLoop, sendLoop)\n├── ApplicationBase\n│   ├── Control       -- Tool dispatch
+  and server lifecycle management\n│   └── State\n│       ├── Idle       -- State:
+  no listener active\n│       ├── Listening  -- State: listener active, no connection\n│
+  \      └── Connected  -- State: connection accepted\n└── Interface\n    └── Network
+  \      -- TCP socket operations (listen, accept, send, recv)\n```\n\n### Key Design
+  Points\n\n- **State machine**: Server lifecycle is modelled as three explicit states
+  — `Idle`, `Listening`, and `Connected`. Each state handles only the events valid
+  for that state.\n- **Single active connection**: Only one accepted connection can
+  be active at a time. A second incoming connection receives `busy\\r\\n` and is rejected.\n-
+  **Background accept thread**: `agent-server-listen` returns immediately; a background
+  thread waits for `accept` and pushes a `ClientConnected` event into the queue.\n-
+  **Event queue**: All inbound data and connection lifecycle events are pushed to
+  an STM `TQueue`. The agent polls via `agent-server-events`.\n- **Socket-based I/O**:
+  All read/write operations use `Network.Socket` directly (no `Handle` abstraction),
+  ensuring predictable close semantics.\n\n---\n\n## \U0001F4E6 Dependencies\n\n-
+  [`pms-domain-model`](https://github.com/phoityne/pms-domain-model)\n- `network`\n-
+  `stm`\n- `async`\n\n---\n\n## \U0001F4DC Credits & License\n\n- **Execution & Process
+  Lead:** Claude Sonnet 4.6\n- **Direction & Policy:** phoityne\n- **License:** Apache-2.0
+  — see [LICENSE](./LICENSE)\n"
+description-type: markdown
+hash: 230c7e822c83fd3766027d0b705f0a73605b9c9e71133d6aaaa6a567a0160eb4
+homepage: https://github.com/phoityne/pms-infra-agent-server
+latest: 0.0.2.0
 license-name: Apache-2.0
 maintainer: phoityne.hs@gmail.com
-synopsis: TCP server listener library for pty-mcp-server agent tools
+synopsis: pms-infra-agent-server
 test-bench-deps:
   aeson: '>=0'
   async: '>=0'
@@ -59,3 +185,4 @@ test-bench-deps:
   safe-exceptions: '>=0'
   stm: '>=0'
   transformers: '>=0'
+...
