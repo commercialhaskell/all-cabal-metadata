@@ -15,6 +15,7 @@ all-versions:
 - 0.4.1.1
 - 0.4.2.0
 - 0.4.2.1
+- 0.5.0.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.16 && <5'
@@ -25,7 +26,6 @@ basic-deps:
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
   http-types: '>=0.12 && <0.13'
-  lzma: '>=0.0.1 && <0.1'
   nova-cache: '>=0'
   ram: '>=0.20 && <1'
   text: '>=2.0 && <2.2'
@@ -35,6 +35,25 @@ basic-deps:
   warp: '>=3.3 && <3.5'
 changelog: |
   # Changelog
+
+  ## 0.5.0.0 - 2026-07-12
+
+  - **Signing: fingerprints sort and deduplicate references.** C++ Nix computes and verifies narinfo fingerprints over a sorted, deduplicated store-path set; signing in the narinfo's file order produced signatures real Nix clients reject while nova-cache's own `verify` (recomputing from the same order) passed and masked the divergence. References are now sorted by basename and deduplicated before signing.
+  - **Removed `NovaCache.Compression`, the `compression` flag, and the `lzma` dependency.** The module had no consumer, and the default-on manual flag made every Hackage install require system liblzma dev files, which plain Windows and minimal Linux machines lack - `cabal install` of downstream packages failed while CI (which pins the flag off inside the repo) stayed green. xz support returns with its first real consumer as a size-bounded decoder suitable for untrusted cache data.
+  - **Wire-format strictness now matches upstream Nix.** `validateNarInfo` requires the StorePath field to be absolute and references to be bare basenames (the other spellings produce narinfos real clients reject at parse time, and a bare StorePath also derived an empty store dir inside the signed fingerprint); store-path names are ASCII-only and capped at 211 characters; NAR parsing rejects backslashes in entry names (the Windows traversal vector) and nonzero string padding; and key parsing rejects an empty name or empty key material at load time instead of producing signatures no trust anchor can match. New `parseStorePathBaseName` and `parseAbsoluteStorePath` expose the per-field parsers.
+  - **Upstream-optional narinfo fields are now optional.** Only StorePath, URL, NarHash, and NarSize are required; `Compression` defaults to bzip2 as upstream, and `FileHash`/`FileSize` are `Maybe` (breaking record change, covered by the major bump). Valid narinfos from foreign caches no longer fail to parse over absent optional fields.
+  - **New `NovaCache.Server` module: the cache's HTTP protocol as a WAI `Application`.** Routing, write authentication, request-body limits, and the narinfo validation/signing pipeline move from the server executable into tested library API. Deployment branding stays out of the library: embedders supply their own root-page response, and the bundled executable carries its landing page itself. Adds `wai` and `http-types` to the library dependencies.
+  - **`GET /narinfo-hashes` requires the write key and is `Cache-Control: no-store`.** The listing enumerates the whole store - something the public cache protocol deliberately never offers - and lists a directory per hit; it exists only for the push tool, which already holds the write key.
+  - **NAR bodies no longer transit memory.** Uploads stream to a temp file under a running size cap and rename into place atomically (`NovaCache.Store.writeNarStreaming`); downloads are served from disk via WAI's `responseFile` (`NovaCache.Store.narFilePath`). A multi-GB NAR previously occupied that much RAM per request in both directions.
+  - **`HEAD` is answered wherever `GET` is.** Clients probing narinfo existence with `HEAD` previously got 404.
+  - **The server refuses to start when `CACHE_API_KEY` normalizes to empty** (BOM or whitespace only - the copy-paste artifact). An empty armed key would authenticate an empty bearer token.
+  - **The server refuses to start when a configured signing key fails to load.** It previously logged a warning and ran unsigned, persisting narinfos no trust anchor can verify - the same misconfiguration class the key parser now rejects, closed at the process boundary too.
+  - **Configurable bind host: `--host` / `HOST`.** The default stays all interfaces, so existing deployments do not silently rebind.
+  - The deploy workflow pins cloudflared by version and checksum instead of pulling `latest`, and builds the server on GitHub's hosted arm64 image (same Ubuntu as the production box), shipping the binary over the Access tunnel - the production host deliberately carries no compiler toolchain.
+  - **The sdist ships `NOTICE`.** Apache-2.0 section 4(d) asks redistributions to carry it; the file existed in the repo but not in the released tarball.
+  - **CI builds from the sdist in isolation**, so tree-vs-tarball divergences (files missing from the tarball, dev-only project settings) fail the pipeline instead of surfacing at install time. CI also compiles the server executable and test suites under `-Werror` on every platform.
+  - Dropped the server executable's unused `crypton` dependency.
+  - Workflows run with a read-only `GITHUB_TOKEN`.
 
   ## 0.4.2.1 - 2026-06-12
 
@@ -289,7 +308,7 @@ description: |
   <div align="center">
   <h1>nova-cache</h1>
   <p><strong>The Nix binary cache protocol, in Haskell.</strong></p>
-  <p>nix-base32, NAR archives, narinfo, store paths, and Ed25519 signing - with an optional WAI cache server. A pure core; IO is confined to the compression, storage, and server boundaries.</p>
+  <p>nix-base32, NAR archives, narinfo, store paths, and Ed25519 signing - with an optional WAI cache server. A pure core; IO is confined to the storage and server boundaries.</p>
 
   [![CI](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml)
   [![Hackage](https://img.shields.io/hackage/v/nova-cache.svg)](https://hackage.haskell.org/package/nova-cache)
@@ -305,9 +324,6 @@ description: |
   ```cabal
   build-depends: nova-cache
   ```
-
-  The `compression` flag (on by default) requires the system `liblzma`. Build
-  with `-f-compression` if you only need hashing, NAR, or narinfo.
 
   ## Usage
 
@@ -345,11 +361,16 @@ description: |
   cabal run --flag server nova-cache-server -- --port 5000 --store ./nix-cache
   ```
 
+  The protocol itself lives in the `NovaCache.Server` library module as a WAI
+  `Application`, so any operator can embed the cache in their own server with
+  their own root page; the bundled executable is one such embedding.
+
   ### Configuration
 
   | Variable | Description |
   | --- | --- |
-  | `PORT` | Listen port (default: 5000) |
+  | `PORT` | Listen port (default: 5000; also `--port`) |
+  | `HOST` | Bind host (default: all interfaces; also `--host`) |
   | `NIX_CACHE_DIR` | Store directory (default: `./nix-cache`) |
   | `CACHE_API_KEY` | Bearer token required for `PUT`. The server refuses to start without it unless `--allow-open-writes` is passed. |
   | `SIGNING_KEY_FILE` | Ed25519 secret key file for server-side narinfo signing |
@@ -361,11 +382,13 @@ description: |
   | --- | --- | --- |
   | `GET` | `/` | Landing page: live stats and the cache public key |
   | `GET` | `/nix-cache-info` | Cache metadata |
-  | `GET` | `/narinfo-hashes` | All cached narinfo hashes, newline-delimited |
+  | `GET` | `/narinfo-hashes` | All cached narinfo hashes, newline-delimited (authenticated) |
   | `GET` | `/<hash>.narinfo` | Fetch a narinfo |
-  | `GET` | `/nar/<file>` | Fetch a NAR |
+  | `GET` | `/nar/<file>` | Fetch a NAR (streamed from disk) |
   | `PUT` | `/<hash>.narinfo` | Upload a narinfo (authenticated, validated) |
-  | `PUT` | `/nar/<file>` | Upload a NAR (authenticated) |
+  | `PUT` | `/nar/<file>` | Upload a NAR (authenticated, streamed to disk) |
+
+  `HEAD` is answered wherever `GET` is.
 
   ### Public cache
 
@@ -383,15 +406,15 @@ description: |
   cabal test
   ```
 
-  Optional flags: `-f-compression` skips the `liblzma` dependency, and `--flag server` builds the cache server. Requires GHC 9.8+ and cabal-install 3.10+.
+  Optional flag: `--flag server` builds the cache server. Requires GHC 9.8+ and cabal-install 3.10+.
 
   ---
 
   <p align="center"><sub>Apache-2.0 - <a href="https://github.com/Novavero-AI">Novavero AI Inc.</a></sub></p>
 description-type: markdown
-hash: f6697c43fffc70f668db4d9c5cd72d8f8457b2cf5abd4425941c2a05d0e0e653
+hash: 1687596d87986b4a9a35833831c59a61da0c42adf66c3e742b6023a30f61d826
 homepage: https://github.com/Novavero-AI/nova-cache
-latest: 0.4.2.1
+latest: 0.5.0.0
 license-name: Apache-2.0
 maintainer: devon.tomlin@novavero.ai
 synopsis: Pure-first Nix binary cache protocol library
@@ -401,6 +424,9 @@ test-bench-deps:
   bytestring: '>=0.11 && <0.13'
   crypton: '>=1.1 && <2'
   directory: '>=1.3 && <1.4'
+  http-types: '>=0.12 && <0.13'
   nova-cache: '>=0'
   ram: '>=0.20 && <1'
   text: '>=2.0 && <2.2'
+  wai: '>=3.2 && <3.3'
+  wai-extra: '>=3.1 && <3.2'
