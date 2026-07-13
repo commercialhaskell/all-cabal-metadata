@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Nadeem Bitar
 basic-deps:
   base: ^>=4.21
@@ -22,6 +23,153 @@ changelog: |
 
 
   ## [Unreleased]
+
+
+  ## [0.2.0.0] — 2026-07-13
+
+  ### Added
+
+  - `Keiki.Symbolic.satResultIsProvablyUnsat` exposes the conservative solver
+    verdict used by symbolic emptiness checks: only a definite `Unsatisfiable`
+    result proves a predicate empty.
+  - `Keiki.Composition.checkComposeAlignment` and `composeChecked` report
+    constructor-name drift, unmatched expectations, field-arity mismatches, and
+    mapped/poisoned boundary names with exact source edge locations.
+  - `PLeftArm` and `PRightArm` give `alternative` concrete and symbolic
+    `Either`-arm exclusion even when an underlying edge guard is `PTop`.
+
+  - `Keiki.Builder.buildTransducerEither` returns all eagerly located builder
+    defects as structured `BuilderError` values. `BuilderDefect` and
+    `renderBuilderErrors` expose the same validation and historical message format
+    without exception plumbing.
+  - `DistinctNames` provides the canonical compile-time duplicate register-slot
+    check, and `slotNamesOf` is now exported from `Keiki.Core` for structural
+    constructor validation.
+  - Structured replay diagnostics are available through
+    `applyEventStreamingEither`, `replayEvents`, `applyEventsEither`, and
+    `reconstituteEither`. `ReplayStepFailure`, `ReplayFailureReason`, and
+    `ReplayFailure` identify the failing event index, wrapper state, and exact
+    reason, including ambiguous inversion, queue mismatch, and truncated
+    multi-event chains. The existing `Maybe` functions remain compatibility
+    wrappers over this primary surface.
+
+  ### Changed
+
+  - Aggregate-constructor TH now rejects positional payload types immediately with
+    a record-syntax diagnostic. The `*All` and `*With` enumeration splices warn
+    when they skip unsupported GADT or explicitly quantified constructors.
+  - **Breaking:** built-in `CanonicalTypeName` instances now use pinned,
+    module-independent names such as `Int`, `Text`, and `Maybe(Int)`. Every
+    non-empty register-file shape hash therefore changes once in this release.
+    Snapshot stores keyed by the old hash treat existing snapshots as cache misses
+    and replay the event log in full; keiro follows this benign fallback path.
+  - `Maybe`, list, `Either`, and tuple canonical-name instances now recurse through
+    `CanonicalTypeName` instead of `Typeable`, so application overrides compose
+    inside containers. A custom type used there may need
+    `deriving anyclass (CanonicalTypeName)`; missing evidence is a compile-time
+    migration rather than silent hash drift.
+  - Symbolic emptiness checks no longer mistake solver uncertainty for proof of
+    unsatisfiability. `symIsBot`, `symSatExt`, `isSingleValuedSym`,
+    `withSymPred`, `checkTransitionDeterminismSym`, and `checkDeadEdgesSym` keep
+    their existing names and signatures; `Unknown`, `ProofError`, and other
+    non-definitive solver results now fail conservatively instead of blessing a
+    guard pair as disjoint or an edge as dead. These pure-looking APIs still run
+    z3 through `unsafePerformIO` and throw if the solver is unavailable.
+  - `checkDeadEdgesSym` no longer carries a redundant `Show s` constraint. Relaxing
+    a constraint is source-compatible, so existing call sites need no change.
+  - Symbolic encodings for `Word8`, `Word16`, `Word32`, `Word64`, `Int32`, and
+    `Int64` now use exact fixed-width SBV values, preserving modular wraparound.
+    `UTCTime` now round-trips at its native picosecond resolution instead of
+    truncating to whole seconds. Platform-sized `Int` remains modeled as an
+    unbounded `Integer`, so analyses whose truth depends on `Int` overflow should
+    use an explicitly sized type.
+  - The pure determinism pass used by `validateTransducer` now proves overlap
+    through supported conjunction spines, including constructor consistency,
+    exact integral intervals, and concrete literal witnesses. Unsupported
+    disjunctions, negations, arithmetic, opaque terms, and variable-to-variable
+    comparisons remain unknown and produce no pure warning; use the z3-backed
+    checks as the exact gate. Existing consumers, including keiro, remain
+    source-compatible, but may see new `NondeterministicPair` warnings. Such
+    warnings are true positives and should be repaired or explicitly
+    acknowledged rather than suppressed by pinning the old behavior.
+  - `SomeSymTransducer` now carries input/output poison provenance while retaining
+    its one-argument compatibility pattern. Variance rewrites stamp constructor
+    names with `#lmapped`/`#rmapped`; categorical composition across a poisoned
+    boundary raises `PoisonedCompositionError` instead of silently bypassing a
+    map or producing a dead pipeline.
+  - `feedback1` is documented as its actual two-copy cascade contract, not
+    shared-state aggregate feedback; no `feedback1Checked` API is exposed.
+
+  - `runUpdate` now gives `UCombine` snapshot (parallel-assignment)
+    semantics: every right-hand side reads the edge-entry register file and
+    writes apply left-to-right. Sequential `compose` now symbolically threads
+    t2 register writes across multi-event chains, so stateful composition
+    agrees with stepping t1 and then t2 event-by-event. Constructor-mismatched
+    comparison leaves become `PBot`, while mismatches in other positions use
+    walker-safe opaque poison terms. This is a pre-release behavior change;
+    the surveyed current keiro consumer has no update depending on the former
+    threaded-within-one-edge behavior and does not call composition operators.
+  - `validateTransducer defaultValidationOptions` now enforces four additional
+    replay-safety checks: head-event recoverability, cross-edge inversion
+    ambiguity, constructor guards before input-field reads, and state-changing
+    ε-edges. The corresponding warning constructors are `HeadUnrecoverable`,
+    `InversionAmbiguity`, `UnguardedInputRead`, and `StateChangingEpsilon`; the
+    new default-on option fields are `checkHeadRecoverability`,
+    `checkInversionAmbiguity`, `checkGuardImpliesInputRead`, and
+    `checkStateChangingEpsilon`. Code that exhaustively matches
+    `TransducerValidationWarning` must add these four cases, and code that
+    constructs `ValidationOptions` should record-update `defaultValidationOptions`
+    so future checks remain enabled.
+  - `checkHiddenInputs` now requires the first event of a multi-event edge to
+    recover every consumed command field. Coverage spread across the union of the
+    head and tail is no longer accepted because streaming replay inverts only the
+    head; tail-only fields produce `HeadUnrecoverable` through
+    `validateTransducer` and an equivalent legacy string warning through
+    `checkHiddenInputs`.
+  - The canonical User Registration pre-confirmation deletion now emits
+    `AccountDeleted` instead of changing vertex and registers silently, so its
+    forward result is recoverable from its persisted log.
+  - `Keiki.Builder` now requires every `onCmd`/`onEpsilon` edge body to
+    declare its output intent explicitly. A body that reaches `goto` without
+    calling `emit`/`emitWith` or `noEmit` is an eager construction error instead
+    of silently becoming an ε-edge; deliberately silent edges keep working by
+    calling `noEmit`.
+  - `Keiki.Builder` now validates every declared edge when the returned transducer
+    is evaluated to weak head normal form. Missing/multiple `goto` calls and
+    mismatched explicit `emitWith` constructors no longer remain latent until an
+    affected `edgesOut` branch is demanded; duplicate `from` blocks merge in
+    declaration order with stable per-vertex edge indices.
+  - The builder pins the enclosing `onCmd` input schema in `EdgeBuilder`. Passing
+    another command's term-fields record to `emit`, or calling `emit` inside
+    `onEpsilon`, is now a compile-time error. `emitWith` remains the explicit form
+    for `onEpsilon` and must agree with the enclosing constructor inside `onCmd`.
+  - `buildTransducer` and `buildTransducerEither` require
+    `DistinctNames (Names rs)`, rejecting register files with duplicated slot
+    names instead of silently resolving the first occurrence. Vertex grouping now
+    requires `Eq v`; the unused `Bounded v` and `Enum v` constraints were removed.
+  - Current keiro authoring remains source-compatible: the standard
+    `B.emit wireCtorX XTermFields {..}` shape and both build call forms are
+    unchanged for valid aggregates.
+  - `Keiki.Profunctor` no longer fabricates method-carrying `WeakenR` and
+    `KnownSlotNames` dictionaries with `unsafeCoerce`. Nested stateful Category
+    composition previously misindexed register reads and writes and hid slot names
+    from `CategoryOverlapError`. `SomeSymTransducer` now carries the exported
+    `KnownSlots`/`SlotListWitness` evidence from `Keiki.Composition`, and composite
+    evidence is derived by structural induction. The smart constructor's structural
+    constraints are now expressed as `KnownSlots rs`.
+  - `Keiki.Acceptor.outputAcceptor` now carries
+    `(InFlight s co, RegFile rs)` and steps with `applyEventStreaming`, so its
+    acceptance result agrees with `reconstitute` for multi-event and truncated
+    logs as well as letter-only logs.
+
+  ### Removed
+
+  - `Keiki.Builder` no longer uses `unsafeCoerce` to reinterpret the input schema
+    recovered by `emit`; the schema relationship is represented in its types.
+  - The lossy pre-release Decider facade has been removed. Use `stepEither` for
+    forward decisions and the structured `Keiki.Core` replay functions for
+    hydration; there is no letter-only replay facade that silently retains the
+    input state after a failure.
 
 
   ## [0.1.0.0] — 2026-06-07
@@ -47,13 +195,6 @@ changelog: |
   - `Keiki.Builder` — the monadic edge-authoring DSL.
   - `Keiki.Composition` — sequential, alternative, and single-step
     feedback combinators on `SymTransducer`s.
-  - `Keiki.Decider` — the Chassaing-shape `Decider` facade
-    (`decide` / `evolve` / `evolveStreaming` / `initialState` /
-    `isTerminal`) derived mechanically from a `SymTransducer`.
-    `decide` returns the full event list directly, including
-    length-2+ chains from multi-event edges; `evolveStreaming`
-    threads the `Keiki.Core.InFlight` wrapper through length-N
-    edges for event-by-event streaming replay.
   - `Keiki.Generics` — `RegFieldsOf`, `GRecord`, `mkInCtor` /
     `mkInCtorVia`, `mkWireCtor` / `mkWireCtorVia`, plus `EmptyRegFile`.
   - `Keiki.Generics.TH` — `deriveAggregateCtors`, `deriveWireCtors`,
@@ -116,10 +257,10 @@ description: |
   symbolic-register finite-state transducer.
 
   keiki keeps the runtime boundary deliberately small. You describe an
-  aggregate or workflow once as a typed transducer; the library derives
-  the event-sourcing facade, replay, acceptors, projections, composition
-  machinery, diagram renderers, and optional symbolic checks from that
-  single declaration.
+  aggregate or workflow once as a typed transducer; the library provides
+  forward decisions, replay, acceptors, projections, composition machinery,
+  diagram renderers, and optional symbolic checks from that single
+  declaration.
 
   ## The name
 
@@ -155,15 +296,17 @@ description: |
   keiki models all three as **finite-state transducers** with a typed
   register file and predicate-labelled guards: a practical hybrid of
   Symbolic Finite Transducers and Streaming String Transducers. From one
-  `SymTransducer` declaration, the library mechanically derives:
+  `SymTransducer` declaration, the library provides:
 
-  - the Chassaing-shape `Decider` (`decide`/`evolve`/`initialState`/`isTerminal`),
+  - strict forward-decision and replay operations with structured failure diagnostics
+    (`stepEither`, `reconstituteEither`, and `replayEvents`),
   - input- and output-side `Acceptor`s,
   - per-vertex projections (the "B-presentation" view),
-  - composition (`compose`, `alternative`, `feedback1`),
-  - profunctor / `Category` / `Strong` / `Choice` instances,
+  - checked sequential composition (`composeChecked`) plus `alternative` and `feedback1`,
+  - profunctor / `Category` / `Strong` / `Choice` / `Arrow` instances,
   - Mermaid and Markdown renderers for documentation,
-  - single-valuedness checks via SBV + z3 as an opt-in symbolic CI gate.
+  - eager builder validation, default-on replay-safety checks, and optional
+    single-valuedness checks via SBV + z3.
 
   `delta` / `omega` / `applyEvent` use concrete predicate evaluation — no
   solver in the per-event hot path. Solver dispatch is reserved for
@@ -178,7 +321,9 @@ description: |
   The core package is intentionally codec-free. JSON support lives in
   [`keiki-codec-json`](keiki-codec-json/README.md), and downstream codec
   testing helpers live in
-  [`keiki-codec-json-test`](keiki-codec-json-test/README.md).
+  [`keiki-codec-json-test`](keiki-codec-json-test/README.md). The JSON event
+  codec supports pinned wire kinds, in-band schema versions, and explicit
+  upcaster chains for persisted-event evolution.
 
   ## Build
 
@@ -217,9 +362,9 @@ description: |
         B.goto EmailSentVertex
   ```
 
-  `Decider`, `Acceptor`, replay, and the per-vertex view are all derived
-  from this one declaration. See the sibling `jitsurei/` package for the
-  full worked aggregates the test suite drives.
+  Forward decisions, structured replay, `Acceptor`s, and the per-vertex
+  view all operate from this one declaration. See the downstream
+  `jitsurei` package for the full worked aggregates the test suite drives.
 
   ## Repository documentation
 
@@ -248,13 +393,14 @@ description: |
 
   BSD-3-Clause. See [`keiki.cabal`](keiki.cabal) for package metadata.
 description-type: markdown
-hash: 1a321c77e1fda4485ef215790f1c95c741c96f6e77834508fbbae1ebc9e4cbde
+hash: 5dd3c6146cdf0d19e83efd2af746e17558767a0e87c3a2824b92d46ef2c3f600
 homepage: ''
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Pure core for symbolic-register transducer event sourcing.
 test-bench-deps:
+  QuickCheck: ^>=2.15
   base: ^>=4.21
   containers: '>=0.6 && <0.9'
   deepseq: ^>=1.5
