@@ -1,11 +1,13 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: ^>=2.2
   base: ^>=4.21
   containers: ^>=0.7
-  keiki: ^>=0.1
+  keiki: ^>=0.2
+  scientific: ^>=0.3
   template-haskell: ^>=2.23
   text: ^>=2.1
 changelog: |
@@ -18,6 +20,44 @@ changelog: |
 
 
   ## [Unreleased]
+
+
+  ## [0.2.0.0] — 2026-07-13
+
+  ### Added
+
+  - Event-codec schema evolution through pinned constructor wire kinds,
+    default-on-missing payload decoding, and a compile-time-complete chain of
+    one-envelope-to-one-envelope upcasters.
+  - `fieldCodec`, a strict smart constructor for `FieldCodec`, plus generated
+    `<prefix>SchemaVersion` bindings.
+
+  ### Changed
+
+  - **Breaking for invalid schemas:** `RegFileToJSON` now rejects duplicate slot
+    names at compile time through keiki's canonical `DistinctNames` invariant,
+    preventing Value-path data loss and duplicate streaming keys.
+  - Encoding now documents and pins the existing fully-initialized-register
+    precondition. Unwritten `emptyRegFile` slots throw a slot-named `ErrorCall`;
+    keiro already snapshots only fully populated register files, so it needs no
+    source change.
+  - **Breaking:** snapshot shape hashes now use keiki's pinned built-in type names.
+    Every non-empty shape hash changes once; stores keyed by an old hash ignore that
+    snapshot and replay from the event log. Keiro already treats this mismatch as a
+    benign cache miss.
+  - Container slot types now require their arguments to have
+    `CanonicalTypeName`, not merely `Typeable`, so user-defined types may need to
+    derive or define that class. This makes application overrides propagate through
+    `Maybe`, lists, `Either`, and tuples.
+  - **Breaking:** `EventCodecOptions` now also carries `kindOverrides`,
+    `versionFieldName`, `currentVersion`, and `upcasters`.
+  - **Breaking:** `FieldCodec` gains the `fcOnMissing` field. Positional
+    construction should be replaced with `fieldCodec` and a record update when a
+    missing-key default is required.
+  - **Breaking:** generated event envelopes now contain an in-band `"v"` field;
+    version-absent historical objects decode as version 1.
+  - **Breaking:** generated `EventTypes` and `KindMap` bindings contain resolved
+    wire kinds, including pinned values, rather than assuming constructor names.
 
 
   ## [0.1.0.0] — 2026-06-07
@@ -153,6 +193,26 @@ description: |
   (non-record-syntax) constructors, and type synonyms are rejected at
   splice time with a precise error message.
 
+  ## Register-file wire rules
+
+  Every register slot must be written before encoding. `emptyRegFile` is an
+  initialization scaffold whose unwritten slots throw an `ErrorCall` beginning with
+  `uninit:` when read or encoded; it is not an encodable snapshot. On the streaming
+  path that exception can surface after earlier bytes have already been emitted, so
+  snapshot only fully hydrated aggregates.
+
+  Every register slot is present in the JSON object. A `Nothing` slot encodes as
+  explicit JSON `null`; omitting its key is an error, not another spelling of
+  `Nothing`. A nested optional value is lossy under aeson's standard instances:
+  `Just Nothing :: Maybe (Maybe a)` and outer `Nothing` both encode as `null` and
+  decode as outer `Nothing`. Avoid nested-`Maybe` slots when that distinction
+  matters, or wrap the inner optional value in a newtype with explicit JSON
+  instances.
+
+  The Value encoder emits aeson's object-key order, while the streaming Encoding
+  path emits slot-list order. Their bytes may differ, but both decode to the same
+  register file.
+
   ## Deriving an event codec skeleton
 
   A service that stores its events as JSON usually hand-writes a
@@ -172,9 +232,10 @@ description: |
   import Data.Text (Text)
   import Keiki.Codec.JSON.Event
     ( EventCodecOptions (..)
-    , FieldCodec (..)
+    , FieldCodec (fcOnMissing)
     , defaultEventCodecOptions
     , deriveEventCodecSkeleton
+    , fieldCodec
     )
 
   newtype OrderId = OrderId Int deriving stock (Eq, Show)
@@ -201,7 +262,7 @@ description: |
   $(deriveEventCodecSkeleton
       defaultEventCodecOptions
         { fieldCodecOverrides =
-            Map.fromList [("orderId", FieldCodec 'orderIdToJSON 'orderIdFromJSON)]
+            Map.fromList [("orderId", fieldCodec 'orderIdToJSON 'orderIdFromJSON)]
         , passthroughFields = Set.fromList ["qty", "trackingNo"]
         }
       ''OrderEvent)
@@ -210,15 +271,18 @@ description: |
   --   orderEventFromJSON   :: Aeson.Value -> Either String OrderEvent
   --   orderEventEventTypes :: [Text]
   --   orderEventKindMap    :: [(Text, Text)]
+  --   orderEventSchemaVersion :: Int
   ```
 
   Each constructor encodes to an object carrying a `"kind"` discriminator
-  (its constructor name) plus one entry per payload field, so
+  (its constructor name unless pinned) and a `"v"` schema version, plus one
+  entry per payload field, so
   `orderEventToJSON (Placed (PlacedData (OrderId 7) 3))` is
-  `{"kind":"Placed","orderId":"ord-7","qty":3}` — note `orderId` is the
-  override's output, not a generic `Int`. The `orderEventEventTypes` /
-  `orderEventKindMap` bindings are plain `Text` (no Keiro dependency) so a
-  downstream can feed them to Keiro's `Codec.eventTypes`.
+  `{"kind":"Placed","v":1,"orderId":"ord-7","qty":3}` — note `orderId`
+  is the override's output, not a generic `Int`. The
+  `orderEventEventTypes` / `orderEventKindMap` bindings contain the resolved
+  wire kinds as plain `Text` (no Keiro dependency), and
+  `orderEventSchemaVersion` contains the configured current version.
 
   **No silent generic fallback.** Each payload field is encoded by *name*:
   an override (`fieldCodecOverrides`), a passthrough using the field's own
@@ -233,6 +297,73 @@ description: |
   Constructors that are multi-argument, use record syntax directly, or are
   GADT/infix are rejected at splice time with a precise message; wrap a
   single record payload type instead (`Placed PlacedData`).
+
+  ### Evolving an event schema
+
+  There are three common changes, each with a distinct codec move.
+
+  1. **Add a payload field without bumping the version.** For an optional
+     field such as `note :: Maybe Text`, add `"note"` to
+     `passthroughFields`; a missing key decodes as `Nothing`, while an
+     explicit JSON `null` also follows aeson's normal `Maybe` decoder. For a
+     non-`Maybe` field, provide a named default constant through the override:
+
+     ```haskell
+     defaultPriority :: Priority
+     defaultPriority = NormalPriority
+
+     priorityCodec :: FieldCodec
+     priorityCodec =
+       (fieldCodec 'priorityToJSON 'priorityFromJSON)
+         { fcOnMissing = Just 'defaultPriority }
+     ```
+
+     Put `priorityCodec` in `fieldCodecOverrides`. Keep `currentVersion`
+     unchanged: this is an additive compatibility rule, not a structural
+     migration. Required fields without either form of default still fail with
+     `missing field: <name>`.
+
+  2. **Rename a Haskell constructor without changing stored bytes.** Pin the
+     renamed constructor to its historical discriminator:
+
+     ```haskell
+     kindOverrides = Map.fromList [("OrderPlaced", "Placed")]
+     ```
+
+     Override keys are current constructor names. The splice rejects unknown
+     keys and duplicate resolved wire kinds, while encoding, decoding,
+     `EventTypes`, and `KindMap` all use the pinned wire value.
+
+  3. **Restructure a payload.** Increment `currentVersion` and register one
+     whole-envelope upcaster for every historical step:
+
+     ```haskell
+     upcastOrderV1 :: Aeson.Value -> Either String Aeson.Value
+     upcastOrderV1 = ... -- rewrite a version-1 object into version-2 shape
+
+     currentVersion = 2
+     upcasters = [(1, 'upcastOrderV1)]
+     ```
+
+     An absent `"v"` is version 1. Before constructor dispatch, the decoder
+     runs every rung from the stored version to the current version. For
+     `currentVersion = n`, the splice requires exactly the source versions
+     `[1 .. n - 1]`; gaps, duplicates, and out-of-range entries fail at compile
+     time. A rung is one-envelope-to-one-envelope. If one historical event must
+     split into several current events, do that in the application's event-store
+     adapter as described in
+     [`docs/research/schema-evolution.md`](../docs/research/schema-evolution.md).
+
+  Unknown object keys are intentionally ignored by the event decoder so additive
+  deployments can overlap. This differs from the RegFile snapshot decoder, which
+  rejects extra keys because a snapshot must match one exact register shape.
+
+  The in-band `"v"` is opt-in version ownership for applications that have no
+  outer event envelope. If an application already owns out-of-band metadata — for
+  example, a keiro-style `schemaVersion` beside the payload — keep this codec's
+  `currentVersion = 1` and evolve at that outer layer. Running both schemes with
+  different version numbers is a configuration error; neither layer detects the
+  disagreement for the other.
 
   ## When to use the streaming encoder
 
@@ -290,9 +421,9 @@ description: |
   sensitivity assertions, and the golden hash fixture pinned for
   GHC 9.12.*.
 description-type: markdown
-hash: 4ddf95f0a48563a159c5a8d1118dcbe96fd38091c75f2b3d68bf1048bff7c3b0
+hash: 3506be9a91a008cc4391de23d85f79fd2932b9308584d451a13519d44f4ec643
 homepage: ''
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Optional JSON codec for keiki's RegFile.
@@ -304,8 +435,8 @@ test-bench-deps:
   containers: ^>=0.7
   deepseq: ^>=1.5
   hspec: ^>=2.11
-  keiki: '>=0.1 && <0.2'
-  keiki-codec-json: '>=0.1 && <0.2'
+  keiki: '>=0.2 && <0.3'
+  keiki-codec-json: '>=0.2 && <0.3'
   quickcheck-instances: ^>=0.3
   tasty-bench: ^>=0.4 || ^>=0.5
   text: '>=2.1 && <2.2'
