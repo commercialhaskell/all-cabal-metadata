@@ -1,0 +1,403 @@
+all-versions:
+- 0.2.0.0
+author: Nadeem Bitar
+basic-deps:
+  aeson: '>=2.2'
+  aeson-casing: '>=0.2'
+  base: '>=4.21 && <5'
+  bytestring: '>=0.11'
+  containers: '>=0.6'
+  contravariant-extras: '>=0.3'
+  deepseq: '>=1.5'
+  effectful: '>=2.6'
+  effectful-core: '>=2.6'
+  generic-lens: '>=2.2'
+  hasql: '>=1.10'
+  hasql-pool: '>=1.2'
+  hasql-transaction: '>=1.1'
+  hs-opentelemetry-api: '>=1.0 && <1.1'
+  hs-opentelemetry-propagator-w3c: '>=1.0 && <1.1'
+  hs-opentelemetry-semantic-conventions: '>=1.40 && <2'
+  keiki: '>=0.2 && <0.3'
+  keiki-codec-json: '>=0.2 && <0.3'
+  keiro-core: ^>=0.2.0.0
+  kiroku-store: '>=0.3 && <0.4'
+  lens: '>=5.2'
+  mmzk-typeid: '>=0.7'
+  scientific: '>=0.3'
+  shibuya-core: '>=0.8.0.1 && <0.9'
+  stm: '>=2.5'
+  streamly: '>=0.11'
+  streamly-core: '>=0.3'
+  text: '>=2.1'
+  time: '>=1.12'
+  unliftio-core: '>=0.2'
+  uuid: '>=1.3'
+  vector: '>=0.13'
+changelog: |
+  # Changelog
+
+  All notable changes to the `keiro` library are recorded here. The format follows
+  [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
+  the [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## [Unreleased]
+
+  _No unreleased changes._
+
+  ## 0.2.0.0 — 2026-07-13
+
+  ### Breaking Changes
+
+  - **Keiro's framework tables moved out of the `kiroku` schema into a dedicated
+    `keiro` PostgreSQL schema.** Every runtime query is now fully qualified
+    (`keiro.keiro_snapshots`, `keiro.keiro_timers`, `keiro.keiro_outbox`, …) and no
+    longer depends on `search_path`. Existing databases must run the
+    `keiro-migrations` bootstrap that creates the schema and relocates the tables;
+    application SQL reading bare `keiro_*` relations must be re-qualified.
+  - `runCommandWithSql`, `runCommandWithSqlEvents`, `runCommandWithProjections`,
+    and the process-manager/router runners now require `KirokuStoreResource` so
+    transactional appends can apply Kiroku's configured `enrichEvent` hook. Acquire
+    the store with `withKirokuStore` and interpret `Store` with `runStoreResource`;
+    plain `runCommand` is unchanged.
+  - Read-model queries no longer auto-register missing registry rows. Applications
+    must call `registerReadModel` at projection startup; unknown models now return
+    `ReadModelUnregistered` without mutating the registry.
+  - `ReadModel` now requires a `strongScope :: StrongScope` field. Use `EntireLog`
+    for all-stream subscriptions or `CategoryHead category` for a category
+    subscription, so that unrelated traffic cannot hold `Strong` reads behind.
+  - `ReadModel` now also requires a `schema :: Text` field naming the PostgreSQL
+    schema its data table lives in. Keiro does not rewrite `query`; qualify the
+    application's SQL with `qualifiedTableName` or `Keiro.Connection.qualifyTable`.
+    The field is Haskell-level wiring only and is deliberately not persisted in the
+    `keiro.keiro_read_models` registry.
+  - `AsyncProjection` now requires `readModelName`, naming the registry row that
+    fences writes during a rebuild.
+  - `applyAsyncProjection` now returns `AsyncApplyOutcome` (`AsyncApplied`,
+    `AsyncDuplicate`, or `AsyncFenced`) and live workers must not checkpoint a
+    fenced event. Rebuild replayers use `applyAsyncProjectionUnfenced` between the
+    new atomic `startRebuild` and guarded `finishRebuild` helpers.
+  - Router deterministic command ids are now derived from the resolved target
+    stream name and same-stream occurrence rather than the target's list position
+    (`deterministicRouterCommandId`). A transition point-probe recognizes legacy
+    positional ids for stable resolver output and may be removed in a later
+    release. If both the deployment version and resolver output change between
+    attempts, a target command may be dispatched at most one extra time across that
+    one-time upgrade window.
+  - `runWorkflow`, `runWorkflowWith`, and the child-workflow runtime now require
+    `Error StoreError` in their effect rows, so post-commit workflow snapshot
+    failures can be caught without leaving the typed error channel.
+  - `HydrationReplayFailed` now carries a typed `HydrationReplayReason` alongside
+    the failing stream version. The reasons distinguish no inverting edge, ambiguous
+    inversion, queue mismatch, and a truncated multi-event chain. `CommandError`
+    also gains `CommandAmbiguous` (matched edge indices) and `HydrationGapDetected`
+    (expected and observed stream versions).
+  - A command matching multiple transitions is now reported as `CommandAmbiguous`
+    instead of `CommandRejected`. Process managers and routers halt on this
+    aggregate-definition bug, while generated timer dispositions route it through
+    their on-error arm rather than benign on-reject handling.
+  - `PMCommandResult.PMCommandFailed` now carries the target `StreamName` alongside
+    its `CommandError`, so worker policy can identify the failing target.
+  - `WorkerOptions` gains a `rejectedCommandPolicy :: RejectedCommandPolicy` field,
+    and `ShardedWorkerOptions` gains `handlerRetryDelay :: RetryDelay` and
+    `retryPolicy :: RetryPolicy`. Record construction must supply them; the
+    `defaultWorkerOptions` and `defaultShardedWorkerOptions` defaults are unchanged
+    in behavior except as noted below.
+  - The `hydration_replay_failed` telemetry class is replaced by four
+    reason-specific `error.type` values, and `command_ambiguous` is new. Dashboards
+    keyed on the old hydration class must be updated.
+  - Stream validation is stricter through the re-exported `keiro-core` contracts.
+    Keiki 0.2's head-recoverability, inversion-ambiguity, unguarded-input-read, and
+    state-changing-silent-edge checks now reject a stream at `mkEventStream`, and
+    `mkEventStreamWith` can no longer disable the head-recoverability or
+    state-changing-epsilon checks. Snapshot-enabled streams whose codec cannot
+    encode their initial state and registers are rejected at startup. `keiro` now
+    requires `keiki >=0.2`, `keiki-codec-json >=0.2`, and `kiroku-store >=0.3`.
+
+  ### New Features
+
+  - New `Keiro.DeadLetter`, `Keiro.DeadLetter.Schema`, and `Keiro.DeadLetter.Replay`
+    modules. Process-manager and router workers can now park a rejected dispatch
+    instead of halting: `RejectedCommandPolicy` selects `RejectedHalt` (the
+    default), `RejectedDeadLetter` (persist a `DispatchDeadLetter` in
+    `keiro.keiro_dead_letters` and acknowledge), or `RejectedSkip` (acknowledge and
+    count). `recordDispatchDeadLetter` is idempotent under source-event redelivery,
+    and `listDispatchDeadLetters` reads one dispatcher's witnesses newest-first.
+    `replaySubscriptionDeadLetters` re-runs a caller-supplied handler over the rows
+    Kiroku parked in `kiroku.dead_letters`, reporting `ReplayedFresh`,
+    `ReplayedDuplicate`, `ReplayFailed`, or `ReplaySourceMissing` without deleting
+    or mutating the Kiroku-owned rows.
+  - New `Keiro.Connection` module for application read-model and projection tables:
+    `qualifyTable`, `quoteIdentifier`, `withProjectionSchema`,
+    `keiroConnectionSettings`, and the opt-in `ensureProjectionSchema`. The store
+    connection's `schema` stays `kiroku` because it drives the `LISTEN`/`NOTIFY`
+    channel; a projection schema is reached by qualification and/or
+    `extraSearchPath`. `ReadModel.qualifiedTableName` builds the model's
+    `"schema"."table"` reference.
+  - `Keiro.Subscription.Shard.Worker` gains an acknowledgement-aware surface:
+    `runShardedSubscriptionGroupAck` with `ShardAck`, `ShardDelivery`, and
+    `ShardEventHandler`, plus per-event retry and dead-letter dispositions.
+    `runShardedSubscriptionGroup` remains as the `RecordedEvent -> IO ()`
+    compatibility wrapper.
+  - Added `keiro.dispatch.deadlettered` and `keiro.subscription.deadlettered`
+    counters. `Keiro.Telemetry.kirokuEventBridge` installs on Kiroku's
+    `eventHandler` to observe `KirokuEventSubscriptionDeadLettered`, the terminal
+    retry-exhaustion signal, and delegates every event to the application's handler.
+  - Added `keiro.snapshot.encode.failures`, `keiro.snapshot.decode.failures`,
+    `keiro.snapshot.read.hits`, `keiro.snapshot.read.misses`, and
+    `keiro.snapshot.apply.divergence`. Snapshot lookup APIs (`lookupSnapshotSeed`,
+    `SnapshotLookup`, `SnapshotMissReason`, `encodeSnapshotStrict`,
+    `writeSnapshotEncoded`) now retain miss and decode reasons, while compatibility
+    wrappers preserve the previous `Maybe` surface.
+  - `commandErrorClass` exposes a stable error-class string for a `CommandError`.
+    `isRejectionClass`, `decideForFailures`, `DispatchFailure`, and
+    `confirmBenignDuplicate` are exported from `Keiro.ProcessManager` and
+    `Keiro.Router` so that custom workers can reuse the runtime's acknowledgement
+    classification. `ReadModel.categoryHeadPosition` reads the latest global
+    position originating in a Kiroku category.
+
+  ### Bug Fixes
+
+  - Command hydration now detects stream-version gaps caused by Kiroku per-stream
+    truncation, and returns `HydrationGapDetected` unless a snapshot covers the
+    hidden prefix.
+  - Transactional command runners now apply Kiroku's configured `enrichEvent` hook
+    before event preparation, so persisted events and the `runCommandWithSqlEvents`
+    callback observe the same enriched metadata as plain `runCommand`.
+  - Router and process-manager duplicate-event rejections are now confirmed against
+    the intended target stream before being treated as benign. Unconfirmed
+    cross-stream or id-less collisions surface as command failures, causing workers
+    to halt instead of silently dropping a dispatch.
+  - Sharded subscription readers now acknowledge each event only after its handler
+    returns, using Kiroku's acknowledgement bridge. A shed or rebalanced bucket's
+    checkpoint can no longer cover an unprocessed event, and a synchronous handler
+    exception is retried in place under `retryPolicy` before Kiroku dead-letters the
+    event; asynchronous exceptions write no acknowledgement, and the event is
+    redelivered by the next owner.
+  - No-op commands now report `CommandResult.globalPosition = Nothing` instead of
+    exposing Kiroku's per-stream-read sentinel `GlobalPosition 0`. Appended commands
+    continue to report the real store-assigned position.
+
+  ### Other Changes
+
+  - `RunCommandOptions.verifyReplayOnAppend` defaults on. Both command append paths
+    replay each just-committed batch from the pre-command state, count an
+    unreplayable batch through `keiro.snapshot.apply.divergence`, and attach a
+    bounded typed reason to `keiro.replay.divergence` without turning an
+    already-committed command into a reported failure.
+  - Aggregate snapshot encoding is forced before the store write. An `ErrorCall`
+    from a partial state encoder or an uninitialized register is swallowed after the
+    event append and counted, instead of escaping a successful command.
+  - Workflow snapshot writes after steps, completion, and continue-as-new rotation
+    are advisory: store failures are swallowed and counted after the journal append
+    commits.
+  - Corrected snapshot documentation: version non-regression applies within one
+    codec version and shape hash, while an incompatible codec can replace a newer
+    row to permit rollback. Upgrade notes cover the full-replay miss caused by
+    Keiki EP-78's stable shape hash.
+  - Documented previously implicit runtime contracts: the inbox deduplication window
+    closes when `garbageCollectCompleted` removes a completed row; outbox
+    `created_at` is transaction-start time, so `PerKeyHeadOfLine` and
+    `PerSourceStream` ordering is best-effort unless the caller serializes same-key
+    enqueues; the default timer worker has no attempt ceiling and requeues claims
+    left `Firing` for five minutes; and process-manager `correlate` joins across
+    streams must be order-insensitive.
+  - The shared PostgreSQL test fixture now provisions templates through the native
+    Kiroku/Keiro migration plan. Codd transition and remediation tests are retained
+    behind the manual `legacy-codd-tools` flag.
+  - Kiroku 0.3, Keiki 0.2, and pg-migrate 1.0 now resolve from Hackage; their
+    obsolete Git package overrides and the local Cabal overlay are no longer needed.
+
+  ## 0.1.0.0 — 2026-07-05
+
+  The initial Hackage release of `keiro`, an event-sourcing framework and workflow
+  engine that composes the kiroku event store, the keiki aggregate core, and the
+  shibuya worker substrate.
+
+  ### Breaking Changes
+
+  - Command-boundary APIs require `ValidatedEventStream` instead of bare
+    `EventStream`: `runCommand`, `runCommandWithSql`, `runCommandWithSqlEvents`,
+    `runCommandWithProjections`, `Router.targetEventStream`, and
+    `ProcessManager.eventStream` / `targetEventStream`. Build stream definitions
+    with `mkEventStream` or `mkEventStreamOrThrow` before wiring them into runners.
+    This is source-level only; persisted events, snapshots, stream names, and wire
+    formats are unchanged.
+
+  ### New Features
+
+  - Command-side write APIs with optimistic concurrency, idempotent event ids,
+    transactional SQL hooks, inline projections, command metadata, and OpenTelemetry
+    spans.
+  - Typed event codecs, schema-version metadata, ordered upcasters, advisory
+    snapshots, and replay-safe event-stream validation via `Keiro.EventStream.Validate`.
+  - Read models with consistency modes, rebuild lifecycle support, async projection
+    deduplication, and strong consistency checks.
+  - Process managers, routers, database-backed timers, shard workers, and worker
+    options for retry, halt, duplicate, and poison-message handling.
+  - Durable integration outbox and idempotent inbox support, including Kafka
+    adapters, trace propagation, retry accounting, dead-lettering, and maintenance
+    helpers.
+  - Durable workflow primitives: journaled named steps, sleep, await/signal,
+    child workflows, continue-as-new, patching, push wake signals, resume workers,
+    instance leasing, garbage collection, snapshots, and workflow telemetry.
+  - Metrics surfaces for command dispatch, projections, timers, outbox/inbox
+    workers, and workflow execution.
+
+  ### Bug Fixes
+
+  - Hardened command retry, snapshot boundary handling, workflow crash windows,
+    process-manager/router ack finalization, timer requeueing, shard reader
+    recovery, async projection deduplication, and inbox/outbox recovery paths.
+  - Fixed duplicate-event classification, outbox publish grouping, no-op late
+    failure marks, and idempotent runtime release paths.
+
+  ### Other Changes
+
+  - Re-exported the shared contracts from `keiro-core`, including codecs, streams,
+    event streams, validation, integration events, and snapshot policies.
+  - Added user guides, migration notes, Haddock coverage, API references, and
+    guide-backed examples for command-side usage, event evolution, snapshots,
+    read models, process managers, routers, integration events, and durable
+    workflows.
+changelog-type: markdown
+description: |
+  # keiro — 経路
+
+  keiro is a Haskell library for event sourcing and workflow orchestration. It
+  combines an append-only event store, a pure functional state machine, and
+  subscription workers into one library-shaped runtime that an application imports
+  and runs against PostgreSQL.
+
+  ## The name
+
+  **経路** (*keiro*) means **route**, **path**, or **course** in Japanese: the way
+  something travels from an origin to a destination.
+
+  | Kanji | Reading | Meaning |
+  |---|---|---|
+  | 経 | *kei* | to pass through, to elapse, a way, a longitude |
+  | 路 | *ro* | a road, path, or way |
+
+  The name is literal. keiro is about the paths events take through a system:
+
+  - an event stream is the route an aggregate's history has taken;
+  - a subscription follows the route through the global event log;
+  - a projection routes events into queryable read models;
+  - a process manager routes source events into commands for another stream;
+  - a workflow is a durable route through state, timers, and external effects.
+
+  The sibling project **keiki** (継起, "successive occurrence") names the
+  succession of events. **keiro** names the routes those events travel and the
+  routes downstream processes follow.
+
+  ## What it provides
+
+  The current v1 library provides:
+
+  - typed stream names through `Keiro.Stream`;
+  - event codecs, schema versions, event type validation, and upcasters through
+    `Keiro.Codec`;
+  - the author-facing `EventStream` contract in `Keiro.EventStream`;
+  - `runCommand` and `runCommandWithSql` in `Keiro.Command` for the canonical
+    load, streaming replay, decide, append-event-batch cycle with optimistic
+    concurrency;
+  - advisory snapshots in `Keiro.Snapshot`;
+  - read models, inline projections, async projection helpers, and rebuild
+    metadata in `Keiro.ReadModel` and `Keiro.Projection`;
+  - event-sourced process managers in `Keiro.ProcessManager`;
+  - durable timer storage and workers in `Keiro.Timer`.
+
+  The stable contracts used by future Keiro packages live in the sibling
+  `keiro-core` package. The full `keiro` package depends on `keiro-core` and
+  re-exports those core modules, so existing imports such as `Keiro.Codec`,
+  `Keiro.EventStream`, `Keiro.Stream`, and `Keiro.Integration.Event` continue to
+  work for applications that depend on `keiro`.
+
+  The top-level `Keiro` module re-exports the core stream, codec, event-stream,
+  command, and snapshot APIs. Read-model, projection, process-manager, and timer
+  modules are exposed directly so applications can import them explicitly.
+
+  ## Runtime stack
+
+  keiro is not a server. The `keiro-core` package contains reusable contracts and
+  pure helpers; the `keiro` package adds the runtime that composes these
+  dependencies:
+
+  - **kiroku** for the PostgreSQL-backed append-only event store;
+  - **keiki** for the pure `SymTransducer` state-machine core;
+  - **shibuya** for subscription and worker supervision;
+  - **hasql** and **effectful** for database access and effect handling;
+  - **Streamly** for streaming reads and worker loops.
+
+  ## Development
+
+  From the repository root:
+
+  ```bash
+  cabal build all
+  cabal test all
+  cabal test jitsurei-test
+  just haskell-verify
+  ```
+
+  The package metadata lives in `keiro/keiro.cabal`. The implementation plans and design
+  history live under `docs/masterplans/`, `docs/plans/`, and `docs/research/`.
+  User-facing documentation starts at `docs/user/README.md`. Long-form,
+  guide-backed examples start at `docs/guides/README.md` and use the sibling
+  `jitsurei` package as their executable source.
+
+  ## Status
+
+  The v1 implementation MasterPlan is complete. The library currently includes
+  the package scaffold, public `EventStream` and codec contract, command cycle,
+  snapshots, read models and projections, process managers, and durable timer APIs.
+
+  Remaining work is future-facing: the v2 deterministic durable-execution runtime,
+  exactly-once async projection checkpoint/user-SQL transactions once shibuya
+  exposes that boundary, and higher-level ergonomic facades over the low-level v1
+  APIs.
+
+  ## License
+
+  BSD-3-Clause.
+description-type: markdown
+hash: 245ce3bf74760b614f74b2937a81ffb45ac1a8e5860740d5b24a9f14692c725e
+homepage: https://github.com/shinzui/keiro#readme
+latest: 0.2.0.0
+license-name: BSD-3-Clause
+maintainer: nadeem@gmail.com
+synopsis: Event sourcing framework and workflow engine
+test-bench-deps:
+  aeson: '>=2.2'
+  base: '>=4.21 && <5'
+  bytestring: '>=0.11'
+  containers: '>=0.6'
+  contravariant-extras: '>=0.3'
+  effectful: '>=2.6'
+  effectful-core: '>=2.6'
+  hasql: '>=1.10'
+  hasql-pool: '>=1.2'
+  hasql-transaction: '>=1.1'
+  hs-opentelemetry-api: '>=1.0 && <1.1'
+  hs-opentelemetry-exporter-in-memory: '>=1.0 && <1.1'
+  hs-opentelemetry-propagator-w3c: '>=1.0 && <1.1'
+  hs-opentelemetry-sdk: '>=1.0 && <1.1'
+  hs-opentelemetry-semantic-conventions: '>=1.40 && <2'
+  hspec: '>=2.11'
+  keiki: '>=0'
+  keiki-codec-json: '>=0'
+  keiro: '>=0'
+  keiro-core: ^>=0.2.0.0
+  keiro-test-support: '>=0'
+  kiroku-store: '>=0.3 && <0.4'
+  process: '>=1.6'
+  shibuya-core: '>=0.8.0.1 && <0.9'
+  stm: '>=2.5'
+  streamly-core: '>=0.3'
+  tasty-bench: '>=0.4'
+  text: '>=2.1'
+  time: '>=1.12'
+  unliftio-core: '>=0.2'
+  uuid: '>=1.3'
+  vector: '>=0.13'

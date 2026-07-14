@@ -1,0 +1,270 @@
+all-versions:
+- 0.2.0.0
+author: Nadeem Bitar
+basic-deps:
+  aeson: '>=2.1 && <2.3'
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11 && <0.13'
+  codd-extras: '>=0.1 && <0.2'
+  containers: '>=0.6 && <0.8'
+  hasql: '>=1.10 && <1.11'
+  keiro-migrations: '>=0'
+  kiroku-store-migrations: '>=0.2.0.0 && <0.3'
+  optparse-applicative: '>=0.17 && <0.20'
+  pg-migrate: '>=1.0.0.0 && <1.1'
+  pg-migrate-cli: ^>=1.0.0.0
+  pg-migrate-embed: ^>=1.0.0.0
+  pg-migrate-import-codd: ^>=1.0.0.0
+  template-haskell: '>=2.20 && <2.24'
+  text: '>=2.0 && <2.2'
+  time: '>=0'
+changelog: |
+  # Changelog
+
+  All notable changes to `keiro-migrations` are recorded here. The format follows
+  [Keep a Changelog](https://keepachangelog.com/), and the package follows the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## [Unreleased]
+
+  _No unreleased changes._
+
+  ## 0.2.0.0 — 2026-07-13
+
+  ### Added
+
+  - Appended `0018`, creating `keiro.keiro_dead_letters`. It durably records
+    process-manager and router dispatches that reached a target stream and were
+    rejected. These rows are distinct from `kiroku.dead_letters`: the source
+    subscription event is successfully handled and checkpointed only after every
+    rejected dispatch has been recorded. The `keiro` package reads and replays them
+    through `Keiro.DeadLetter`.
+  - Appended `0017-schema-management-comment`, an observable non-destructive
+    native-runner canary. The combined-history fixture proves Kiroku `0008`
+    completes before Keiro `0017`, then strict verification and reruns succeed.
+
+  ### Breaking Changes
+
+  - Replaced the public Codd runner surface with native `pg-migrate` APIs.
+    `keiroMigrations` now returns the `keiro` `MigrationComponent`, and
+    `frameworkMigrationPlan` composes concrete Kiroku and Keiro components in
+    dependency order. The standard `keiro-migrate` CLI now uses the `pgmigrate`
+    ledger.
+  - Renamed the sixteen embedded migrations to stable component-local identifiers
+    under `migrations/manifest` while preserving every legacy SQL payload byte.
+    Timestamped filenames and `migrations.lock` remain import evidence only.
+  - **Keiro's framework tables moved out of the `kiroku` schema into a new,
+    dedicated `keiro` PostgreSQL schema that Keiro creates and owns.** The
+    bootstrap migration now issues `CREATE SCHEMA IF NOT EXISTS keiro`, and every
+    migration creates its objects schema-qualified as `keiro.<table>` with **no**
+    `SET search_path` pin and no explanatory comment. The `keiro-migrate new`
+    scaffolder emits that qualified, comment-free template.
+  - The codd expected-schema drift gate is now scoped to the `keiro` namespace
+    (`CODD_SCHEMAS=keiro`), contains only `keiro_*` objects, and is **portable**:
+    the captured database role and owner are a deterministic pinned `keiro`
+    identity rather than the local operating-system user, so
+    `cabal test keiro-migrations-test` passes on any machine and in CI.
+  - Read-model and projection tables now support a **configurable schema**: an
+    application declares the schema its read-model/projection tables live in (a
+    `schema` field on `ReadModel` plus the `Keiro.Connection` helpers), instead of
+    implicitly inheriting the store connection's `search_path`. This is
+    Haskell-level configuration only — no new database column and no new migration.
+
+  ### Upgrade
+
+  - Added atomic Codd history import for the shared Kiroku/Keiro ledger. Both
+    components' exact payload maps, manifests, and 23 mappings are validated in
+    one adapter call; strict verification succeeds without replaying target SQL.
+  - Moved Codd expected-schema, remediation, and ledger-fixup behavior behind the
+    manual `legacy-codd-tools` flag. The normal library, executable, and shared
+    test fixture no longer depend on `codd`, `codd-extras`, `file-embed`, or
+    `postgresql-simple` for migration execution.
+  - Added integrity gates for shipped migrations: `migrations.lock`,
+    `keiro-migrate lock`, embed-parity checks, body linting, combined
+    Kiroku+Keiro ledger timestamp uniqueness, a codd v5 ledger canary, and
+    regression tests for both the ledger realignment fixup and the alpha
+    remediation runbook.
+  - Hardened the apply path: unknown `keiro-migrate` arguments now exit 2 with
+    usage, `up` is an explicit apply synonym, `KEIRO_MIGRATE_NO_CHECK=false`
+    remains checked, schema drift under the checked path exits nonzero, embedded
+    migrations force codd's single-try retry policy, and concurrent applies
+    serialize with the shared Kiroku advisory lock.
+  - Added operator tooling: `keiro-migrate verify` strict-checks a live database
+    against the expected-schema snapshot embedded in the binary,
+    `keiro-migrate status` reports applied and pending combined-ledger entries,
+    and `Keiro.Migrations.missingMigrations` lets applications fail fast at
+    startup when Kiroku or Keiro framework migrations have not been applied.
+  - Added `docs/user/migration-ownership.md`, the canonical guide for
+    framework-owned vs application-owned migrations, combined-ledger composition,
+    application migration guards, runtime grants, and operator checks.
+  - A database first migrated by `0.1.0.0` has its `keiro_*` tables in `kiroku`. It
+    requires a **one-time remediation** before running these migrations: follow
+    [Upgrading To The Keiro Schema](../docs/user/upgrading-to-the-keiro-schema.md),
+    which wraps the tested script
+    `keiro-migrations/remediation/2026-07-05-relocate-keiro-tables-to-keiro-schema.sql`.
+    The script relocates the tables (`ALTER TABLE ... SET SCHEMA keiro`) in one
+    transaction and needs no codd-ledger change (migration filenames are unchanged,
+    so codd re-runs nothing). Fresh and ephemeral databases need no remediation.
+
+  ### Recommended Version Bump
+
+  - The next release is **`0.2.0.0`**. This is a breaking change; the package
+    follows the Haskell PVP, where the leading `A.B` components form the "major"
+    version and must increment on any breaking change, so `0.1` → `0.2` is the
+    minimal PVP-correct major bump for a pre-1.0 package.
+
+  ## 0.1.0.0 — 2026-07-05
+
+  Initial Hackage release.
+
+  ### New Features
+
+  - Added embedded codd migrations and the `keiro-migrate` executable for Keiro
+    schema installation and upgrades.
+  - Added framework schema for read models, snapshots, timers, outbox, inbox,
+    subscriptions, projections, durable workflows, workflow children, awakeables,
+    workflow instances, recovery indexes, and maintenance helpers.
+  - Added expected-schema drift checks and a local-development no-check migration
+    runner.
+
+  ### Bug Fixes
+
+  - Aligned with kiroku schema dependencies and added messaging crash-recovery
+    schema updates.
+changelog-type: markdown
+description: |
+  # Keiro database migrations
+
+  `keiro-migrations` exports a native `pg-migrate` component named `keiro`. The
+  component owns sixteen embedded SQL migrations and declares one dependency,
+  `kiroku`. Applications compose Kiroku first and Keiro second; Keiro never embeds
+  or copies Kiroku's SQL.
+
+  ```haskell
+  import Keiro.Migrations (frameworkMigrationPlan, keiroMigrations)
+  import Kiroku.Store.Migrations qualified as Kiroku
+
+  plan = do
+    kiroku <- Kiroku.kirokuMigrations
+    keiro <- keiroMigrations
+    frameworkMigrationPlan kiroku keiro
+  ```
+
+  The `keiro-migrate` executable builds that plan and exposes the standard
+  `pg-migrate` commands. Set `DATABASE_URL` or pass the connection option shown by
+  the command help:
+
+  ```bash
+  cabal run keiro-migrate -- plan
+  cabal run keiro-migrate -- status
+  cabal run keiro-migrate -- verify
+  cabal run keiro-migrate -- up
+  ```
+
+  `status` and `verify` are read-only. `up` serializes concurrent callers with the
+  `pg-migrate` advisory lock, applies all Kiroku migrations before Keiro, and
+  reports already-applied migrations without replaying them.
+
+  ## Authoring native migrations
+
+  The ordered manifest is `keiro-migrations/migrations/manifest`. Migration names
+  are stable component-local identifiers such as `0016-keiro-inbox-drop-received-idx`;
+  the timestamped files under `sql-migrations/` and `migrations.lock` remain
+  immutable legacy evidence for old Codd databases.
+
+  Create new work through the standard CLI and review the manifest append together
+  with the new SQL file:
+
+  ```bash
+  cabal run keiro-migrate -- new \
+    --manifest keiro-migrations/migrations/manifest \
+    --description "add order summary"
+  cabal run keiro-migrate -- check keiro-migrations/migrations/manifest
+  ```
+
+  Never edit a migration that has shipped. Add a new forward migration for every
+  schema correction.
+
+  ## Importing the shared Codd ledger
+
+  `Keiro.Migrations.History.Codd` combines Kiroku's seven mappings with Keiro's
+  sixteen mappings. `frameworkCoddSourceConfig` selects both histories from the
+  shared `codd.sql_migrations` or legacy `codd_schema.sql_migrations` ledger,
+  checks the original SHA-256 manifests and payload bytes, and produces one atomic
+  history import:
+
+  ```haskell
+  config <-
+    either (fail . show) pure $
+      frameworkCoddSourceConfig provider True reason Confirmed
+
+  result <-
+    importCoddHistory
+      defaultImportOptions
+      config
+      provider
+      plan
+      frameworkCoddHistoryMappings
+  ```
+
+  Run the import while legacy migration writers are quiescent, then run strict
+  `verify`. A partial row, missing payload, changed manifest, or unexpected row in
+  strict mode fails before either target component is imported.
+
+  Databases first migrated by `keiro-migrations 0.1.0.0` may have `keiro_*`
+  tables under `kiroku`. Follow
+  [Upgrading To The Keiro Schema](../docs/user/upgrading-to-the-keiro-schema.md)
+  before importing their history.
+
+  ## Legacy transition tools
+
+  Codd expected-schema snapshots, remediation drills, and sentinel-ledger fixup
+  tests remain available only through the manual `legacy-codd-tools` flag. They do
+  not enter the normal library, executable, or test-support dependency closure:
+
+  ```bash
+  cabal test -flegacy-codd-tools \
+    keiro-migrations:keiro-migrations-legacy-test
+  cabal run -flegacy-codd-tools keiro-write-expected-schema
+  ```
+
+  The normal migration suite is:
+
+  ```bash
+  cabal test keiro-migrations:keiro-migrations-test
+  ```
+description-type: markdown
+hash: 16c685ce66cf8f78502fbe3b3e0a312cbae498e1d6ccff25a5331758f82c5782
+homepage: ''
+latest: 0.2.0.0
+license-name: BSD-3-Clause
+maintainer: nadeem@gmail.com
+synopsis: Schema migrations for keiro
+test-bench-deps:
+  aeson: '>=0'
+  async: '>=0'
+  attoparsec: '>=0'
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11 && <0.13'
+  codd: '>=0'
+  codd-extras: '>=0'
+  containers: '>=0.6 && <0.8'
+  contravariant-extras: '>=0'
+  directory: '>=1.3'
+  ephemeral-pg: '>=0.2 && <0.3'
+  filepath: '>=1.4 && <1.6'
+  generic-lens: '>=2.2'
+  hasql: '>=1.10 && <1.11'
+  hasql-pool: '>=1.2'
+  hspec: '>=2.10 && <2.12'
+  keiro-migrations: '>=0'
+  kiroku-store: '>=0.3 && <0.4'
+  kiroku-store-migrations: '>=0.2.0.0 && <0.3'
+  lens: '>=5.2'
+  pg-migrate: ^>=1.0.0.0
+  pg-migrate-import-codd: ^>=1.0.0.0
+  pg-migrate-test-support: ^>=1.0.0.0
+  temporary: '>=0'
+  text: '>=2.0 && <2.2'
+  time: '>=1.12'
+  vector: '>=0.13'

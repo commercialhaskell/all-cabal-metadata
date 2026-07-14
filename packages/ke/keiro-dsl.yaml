@@ -1,0 +1,229 @@
+all-versions:
+- 0.2.0.0
+author: Nadeem Bitar
+basic-deps:
+  base: '>=4.21 && <5'
+  containers: '>=0.6'
+  directory: '>=1.3'
+  filepath: '>=1.4'
+  keiro-dsl: '>=0'
+  megaparsec: '>=9.6'
+  optparse-applicative: '>=0.18'
+  parser-combinators: '>=1.3'
+  prettyprinter: '>=1.7'
+  process: '>=1.6'
+  text: '>=2.1'
+changelog: |
+  # Changelog
+
+  All notable changes to `keiro-dsl` are recorded here. The format follows
+  [Keep a Changelog](https://keepachangelog.com/), and the package follows the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## [Unreleased]
+
+  _No unreleased changes._
+
+  ## 0.2.0.0 — 2026-07-13
+
+  ### Breaking Changes
+
+  - The process `saga` clause is now `saga <Aggregate> category "<camelCase>"`,
+    replacing `saga <Aggregate> stream="<prefix>-" <> correlationId`. Categories are
+    validated (`SagaCategoryIllegal`) against the same rules as
+    `Keiro.Stream.category`: non-empty, not `$all`, no `-` (Kiroku's category/id
+    boundary), no whitespace or control characters, and no `:` (reserved for the
+    `wf:<name>` workflow stream family). Generated process and router fills now
+    build saga streams with `entityStream` and a typed category constant instead of
+    splicing a string prefix.
+  - `process` nodes must now declare node-level `rejected => <policy>` and
+    `poison => <policy>` clauses (`halt`, `deadLetter`, or `skip`), and every timer
+    `fire` disposition must carry an `on-ambiguous` arm alongside `on-ok`,
+    `on-reject`, `on-error`, and `not-mine`. Mapping `on-ambiguous => Fired` is
+    rejected (`AmbiguousMarkedBenign`): `CommandAmbiguous` means several aggregate
+    edges matched, and is never a benign success.
+  - Identifier lexemes are restricted to ASCII, and the validator now enforces
+    per-category Haskell hygiene: constructor-position names must be
+    constructor-safe (`IdentNotConstructorSafe`), no identifier may be a Haskell
+    keyword (`IdentHaskellKeyword`), and generated vertex constructors may not
+    collide (`VertexCtorCollision`). Specs that previously scaffolded to
+    uncompilable Haskell are now rejected at `check`.
+  - All numeric literal sites parse through `Integer` and fail with a positioned
+    diagnostic when the value exceeds `maxBound :: Int`, instead of silently
+    wrapping. `maxBound` itself still parses exactly.
+  - Duplicate singleton blocks and duplicate `goto` clauses are reported at their
+    second occurrence rather than being silently accepted with a last-one-wins
+    reading; a missing `goto` is now anchored to its transition.
+  - `Text` registers require a quoted initial, and a register whose type is an enum
+    or the aggregate's vertex type must start at a declared constructor or state.
+    The scaffolder refuses the run rather than emitting a broken initial.
+  - Validation is substantially stricter, so specs that checked under 0.1.0.0 may
+    now be rejected: duplicate node, command, event, enum-constructor, enum-wire and
+    id-prefix names; dangling aggregate, projection, timer, workflow, signal and
+    operation references; non-total or unresolved `rule` domains; duplicate workflow
+    replay labels; incomplete or shadowed disposition tables; duplicate and dangling
+    status-map keys; emit/intake topic-affinity mismatch; workqueue
+    `queueRef`/table/DLQ divergence; unresolved dispatch dedup queues and fields;
+    invalid process timer ceilings; and write targets that are not registers.
+  - `keiro-dsl scaffold` now plans the entire module set before writing any byte,
+    and refuses the run on module-path collisions, self-firewall breaches, or
+    unlowerable spec content. It also refuses to overwrite a file on a `Generated`
+    path that lacks the `@generated` banner; pass the new
+    `--force-generated-overwrite` flag to override.
+  - `keiro-dsl diff` gained a `WARNING:` tier, and its change lines now read
+    `<node> <facet> <subject>: <detail>` rather than always saying `event`. Only
+    `BREAKING:` changes exit non-zero.
+
+  ### New Features
+
+  - Added a first-class `readmodel` node declaring `table`, `schema`, a typed
+    `columns` block, `version`, captured `shape`, `consistency`, `scope`, `feed`
+    (`inline` or `subscription`), and `subscription`. The validator owns a closed
+    column-type vocabulary (`text`, `int`, `bigint`, `bool`, `timestamptz`, `jsonb`,
+    `numeric`), detects shape-hash drift against the declared columns, rejects
+    `Strong` + `inline` (no subscription worker advances the cursor a strong read
+    waits on), rejects `scope` without `Strong`, and rejects an `inline` model that
+    no aggregate projection feeds. `scaffold` emits `ReadModel` and `ReadModelTable`
+    generated modules plus `ReadModelHoles`. Aggregate `projection` consistency is
+    now optional and must agree with the read-model node when one exists; a
+    projection with no `readmodel` node warns that registration, schema identity,
+    and rebuild helpers are unavailable.
+  - Query operations and PGMQ dispatch source/dedup read-model references now
+    actually resolve against declared nodes — these were explicitly deferred no-ops
+    in 0.1.0.0. Query `consistency` must be `Strong`, `Eventual`, or `PositionWait`,
+    and a dispatch dedup field must be a column of the named model.
+  - Added the `router` node for stateless content-based routing: `input`, `key`,
+    `resolve stable via read-model <name> row { ... }` (or `via hole`), `target`,
+    `projections`, `dispatch-each`, a runtime-owned `dispatch-id` strategy keyed on
+    target stream name and occurrence, and node-level `rejected`/`poison` policies.
+    Validation resolves the target aggregate, its command and command fields, the
+    key field, and the read-model reference, and confines dispatch bindings to the
+    `input.` and `resolved.` scopes plus quoted literals. `scaffold` emits
+    `Router`/`RouterHarness` generated modules with `RouterHoles`/`RouterValue`
+    stubs, and `keiro-dsl new router` prints a starter.
+  - Added node-level `rejected` and `poison` worker policies on `process` and
+    `router` nodes, reconciled against the per-dispatch `on-failed` arms: a dispatch
+    declaring `DeadLetter` under a node that does not is a `PolicyContradiction`,
+    divergent `on-failed` actions within one node are rejected because the runtime
+    applies a single `RejectedCommandPolicy` to the whole failure group, and an
+    unacknowledged `rejected => deadLetter` warns.
+  - Added aggregate `snapshot every <n>` / `snapshot on-terminal` with a captured
+    `state-codec version=<n> shape-hash="..."` fixture, lowered into the generated
+    aggregate modules and pinned against the live runtime. Intervals below 1, and
+    empty or zero-version codec fixtures, are rejected.
+  - Added workqueue `ordering` (`unordered`, `fifo-throughput`, `fifo-round-robin`),
+    `group key from <field> via <fn>`, and provisioning (standard, `unlogged`,
+    partitioned). The validator rejects FIFO without a group key, a group key
+    without FIFO, and an empty partition spec, and flags unlogged durability; the
+    generated `QueuePolicy` is pinned to the live pgmq configuration types.
+  - Added intake `persist = full-envelope | dedupe-only`, lowered to the live
+    `InboxPersistence` value and wired through `runInboxTransactionWith`.
+  - Added a durable-workflow evolution surface: guarded `patch <id> { ... }` blocks
+    and a terminal `continueAsNew <SeedType>`, lowered into the workflow run
+    options. Duplicate and malformed patch ids, and a non-terminal `continueAsNew`,
+    are rejected.
+  - Added a `partial` token on `status-map`, so an intentionally incomplete
+    event-to-status mapping is expressible instead of failing the totality rule.
+  - Publisher backoff accepts optional `max=` and `multiplier=`, and exponential
+    backoff now lowers to `ExponentialBackoff ExponentialBackoffOptions{..}` with
+    faithful duration units.
+  - Rebuilt `diff` on an exhaustive node-family registry: every `Node` constructor
+    either has a differ or carries a recorded out-of-scope rationale, so a new node
+    kind can no longer be silently treated as safe. Classification now covers
+    aggregate decode evolution through command indirection (field type, removal,
+    wire spelling, enum add/drop, schema-version regression, old-anchored upcaster
+    continuity, undeprecation), contract topic/schema-version/discriminator/field/
+    event changes, workqueue payload, identity, ordering and provisioning changes,
+    process input and timer-window changes, intake decode posture, dedupe identity
+    and persistence, emit mapping and ordering, publisher policy, workflow shape,
+    body, patch and continue-as-new seed changes, read-model
+    version/shape/feed/consistency evolution, projection and id-prefix re-keying,
+    router stable-name changes, and dispatch retargeting.
+  - `scaffold` now writes a versioned per-context record
+    (`keiro-dsl-scaffold-record.<context>.txt`) and reports still-present modules
+    made stale by node, layout, or `--module-root` changes. It never deletes
+    generated or hand-owned files.
+  - Diagnostics carry row-level source locations, so validator-owned rows
+    (dispositions, status maps, timers, dispatches) are anchored precisely instead
+    of at the enclosing node.
+
+  ### Bug Fixes
+
+  - String literals now decode and re-render the closed DSL escape set, so topics,
+    emit maps, and quoted field bindings survive a parse/pretty-print round trip
+    instead of being corrupted.
+  - The scaffolder escapes payload literal splices, closing a template-injection
+    path where a quoted spec literal could break out of the generated Haskell
+    string. Its status-map and harness lowering is now total.
+  - Generated `Stream` and stream-category imports are emitted in the
+    repository-standard post-qualified (`ImportQualifiedPost`) form.
+  - The self-firewall is derived from Keiki's exported surface as a single
+    token-aware scan, rather than a hand-maintained substring list that both missed
+    operators and produced false positives.
+
+  ### Other Changes
+
+  - Added conformance suites that round-trip every node family, compile every
+    `keiro-dsl new <kind>` starter, cold-start the new read-model, router, snapshot,
+    queue-ordering, and workflow-rotation surfaces, and exercise the generated
+    read-model and router modules against the live runtime.
+  - Test fixtures and conformance corpora resolve from either the package root or
+    the repository root.
+
+  ## 0.1.0.0 — 2026-07-05
+
+  Initial Hackage release.
+
+  ### Breaking Changes
+
+  - Renamed the typed-spec file extension from `.kdsl` to `.keiro` before the first
+    public release.
+
+  ### New Features
+
+  - Added grammar, parser, pretty-printer, validator, diff engine, scaffold
+    generator, harness emitter, and CLI for typed `.keiro` service specs.
+  - Added aggregate, process manager, durable timer, integration contract, inbox,
+    publisher, PGMQ workqueue, workflow, and operation nodes.
+  - Added configurable module placement, build-wiring manifests, self-firewall
+    checks, post-scaffold reports, per-iteration ergonomics, and `new <kind>`
+    starter skeletons.
+  - Generated validated event streams compatible with Keiro's command boundaries.
+
+  ### Bug Fixes
+
+  - Tolerated formatter comma style in scaffold conformance tests.
+changelog-type: markdown
+description: |-
+  keiro-dsl is the toolchain over a typed `.keiro` specification of a keiro
+  service: a parser + checker + scaffolder + harness emitter. It emits the
+  symbol-free deterministic layer plus typed holes, never a keiki symbolic
+  operator (the firewall invariant).
+description-type: haddock
+hash: 04fb778340f2db705959214cb258cd0e5eb2889b7b6364ca9def9b8ecb3c93d3
+homepage: ''
+latest: 0.2.0.0
+license-name: BSD-3-Clause
+maintainer: nadeem@gmail.com
+synopsis: Typed specification toolchain for keiro services
+test-bench-deps:
+  QuickCheck: '>=2.14'
+  aeson: '>=2.2'
+  base: '>=4.21 && <5'
+  containers: '>=0.6'
+  directory: '>=1.3'
+  effectful-core: '>=0'
+  filepath: '>=1.4'
+  hasql-transaction: '>=0'
+  hspec: '>=2.11'
+  keiki: '>=0.2 && <0.3'
+  keiro: '>=0'
+  keiro-dsl: '>=0'
+  keiro-pgmq: '>=0'
+  kiroku-store: '>=0.3 && <0.4'
+  pgmq-config: '>=0'
+  pgmq-core: '>=0'
+  shibuya-core: '>=0'
+  text: '>=2.1'
+  time: '>=1.12'
+  uuid: '>=1.3'
