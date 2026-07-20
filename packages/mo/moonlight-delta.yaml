@@ -1,0 +1,282 @@
+all-versions:
+- 0.1.0.0
+author: Blue Rose
+basic-deps: {}
+changelog: |
+  # Changelog
+
+  ## 0.1.0.0 - 2026-07-12
+
+  - Initial release of the boundary-aware delta calculus layered over
+    `moonlight-core`.
+  - Checked patch surface (`Moonlight.Delta.Patch`). A `CellPatch` records both
+    endpoints of a change — `AssertAbsent`, `Insert`, `Delete before`, `Replace
+    before after` — so applying one is a verified transition rather than an
+    overwrite. `apply`, `compose`, and `replay` are all checked; `diff` and
+    `invert` are total. Stale writes, missing-row races, duplicate inserts, and
+    invalid deletes come back as typed `ApplyError`/`ComposeError`/`ReplayError`
+    instead of silent last-write-wins.
+  - Signed deltas (`Moonlight.Delta.Signed`) with normalize, identity,
+    associativity, and inverse laws.
+  - Frontier, support, and monotone modules (`Moonlight.Delta.Frontier`,
+    `.Support`, `.Monotone`). Monotone composition holds under an associative
+    join; `ResetDelta` is a deliberate left-absorbing rebase, documented as such.
+  - Epoch calculus (`Moonlight.Delta.Epoch`): unbounded `Version` values,
+    versioned `Endpoint` objects, checked `EpochDelta` construction,
+    `transportKeys`, `transportView`, and checked composition.
+  - The layer also ships repair, scope, normalization, operator, and time modules
+    (`Moonlight.Delta.Repair`, `.Scope`, `.Normalize`, `.Operator`, `.Time`).
+  - Law families are named through `Moonlight.Core.LawName` ADTs and checked via a
+    proof-manifest helper; a reference model backs the patch and epoch suites.
+  - Public package surfaces are `Moonlight.Delta.Patch`,
+    `Moonlight.Delta.Epoch`, `Moonlight.Delta.Repair`, and the modules in the
+    `moonlight-delta-core` sublibrary.
+changelog-type: markdown
+description: |
+  # moonlight-delta
+
+  > Part of **Moonlight**, the sheaf-theoretic computation layer beneath
+  > [Melusine](https://bluerose.blue) and Pale Meridian.
+
+  `moonlight-delta` is Moonlight's checked state-change algebra: keyed patches, signed
+  multiplicities, invalidation scopes, frontiers, epochs, monotone operators, and bounded
+  repair. Operations return typed incompatibilities where a transition cannot be applied.
+
+  ## Main idea
+
+  A `CellPatch value` records both endpoints of one keyed transition: absent to absent,
+  absent to present, present to absent, or present to present. Build cells with
+  `assertAbsent`, `insert`, `delete`, `replace`, or `cellFromEndpoints`. `apply` checks
+  the before endpoint, and `compose` checks that adjacent endpoints connect.
+
+  Use patches for concurrent updates, retries, synchronization, authorization-sensitive
+  changes, and reconciliation.
+
+  ## Use
+
+  ```haskell
+  import Data.Map.Strict (Map)
+  import Data.Map.Strict qualified as Map
+  import Moonlight.Delta.Patch qualified as Patch
+
+  changeTitle :: Patch.Patch Int String
+  changeTitle = Patch.singleton 7 (Patch.replace "Draft" "Published")
+
+  committed
+    :: Either (Patch.ApplyError Int String) (Map Int String)
+  committed = Patch.apply changeTitle (Map.singleton 7 "Draft")
+  ```
+
+  ## Cookbook
+
+  ### Compose and replay patches
+
+  `compose newer older` collapses two connected transitions. `replay` applies a
+  chronological sequence and reports the failing index.
+
+  ```haskell
+  import Data.Map.Strict (Map)
+  import Data.Map.Strict qualified as Map
+  import Moonlight.Delta.Patch qualified as Patch
+
+  draft, reviewed, published :: Map Int String
+  draft = Map.singleton 7 "Draft"
+  reviewed = Map.singleton 7 "Review"
+  published = Map.singleton 7 "Published"
+
+  draftToReview, reviewToPublished :: Patch.Patch Int String
+  draftToReview = Patch.diff draft reviewed
+  reviewToPublished = Patch.diff reviewed published
+
+  publication
+    :: Either (Patch.ComposeError Int String) (Patch.Patch Int String)
+  publication = Patch.compose reviewToPublished draftToReview
+
+  replayed
+    :: Either (Patch.ReplayError Int String) (Map Int String)
+  replayed = Patch.replay [draftToReview, reviewToPublished] draft
+
+  history
+    :: Either (Patch.ComposeError Int String) (Patch.Patch Int String)
+  history =
+    Patch.recordMany
+      [ (7, Patch.replace "Draft" "Review")
+      , (7, Patch.replace "Review" "Published")
+      ]
+  ```
+
+  Use `invert` to reverse a patch. Repeated temporal keys belong in `recordMany`;
+  `fromList` instead means authoritative, last-wins rows.
+
+  ### Apply signed multiplicities
+
+  `Signed` stores integer changes while the state retains non-negative multiplicities.
+
+  ```haskell
+  import Data.Map.Strict (Map)
+  import Data.Map.Strict qualified as Map
+  import Moonlight.Delta.Signed qualified as Signed
+
+  inventory :: Map String Signed.Multiplicity
+  inventory = Map.singleton "rose" (Signed.Multiplicity 2)
+
+  sale :: Signed.Signed String
+  sale = Signed.signedFromList [("rose", -1), ("lily", 2)]
+
+  afterSale
+    :: Either
+         (Signed.SignedApplyError String)
+         (Map String Signed.Multiplicity)
+  afterSale = Signed.applySignedToMap sale inventory
+  ```
+
+  An underflow returns `SignedMultiplicityUnderflow`; a zero result removes the row.
+  Combine changes with `combineSigned` and reverse one with `negateSigned`.
+
+  ### Bound invalidation with a scope
+
+  `Scope` distinguishes no invalidation, a finite dirty set, and global invalidation.
+
+  ```haskell
+  import Data.Set (Set)
+  import Data.Set qualified as Set
+  import Moonlight.Delta.Scope qualified as Scope
+
+  dirtyPages :: Scope.Scope (Set Int)
+  dirtyPages = Scope.dirtyScope (Set.fromList [2, 7])
+
+  visibleDirtyPages :: Scope.Scope (Set Int)
+  visibleDirtyPages = Scope.restrictScope (Set.singleton 7) dirtyPages
+  ```
+
+  `scopeKeys` returns `Nothing` for `fullScope`.
+
+  ### Track two-axis progress
+
+  `ProductFrontier2` canonicalizes a two-dimensional progress skyline by removing
+  dominated points.
+
+  ```haskell
+  import Moonlight.Delta.Frontier qualified as Frontier
+
+  progress :: Frontier.ProductFrontier2 Int Int
+  progress = Frontier.mkProductFrontier2 [(0, 3), (1, 2), (2, 1), (3, 0)]
+
+  covered :: Bool
+  covered = Frontier.productFrontier2Contains (2, 2) progress
+  ```
+
+  Use `mkFrontier` or `mkUpperFrontier` for a general `PartialOrder`.
+
+  ### Transport keys across an epoch
+
+  An `EpochDelta` checks a partial transport between versioned key universes. A query is
+  partitioned into transported, retired, and unknown keys.
+
+  ```haskell
+  import Data.IntMap.Strict (IntMap)
+  import Data.IntMap.Strict qualified as IntMap
+  import Data.IntSet (IntSet)
+  import Data.IntSet qualified as IntSet
+  import Moonlight.Delta.Epoch qualified as Epoch
+
+  source, target :: Epoch.Endpoint IntSet
+  source = Epoch.Endpoint Epoch.initialVersion (IntSet.fromList [10, 20])
+  target =
+    Epoch.Endpoint
+      (Epoch.nextVersion Epoch.initialVersion)
+      (IntSet.fromList [11, 30])
+
+  advance
+    :: Either
+         (Epoch.DeltaViolation Int)
+         (Epoch.EpochDelta (IntMap Int) IntSet)
+  advance =
+    Epoch.epochDelta
+      source
+      target
+      (IntMap.singleton 10 11)
+      (IntSet.singleton 20)
+      (IntSet.singleton 10)
+
+  query
+    :: Either (Epoch.DeltaViolation Int) (Epoch.Transport (IntMap Int) IntSet)
+  query =
+    fmap
+      (\deltaValue -> Epoch.transportKeys deltaValue (IntSet.fromList [10, 20, 99]))
+      advance
+  ```
+
+  Invalid versions, universes, transports, retirements, or changed keys return a
+  `DeltaViolation`. Here `query` partitions `10 -> 11`, retired `20`, and unknown `99`;
+  changed key `10` and fresh key `30` determine the dirty target set.
+
+  ### Run bounded repair
+
+  A repair `Kernel` checks obstructions, turns repairable ones into corrections, and
+  applies those corrections under explicit fuel.
+
+  ```haskell
+  import Data.List.NonEmpty (NonEmpty ((:|)))
+  import Moonlight.Delta.Repair qualified as Repair
+
+  data TooSmall = TooSmall Int
+  data Increment = Increment
+
+  incrementKernel :: Int -> Repair.Kernel Int TooSmall Increment
+  incrementKernel target =
+    Repair.Kernel
+      { Repair.check = \state ->
+          if state >= target
+            then Repair.StepConverged state
+            else Repair.StepObstructed state (TooSmall target :| [])
+      , Repair.residuate = \_ -> Just Increment
+      , Repair.applyKernelCorrection = \state Increment -> state + 1
+      }
+
+  repaired :: Repair.Result Int TooSmall
+  repaired = Repair.boundedRepair (incrementKernel 2) (Repair.Config 4) 0
+  ```
+
+  The result is `ResultConverged 2 2`; the other terminal cases are `ResultStuck` and
+  `ResultBudgetExhausted`. Compose kernels with `sequenceRepair`, `productRepair`, or
+  `focusRepair`.
+
+  ## Surface & boundaries
+
+  There is no umbrella library. Depend on the smallest public slice you use.
+
+  | Cabal dependency | Import | What you get |
+  | --- | --- | --- |
+  | `moonlight-delta:moonlight-delta-core` | `Moonlight.Delta.Signed`, `.Scope`, `.Frontier`, `.Monotone`, `.Normalize`, `.Support`, `.Operator`, `.Time` | Signed changes, invalidation, progress frontiers, operators, and their shared laws. |
+  | `moonlight-delta:moonlight-delta-patch` | `Moonlight.Delta.Patch` | Checked keyed transitions, composition, diff, inversion, and replay. |
+  | `moonlight-delta:moonlight-delta-epoch` | `Moonlight.Delta.Epoch` | Versioned partial key transport and view restamping. |
+  | `moonlight-delta:moonlight-delta-repair` | `Moonlight.Delta.Repair` | Bounded obstruction repair and kernel composition. |
+
+  ## Test
+
+  ```bash
+  cabal test moonlight-delta:moonlight-delta-test
+  ```
+
+  ## License
+
+  MIT. See `LICENSE`.
+description-type: markdown
+hash: f8a6544c21e49d313049df37ce5cc88392c3c128d11cba3eaf9403bdd4059a46
+homepage: https://github.com/PaleRoses/moonlight
+latest: 0.1.0.0
+license-name: MIT
+maintainer: rosaliafialkova@gmail.com
+synopsis: Boundary-aware delta calculus for Moonlight.
+test-bench-deps:
+  QuickCheck: '>=2.14'
+  base: '>=4.22 && <5'
+  containers: '>=0.8 && <0.9'
+  deepseq: '>=1.4'
+  moonlight-core: '>=0.1 && <0.2'
+  moonlight-delta: '>=0'
+  tasty: '>=1.4'
+  tasty-bench: '>=0.3 && <0.6'
+  tasty-hunit: '>=0.10'
+  tasty-quickcheck: '>=0.10'
