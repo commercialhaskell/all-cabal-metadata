@@ -1,0 +1,290 @@
+all-versions:
+- 0.1.0.0
+author: IC Rainbow
+basic-deps:
+  base: '>=4.7 && <5'
+  containers: '>=0'
+  fragr: '>=0'
+  optparse-applicative: '>=0'
+  text: '>=0'
+  transformers: '>=0'
+changelog: |
+  # Changelog for `fragr`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.1.0.0 - 2026-07-22
+
+  - Initial release.
+changelog-type: markdown
+description: |
+  # fragr
+
+  A frame graph (a.k.a. render graph) engine in Haskell, after the GDC 2017
+  talk *"FrameGraph: Extensible Rendering Architecture in Frostbite"*
+  (Yuriy O'Donnell). See [SPEC.md](./SPEC.md) for the full language-neutral
+  specification this package implements.
+
+  The library is renderer-agnostic: it knows nothing about GPUs, textures,
+  or graphics APIs. It is a generic engine for declaring a DAG of *passes*
+  over *virtual resources* — it culls unused work, computes resource
+  lifetimes, and executes the surviving passes in order, creating and
+  destroying resources just-in-time.
+
+  ## Quick start
+
+  1. Give your resource type a `FG.Resource` instance.
+  2. Each frame: build the graph, `FG.compile`, `FG.execute`, discard.
+  3. See it run: `stack exec fragr-exe execute`.
+
+  ```haskell
+  import Fragr qualified as FG
+
+  -- 1. The resource contract:
+  instance FG.Resource Buffer where
+    type Desc Buffer = BufferDesc    -- allocation descriptor
+    type Alloc Buffer = StagingPool  -- opaque, forwarded from execute
+    type Ctx Buffer = CommandBuffer  -- opaque, forwarded from execute
+    createResource desc pool = ...      -- pop a slot of desc's size, or allocate
+    destroyResource desc pool buf = ... -- push the slot back
+    -- optional: a Flags type, the hooks it feeds (preRead / preWrite, and
+    -- preAcquire / preRelease under executeQueued), describeDesc
+
+  -- Pass data: a record of the handles the setup declared.
+  data Upload = Upload
+    { staging :: Handle Buffer
+    , synced :: Handle Buffer
+    }
+
+  main = do
+    pool <- newStagingPool  -- persists across frames
+
+    -- 2. Each frame: rebuild, compile, execute.
+    g <- FG.newFrameGraph
+    mesh <- FG.importResource g "mesh" meshDesc gpuMesh
+
+    up <- FG.addPass g "Upload"
+      do
+        staging <- FG.create @Buffer "staging" stagingDesc
+        staging' <- FG.write staging
+        synced <- FG.write mesh  -- writing an import forces a side effect
+        pure Upload{staging = staging', synced}
+      \up -> do
+        buf <- FG.get @Buffer up.staging
+        cb <- FG.askCtx
+        ... -- memcpy the chunk into buf, record the copy into the mesh
+
+    FG.addPass_ g "Draw"
+      do
+        FG.read up.synced
+        FG.setSideEffect
+      do
+        cb <- FG.askCtx
+        ... -- record draws against the synced mesh
+
+    FG.compile g
+    FG.execute g cmdBuffer pool
+  ```
+
+  ## The frame model
+
+  A frame is a single-use object: build, `compile`, `execute`, discard —
+  the frame loop rebuilds it every frame, Frostbite-style. `compile` is
+  cheap enough for the hot path.
+
+  Per-frame values (camera, exposure, the swapchain image) travel through
+  the `ctx` argument of `execute` or are captured when the passes are
+  re-registered.
+
+  The `alloc` argument is the piece that *outlives* frames: transients are
+  virtual, and `createResource` / `destroyResource` are where the
+  allocation strategy lives. Back them with a pool and a rebuilt frame's
+  transients recycle their memory instead of touching the driver. A
+  transient's slot frees the moment its last user ends — in the example
+  above, the staging slot returns to the pool before the next pass runs.
+
+  ## Setup and execution
+
+  Pass *setup* runs in the `Build` monad: declarations implicitly target
+  the pass under construction. Setup is a declaration — anything a pass
+  needs from the outside world is produced before `addPass` and captured.
+
+  The *execution* callback runs in `Exec`, a `MonadIO` — recording
+  commands is what it is for. It carries:
+
+  - the pass's resource accessor: `FG.get`, `FG.getDesc` (only for handles
+    the pass declared);
+  - the frame context: `FG.askCtx`.
+
+  Handles are *versioned*: writing a resource you did not create in the
+  same pass renames it and returns a fresh handle. Always keep the
+  returned handle (`h' <- FG.write h`). For terminal writes whose minted
+  handle is dead by design, `write_` / `writeWith_` discard it visibly,
+  and `addPass_` registers a sink pass (present, readback) with no pass
+  data — a sink then composes with zero `_ <-` binds.
+
+  Passes whose outputs nobody consumes are culled. Three ways out:
+
+  - `FG.setSideEffect` marks the pass itself observable;
+  - writing an `importResource` marks it automatically — the contents are
+    observable from outside the graph. Import a target only this graph's
+    passes care about with `importScratch` instead, and its writers stay
+    cullable like a transient's;
+  - `FG.finalize g h flags` declares a resource's terminal state (e.g.
+    presentable) as exactly such a pass, placed on the queue of the pass
+    that produced the handle.
+
+  ## Flags and hooks
+
+  `readWith` / `writeWith` carry per-resource `Flags` to the `preRead` /
+  `preWrite` hooks. Each `Resource` instance picks its own type (an image
+  layout ADT, a stage/access mask pair, ...) via the `Flags` associated
+  type, and the handle's resource type ties the declaration to it —
+  passing another resource's flags is a type error. Plain `read` / `write`
+  declare the access with no flags and fire no hooks.
+
+  `FG.addPreExec` installs a per-pass flush point between the hooks and
+  the pass callback, so hooks can accumulate work into `ctx` (say, image
+  barriers) and emit it as one batched command. `FG.addPostExec` is its
+  counterpart after the callback and the `preRelease` hooks, batching
+  release barriers the same way. Flush points compose, so an adapter
+  library and the application can hook the same graph.
+
+  ## Graph rendering
+
+  Both written against the read-only `FG.snapshot` view — as any custom
+  writer would be:
+
+  - `Fragr.Snapshot.Dot` — Graphviz DOT export of the compiled graph
+    (`Dot.dump g`, or `Dot.dumpWith` for the `Dot.Options`). One vertex
+    per resource *version*, overlaid with the write-after-read edges that
+    order passes no data flows between. Opting into `stratify` pins one
+    row per dependency level, so the widest row is the concurrency the
+    graph permits. `Dot.dumpSync` renders the compiled schedule instead:
+    one lane per queue in submission order, overlaid with the timeline
+    waits, event pairs, ownership transfers and retire points.
+  - `Fragr.Snapshot.JSON` — the interactive viewer's JSON document
+    (`Json.dump g`), which instead collapses each resource's whole rename
+    chain into one record. The serializer is hand-rolled, keeping the
+    library free of an aeson dependency.
+
+  ## Multi-queue support
+
+  On top of the single-queue `execute`, the library can schedule the
+  surviving passes across several submission queues (e.g. a Vulkan
+  graphics queue and an async-compute queue) — still renderer-agnostically:
+  it only knows about `QueueId`s, per-queue timeline values and
+  `EventId`s, never about a real semaphore or barrier.
+
+  To use it:
+
+  1. Assign passes to queues in their setup blocks:
+     `FG.setQueue (QueueId 1)` (default: `defaultQueue`, queue 0).
+  2. `FG.compile g` — or `compileWith` with a queue-family partition.
+  3. Size per-queue state (command buffers) from `FG.executingQueues g`.
+  4. `FG.executeQueued g backend (Just recycleQueue) ctx alloc`.
+
+  ### The schedule
+
+  `compile` derives a `PassSync` schedule per surviving pass:
+
+  - **cross-queue waits** — the timeline values a pass must wait for, one
+    per foreign producer queue, deduplicated by a per-queue watermark (a
+    value an earlier same-queue pass already waited for is dropped); each
+    kept `Wait` lists the accesses (handles + flags) it protects, so a
+    driver can derive its wait scope (e.g. `waitDstStageMask`) instead of
+    over-synchronizing;
+  - **timeline signal** — the `i`-th executing pass on a queue signals
+    value `i` on completion;
+  - **split-barrier events** — a same-queue dependency with a pass in
+    between gets a `signalEvents` / `waitEvents` pair, each `SyncEvent`
+    carrying its own pass's accesses for the barrier scopes; adjacent ones
+    rely on a plain barrier (the `preRead` / `preWrite` hook path);
+  - **ownership transfer** — `releases` / `acquires` list the outputs
+    handed between queues as `Transfer`s carrying the *consuming* access's
+    flags (for a cross-queue rename, the renaming write's), so a backend
+    can record release/acquire barriers into the right target state; the
+    resource contract's `preRelease` hook fires on the producer (after its
+    callback) and `preAcquire` on the consumer (before its callback), with
+    the `addPreExec` / `addPostExec` flush points bracketing the callback
+    to batch what each side accumulates.
+
+  No pass reordering happens: registration order stays execution order, so
+  every cross-queue edge points backward and in-order submission plus
+  waits cannot deadlock.
+
+  ### Queue families
+
+  Ownership's real unit is the queue *family*: give `compileWith` a
+  `QueueId -> FamilyId` partition and a fan-out to several queues of one
+  family carries a single transfer — the family's first-registered
+  consumer acquires for its siblings. Consumption on two distinct families
+  is rejected (`ReleasedToTwoFamilies`) unless the resource has no single
+  owner (e.g. Vulkan `CONCURRENT` sharing): imports read that off the
+  object (`Resource.isShared`), created transients say `markShared`.
+  Queues outside the partition (e.g. a host queue) keep per-queue
+  transfers, which is also plain `compile`'s behavior for everything.
+
+  An import last touched by one family and first used by another this
+  frame has no producer edge to derive a transfer from. `importOwned g
+  "mesh" meshDesc gpuMesh (QueueId 1)` names the owning queue and
+  registers a synthetic pass on it, standing in for last frame's work —
+  the release gains a queue to record on and the schedule a producer edge,
+  with families, sibling waits and single-owner validation applying
+  unchanged. Its writers stay cullable, like `importScratch`'s.
+
+  ### Driving the schedule
+
+  `executeQueued g backend (Just recycleQueue) ctx alloc` walks the
+  schedule through `backend :: QueueBackend`, a record of callbacks the
+  library invokes around each pass (wait/acquire before, release/signal
+  after) — it never names a GPU primitive itself. An import-only graph
+  (fragr does scheduling and hooks, all resources owned outside) may pass
+  `Nothing` instead.
+
+  Deferred, Vulkan-style reclamation goes through a `RecycleQueue`:
+  instead of destroying a transient inline, `executeQueued` retires it
+  with the per-queue timeline values that must be reached first; `collect`
+  (given the currently-reached timelines) frees everything whose
+  requirements are met and whose in-use refcount is zero.
+
+  The full schedule and retire requirements are also exposed through
+  `FG.snapshot` (`PassInfo.sync` and `Snapshot.retires`) for inspection.
+  See the `multi-queue` test group for a worked simulated-Vulkan backend.
+
+  ## The demo
+
+  Run `stack exec fragr-exe execute`. It executes a small streaming frame
+  twice against a staging-buffer pool and prints every allocation
+  decision. What to watch for:
+
+  1. Each upload pass borrows a staging transient, fills it, and copies
+     its chunk into the imported GPU mesh buffer.
+  2. The staging slot retires the moment its upload ends, so chunk B
+     reuses chunk A's slot within the frame.
+  3. The rebuilt second frame allocates nothing — one buffer serves every
+     upload.
+
+  Under `executeQueued` the same retirement goes through the
+  `RecycleQueue`, so a slot returns to the pool only once the GPU has
+  actually finished the copy.
+description-type: markdown
+hash: ce1183f4e20b6c1285dd69b785a1b40bf9ff2db196b89ee14f290874dbb85d36
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: aenor.realm@gmail.com
+synopsis: Frame graph (render graph) engine, renderer-agnostic
+test-bench-deps:
+  base: '>=4.7 && <5'
+  containers: '>=0'
+  fragr: '>=0'
+  tasty: '>=0'
+  tasty-bench: '>=0'
+  tasty-hunit: '>=0'
+  text: '>=0'
+  transformers: '>=0'
