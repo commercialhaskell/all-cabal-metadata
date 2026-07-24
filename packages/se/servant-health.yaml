@@ -1,0 +1,319 @@
+all-versions:
+- 0.1.0.0
+author: Nadeem Bitar
+basic-deps:
+  aeson: '>=2.2 && <2.4'
+  base: '>=4.21 && <5'
+  bytestring: '>=0.12 && <0.13'
+  openapi-hs: '>=5.0 && <5.1'
+  servant: ^>=0.20
+  servant-server: ^>=0.20
+  sop-core: '>=0.5 && <0.6'
+  text: '>=2.1 && <2.2'
+  time: '>=1.12 && <1.15'
+changelog: |
+  # Changelog for servant-health
+
+  This project follows the [Haskell PVP](https://pvp.haskell.org/).
+
+  ## 0.1.0.0 — 2026-07-24
+
+  First release.
+
+  ### New Features
+
+  - **Probe routes and wire contract.** `Servant.Health` exports `HealthApi`, a
+    `NamedRoutes` record mounted under `"health"` that answers `GET /health/live`
+    and `GET /health/ready`. Responses are typed via `MultiVerb`
+    (`ProbeResponses`), and the passed/failed → 200/503 mapping lives in the one
+    `AsUnion ProbeResponses ProbeResult` instance. The `ProbeStatus` body is a
+    fixed key set — `status`, `check`, `failingSince` — with `failingSince` null
+    while healthy.
+  - **Injectable check seam.** `type ProbeCheck = IO ProbeVerdict` plus
+    `healthServer` and `runProbe`. The package ships no checks of its own; checks
+    are run afresh on every request and nothing caches a verdict.
+  - **Check combinators.** `Servant.Health.Check` provides `boolCheck`,
+    `sequenceChecks` (short-circuiting, empty list is healthy), `safeCheck`
+    (synchronous exceptions become failed probes, asynchronous ones are re-thrown),
+    `withProbeTimeout`, and `newFailureTracker` for reporting the original onset of
+    a failing run rather than the latest observation.
+  - **Path constants.** `Servant.Health.Paths` exports `healthMountSegment`,
+    `liveRawPath`, `readyRawPath`, and `healthRawPaths` for request-logger
+    exclusions and conformance-test exemption lists.
+  - **OpenAPI schema.** A non-orphan `ToSchema ProbeStatus` instance derived from
+    the same `probeJsonOptions` value as the JSON codec, so the published schema
+    and the bytes on the wire cannot disagree.
+  - **`testkit` public sublibrary.** `servant-health:testkit` exports
+    `probeContractTests`, which drives a real Warp server built from the
+    consumer's own application builder and asserts the full probe matrix —
+    including the cross-assertions that catch an umbrella record wiring the two
+    probe routes to each other's checks. Depend on it from test stanzas only.
+
+  ### Other Changes
+
+  - Supports a single OpenAPI cohort: `openapi-hs >=5.0 && <5.1`, with
+    `servant-openapi-hs >=5.1 && <5.2` used test-only. See
+    [ADR 7](https://github.com/shinzui/servant-health/blob/master/docs/adr/7-single-cohort-openapi-support.md); the 4.1 cohort was
+    dropped before this first release.
+  - Added `README.md`, plus `homepage`, `bug-reports`, and a `source-repository
+    head` stanza to the cabal file.
+changelog-type: markdown
+description: |
+  # servant-health
+
+  Kubernetes liveness and readiness probe endpoints for [servant][].
+
+  Every service that runs under Kubernetes writes the same eighty lines: two
+  routes, a JSON status body, a 503 mapping, and the wiring that keeps them
+  apart. This package provides that surface once — a fixed probe wire type, typed
+  200/503 responses via `MultiVerb`, an injectable check seam, path constants, and
+  a conformance kit — and deliberately ships **no checks of its own**. What
+  "healthy" means for your service is yours to decide.
+
+  ```
+  GET /health/live   →  200 {"status":"ok","check":"all","failingSince":null}
+  GET /health/ready  →  503 {"status":"failed","check":"database","failingSince":"2026-07-24T12:03:41Z"}
+  ```
+
+  ## Installation
+
+  ```cabal
+  build-depends:
+    , servant-health  ^>=0.1
+  ```
+
+  Requires GHC 9.12 (`base >=4.21`, `GHC2024`) and servant 0.20.
+
+  `servant-health` depends on [`openapi-hs`][openapi-hs] (`>=5.0 && <5.1`), a fork
+  of `openapi3`, because the `ToSchema` instance for the probe body is non-orphan.
+  Upstream `servant-openapi3` has no `HasOpenApi` instance for `MultiVerb` at all,
+  so a service deriving an OpenAPI document for these routes needs
+  [`servant-openapi-hs`][servant-openapi-hs] (`>=5.1 && <5.2`) rather than the
+  upstream package. Both forks are on Hackage. See
+  [ADR 7](https://github.com/shinzui/servant-health/blob/master/docs/adr/7-single-cohort-openapi-support.md) for why only this cohort is
+  supported.
+
+  ## Quick start
+
+  Mount `HealthApi` under `"health"` on your umbrella route record and hand
+  `healthServer` a liveness check and a readiness check, in that order:
+
+  ```haskell
+  {-# LANGUAGE DataKinds #-}
+
+  import GHC.Generics (Generic)
+  import Network.Wai (Application)
+  import Servant.API (NamedRoutes, (:>))
+  import Servant.API.Generic ((:-))
+  import Servant.Health (HealthApi, ProbeCheck, healthServer)
+  import Servant.Server.Generic (genericServe)
+
+  data MyServiceApi mode = MyServiceApi
+    { health :: mode :- "health" :> NamedRoutes HealthApi
+    , orders :: mode :- "orders" :> NamedRoutes OrdersApi
+    }
+    deriving stock (Generic)
+
+  mkApp :: ProbeCheck -> ProbeCheck -> IO Application
+  mkApp livenessCheck readinessCheck =
+    pure $
+      genericServe
+        MyServiceApi
+          { health = healthServer livenessCheck readinessCheck
+          , orders = ordersServer
+          }
+  ```
+
+  Both checks are run afresh on every request; nothing here caches a verdict.
+
+  ## The wire contract
+
+  Both probes answer with the same body shape — exactly `status`, `check`, and
+  `failingSince`, with `failingSince` null while healthy — so dashboards and
+  runbooks can read either route the same way:
+
+  ```haskell
+  data ProbeStatus = ProbeStatus
+    { status :: !Text          -- "ok" | "failed"
+    , check :: !Text           -- "all" when passing, else the failed check's name
+    , failingSince :: !(Maybe UTCTime)
+    }
+  ```
+
+  A passing check answers **200**, a failing one answers **503** with the same
+  shape. That mapping lives in exactly one place — the `AsUnion ProbeResponses
+  ProbeResult` instance — because both alternatives carry the same body type.
+
+  The body is not extensible per service. Diagnostics belong in logs and metrics;
+  see [ADR 2](https://github.com/shinzui/servant-health/blob/master/docs/adr/2-probe-wire-contract-and-status-mapping.md).
+
+  ## Writing checks
+
+  A check is just `type ProbeCheck = IO ProbeVerdict`, where a verdict is
+  `Healthy` or `Unhealthy` carrying the failed check's name and when the failure
+  began. `Servant.Health.Check` supplies the generic glue every service otherwise
+  reinvents:
+
+  | Combinator | What it does |
+  | --- | --- |
+  | `boolCheck name test` | Name a boolean test; `False` becomes `Unhealthy name`. |
+  | `sequenceChecks checks` | Run left to right, report the first failure, skip the rest. An empty list is `Healthy`. |
+  | `safeCheck name action` | Turn a thrown synchronous exception into a failed probe instead of a 500. Async exceptions are re-thrown. |
+  | `withProbeTimeout micros name action` | Bound a check; on expiry it reports `Unhealthy`. |
+  | `newFailureTracker` | Build a wrapper that makes `failingSince` report the *original* onset of a failing run, not the current observation. |
+
+  Assembling them for production, with the service's own `databaseCheck` and
+  friends:
+
+  ```haskell
+  import Servant.Health.Check (safeCheck, sequenceChecks, withProbeTimeout)
+
+  runService :: ConnectionPool -> IO ()
+  runService pool = do
+    application <-
+      mkApp
+        (withProbeTimeout 2_000_000 "liveness" (safeCheck "liveness" (eventLoopCheck pool)))
+        (safeCheck "readiness" (sequenceChecks [databaseCheck pool, cacheCheck]))
+    Warp.run 8080 application
+  ```
+
+  Two things worth getting right:
+
+  - **Wrap every check in `safeCheck`.** An exception escaping a check becomes a
+    500, which pages an operator with a stack trace instead of telling them which
+    dependency is down.
+  - **Put `withProbeTimeout` *outside* `safeCheck`.** The timeout interrupts by
+    throwing an asynchronous exception, and `safeCheck` deliberately lets those
+    through. Nested the other way round, a deadlocked process would hang its
+    liveness probe instead of failing it — the opposite of what liveness is for.
+    `timeout` also cannot interrupt a foreign call unless the program is built
+    with `-threaded`.
+
+  To report the onset of a failure rather than the moment it was last observed,
+  give liveness and readiness their own trackers:
+
+  ```haskell
+  trackLiveness <- newFailureTracker
+  trackReadiness <- newFailureTracker
+  pure (healthServer (trackLiveness livenessCheck) (trackReadiness readinessCheck))
+  ```
+
+  ## Path constants
+
+  `Servant.Health.Paths` exports `healthMountSegment`, `liveRawPath`,
+  `readyRawPath`, and `healthRawPaths` — for request-logger exclusion predicates
+  and conformance-test exemption lists, instead of restating string literals.
+
+  ## Proving your wiring: the `testkit` sublibrary
+
+  Mounting `HealthApi` leaves one thing unproven: that *your* assembled
+  application really answers both paths, and that the two routes were not wired to
+  each other's checks. Both probe routes have the same handler type, so an
+  umbrella record that swaps them compiles cleanly — only a request that
+  distinguishes them catches it.
+
+  `servant-health:testkit` is a public sublibrary shipped inside this package.
+  Depend on it from your test stanza only, so production builds never acquire its
+  `tasty` and `warp` dependencies:
+
+  ```cabal
+  test-suite myservice-test
+    type:           exitcode-stdio-1.0
+    hs-source-dirs: test
+    main-is:        Main.hs
+    ghc-options:    -threaded -rtsopts -with-rtsopts=-N
+    build-depends:
+      , base
+      , servant-health
+      , servant-health:testkit
+      , tasty
+  ```
+
+  The kit supplies the checks it wants mounted, so it takes your app *builder*
+  rather than a finished application:
+
+  ```haskell
+  main :: IO ()
+  main = defaultMain (probeContractTests "myservice probes" mkApp)
+  ```
+
+  It drives a real Warp server on an ephemeral port and asserts the whole matrix:
+  both checks healthy → both probes 200; readiness failing → `/health/ready` 503
+  while `/health/live` stays 200; liveness failing → the mirror image. Those two
+  "still answers 200" assertions are the dispatch proof. The `-threaded` flag is
+  checked as its own test case, because without it Warp's timer manager fails with
+  an error that says nothing about the missing flag.
+
+  ## What this package does not do
+
+  `servant-health` provides the probe *surface* and nothing that decides what a
+  probe means. Deliberately out of scope
+  ([ADR 3](https://github.com/shinzui/servant-health/blob/master/docs/adr/3-scope-boundaries-and-deliberate-exclusions.md)):
+
+  - **Checks themselves** — no database ping, no lag check. The `ProbeCheck` seam
+    is how you supply your own.
+  - **Readiness policy** — whether a degraded cache should remove a pod from load
+    balancing is a per-service judgment.
+  - **Kubernetes manifests and probe tuning** — periods, thresholds, and the
+    Kubernetes-side timeouts are deployment configuration.
+  - **A bare `/health` route** — a single combined route cannot express the
+    distinction Kubernetes acts on: liveness failure restarts the container,
+    readiness failure only removes it from load balancing. A test pins `GET
+    /health` at 404.
+  - **RFC 9457 problem details** — a probe body is a status report, not an error
+    document.
+
+  The library's dependency budget is `base`, `aeson`, `bytestring`, `openapi-hs`,
+  `servant`, `servant-server`, `sop-core`, `text`, and `time`. A proposal to add
+  one should be read as a proposal to cross one of these boundaries.
+
+  ## Development
+
+  ```sh
+  nix develop        # dev shell (GHC 9.12, cabal, HLS, fourmolu)
+  cabal build all    # library, testkit sublibrary, and test suite
+  just test          # cabal test — the single entry point CI runs
+  just show-versions # which openapi cohort the build actually resolved to
+  just build-nix     # nix build: packages.default, with the pinned openapi overlay
+  nix fmt            # treefmt: nixpkgs-fmt + fourmolu + cabal-fmt
+  nix flake check    # treefmt + pre-commit gates
+  ```
+
+  `nix build` evaluates the git tree, so new files must be `git add`-ed before it
+  can see them.
+
+  Design decisions are recorded in [`docs/adr/`](https://github.com/shinzui/servant-health/blob/master/docs/adr/), and the plans that
+  produced them in [`docs/plans/`](https://github.com/shinzui/servant-health/blob/master/docs/plans/).
+
+  ## License
+
+  BSD-3-Clause.
+
+  [servant]: https://hackage.haskell.org/package/servant
+  [openapi-hs]: https://hackage.haskell.org/package/openapi-hs
+  [servant-openapi-hs]: https://hackage.haskell.org/package/servant-openapi-hs
+description-type: markdown
+hash: 7cbcc6a438b3f1392f1684444c80634630bdc2419eb650b154e75f13985abe1b
+homepage: https://github.com/shinzui/servant-health
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: nadeem@gmail.com
+synopsis: Kubernetes liveness and readiness probe endpoints for servant
+test-bench-deps:
+  aeson: '>=0'
+  base: '>=0'
+  bytestring: '>=0'
+  http-client: '>=0'
+  http-types: '>=0'
+  openapi-hs: '>=0'
+  servant: '>=0'
+  servant-health: '>=0'
+  servant-openapi-hs: '>=5.1 && <5.2'
+  servant-server: ^>=0.20
+  sop-core: '>=0'
+  tasty: '>=0'
+  tasty-hunit: '>=0'
+  text: '>=0'
+  time: '>=0'
+  wai: '>=0'
+  warp: '>=0'
