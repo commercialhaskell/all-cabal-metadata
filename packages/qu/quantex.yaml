@@ -1,0 +1,281 @@
+all-versions:
+- 0.1.0.0
+author: d3z
+basic-deps:
+  base: '>=4.20 && <4.23'
+  bytestring: '>=0.12 && <0.13'
+  quantex: '>=0'
+changelog: |
+  # Changelog
+
+  All notable changes to `quantex` are recorded here. The format follows
+  [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow the
+  [Haskell PVP](https://pvp.haskell.org).
+
+  ## 0.1.0.0 — unreleased
+
+  First public release. Pre-release quality: the API is under construction and may
+  change without a major bump until 1.0.
+
+  ### Added
+
+  - ML-KEM (FIPS 203) parameter sets 512, 768 and 1024, over vendored
+    mlkem-native.
+  - ML-DSA (FIPS 204) parameter sets 44, 65 and 87, over vendored mldsa-native,
+    with pure and prehashed (HashML-DSA) signing.
+  - SLH-DSA (FIPS 205), all twelve parameter sets, over vendored slhdsa-c, with
+    pure and prehashed (HashSLH-DSA) signing.
+  - X-Wing hybrid KEM (`draft-connolly-cfrg-xwing-kem-10`), combining ML-KEM-768
+    with X25519 from vendored Monocypher.
+  - Phantom-typed `PublicKey`, `SecretKey`, `Ciphertext`, `Signature`, `Seed`,
+    `SharedSecret`, so scheme mismatches are compile errors.
+  - Pure `Either QuantexError` API with a deterministic seed-based core and `IO`
+    wrappers that draw from a minimal platform entropy shim.
+  - Zeroizing, page-locked `SecretBytes` storage for secret keys, seeds, signing
+    randomness and shared secrets, with constant-time equality and no `Show`.
+  - `withSecretKey` and `withSharedSecret`, which lend the raw zeroizing buffer to
+    a callback so a KDF or AEAD key never materializes an unzeroized copy.
+  - `Quantex.Codec`: raw `encode`/`decode` for public material, with strict length
+    validation plus the FIPS 203 §7.2 modulus and §7.3 hash-consistency checks on
+    ML-KEM and X-Wing key import.
+  - Known-answer tests against NIST ACVP vectors and the X-Wing draft vectors,
+    with an extended offline suite gated behind `QUANTEX_EXTENDED_TESTS`.
+changelog-type: markdown
+description: |
+  <div align="center">
+
+  <img src="https://raw.githubusercontent.com/d3z-the-dev/quantex/master/.github/assets/img/logo.svg" alt="quantex" width="420">
+
+  <p>
+  <b>post-quantum cryptography for Haskell</b>
+  <br>
+  type-safe C bindings to the NIST standards
+  </p>
+
+  <p align="center">
+    <a href="https://github.com/d3z-the-dev/quantex/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/d3z-the-dev/quantex/ci.yml?branch=master&label=CI" alt="CI"></a>
+    <img src="https://img.shields.io/badge/status-pre--release-orange.svg" alt="Status: pre-release">
+    <img src="https://img.shields.io/badge/GHC-9.10%20%7C%209.12%20%7C%209.14-5e5086.svg?logo=haskell&logoColor=white" alt="GHC 9.10, 9.12, 9.14">
+    <img src="https://img.shields.io/badge/FIPS-203%20%7C%20204%20%7C%20205-1f6feb.svg" alt="FIPS 203, 204, 205">
+  </p>
+
+  </div>
+
+  ---
+
+  quantex covers the NIST post-quantum standards ML-KEM, ML-DSA, and SLH-DSA,
+  plus the X-Wing hybrid KEM. Behind them are upstream C reference
+  implementations ([mlkem-native](https://github.com/pq-code-package/mlkem-native),
+  [mldsa-native](https://github.com/pq-code-package/mldsa-native),
+  [slhdsa-c](https://github.com/pq-code-package/slhdsa-c), and
+  [Monocypher](https://github.com/LoupVaillant/Monocypher) for X25519), wrapped
+  in a pure, phantom-typed API.
+
+  | Scheme | Standard | Parameter sets |
+  |---|---|---|
+  | ML-KEM | FIPS 203 | 512, 768, 1024 |
+  | ML-DSA | FIPS 204 | 44, 65, 87 |
+  | SLH-DSA | FIPS 205 | all 12 sets |
+  | X-Wing | CFRG draft | X25519 + ML-KEM-768 |
+
+  ## Highlights
+
+  - Phantom-typed `PublicKey a`, `SecretKey a`, `Ciphertext a`, `Signature a`. Mixing schemes does not compile.
+  - Pure `Either QuantexError` API. No exceptions in pure code.
+  - Deterministic seed-based core, with `IO` wrappers over a minimal platform entropy shim (no third-party entropy dependency).
+  - Secret keys, seeds, and shared secrets live in zeroizing, page-locked storage with constant-time equality and no `Show`.
+  - Every primitive is a vendored C reference implementation, pinned by commit.
+
+  ## Install
+
+  ### From Hackage
+
+  ```sh
+  cabal install quantex
+  ```
+
+  Or add `quantex ^>=0.1` to your package's `build-depends`. The library pulls only
+  `base`, `bytestring`, and `deepseq`, and is tested with GHC 9.10, 9.12, and 9.14.
+
+  ### From a GitHub release
+
+  Download `quantex-<version>.tar.gz` from the
+  [releases page](https://github.com/d3z-the-dev/quantex/releases) and install the
+  tarball directly:
+
+  ```sh
+  cabal install quantex-<version>.tar.gz
+  ```
+
+  ### From source
+
+  Point a `cabal.project` at the repository:
+
+  ```cabal
+  source-repository-package
+    type: git
+    location: https://github.com/d3z-the-dev/quantex
+    subdir: quantex
+  ```
+
+  Then add `quantex` to your `build-depends`.
+
+  ## Quickstart
+
+  Key encapsulation. Any scheme is one type application away:
+
+  ```haskell
+  {-# LANGUAGE TypeApplications #-}
+
+  import Quantex.KEM (decaps, encaps, keypair, sharedSecretEq)
+  import Quantex.KEM.MLKEM (MLKEM768)
+  -- or: import Quantex.KEM.XWing (XWing)
+
+  main :: IO ()
+  main = do
+    (public, secret) <- keypair @MLKEM768
+    (encapsulated, shared) <- encaps public
+    print (sharedSecretEq shared (decaps secret encapsulated))
+  ```
+
+  Signing, hedged by default per FIPS 204/205:
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings, TypeApplications #-}
+
+  import Quantex.Sign (contextEmpty, keypair, sign, verify)
+  import Quantex.Sign.MLDSA (MLDSA65)
+
+  main :: IO ()
+  main = do
+    (public, secret) <- keypair @MLDSA65
+    signed <- sign secret contextEmpty "attack at dawn"
+    print (verify public contextEmpty "attack at dawn" signed)  -- Right ()
+  ```
+
+  ### API at a glance
+
+  | Operation | KEM | Signatures |
+  |---|---|---|
+  | Key generation | `keypair`, `keypairFrom` | `keypair`, `keypairFrom` |
+  | Core | `encaps` / `decaps`, `encapsFrom` | `sign` / `verify`, `signDeterministic` |
+  | Prehash | | `signPrehashed` / `verifyPrehashed`, `signDigest` / `verifyDigest` |
+  | Serialize | `encode` / `decode` | `encode` / `decode` |
+
+  ## More usage
+
+  Prehash signing (HashML-DSA, FIPS 204 §5.4; HashSLH-DSA, FIPS 205 §10.2) hashes
+  the message first. It is domain-separated from pure signing, so the two never
+  cross-verify. Use `signPrehashed`/`verifyPrehashed` for a whole message, or
+  `signDigest`/`verifyDigest` for a `Digest` computed elsewhere (for example over
+  a streamed file that never fits in memory):
+
+  ```haskell
+  import Quantex.Sign (contextEmpty, keypair, signPrehashed, verifyPrehashed)
+  import Quantex.Sign.MLDSA (MLDSA65)
+  import Quantex.Sign.Prehash (PrehashAlgorithm (SHA2_256))
+
+  main :: IO ()
+  main = do
+    (public, secret) <- keypair @MLDSA65
+    signed <- signPrehashed secret contextEmpty SHA2_256 "attack at dawn"
+    print (verifyPrehashed public contextEmpty SHA2_256 "attack at dawn" signed)  -- Right ()
+  ```
+
+  Every operation has a deterministic form (`keypairFrom`, `encapsFrom`,
+  `signFrom`, `signDeterministic`) over validated seeds, so no hidden randomness
+  enters the core. Serialization is raw `encode`/`decode` with strict length
+  validation on decode:
+
+  ```haskell
+  import Quantex.Codec (decode, encode)
+
+  decode (encode public) == Right public
+  ```
+
+  For an ML-KEM secret key, store the 64-byte generation seed instead of the
+  expanded decapsulation key: it is smaller and is the FIPS 203 canonical form.
+  Persist `seedBytes` and rebuild with `secretKeyFromSeed` on load.
+
+  > [!IMPORTANT]
+  > `secretKeyBytes`, `seedBytes`, and `sharedSecretBytes` copy secrets into
+  > ordinary, non-zeroizing memory. Treat every such copy as radioactive and keep
+  > it under the same protection as the key. `Codec` covers only public-material
+  > types, so `encode`/`decode` never crosses this boundary implicitly. To
+  > consume a secret without crossing it at all, use `withSecretKey` and
+  > `withSharedSecret`: they lend the raw zeroizing buffer to a callback, so a KDF
+  > or AEAD key never materializes an unzeroized copy. See
+  > [SECURITY.md](https://github.com/d3z-the-dev/quantex/blob/master/SECURITY.md).
+
+  ## Examples
+
+  Ten self-contained programs, one per application domain: secure transport,
+  file and message encryption, firmware and release signing, IoT provisioning, key
+  escrow, and bearer tokens. Each reads top to bottom as one realistic scenario,
+  prints a narrated transcript, and exits non-zero on any deviation, so the set
+  doubles as a smoke test.
+
+  They ship in the repository, not in the published package. See
+  [`examples/`](https://github.com/d3z-the-dev/quantex/blob/master/examples/README.md)
+  for the full matrix of executables, schemes, and what each one demonstrates.
+
+  ## Design
+
+  - Cryptographic math is never implemented in Haskell. Every primitive call
+    crosses the FFI into vendored C: mlkem-native (ML-KEM), mldsa-native
+    (ML-DSA), slhdsa-c (SLH-DSA), Monocypher (X25519 inside X-Wing). Upstream
+    commits and local patches are recorded in
+    [`quantex/cbits/README.md`](https://github.com/d3z-the-dev/quantex/blob/master/quantex/cbits/README.md).
+  - Phantom types carry the scheme, so keys and ciphertexts of different schemes
+    never mix.
+  - The core is deterministic over seeds. `IO` wrappers add entropy at the edge.
+  - Secret material carries no `Show`; public material shows byte counts only, and
+    nothing serializes implicitly.
+
+  ## Security
+
+  > [!WARNING]
+  > Constant-time and side-channel resistance are inherited from the vendored C,
+  > not established by this library. mlkem-native, mldsa-native, and slhdsa-c
+  > avoid secret-dependent branches by construction but are not hardened against
+  > microarchitectural attacks; Monocypher documents constant-time X25519.
+  > Zero-on-GC is best-effort. quantex is pre-release.
+
+  On top of the upstream primitives, the wrapper adds no secret-dependent
+  branching, constant-time secret equality, zeroizing and page-locked storage from
+  the moment a secret is created, and strict length plus FIPS 203 §7.2/§7.3 key
+  checks at every decode boundary. Full threat model, zeroization details, and the
+  reporting process live in
+  [SECURITY.md](https://github.com/d3z-the-dev/quantex/blob/master/SECURITY.md);
+  known-answer test vectors are pinned and documented in
+  [`quantex/test/vectors/README.md`](https://github.com/d3z-the-dev/quantex/blob/master/quantex/test/vectors/README.md).
+
+  ## Status
+
+  > [!NOTE]
+  > Pre-release, API under construction. Serialization is raw `encode`/`decode`
+  > with strict length validation in `Quantex.Codec`. DER and OID encodings are
+  > out of scope for v0.1.
+
+  ## License
+
+  BSD-3-Clause; see
+  [`LICENSE`](https://github.com/d3z-the-dev/quantex/blob/master/LICENSE).
+  Vendored C keeps its upstream licenses; see
+  [`quantex/LICENSE.third-party`](https://github.com/d3z-the-dev/quantex/blob/master/quantex/LICENSE.third-party).
+description-type: markdown
+hash: e537335aaea9043028423cb911e38a333c1be1e422fae766e3ec52dca5abb4a3
+homepage: https://github.com/d3z-the-dev/quantex
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: d3z.the.dev@gmail.com
+synopsis: 'NIST post-quantum cryptography: ML-KEM, ML-DSA, SLH-DSA, X-Wing'
+test-bench-deps:
+  aeson: '>=2.2'
+  base: '>=0'
+  bytestring: '>=0'
+  quantex: '>=0'
+  tasty: '>=0'
+  tasty-bench: '>=0'
+  tasty-hunit: '>=0'
+  tasty-quickcheck: '>=0'
