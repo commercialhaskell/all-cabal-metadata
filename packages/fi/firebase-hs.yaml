@@ -2,29 +2,145 @@ all-versions:
 - 0.1.0.0
 - 0.1.1.0
 - 0.2.0.0
+- 0.3.0.0
 author: Devon Tomlin
 basic-deps:
-  aeson: '>=2.0 && <2.3'
-  base: '>=4.19 && <5'
+  aeson: '>=2.0 && <2.4'
+  base: '>=4.18 && <5'
   base64-bytestring: '>=1.2 && <1.3'
   bytestring: '>=0.11 && <0.13'
-  containers: '>=0.6 && <0.8'
-  crypton: '>=0.31 && <1.2'
-  http-client: '>=0.7 && <0.8'
-  http-client-tls: '>=0.3 && <0.4'
+  containers: '>=0.6 && <0.9'
+  crypton: '>=0.31 && <2'
+  http-client: '>=0.7.13 && <0.8'
+  http-client-tls: '>=0.3 && <0.5'
   http-types: '>=0.12 && <0.13'
-  stm: '>=2.5 && <2.7'
   text: '>=1.2 && <2.2'
-  time: '>=1.12 && <1.15'
+  time: '>=1.12 && <1.17'
   transformers: '>=0.5 && <0.7'
 changelog: |
   # Changelog
+
+  ## 0.3.0.0
+
+  ### Fixed
+  - Percent-encode every caller-supplied URL component. Project IDs, collection
+    paths, document IDs, and `updateMask` field paths were interpolated raw, so
+    a value containing `?`, `#`, `%`, `&`, a space, or any non-ASCII character
+    produced a malformed request or injected query parameters. Subcollection
+    `/` separators are preserved; the segments between them are encoded.
+  - `FirestoreValue` covers every type Firestore stores. `bytesValue`,
+    `referenceValue`, and `geoPointValue` had no representation, so a document
+    containing any of them failed to decode outright and `getDocument` returned
+    `InvalidResponse` for data Firestore considers perfectly valid.
+  - Non-finite doubles travel in proto3 JSON's string spellings. `DoubleValue`
+    holding NaN or an infinity previously encoded as `null` or `"+inf"`, which
+    Firestore rejects, and a stored `"NaN"`, `"Infinity"`, or `"-Infinity"`
+    failed to decode, making any document that held one unreadable.
+  - `runQuery` posts to the queried collection's parent resource, so a
+    subcollection path (`users/abc/posts`) now queries that subcollection.
+    The full path used to be sent as the `from` collection ID, which
+    Firestore rejects; only top-level collections were queryable.
+  - A query result whose document fails to decode is reported as
+    `InvalidResponse` instead of being silently dropped, which misreported
+    what the query matched.
+  - `integerValue` strings outside the `Int64` range are rejected. The digits
+    were read straight into `Int64`, so an out-of-range value silently
+    wrapped instead of failing.
+  - `{"doubleValue": null}` is rejected. The null previously fell through to
+    aeson's `Double` parser, which reads JSON null as NaN.
+  - A cache refresh no longer overwrites a newer key set installed by a
+    concurrent verification.
+  - `runQuery` and `runQueryInTransaction` classify their error responses.
+    Firestore's streaming endpoints frame an error as a single-element JSON
+    array, which the parser did not read, so a query that failed with an
+    error response surfaced as `NetworkError "HTTP <status>"` instead of
+    `DocumentNotFound`, `PermissionDenied`, `TransactionAborted`, or a
+    specific API error.
+  - A query stream that fails after emitting some results reports the error
+    instead of returning the partial page as a success. The trailing error
+    entry was dropped, so a truncated result set looked complete.
+  - `TimestampValue` encodes at most nanosecond precision. A `UTCTime`
+    carrying sub-nanosecond digits formatted to more than the nine fractional
+    digits Firestore accepts, which it rejects on write.
+
+  ### Breaking Changes
+  - Firestore operations take a single `Firestore` handle in place of the
+    `Manager -> AccessToken -> ProjectId` prefix every one of them repeated.
+    Build it with `newFirestore`, and refresh an expiring token with
+    `withToken` rather than rebuilding the connection pool.
+  - `FirebaseUser` gained fields, so positional construction no longer
+    compiles. Pattern matches on `fuUid`, `fuEmail`, and `fuName` are
+    unaffected.
+  - `commitTransaction` and the `runTransaction` callback take the new opaque
+    `Write` type in place of raw `Aeson.Value`, with `mkUpdateWrite` and
+    `mkDeleteWrite` constructing it. Hand-assembled write JSON no longer
+    typechecks.
+  - `Firebase.Firestore.Internal.queryUrl` is replaced by `runQueryUrl`, which
+    takes the queried collection so it can address the parent resource.
+  - `KeyCache` is now backed by `IORef` rather than `TVar`, and `Firebase.Auth`
+    re-exports it as an abstract type. Construct it with `newKeyCache` or
+    `newTlsKeyCache`.
+  - Dropped the `stm` dependency: the cache is a single reference with no
+    composed transactions, which `atomicModifyIORef'` covers.
+  - Dropped the `mtl` dependency from the `servant` flag. `Firebase.Servant`
+    now builds its 401 on the `Handler` newtype and `transformers`, which does
+    not depend on which `MonadError` re-export a given servant version ships.
+  - `Firebase.Servant` no longer exports `extractBearerToken` or
+    `authErrorToBody`. Both were duplicates of the `Firebase.Auth.WAI`
+    versions; use `Firebase.Auth.Internal.bearerToken` and
+    `Firebase.Auth.authErrorMessage`.
+  - A response body that is JSON but not shaped like a Firestore error now
+    reports `NetworkError "HTTP <status>"` instead of
+    `FirestoreApiError status "" "unknown error"`.
+
+  ### Added
+  - `getDocumentInTransaction` and `runQueryInTransaction` read inside a
+    transaction. The reads see the transaction's snapshot and Firestore
+    verifies at commit that nothing they read has changed, which is what makes
+    `runTransaction` a transaction rather than an atomic batch write; reads
+    without the transaction ID never did either.
+  - Token claims are no longer discarded. `FirebaseUser` now carries
+    `fuEmailVerified`, `fuPicture`, `fuAuthTime`, `fuSignInProvider`, and
+    `fuCustomClaims`, with `hasClaim` and `lookupClaim` to read them. Custom
+    claims are how Firebase expresses roles, so without them a verified token
+    could establish identity but not authorize anything.
+  - 401 responses from the WAI middleware and the Servant handler carry the
+    `WWW-Authenticate: Bearer` challenge RFC 6750 requires.
+  - `listDocuments` lists a collection. `collectionUrl` had described itself as
+    "used for listing" since the first release with nothing to use it.
+  - `BytesValue`, `ReferenceValue`, `GeoPointValue`, and the `GeoPoint` type.
+  - `mkUpdateWrite` and `mkDeleteWrite` build the writes `commitTransaction`
+    and `runTransaction` expect. `mkUpdateWrite` was referenced by the README
+    and Haddock but never existed, leaving no supported way to construct a
+    write.
+  - `Firebase.Auth.Internal`: base64url padding and bearer-token extraction,
+    shared by the verifier and both web integrations.
+  - `authErrorMessage` renders an `AuthError` as a client-safe body.
+  - `documentResourceName`, the percent-encoding helpers,
+    `splitCollectionPath`, `documentInTransactionUrl`, and the pure response
+    decoders (`decodeBody`, `decodeDocumentList`, `decodeQueryResults`,
+    `decodeTransactionId`) are exported from `Firebase.Firestore.Internal`.
+
+  ### Changed
+  - Bearer scheme names are matched case-insensitively, as RFC 7235 requires.
+  - Network calls catch only `HttpException`. Anything else, asynchronous
+    cancellation in particular, propagates instead of surfacing as a
+    `KeyFetchError` or `NetworkError` result.
+  - Widened bounds: `http-client-tls < 0.5` (resolves the Stackage report in
+    issue #1), `containers < 0.9`, `aeson < 2.4`, `time < 1.17`,
+    `crypton < 2`. Lowered `base` to `>= 4.18`, admitting GHC 9.6.
+  - `http-client >= 0.7.13`, the first release whose `Show Request` redacts
+    the `Authorization` header. An `HttpException` rendered into
+    `NetworkError` text therefore never carries the access token.
+  - CI builds the `wai` and `servant` modules, which no job previously
+    compiled, and adds a GHC compatibility matrix, an sdist build, and an
+    ASCII-only source check.
 
   ## 0.2.0.0
 
   ### Breaking Changes
   - Replaced `jose` JWT backend with direct `crypton` RS256 verification
-  - Dropped `jose`, `lens`, `memory` dependencies — significantly lighter dependency tree
+  - Dropped `jose`, `lens`, `memory` dependencies for a significantly lighter dependency tree
   - `JWKSet` (from jose) replaced with internal `JwkSet`/`JwkKey` types in `Firebase.Auth.Types`
   - License changed from MIT to BSD-3-Clause
 
@@ -92,42 +208,38 @@ changelog: |
   - 41 pure tests
 changelog-type: markdown
 description: |
-  <div align="center">
-  <h1>firebase-hs</h1>
-  <p><strong>Firebase for Haskell</strong></p>
-  <p>Auth verification, Firestore CRUD, structured queries, atomic transactions, and a Servant auth combinator.</p>
-  <p><a href="#quick-start">Quick Start</a> · <a href="#firestore">Firestore</a> · <a href="#servant">Servant</a> · <a href="#api-reference">API Reference</a></p>
-  <p>
+  # firebase-hs
 
   [![CI](https://github.com/Gondola-Bros-Entertainment/firebase-hs/actions/workflows/ci.yml/badge.svg)](https://github.com/Gondola-Bros-Entertainment/firebase-hs/actions/workflows/ci.yml)
   [![Hackage](https://img.shields.io/hackage/v/firebase-hs.svg)](https://hackage.haskell.org/package/firebase-hs)
-  ![Haskell](https://img.shields.io/badge/haskell-GHC%209.8-purple)
-  ![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)
+  [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
 
-  </p>
-  </div>
+  Firebase for Haskell:
 
-  ---
+  - **Auth**: Firebase ID token (JWT) verification against Google's public
+    keys, with RS256 via crypton and automatic key caching
+  - **Firestore**: CRUD, structured queries, and atomic transactions over the
+    REST API
+  - **WAI / Servant**: auth middleware and an auth combinator, each behind an
+    optional cabal flag
 
-  ## What is firebase-hs?
+  Full API documentation lives on
+  [Hackage](https://hackage.haskell.org/package/firebase-hs).
 
-  A pure Haskell library for Firebase services:
-
-  - **Auth** — JWT verification against Google's public JWKs using crypton for RS256, with automatic key caching
-  - **Firestore** — CRUD operations, structured queries, and atomic transactions via the REST API
-  - **Servant** — One-liner auth combinator for Servant servers (optional flag)
-
-  ---
-
-  ## Quick Start
-
-  Add to your `.cabal` file:
+  ## Install
 
   ```cabal
   build-depends: firebase-hs
   ```
 
-  ### Verify a Token
+  The web integrations are off by default; enable the ones you use:
+
+  ```bash
+  cabal build -f wai      # Firebase.Auth.WAI
+  cabal build -f servant  # Firebase.Servant
+  ```
+
+  ## Auth
 
   ```haskell
   import Firebase.Auth
@@ -142,144 +254,71 @@ description: |
       Right user -> putStrLn ("UID: " ++ show (fuUid user))
   ```
 
-  ---
+  Build one `KeyCache` at startup and share it across threads; keys refresh
+  automatically per Google's `Cache-Control` header.
 
-  ## Auth
-
-  ### Verification Rules
+  A token is accepted only if every one of these holds:
 
   | Check | Rule |
   |-------|------|
-  | **Algorithm** | RS256 only |
-  | **Signature** | Must match a Google public key |
-  | **Issuer** | `https://securetoken.google.com/<projectId>` |
-  | **Audience** | Must equal your Firebase project ID |
-  | **Expiry** | `exp` must be in the future (within clock skew) |
-  | **Issued at** | `iat` must be in the past (within clock skew) |
-  | **Subject** | `sub` must be non-empty (becomes the Firebase UID) |
+  | Algorithm | RS256 only |
+  | Signature | Must match a Google public key |
+  | Issuer | `https://securetoken.google.com/<projectId>` |
+  | Audience | Must equal your Firebase project ID |
+  | Expiry / issued-at | `exp` in the future, `iat` in the past, within clock skew |
+  | Subject | `sub` non-empty (becomes the Firebase UID) |
 
-  ### Key Caching
-
-  Keys are fetched lazily on first verification, cached per Google's `Cache-Control: max-age`, and refreshed automatically. Thread-safe via STM.
-
-  ### Error Handling
+  Roles live in custom claims, set by the Admin SDK's `setCustomUserClaims`:
 
   ```haskell
-  case result of
-    Left (KeyFetchError msg) -> logError "Network issue" msg
-    Left InvalidSignature    -> respond 401 "Invalid token"
-    Left TokenExpired        -> respond 401 "Token expired"
-    Left (InvalidClaims msg) -> respond 401 ("Bad claims: " <> msg)
-    Left (MalformedToken _)  -> respond 400 "Malformed token"
-    Right user               -> handleAuthenticated user
+  if hasClaim "admin" user then handleAdmin user else refuse
   ```
-
-  ---
 
   ## Firestore
 
-  ### CRUD Operations
-
   ```haskell
+  import qualified Data.Map.Strict as Map
   import Firebase.Firestore
 
   main :: IO ()
   main = do
-    mgr <- newTlsManager
-    let pid = ProjectId "my-project"
-        tok = AccessToken "ya29..."
+    fs <- newFirestore (ProjectId "my-project") (AccessToken "ya29...")
 
-    -- Create
-    let fields = Map.fromList [("name", StringValue "Alice"), ("age", IntegerValue 30)]
-    _ <- createDocument mgr tok pid (CollectionPath "users") (DocumentId "alice") fields
-
-    -- Read
     let path = DocumentPath (CollectionPath "users") (DocumentId "alice")
-    doc <- getDocument mgr tok pid path
-
-    -- Update specific fields
-    let updates = Map.fromList [("age", IntegerValue 31)]
-    _ <- updateDocument mgr tok pid path ["age"] updates
-
-    -- Delete
-    _ <- deleteDocument mgr tok pid path
-    pure ()
+    _ <- createDocument fs (CollectionPath "users") (DocumentId "alice")
+           (Map.fromList [("name", StringValue "Alice"), ("age", IntegerValue 30)])
+    _ <- updateDocument fs path ["age"] (Map.fromList [("age", IntegerValue 31)])
+    doc <- getDocument fs path
+    print doc
   ```
 
-  ### Structured Queries
+  Build one `Firestore` handle and share it; it holds a pooled connection
+  manager. Access tokens expire, so swap in a fresh one with `withToken`
+  rather than rebuilding the handle.
 
-  Build queries with a pure DSL and `(&)` composition:
+  Queries compose with `(&)`; subcollections are addressed by path:
 
   ```haskell
   import Data.Function ((&))
 
-  let q = query (CollectionPath "users")
-        & where_ (fieldFilter "age" OpGreaterThan (IntegerValue 18))
-        & orderBy "age" Ascending
-        & limit 10
-
-  result <- runQuery mgr tok pid q
+  result <- runQuery fs $
+    query (CollectionPath "users")
+      & where_ (fieldFilter "age" OpGreaterThan (IntegerValue 18))
+      & orderBy "age" Ascending
+      & limit 10
   ```
 
-  Composite filters for complex conditions:
+  Transactions read with the transaction ID and return the writes to commit.
+  On any failure the transaction is rolled back, and losing a contention race
+  surfaces as `TransactionAborted`:
 
   ```haskell
-  let q = query (CollectionPath "users")
-        & where_ (compositeAnd
-            [ fieldFilter "age" OpGreaterThan (IntegerValue 18)
-            , fieldFilter "active" OpEqual (BoolValue True)
-            ])
+  result <- runTransaction fs ReadWrite $ \txnId -> runExceptT $ do
+    doc <- ExceptT (getDocumentInTransaction fs txnId path)
+    pure [mkUpdateWrite (fsProject fs) path (applyDebit 100 (docFields doc))]
   ```
 
-  ### Atomic Transactions
-
-  Read-then-write operations that succeed or fail atomically:
-
-  ```haskell
-  result <- runTransaction mgr tok pid ReadWrite $ \txnId -> runExceptT $ do
-    -- Reads within the transaction see a consistent snapshot
-    d <- ExceptT $ getDocument mgr tok pid userPath
-    let newBalance = computeNewBalance (docFields d)
-    pure [mkUpdateWrite userPath newBalance]
-  ```
-
-  Retry aborted transactions:
-
-  ```haskell
-  -- First attempt
-  result <- beginTransaction mgr tok pid ReadWrite
-  case result of
-    Left (TransactionAborted _) ->
-      -- Retry with the failed transaction ID for priority
-      beginTransaction mgr tok pid (RetryWith txnId)
-  ```
-
-  ### Firestore Value Types
-
-  Values mirror Firestore's tagged wire format:
-
-  ```haskell
-  data FirestoreValue
-    = NullValue | BoolValue !Bool | IntegerValue !Int64
-    | DoubleValue !Double | StringValue !Text | TimestampValue !UTCTime
-    | ArrayValue ![FirestoreValue] | MapValue !(Map Text FirestoreValue)
-  ```
-
-  Note: integers are encoded as JSON strings (`{"integerValue":"42"}`), not numbers. The JSON instances handle this transparently.
-
-  ---
-
-  ## WAI Middleware
-
-  Protect any WAI-based server (Warp, Scotty, Yesod, Spock) with Firebase auth. Enable with the `wai` cabal flag:
-
-  ```bash
-  cabal build -f wai
-  ```
-
-  ### Simple Gate
-
-  Reject unauthenticated requests before they reach your app:
+  ## WAI
 
   ```haskell
   import Firebase.Auth (newTlsKeyCache, defaultFirebaseConfig)
@@ -290,34 +329,13 @@ description: |
   main = do
     cache <- newTlsKeyCache
     let cfg = defaultFirebaseConfig "my-project-id"
-    run 3000 $ requireAuth cache cfg myApp
+    run 3000 (requireAuth cache cfg myApp)
   ```
 
-  ### With User Propagation
-
-  Store the authenticated user in the WAI vault for downstream handlers:
-
-  ```haskell
-  import Firebase.Auth.WAI (firebaseAuth, lookupFirebaseUser)
-
-  main = run 3000 $ firebaseAuth cache cfg myApp
-
-  myHandler req respond = case lookupFirebaseUser req of
-    Just user -> respond (ok200 ("Hello, " <> fuUid user))
-    Nothing   -> respond (err500 "unreachable")
-  ```
-
-  ---
+  `firebaseAuth` additionally stores the verified `FirebaseUser` in the
+  request vault for `lookupFirebaseUser` to read downstream.
 
   ## Servant
-
-  Enable with the `servant` cabal flag:
-
-  ```bash
-  cabal build -f servant
-  ```
-
-  One-liner auth for any Servant server:
 
   ```haskell
   import Firebase.Auth (newTlsKeyCache, defaultFirebaseConfig)
@@ -332,91 +350,29 @@ description: |
     runSettings defaultSettings (serveWithContext api ctx server)
   ```
 
-  The handler extracts the Bearer token, verifies it against Google's keys, and injects a `FirebaseUser` into your endpoint — or returns 401 with a descriptive error.
-
-  ---
-
-  ## API Reference
-
-  ### Auth
-
-  ```haskell
-  verifyIdToken       :: Manager -> FirebaseConfig -> ByteString -> IO (Either AuthError FirebaseUser)
-  newKeyCache         :: Manager -> IO KeyCache
-  newTlsKeyCache      :: IO KeyCache
-  verifyIdTokenCached :: KeyCache -> FirebaseConfig -> ByteString -> IO (Either AuthError FirebaseUser)
-  parseCacheMaxAge    :: ResponseHeaders -> Maybe Int
-  ```
-
-  ### Firestore
-
-  ```haskell
-  getDocument    :: Manager -> AccessToken -> ProjectId -> DocumentPath -> IO (Either FirestoreError Document)
-  createDocument :: Manager -> AccessToken -> ProjectId -> CollectionPath -> DocumentId -> Map Text FirestoreValue -> IO (Either FirestoreError Document)
-  updateDocument :: Manager -> AccessToken -> ProjectId -> DocumentPath -> [Text] -> Map Text FirestoreValue -> IO (Either FirestoreError Document)
-  deleteDocument :: Manager -> AccessToken -> ProjectId -> DocumentPath -> IO (Either FirestoreError ())
-  runQuery       :: Manager -> AccessToken -> ProjectId -> StructuredQuery -> IO (Either FirestoreError [Document])
-  ```
-
-  ### Transactions
-
-  ```haskell
-  beginTransaction    :: Manager -> AccessToken -> ProjectId -> TransactionMode -> IO (Either FirestoreError TransactionId)
-  commitTransaction   :: Manager -> AccessToken -> ProjectId -> TransactionId -> [Value] -> IO (Either FirestoreError ())
-  rollbackTransaction :: Manager -> AccessToken -> ProjectId -> TransactionId -> IO (Either FirestoreError ())
-  runTransaction      :: Manager -> AccessToken -> ProjectId -> TransactionMode -> (TransactionId -> IO (Either FirestoreError [Value])) -> IO (Either FirestoreError ())
-  ```
-
-  ### WAI Middleware
-
-  ```haskell
-  requireAuth        :: KeyCache -> FirebaseConfig -> Middleware
-  firebaseAuth       :: KeyCache -> FirebaseConfig -> Middleware
-  lookupFirebaseUser :: Request -> Maybe FirebaseUser
-  ```
-
-  ### Servant
-
-  ```haskell
-  firebaseAuthHandler :: KeyCache -> FirebaseConfig -> AuthHandler Request FirebaseUser
-  extractBearerToken  :: Request -> Maybe ByteString
-  authErrorToBody     :: AuthError -> LBS.ByteString
-  ```
-
-  Full Haddock documentation is available on [Hackage](https://hackage.haskell.org/package/firebase-hs).
-
-  ---
-
-  ## Build & Test
+  ## Build and Test
 
   ```bash
-  cabal build                              # Build library
-  cabal test                               # Run all tests (46 pure tests)
-  cabal build --ghc-options="-Werror"      # Warnings as errors
-  cabal build -f wai                       # Build with WAI middleware
-  cabal build -f servant                   # Build with Servant combinator
-  cabal haddock                            # Generate docs
+  cabal build all -f wai -f servant --enable-tests --ghc-options="-Werror"
+  cabal test
   ```
 
-  ---
-
-  <p align="center">
-    <sub>BSD-3-Clause License · <a href="https://github.com/Gondola-Bros-Entertainment">Gondola Bros Entertainment</a></sub>
-  </p>
+  BSD-3-Clause. Maintained by
+  [Gondola Bros Entertainment](https://github.com/Gondola-Bros-Entertainment).
 description-type: markdown
-hash: d4cf79d0b19eade964cd37d7250ddb369efddb7750928c33a436145c299fb05c
+hash: 3f5bd69b0270362bb1d0b85ff0be957278d18e9e2c9f7eb1c32fb1e2898ec447
 homepage: https://github.com/Gondola-Bros-Entertainment/firebase-hs
-latest: 0.2.0.0
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: devon.tomlin@novavero.ai
 synopsis: Firebase Auth, Firestore, and Servant integration for Haskell
 test-bench-deps:
-  aeson: '>=2.0 && <2.3'
-  base: '>=4.19 && <5'
+  aeson: '>=2.0 && <2.4'
+  base: '>=4.18 && <5'
   bytestring: '>=0.11 && <0.13'
-  containers: '>=0.6 && <0.8'
+  containers: '>=0.6 && <0.9'
   firebase-hs: '>=0'
-  http-client: '>=0.7 && <0.8'
+  http-client: '>=0.7.13 && <0.8'
   http-types: '>=0.12 && <0.13'
   text: '>=1.2 && <2.2'
-  time: '>=1.12 && <1.15'
+  time: '>=1.12 && <1.17'
