@@ -20,6 +20,7 @@ all-versions:
 - 0.1.0.18
 - 0.1.0.19
 - 0.1.0.20
+- 0.1.0.21
 author: Tom Wells
 basic-deps:
   aeson: '>=2 && <3'
@@ -35,6 +36,41 @@ basic-deps:
   warp: '>=3.3 && <4'
 changelog: |
   # Revision history for mcp-server
+
+  ## 0.1.0.21 - ???
+
+  * **BREAKING**: every handler (prompt/resource/tool; list and get/read/call)
+    now receives a `ClientContext` as its first argument, so a server can behave
+    differently depending on who is calling. On stdio the context is anonymous;
+    on HTTP it carries the request's bearer token and the principal returned by
+    the authorization callback.
+  * **BREAKING**: `HttpConfig` gains an `httpAuthorize` field — an optional
+    callback that validates the presented `Authorization: Bearer` token and
+    returns an application-defined principal (`Nothing` rejects with 401). As it
+    now holds a function, `HttpConfig` no longer derives `Show`/`Eq`.
+  * HTTP transport: accept requests without an `MCP-Protocol-Version` header
+    (the spec says to assume `2025-03-26`), exempt `initialize` from the header
+    check (it negotiates its version in the body), and keep rejecting a present
+    but unsupported header with 400. Previously every request without the header
+    was rejected, locking out pre-`2025-06-18` clients.
+  * `initialize` now advertises only the capabilities that actually have
+    handlers, so strict clients no longer drop the server when e.g.
+    `prompts/list` answers "not supported".
+  * CORS: preflight `OPTIONS` requests are exempt from authorization (browsers
+    send no credentials on preflight) and `Authorization` is included in
+    `Access-Control-Allow-Headers`.
+  * `http-simple-example` is now built with `-threaded`, which Warp requires;
+    previously every request crashed with a `TimerManager` error.
+
+  ## 0.1.0.20 - ???
+
+  * Fix protocol version negotiation: echo back any compatible revision the client
+    proposes (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) instead of
+    always responding with the server's own version. Fixes clients (e.g. Claude
+    Code) that disconnect when they receive a different version than requested.
+  * Apply the same negotiation to the HTTP transport's `MCP-Protocol-Version`
+    header check, which previously rejected anything other than `2025-06-18`.
+  * Default/fallback advertised version bumped to `2025-11-25`.
 
   ## 0.1.0.19 - ???
 
@@ -126,11 +162,11 @@ description: |-
 
   ## Features
 
-  - **Complete MCP Implementation**: Supports MCP 2025-06-18 specification
+  - **Complete MCP Implementation**: Negotiates MCP protocol revisions `2024-11-05` through `2025-11-25` (the shared wire format for tool/resource/prompt operations)
   - **Type-Safe API**: Leverage Haskell's type system for robust MCP servers
   - **Multiple Abstractions**: Both low-level fine-grained control and high-level derived interfaces
   - **Template Haskell Support**: Automatic handler derivation from data types
-  - **Multiple Transports**: STDIO and HTTP Streaming transport (MCP 2025-06-18 Streamable HTTP)
+  - **Multiple Transports**: STDIO and HTTP Streaming transport (MCP Streamable HTTP)
 
   ## Supported MCP Features
 
@@ -163,18 +199,19 @@ description: |-
   data MyResource = Menu | Specials
   data MyTool = Search { query :: Text } | Order { item :: Text }
 
-  -- Implement handlers
-  handlePrompt :: MyPrompt -> IO Content
-  handlePrompt (Recipe idea) = pure $ ContentText $ "Recipe for " <> idea
-  handlePrompt (Shopping items) = pure $ ContentText $ "Shopping list: " <> items
+  -- Implement handlers. Every handler receives the per-request 'ClientContext'
+  -- (the caller's bearer token and principal on the HTTP transport) first.
+  handlePrompt :: ClientContext -> MyPrompt -> IO Content
+  handlePrompt _ (Recipe idea) = pure $ ContentText $ "Recipe for " <> idea
+  handlePrompt _ (Shopping items) = pure $ ContentText $ "Shopping list: " <> items
 
-  handleResource :: MyResource -> IO Content
-  handleResource Menu = pure $ ContentText "Today's menu..."
-  handleResource Specials = pure $ ContentText "Daily specials..."
+  handleResource :: ClientContext -> URI -> MyResource -> IO ResourceContent
+  handleResource _ uri Menu = pure $ ResourceText uri "text/plain" "Today's menu..."
+  handleResource _ uri Specials = pure $ ResourceText uri "text/plain" "Daily specials..."
 
-  handleTool :: MyTool -> IO Content
-  handleTool (Search query) = pure $ ContentText $ "Search results for " <> query
-  handleTool (Order item) = pure $ ContentText $ "Ordered " <> item
+  handleTool :: ClientContext -> MyTool -> IO Content
+  handleTool _ (Search query) = pure $ ContentText $ "Search results for " <> query
+  handleTool _ (Order item) = pure $ ContentText $ "Ordered " <> item
 
   -- Derive handlers automatically
   main :: IO ()
@@ -285,9 +322,10 @@ description: |-
   ```haskell
   import MCP.Server
 
-  -- Manual handler implementation
-  promptListHandler :: IO [PromptDefinition]
-  promptGetHandler :: PromptName -> [(ArgumentName, ArgumentValue)] -> IO (Either Error Content)
+  -- Manual handler implementation. Every handler receives the per-request
+  -- 'ClientContext' as its first argument.
+  promptListHandler :: ClientContext -> IO [PromptDefinition]
+  promptGetHandler :: ClientContext -> PromptName -> [(ArgumentName, ArgumentValue)] -> IO (Either Error Content)
   -- ... implement your custom logic
 
   main :: IO ()
@@ -302,7 +340,8 @@ description: |-
 
   ## HTTP Transport (NEW!)
 
-  The library now supports MCP 2025-06-18 Streamable HTTP transport:
+  The library supports the MCP Streamable HTTP transport. Compile your
+  executable with `ghc-options: -threaded` — Warp requires the threaded runtime:
 
   ```haskell
   import MCP.Server.Transport.Http
@@ -317,7 +356,24 @@ description: |-
         { httpPort = 8080
         , httpHost = "0.0.0.0"
         , httpEndpoint = "/api/mcp"
-        , httpVerbose = True  -- Enable detailed logging
+        , httpVerbose = True     -- Enable detailed logging
+        , httpAuthorize = Nothing -- No authentication (see below)
+        }
+  ```
+
+  **Bearer-token authentication** (optional): supply an `httpAuthorize` callback
+  to validate the `Authorization: Bearer` token each request presents. Return
+  `Just principal` to authorize (the principal — any JSON `Value`, e.g. a role —
+  reaches your handlers as `clientPrincipal` in the `ClientContext`), or
+  `Nothing` to reject the request with 401. Token policy lives entirely in your
+  application; the library only threads the identity through:
+
+  ```haskell
+      customConfig = defaultHttpConfig
+        { httpAuthorize = Just $ \mtoken -> case mtoken of
+            Just "secret-admin-token" -> pure $ Just (String "admin")
+            Just "secret-user-token"  -> pure $ Just (String "user")
+            _                         -> pure Nothing
         }
   ```
 
@@ -325,7 +381,8 @@ description: |-
   - CORS enabled for web clients
   - GET `/mcp` for server discovery
   - POST `/mcp` for JSON-RPC messages
-  - Full MCP 2025-06-18 compliance
+  - Protocol-version negotiation across supported revisions (`2024-11-05`–`2025-11-25`)
+  - Optional pluggable bearer-token authentication via `httpAuthorize`
 
   ## Examples
 
@@ -367,7 +424,7 @@ description: |-
 
   ## Documentation
 
-  - [MCP Specification](https://modelcontextprotocol.io/specification/2025-06-18/)
+  - [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25/)
   - [API Documentation](https://hackage.haskell.org/package/mcp-server)
   - [Examples](examples/)
 
@@ -383,9 +440,9 @@ description: |-
 
   BSD-3-Clause
 description-type: markdown
-hash: d8781fdfe837962cf0a9168e85f7248698dfbb75a1bcc4af35f3d285f9740381
+hash: 518f56e52ead0dc8288f6a00087edfb72e23d553fb00e68ec6478baf03b94274
 homepage: https://github.com/drshade/haskell-mcp-server
-latest: 0.1.0.20
+latest: 0.1.0.21
 license-name: BSD-3-Clause
 maintainer: drshade@gmail.com
 synopsis: Library for building Model Context Protocol (MCP) servers
