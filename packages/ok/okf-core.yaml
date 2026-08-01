@@ -5,6 +5,7 @@ all-versions:
 - 0.2.0.0
 - 0.3.0.0
 - 0.4.0.0
+- 0.5.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.2 && <2.4'
@@ -33,6 +34,244 @@ changelog: |
   this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   ## [Unreleased]
+
+  ## [0.5.0.0] - 2026-08-01
+
+  ### Added
+
+  - **OKF v0.2 core semantics.** okf now tracks version 0.2 of the Open Knowledge
+    Format. Every family below is optional; `type` remains the only key a concept
+    must have, and no bundle is ever rejected for omitting one.
+  - `Okf.Actor`: the specification §7 actor convention, with `parseActor` (total,
+    never fails), `renderActor` (its exact inverse), and `isHumanActor`, which is
+    the single test separating the machine-confirmed trust tier from
+    human-reviewed. Four fields carry an actor: `generated.by`, `verified[].by`,
+    and `sources[].author`.
+  - The trust family (§5.2): `Generated`/`readGenerated`/`setGenerated` for who or
+    what produced a concept's content and when, and
+    `Verification`/`readVerified`/`setVerified` for independent confirmation.
+    `readVerified` accepts a bare mapping as a one-element list, as §5.2 requires.
+  - The lifecycle family (§5.4, §5.5): `Status`/`readStatus`/`renderStatus`/
+    `setStatus`, where an absent key means `stable`, and `readStaleAfter`/
+    `setStaleAfter`.
+  - The provenance family (§5.1): `Source`/`readSources`/`setSources` with the
+    credibility signals `author`, `usage_count`, and `last_modified`, plus
+    `UsageWindow`/`readUsageWindow`/`setUsageWindow` and `effectiveUsageWindow`,
+    which resolves an entry's own window against the document-scope one.
+    `usage_count` is read only from a YAML integer; a numeric string is not
+    coerced.
+  - `Okf.Trust`: `trustTier`, `renderTrustTier`, `latestVerification`,
+    `staleness`, and `renderStaleness`. Everything here is derived on read and
+    never stored, and no function in `okf-core` reads the clock — `staleness`
+    takes the current day as an argument. See
+    `docs/adr/8-derived-not-stored-trust-and-credibility.md`.
+  - `Okf.Bundle.Concept` projects six more typed fields from frontmatter —
+    `generated`, `verified`, `status`, `staleAfter`, `sources`, `usageWindow` —
+    with matching accessors. Every projection restates frontmatter; none is a
+    derivation.
+  - The bundle-root version declaration of §12: `OkfVersion`,
+    `VersionDeclaration`, `readBundleVersion`, `parseOkfVersion`,
+    `renderOkfVersion`, `supportedOkfVersion`, and `renderRootIndex` in
+    `Okf.Index`. `Okf.Validation.versionGate` is the one place that decides what a
+    declared version implies, and `gateDeclaresAtLeast` is the only question a
+    check asks of it. An unknown minor within a known major is read as the highest
+    known version; an unknown major is read permissively. Neither is ever a refusal.
+    See `docs/adr/10-okf-version-declaration-and-best-effort-reading.md`.
+  - `Okf.Markdown`, with one shared `markdownOptions` list, `extractFootnoteLabels`,
+    and `footnoteLabelsUsed`. All three `commonmarkToNode` call sites now route
+    through it and Markdown footnotes are enabled. See
+    `docs/adr/9-one-markdown-parse-configuration-and-source-scanned-authoring-checks.md`.
+  - `okf-core/test/fixtures/v01-legacy-bundle`, a deliberately unmigrated v0.1
+    bundle that keeps the legacy fallback under test. Do not migrate it.
+  - **Object rules on profile field rules.** `FieldRule` gains
+    `objectFields :: Maybe NestedRules`, describing the record that *is* a key's
+    value, as distinct from `elementFields`, which describes the record inside each
+    element of a list. Both take the same `NestedRules` value and their members are
+    checked identically; only the reported `FieldPath` differs (`generated.by`
+    against `reviews[0].kind`). Declaring both accepts either spelling, which is how
+    a profile describes the OKF v0.2 `verified` key. `NestedFieldRule` gains
+    neither member, so the descriptor stays depth-bounded.
+    `EffectiveFieldRule` gains the `fieldRuleObjectFields` accessor, and generated
+    profile documentation gains an `- Object fields:` bullet. Declaring
+    `objectFields` and no explicit cardinality refines the rule to the new
+    compiled-only `Cardinality` constructor `Object`; pairing it with an explicit
+    `Scalar` or `List` is the new definition error
+    `ObjectFieldsRequireObjectShape`. See
+    `docs/adr/11-growing-the-profile-descriptor-language.md`.
+  - `okf-core/test/fixtures/profiles/object-fields-mp8-ep1.dhall`, the frozen
+    descriptor generation from immediately before `objectFields` existed. Do not
+    edit it.
+  - **The OKF v0.2 `Attested Computation` concept type (§10).** A concept of that
+    exact type carries a sanctioned way to compute a value, so a consumer can
+    confirm a number came from running the blessed computation rather than from an
+    agent improvising its own query. `Okf.Document` reads the five contract keys —
+    `runtime`, `parameters`, `computation`, `executor`, `attester` — with
+    `Parameter`, `Executor`, `Attester`, and `attestedComputationType`, the exact
+    case-sensitive type string. All five joined `coreFrontmatterFieldOrder` and
+    `fieldsIntroducedInV02`, between `status` and `generated`, which is §10.2's own
+    worked-example order, so serialization round-trips a §10.2 concept unchanged.
+    `Okf.Bundle` projects the lot onto `Concept`.
+  - The body half of §10.3: `Okf.Markdown.computationBlocks` finds the code blocks
+    under a `# Computation` heading, bounded at the next heading of the same or
+    shallower level, and accepts both the fenced spelling §10.3's prose names and
+    the indented one §10.2's own example writes. `Okf.Document.ComputationSource`
+    and `readComputationSources` restate what a document offers — file before
+    inline — and `Okf.Bundle.conceptComputationSources` projects it. Every one of
+    these is type-agnostic and never reports; scoping to the type is
+    `Okf.Validation`'s job.
+  - Four strict-mode `ValidationError` constructors for that type and no other:
+    `AttestedComputationMissingRuntime` for §10.2's one REQUIRED field, and
+    `AttestedComputationHasNoComputation`, `AttestedComputationHasBothComputations`,
+    and `AttestedComputationHasManyBlocks Int` for the three ways §10.3's
+    exactly-one rule breaks. Strict-only, per
+    `docs/adr/7-okf-v0-1-legacy-fallback-policy.md`: §11's conformance list reaches
+    none of them and separately forbids rejecting a bundle for an unknown `type`,
+    so "REQUIRED for this type" binds the producer and does not license a consumer
+    to refuse.
+  - **Path-valued frontmatter fields are resolved against the bundle** (§6.2), a
+    gap that predates attested computations — nothing in okf had ever looked at a
+    path sitting in a frontmatter value. `Okf.Path` gains existence checking, and
+    `Okf.Validation` reports `DanglingFrontmatterPath` under `StrictAuthoring` for
+    `resource`, `computation`, `executor.resource`, and `attester.resource`. A
+    relative path that would have resolved from the bundle root is told the
+    leading-slash spelling to write instead. `sources[].resource` is deliberately
+    excluded: §5.1 sanctions a scope descriptor there, so path-checking it would
+    report correct bundles as broken. See
+    `docs/adr/12-frontmatter-path-resolution.md`.
+  - `Okf.Profile.validateProfileWith` takes a `BundleInventory`, so a profile
+    `path` rule resolves against every file in the bundle rather than only `.md`
+    concepts — which is what §6.3's own `references/attesters/revenue.py` example
+    needs. `validateProfile` is defined in terms of it and keeps its exact meaning:
+    a caller that supplies no inventory has not looked, and okf reports nothing it
+    did not check. See `docs/adr/13-the-references-convention-and-non-markdown-files.md`.
+  - `Okf.Index` lists a directory's non-Markdown files under a `# Files` heading,
+    so a `references/attesters/` directory holding only `.py` files no longer
+    generates a one-byte `index.md`.
+  - `okf-core/test/fixtures/attested-computation/`, a bundle carrying one complete
+    contract, one of each §10.3 failure, one `Metric` that must never be mistaken
+    for a computation, and one concept that is core-clean and deviates only from a
+    house profile. `okf-core/test/fixtures/profiles/attested-computation-house.dhall`
+    is that house profile, and is the descriptor `docs/user/profiles.md` documents.
+  - `Okf.Profile.Documentation.defaultDocumentationActor`, the actor
+    `defaultDocumentationOptions` names as the producer of a generated
+    documentation bundle: `ProcessActor "okf-profile-document"`. Deliberately
+    version-free, so generated output stays byte-identical across okf releases.
+  - A profile may require its bundle to declare an OKF version.
+    `ProfileSpec.requireBundleVersion` holds a minimum as `Just "0.2"`, and the new
+    `Okf.Profile.validateProfileVersion` reports an undeclared, older, or
+    unparseable declaration as `RequiredBundleVersionUnmet`. Specification §12
+    makes the declaration a MAY, so `validateBundle` still never asks for one; this
+    is the house-convention half, inert until a profile author writes the field.
+    `compiledProfileRequiredBundleVersion` reads the parsed minimum off a compiled
+    profile. See
+    `docs/adr/10-okf-version-declaration-and-best-effort-reading.md`.
+  - `validateProfileVersion` is a new entry point rather than a parameter on
+    `validateProfile` or `validateProfileWith`, whose signatures are unchanged: the
+    check consults no concepts, and adding a parameter would break every caller.
+  - The generated profile documentation bundle gains a `Required bundle version`
+    bullet in its `## Settings` list, so a profile setting cannot be a silent hole
+    in its own documentation. Regenerating a committed documentation bundle
+    produces that one added line.
+
+  ### Changed
+
+  - **Breaking for exhaustive consumers, from the attested computation work.**
+    Four changes, listed together because a consumer moving its okf pin meets them
+    as one surface. `Okf.Validation.validateBundle` takes a required
+    `BundleInventory` before its list of concepts — required rather than defaulted,
+    so no caller can pass an empty inventory and have every path report as
+    dangling. `BundleValidationError` gains `DanglingFrontmatterPath ConceptId Text
+    FilePath (Maybe FilePath)`. `ValidationError` gains the four
+    `AttestedComputation*` constructors listed above. And `Okf.Index.renderIndex`
+    takes two further parameters, for the non-Markdown files in a directory.
+    The arity change on `validateBundle` is the one that breaks a caller outright;
+    the constructor additions break only an exhaustive `case`. Mori
+    (`mori://shinzui/mori`) matches `ProfileViolation` and not `ValidationError` or
+    `BundleValidationError` as of 2026-08-01, so the constructors do not reach it,
+    but its call to `validateBundle` does — check before moving the pin rather than
+    assuming, since that is a position on a date and not a guarantee.
+    `Okf.Profile.validateProfile` is unchanged in signature and meaning.
+  - **Breaking for exhaustive consumers.** `Cardinality` gains a fourth
+    constructor, `Object`, and `ProfileDefinitionError` gains
+    `ObjectFieldsRequireObjectShape`. The `Cardinality` addition is the wider of
+    the two: that type appears in `ConflictingCardinality`,
+    `ElementFieldsRequireList`, `ConditionFieldNotScalar`, and
+    `CardinalityMismatch`, so a consumer that renders a cardinality needs a new
+    case even if it declares no object rules. `Object` is deliberately unreachable
+    from Dhall — the published union in `okf-core/dhall/Cardinality.dhall` keeps
+    exactly its three alternatives — so no pinned descriptor changes type. No
+    `ProfileViolation` constructor was added.
+  - Adding `objectFields` to the closed Dhall `FieldRule` record is a schema
+    event. The complete optional-presence generation is frozen before it and
+    upgrades with `objectFields = None`, so descriptors written with record
+    completion or the `mk` constructors are unaffected; a descriptor that annotates
+    itself against okf's current schema by relative path must add the field, since
+    Dhall rejects the annotation before any fallback decoder runs.
+  - A missing member of a nested record now carries the member's `description`
+    prose in parentheses, as a missing top-level key already did. This applies to
+    list elements as well as object members, and emits nothing where a member
+    declares no description.
+  - **Breaking for exhaustive consumers.** `validateBundle` takes a
+    `VersionDeclaration` between the profile and the concepts:
+    `ValidationProfile -> VersionDeclaration -> [Concept] -> [BundleValidationError]`.
+    Passing `VersionUndeclared` reproduces the previous behaviour exactly.
+    `ValidationError` gains `MissingGeneratedField`, `GeneratedMustHaveActor`,
+    `SourceMissingResource`, `DuplicateSourceId`, `FootnoteLabelNotInSources`,
+    `SourceIdNotCited`, and `LegacyFieldInDeclaredV2`; `BundleValidationError`
+    gains `BundleVersionUnparseable` and `BundleVersionNotUnderstood`. Every new
+    diagnostic is `StrictAuthoring` only.
+  - **Strict validation asks for `generated` rather than `timestamp`**, falling
+    back to a legacy `timestamp` when `generated` is absent, so nothing that
+    passed before fails now. The message for a concept with neither changes from
+    `missing recommended field: timestamp` to
+    `missing generated field (or legacy timestamp)`. The fallback is silent in an
+    undeclared bundle and reported in one that declares `okf_version: "0.2"`; see
+    `docs/adr/7-okf-v0-1-legacy-fallback-policy.md`.
+  - **`logStaleness` reads `generated.at` first**, falling back to `timestamp`. A
+    v0.2 concept with no `timestamp` at all is staleness-checked for the first
+    time.
+  - `coreFrontmatterFieldOrder` gains all six v0.2 concept keys, so re-serializing
+    a document orders them deterministically and a closed profile
+    (`allowUnknownFields = False`) permits them without redeclaring. `timestamp`
+    moved to the end of that order, which reorders it once in any document a
+    producer re-serializes.
+  - Markdown bodies parse with footnotes enabled. This also fixes a bug: a
+    single-token footnote definition such as `[^src]: doc.md` previously parsed as
+    a link reference definition, producing a phantom dangling link.
+  - `setTimestamp`, `OkfCommon`'s `commonTimestamp`, and reading a v0.1
+    `timestamp` are all retained. Writing v0.1 on purpose stays supported.
+  - `Okf.Profile.Documentation.DocumentationOptions` gains a `generated ::
+    Maybe Generated` field carrying the OKF v0.2 `generated` family written on
+    every generated document, and `defaultDocumentationOptions` now supplies one.
+    `Nothing` omits the key. Generation still reads no clock: `generatedAt` is
+    caller-supplied and absent by default.
+  - **Breaking for record-literal callers.** A consumer that constructs
+    `DocumentationOptions` as a record literal rather than by overriding
+    `defaultDocumentationOptions` must add the new field. The module Haddock has
+    always directed callers to start from `defaultDocumentationOptions` for
+    exactly this reason; a call site that does so is unaffected.
+  - **Breaking for exhaustive matchers and record-literal callers**, from
+    `requireBundleVersion`. `ProfileSpec` gains a field, so a consumer building one
+    as a record literal must add it. `ProfileViolation` gains
+    `RequiredBundleVersionUnmet` — the first violation that carries no `ConceptId`,
+    so a consumer grouping violations by concept needs a case for it — and
+    `ProfileDefinitionError` gains `InvalidRequiredBundleVersion`. Handle all three
+    before moving an okf pin. `okf profile show --json` gains a
+    `requireBundleVersion` key for the same reason.
+  - The published Dhall schema `okf-core/dhall/Profile.dhall` gains
+    `requireBundleVersion : Optional Text`, defaulted to `None Text` in
+    `okf-core/dhall/defaults/Profile.dhall`. A descriptor written as
+    `Profile::{ … }` is unaffected; one written as a bare record literal annotated
+    `: Profile` must add the member, and one pinned at an earlier release keeps
+    decoding through a new frozen generation
+    (`okf-core/test/fixtures/profiles/pre-bundle-version.dhall`).
+
+  ### Fixed
+
+  - The sdist ships `test/fixtures/**/*.sql`. The `attested-computation` fixture
+    points a `computation` field at a `.sql` file, so without it `cabal test` on
+    the released tarball reported that path as dangling — a failure only someone
+    building from Hackage with tests enabled would ever have seen.
 
   ## [0.4.0.0] - 2026-07-30
 
@@ -279,15 +518,16 @@ description: |-
   index and link graph, validates referential integrity, and writes bundles back
   out with a round-trip guarantee.
 description-type: haddock
-hash: 9cff2ae90e5b55caff24d5cd95b5ff0d866657234471798abdf55009748a3bb5
+hash: 383fdd7696bfc68dee1ffd56704fcc22056dd2eebfaebdb7c48e6197720a98dc
 homepage: ''
-latest: 0.4.0.0
+latest: 0.5.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Read, validate, index, and traverse Open Knowledge Format bundles
 test-bench-deps:
   aeson: '>=0'
   base: '>=4.20 && <5'
+  containers: '>=0.6 && <0.8'
   dhall: '>=1.41 && <1.43'
   directory: '>=0'
   filepath: '>=0'
