@@ -21,15 +21,20 @@ all-versions:
 - 0.1.0.19
 - 0.1.0.20
 - 0.1.0.21
+- 0.2.0.1
 author: Tom Wells
 basic-deps:
   aeson: '>=2 && <3'
+  async: '>=2.2 && <2.3'
   base: '>=4.18 && <4.23'
+  base64-bytestring: '>=1.0 && <1.3'
   bytestring: '>=0.10 && <0.13'
   containers: '>=0.6 && <0.9'
   http-types: '>=0.12 && <1'
   mcp-server: '>=0'
   network-uri: '>=2.6 && <2.8'
+  scientific: '>=0.3 && <0.4'
+  stm: '>=2.5 && <2.6'
   template-haskell: '>=2.16 && <2.25'
   text: '>=1.2 && <3'
   wai: '>=3.2 && <4'
@@ -37,7 +42,230 @@ basic-deps:
 changelog: |
   # Revision history for mcp-server
 
-  ## 0.1.0.21 - ???
+  ## 0.2.0.1 - 2026-08-01
+
+  (Supersedes 0.2.0.0, which is **deprecated on Hackage**: it was published
+  hours before this line landed and was never adopted, so rather than
+  burning a major version on a release nobody used, 0.2.0.1 replaces it —
+  including changes that would ordinarily demand a major bump. Anyone
+  explicitly pinning the deprecated 0.2.0.0 should move here. The unreleased
+  0.2.1.0 line below is folded in as well.)
+
+  * Request cancellation (ADR 0008): in-flight requests can now actually be
+    interrupted, per the spec's "stop work as soon as practical, send nothing
+    further for that request". On stdio every request runs in its own task
+    and `notifications/cancelled` cancels the referenced one (unknown or
+    completed ids are ignored); on HTTP, closing an SSE response stream
+    cancels the running handler (detected within one keep-alive interval,
+    now 5s). Single-JSON HTTP responses only detect a disconnect at the
+    final write, so clients wanting cancellable calls should opt into
+    streaming via a `progressToken`. Cancellation is delivered as an
+    asynchronous exception, so handlers acquiring resources should use
+    `bracket` — documented in the README. BREAKING (behavioral): stdio
+    requests are now served concurrently rather than strictly
+    sequentially — handlers touching shared mutable state must
+    synchronize, as was already required with the HTTP transport. New
+    dependency: `async`.
+  * Progress notifications and per-request SSE (ADR 0007): handlers can
+    call `reportProgress` and `logToClient` on the `ClientContext` — both
+    safe unconditionally. `reportProgress` emits `notifications/progress`
+    only when the request carried a `progressToken`; `logToClient` emits
+    `notifications/message` only when the request declared
+    `io.modelcontextprotocol/logLevel` (per spec MUST NOT otherwise),
+    filtered to the declared threshold (new `LogLevel` type, RFC 5424
+    ordering). On stdio the notifications interleave before the response;
+    on HTTP a request that opted in is answered with an SSE response
+    stream (notifications, then the final response), while other requests
+    keep the single-JSON response. BREAKING: `ClientContext` carries the
+    two actions and loses its `Show`/`Eq` instances;
+    `MCP.Server.Handlers.handleMcpMessage` takes the transport's
+    notification sink.
+  * Definition metadata (ADR 0006):
+      * `ToolAnnotations` — `readOnlyHint`/`destructiveHint`/`idempotentHint`/
+        `openWorldHint` behavioral hints (2025-03-26+) plus a title, all unset
+        by default (`defaultToolAnnotations`), carried on `ToolDefinition` and
+        driving client permission UX.
+      * `Icon` lists (2025-11-25+) on tool, prompt, resource and
+        resource-template definitions.
+      * Content `Annotations` (`audience`/`priority`/`lastModified`,
+        2025-03-26+) attached via the new `ContentAnnotated` wrapper, whose
+        annotations merge into the inner block's JSON (and parse back out).
+  * New `WithOptions` derivations for all five derive families, taking
+    per-constructor `DefinitionOptions` (description, title, icons, tool
+    annotations, and **constructor-scoped field descriptions** — two
+    constructors can now describe a same-named field differently, fixing the
+    global-namespace wart of the flat description list, which remains
+    supported unchanged).
+  * BREAKING: `ToolDefinition`, `PromptDefinition`, `ResourceDefinition` and
+    `ResourceTemplateDefinition` gain fields, and `Content` gains the
+    `ContentAnnotated` constructor. New smart constructors
+    (`mkToolDefinition`, `mkPromptDefinition`, `mkResourceDefinition`,
+    `mkResourceTemplateDefinition`) build definitions from required fields
+    only — construct through them and record-update, so future optional
+    fields stop breaking your code. All new JSON fields are omitted when
+    unset, so wire output for existing servers is unchanged.
+
+  * Derived output schemas and structured content (ADR 0005): the new
+    `deriveToolHandlerWithOutput` (and `...WithOutputDescription`) take a
+    result record type, derive the tools' `outputSchema` from it (same field
+    rules as input derivation: primitives, `Maybe`, lists, all-nullary
+    enums, nested records), and serialize the handler's typed values into
+    `structuredContent` — the generated serializer mirrors the generated
+    schema, so the two cannot drift. Handlers return the new
+    `ToolOutput` type: `ToolOutput` (structured value; the JSON is also
+    returned as a text content block per the spec's recommendation),
+    `ToolOutputWith` (custom content blocks), `ToolOutputError` (isError),
+    or `ToolOutputRaw` (plain `ToolResult` escape hatch). Existing
+    `ToToolResult` handlers are untouched. The conformance corpus gains an
+    `echo_structured` reference tool with cases in both eras.
+
+  * The HTTP transport's WAI application is now exported (`mcpApplication`,
+    re-exported from `MCP.Server`), so the MCP endpoint can be embedded into
+    an existing WAI stack — your own Warp settings, TLS, middleware or router
+    — instead of `transportRunHttp` running its own server. `httpPort`/
+    `httpHost` are ignored when embedding; everything else (endpoint path,
+    Origin validation, bearer auth, `subscriptions/listen` streaming) applies
+    as usual.
+  * The golden wire fixtures are now a self-describing, API-agnostic
+    conformance corpus: each case under `test/golden/` is a
+    `.request.json`/`.response.json` pair on disk, enumerated by
+    `manifest.json`, with the reference server documented in
+    `test/golden/README.md`. Other MCP implementations can replay the
+    requests and diff the responses without touching any Haskell; the
+    fixtures themselves are unchanged.
+
+  ## 0.2.0.0 - 2026-07-31
+
+  A major overhaul of the handler API. The headline changes: the handler
+  boundary is no longer stringly typed, and the server is dual-era — it speaks
+  both the legacy initialize-handshake revisions and the stateless
+  `2026-07-28` revision.
+
+  ### Dual-era protocol support (2026-07-28)
+
+  * Requests that declare a protocol revision in their params `_meta`
+    (`io.modelcontextprotocol/protocolVersion`) are served statelessly with
+    the modern result envelope: `resultType: "complete"`, the server identity
+    in result `_meta`, and — on `tools/list`, `prompts/list`,
+    `resources/list`, `resources/read` and `server/discover` — the required
+    `ttlMs`/`cacheScope` fields (configurable via `CacheHints` on the
+    transport configs; default: no caching, private). Requests without modern
+    `_meta` are served byte-identically to before under the revision
+    negotiated by `initialize`.
+  * New `server/discover` method (mandatory in 2026-07-28, and the
+    backwards-compatibility probe): supported revisions of both eras,
+    handler-gated capabilities, server identity and instructions.
+  * Declaring an unsupported revision returns
+    `UnsupportedProtocolVersionError` (`-32022`) listing the supported set.
+  * A legacy client proposing `2026-07-28` via `initialize` negotiates down
+    to `2025-11-25`: an initializing client is legacy by definition.
+  * Handlers can read the declared revision, client info and client
+    capabilities from the `ClientContext`
+    (`clientProtocolVersion`/`clientInfo`/`clientCapabilities`); the new
+    `anonymousContext` builds an empty context.
+  * HTTP: modern requests get the 2026-07-28 request-metadata validation —
+    the `MCP-Protocol-Version` header must match the body's declared
+    revision, `Mcp-Method` must match the body method, and `Mcp-Name` must
+    match `params.name`/`params.uri` for `tools/call`/`resources/read`/
+    `prompts/get` (with `=?base64?…?=` sentinel decoding); violations return
+    `400` with `HeaderMismatch` (`-32020`). Unknown methods return HTTP 404
+    and unsupported revisions HTTP 400, so era-probing clients can
+    distinguish them. Legacy requests keep the relaxed pre-2026 rules.
+
+  ### Change notifications and subscriptions/listen
+
+  * New `MCP.Server.Notifications`: create an `McpNotifier` with
+    `newMcpNotifier`, hand its `NotificationSource` to a transport
+    (`stdioNotifications`/`httpNotifications`), and call
+    `notifyToolsListChanged`/`notifyPromptsListChanged`/
+    `notifyResourcesListChanged`/`notifyResourceUpdated` when things change.
+  * `subscriptions/listen` (2026-07-28) is served on both transports: the
+    mandatory acknowledgment comes first with the honored filter, every
+    message is tagged with the subscription id, only opted-into types are
+    delivered, and streams end gracefully (closure responses at stdio EOF;
+    closing the SSE stream cancels over HTTP, `notifications/cancelled` over
+    stdio). HTTP streams send periodic keep-alive comments and
+    `X-Accel-Buffering: no`.
+  * Legacy stdio clients receive spontaneous untagged notifications after
+    `initialize`. Capabilities are era- and transport-aware: `listChanged` is
+    advertised only where delivery is possible (stdio legacy push, or
+    modern `subscriptions/listen`), and `subscribe` only to modern clients.
+  * `defaultHttpConfig` is now re-exported from `MCP.Server`.
+
+  ### Resource templates and completions
+
+  * Record constructors of a resource type now derive as resource /templates/
+    (`UserProfile { userId :: Text }` →
+    `resource://user_profile/{userId}`): the derived read handler matches
+    template URIs, percent-decodes the path segments, and parses them into
+    the constructor's (typed) fields. `deriveResourceTemplates` derives the
+    `resources/templates/list` handler advertising them; the method carries
+    the modern cacheability envelope.
+  * New `completions` handler slot serving `completion/complete` for prompt
+    arguments and resource-template parameters (`CompletionRef`,
+    `CompletionResult`, capped at 100 values per the spec). The
+    `completions` capability is advertised automatically.
+  * `McpServerHandlers` gains `resourceTemplates` and `completions` fields;
+    the new `noHandlers` value lets you construct handler sets by record
+    update so future fields don't break your code.
+
+  ### Typed tool arguments and results (BREAKING)
+
+  * Tool arguments arrive as full JSON values (`Map Text Value`). The Template
+    Haskell derivation decodes records recursively and now supports **list
+    fields**, **enumeration fields** (all-nullary data types, wired as string
+    enums), and **nested record fields** in addition to the primitives.
+    Primitive parsing is lenient: native JSON types or their string
+    representations are both accepted (many clients send numbers/booleans as
+    strings). Prompt arguments remain string-valued per the MCP specification.
+  * `inputSchema` is generated as a real JSON Schema (`Schema`/`SchemaType`
+    ADT with `enum`, `items` and nested `object`s), replacing the flat
+    `InputSchemaDefinition*` types that silently typed every non-primitive
+    field as a string.
+  * Tool handlers produce a `ToolResult`: multiple content blocks,
+    `structuredContent`, `_meta`, and `isError`. Tool *execution* failures
+    should be reported via `isError` (see `toolError`) so the model can see
+    them — per spec — instead of surfacing as JSON-RPC protocol errors.
+    The `ToToolResult` class keeps simple handlers simple: returning
+    `Content` or `Text` still works unchanged.
+  * Prompt handlers produce a `PromptResult` (optional description plus a
+    multi-message conversation with user/assistant roles) via the analogous
+    `ToPromptResult` class.
+  * `Content` gains `audio` and `resource_link` variants; embedded resources
+    now carry their full contents as the spec requires.
+  * `ToolDefinition` gains `outputSchema`; `tools/call` responses carry
+    `structuredContent`.
+  * Handler types are fixed to `IO` — the monad parameter was unusable
+    through the public API (both transports required `IO`).
+
+  ### Transport fixes
+
+  * stdio: a blank line on stdin no longer terminates the server, EOF shuts
+    down cleanly instead of crashing, and malformed input is answered with
+    proper JSON-RPC error responses (`-32700`/`-32600`, `id: null`).
+  * stdio: raw request bodies are no longer logged to stderr by default
+    (tool arguments may carry sensitive data) — only message summaries.
+    `runMcpServerStdioWithConfig` with `stdioVerbose = True` restores full
+    body logging.
+  * JSON-RPC: messages are classified by shape (method/id presence) instead
+    of parse-fallthrough, so a request with a malformed `id` is answered
+    with an error rather than silently dropped as a notification. Request
+    ids must be integral.
+  * HTTP: new `httpAllowedOrigins` policy on `HttpConfig` (Origin
+    validation / DNS-rebinding protection, a spec MUST); accepted
+    notifications return `202` with no body; malformed bodies get JSON-RPC
+    error responses; the `Access-Control-Allow-Origin` header is set
+    consistently on every response and echoes the validated origin (with
+    `Vary: Origin`) when a policy is configured.
+  * HTTP (BREAKING): the non-spec GET "discovery" endpoint is removed — the
+    MCP endpoint now answers GET with `405 Method Not Allowed`, matching the
+    spec (no revision defines a GET discovery response, and `2026-07-28`
+    requires 405 here).
+  * Integer tool arguments bound the scientific-notation exponent (1024, the
+    same bound aeson uses) so a tiny payload like `1e1000000000` cannot force
+    allocation of a gigabyte-sized `Integer`.
+
+  ## 0.1.0.21 - 2026-07-31
 
   * **BREAKING**: every handler (prompt/resource/tool; list and get/read/call)
     now receives a `ClientContext` as its first argument, so a server can behave
@@ -62,7 +290,7 @@ changelog: |
   * `http-simple-example` is now built with `-threaded`, which Warp requires;
     previously every request crashed with a `TimerManager` error.
 
-  ## 0.1.0.20 - ???
+  ## 0.1.0.20 - 2026-07-31
 
   * Fix protocol version negotiation: echo back any compatible revision the client
     proposes (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) instead of
@@ -162,7 +390,7 @@ description: |-
 
   ## Features
 
-  - **Complete MCP Implementation**: Negotiates MCP protocol revisions `2024-11-05` through `2025-11-25` (the shared wire format for tool/resource/prompt operations)
+  - **Complete MCP Implementation**: Dual-era server — legacy revisions `2024-11-05` through `2025-11-25` via the `initialize` handshake, and the stateless `2026-07-28` revision via per-request `_meta` (including `server/discover`, `resultType`, and cacheability fields)
   - **Type-Safe API**: Leverage Haskell's type system for robust MCP servers
   - **Multiple Abstractions**: Both low-level fine-grained control and high-level derived interfaces
   - **Template Haskell Support**: Automatic handler derivation from data types
@@ -172,7 +400,12 @@ description: |-
 
   - ✅ **Prompts**: User-controlled prompt templates with arguments
   - ✅ **Resources**: Application-controlled readable resources
+  - ✅ **Resource Templates**: Parameterized resources via URI templates
   - ✅ **Tools**: Model-controlled callable functions
+  - ✅ **Completions**: Argument autocompletion for prompts and templates
+  - ✅ **Change Notifications**: `listChanged`/resource-update pushes, via `subscriptions/listen` (2026-07-28) or legacy stdio delivery
+  - ✅ **Progress & Logging**: `notifications/progress` and `notifications/message` scoped to the requesting client
+  - ✅ **Cancellation**: `notifications/cancelled` (stdio) and stream closure (HTTP) interrupt in-flight handlers
   - ✅ **Initialization Flow**: Complete protocol lifecycle with version negotiation
   - ✅ **Error Handling**: Comprehensive error types and JSON-RPC error responses
 
@@ -191,6 +424,7 @@ description: |-
   {-# LANGUAGE OverloadedStrings #-}
   {-# LANGUAGE TemplateHaskell #-}
 
+  import Data.Text (Text)
   import MCP.Server
   import MCP.Server.Derive
 
@@ -213,6 +447,11 @@ description: |-
   handleTool _ (Search query) = pure $ ContentText $ "Search results for " <> query
   handleTool _ (Order item) = pure $ ContentText $ "Ordered " <> item
 
+  -- Template Haskell staging: this empty splice ends the declaration group,
+  -- so the derive splices below can see the types above. (Alternatively,
+  -- declare the types in a separate module, as the examples/ do.)
+  $(pure [])
+
   -- Derive handlers automatically
   main :: IO ()
   main = runMcpServerStdio serverInfo handlers
@@ -222,7 +461,10 @@ description: |-
         , serverVersion = "1.0.0"
         , serverInstructions = "A sample MCP server"
         }
-      handlers = McpServerHandlers
+      -- Start from 'noHandlers' and record-update the features you provide:
+      -- constructing McpServerHandlers directly breaks (at runtime!) when a
+      -- field is missed, and the library grows new handler slots over time.
+      handlers = noHandlers
         { prompts = Just $(derivePromptHandler ''MyPrompt 'handlePrompt)
         , resources = Just $(deriveResourceHandler ''MyResource 'handleResource)
         , tools = Just $(deriveToolHandler ''MyTool 'handleTool)
@@ -240,18 +482,77 @@ description: |-
   -- Becomes: "get_value", "set_value", "search_items"
   ```
 
-  #### Automatic Type Conversion
+  #### Typed Tool Arguments
 
-  The derivation system automatically converts Text arguments to appropriate Haskell types:
+  Tool arguments are decoded from full JSON values, and the generated
+  `inputSchema` mirrors the field types:
 
   ```haskell
-  data MyTool = Calculate { number :: Int, factor :: Double, enabled :: Bool }
-  -- Text "42" -> Int 42
-  -- Text "3.14" -> Double 3.14
-  -- Text "true" -> Bool True
+  data Color = Red | Green | Blue          -- all-nullary type: string enum
+  data Filters = Filters                   -- record: nested JSON object
+    { tags     :: [Text]                   -- list: JSON array
+    , maxCount :: Maybe Int                -- Maybe: optional field
+    }
+
+  data MyTool = Search
+    { query   :: Text
+    , color   :: Color                     -- "red" | "green" | "blue"
+    , filters :: Filters                   -- { "tags": [...], "maxCount": ... }
+    , limit   :: Maybe Int
+    }
   ```
 
-  Supported conversions: `Int`, `Integer`, `Double`, `Float`, `Bool`, and `Text` (no conversion).
+  Primitive fields (`Int`, `Integer`, `Double`, `Float`, `Bool`, `Text`) are
+  parsed leniently: the native JSON type and its string representation are
+  both accepted (`42` or `"42"`), since many clients send numbers and
+  booleans as strings.
+
+  Prompt arguments are string-valued per the MCP specification, so prompt
+  records are limited to primitive and enumeration fields.
+
+  #### Tool Results
+
+  Simple handlers can return plain `Content` (or `Text`). Return a full
+  `ToolResult` for multiple content blocks, structured content, or to report
+  execution failures with `isError` — which the spec prefers over protocol
+  errors, so the model can see what went wrong and react:
+
+  ```haskell
+  handleTool :: ClientContext -> MyTool -> IO ToolResult
+  handleTool _ (Search q _ _ _)
+    | T.null q  = pure $ toolError "query must not be empty"
+    | otherwise = pure $ toolResult [ContentText ("Results for " <> q)]
+  ```
+
+  Prompt handlers can likewise return a `PromptResult` with a description and
+  a multi-message conversation (user and assistant roles).
+
+  #### Derived Output Schemas
+
+  Tools can be typed on the way out too: give the derivation a result record
+  and it derives the tool's `outputSchema` (same field rules as inputs —
+  primitives, `Maybe`, lists, enums, nested records) and serializes your typed
+  values into `structuredContent`, guaranteed to match the schema. Per the
+  spec's recommendation, the JSON is also returned as a text content block for
+  clients that predate structured output:
+
+  ```haskell
+  data WeatherReport = WeatherReport
+      { temperature :: Int
+      , sky         :: Sky          -- enum
+      , alerts      :: [Text]
+      , humidity    :: Maybe Int    -- optional, omitted when Nothing
+      }
+
+  handleTool :: ClientContext -> MyTool -> IO (ToolOutput WeatherReport)
+  handleTool _ (GetWeather city) = pure $ ToolOutput (lookupWeather city)
+  handleTool _ (BrokenTool _)    = pure $ ToolOutputError "sensor offline"
+
+  tools = Just $(deriveToolHandlerWithOutput ''MyTool 'handleTool ''WeatherReport)
+  ```
+
+  `ToolOutputWith` supplies custom content blocks alongside the structured
+  value; `ToolOutputRaw` is the escape hatch back to a plain `ToolResult`.
 
   #### Nested Parameter Types
 
@@ -280,6 +581,44 @@ description: |-
   -- Generates: "resource://menu", "resource://specials"
   ```
 
+  #### Resource Templates
+
+  Record constructors become parameterized resource *templates* (RFC 6570 URI
+  templates), with one percent-decoded path segment per field:
+
+  ```haskell
+  data MyResource
+      = Menu                                            -- static: resource://menu
+      | ProductDetail { sku :: Text }                   -- resource://product_detail/{sku}
+      | OrderItem { orderId :: Int, itemName :: Text }  -- resource://order_item/{orderId}/{itemName}
+  ```
+
+  The read handler derived by `deriveResourceHandler` matches template URIs
+  (e.g. `resource://product_detail/ABC123`) and decodes the segments into the
+  constructor's fields — typed fields like `Int` are parsed, and a failing
+  segment yields an invalid-params error. Advertise the templates via
+  `resources/templates/list` with:
+
+  ```haskell
+  resourceTemplates = Just $(deriveResourceTemplates ''MyResource)
+  ```
+
+  #### Argument Completion
+
+  Provide a `completions` handler to serve `completion/complete` for prompt
+  arguments and resource-template parameters:
+
+  ```haskell
+  handleComplete :: ClientContext -> CompletionRef -> ArgumentName -> Text -> Map Text Text -> IO (Either Error CompletionResult)
+  handleComplete _ (CompletionRefPrompt "recipe") "idea" partial _ =
+      pure $ Right $ completionResult $
+          filter (T.isPrefixOf partial) ["pancakes", "pasta", "pizza"]
+  handleComplete _ _ _ _ _ = pure $ Right $ completionResult []
+  ```
+
+  The `completions` capability is advertised automatically when the handler is
+  present.
+
   #### Unsupported Patterns
 
   We do not support positional (unnamed) parameters:
@@ -292,6 +631,33 @@ description: |-
   ```
 
   All parameter types must ultimately resolve to records with named fields to generate proper MCP schemas.
+
+  #### Tool Annotations, Icons and Titles
+
+  The `WithOptions` derivation variants take per-constructor
+  `DefinitionOptions` — description, title, icons, behavioral annotations
+  (which drive client permission UX, e.g. auto-approving read-only tools),
+  and argument descriptions scoped to the constructor:
+
+  ```haskell
+  tools = Just $(deriveToolHandlerWithOptions ''MyTool 'handleTool
+    [ ("Search", defaultDefinitionOptions
+        { optDescription = Just "Search the catalog"
+        , optToolAnnotations = Just defaultToolAnnotations
+            { toolReadOnlyHint = Just True, toolIdempotentHint = Just True }
+        , optIcons = [icon "https://example.com/search.png"]
+        , optFieldDescriptions = [("q", "Search terms")]
+        })
+    ])
+  ```
+
+  Content blocks can carry annotations too (`audience`, `priority`,
+  `lastModified`), attached with the `ContentAnnotated` wrapper:
+
+  ```haskell
+  ContentAnnotated defaultAnnotations { annotationsPriority = Just 0.9 }
+                   (ContentText "important result")
+  ```
 
   ## Custom Descriptions
 
@@ -308,7 +674,7 @@ description: |-
     ]
 
   -- Use in derivation
-  handlers = McpServerHandlers
+  handlers = noHandlers
     { prompts = Just $(derivePromptHandlerWithDescription ''MyPrompt 'handlePrompt descriptions)
     , tools = Just $(deriveToolHandlerWithDescription ''MyTool 'handleTool descriptions)
     , resources = Just $(deriveResourceHandlerWithDescription ''MyResource 'handleResource descriptions)
@@ -323,22 +689,112 @@ description: |-
   import MCP.Server
 
   -- Manual handler implementation. Every handler receives the per-request
-  -- 'ClientContext' as its first argument.
+  -- 'ClientContext' as its first argument. Prompt arguments are string-valued
+  -- (Map Text Text); tool arguments are full JSON values (Map Text Value).
   promptListHandler :: ClientContext -> IO [PromptDefinition]
-  promptGetHandler :: ClientContext -> PromptName -> [(ArgumentName, ArgumentValue)] -> IO (Either Error Content)
+  promptGetHandler :: ClientContext -> PromptName -> Map Text Text -> IO (Either Error PromptResult)
   -- ... implement your custom logic
 
   main :: IO ()
   main = runMcpServerStdio serverInfo handlers
     where
-      handlers = McpServerHandlers
+      handlers = noHandlers
         { prompts = Just (promptListHandler, promptGetHandler)
-        , resources = Nothing  -- Not supported
-        , tools = Nothing      -- Not supported
         }
   ```
 
-  ## HTTP Transport (NEW!)
+  ## Progress and Per-Request Logging
+
+  Handlers can report progress on long-running work and send log messages to
+  the calling client through actions on the `ClientContext`:
+
+  ```haskell
+  handleTool ctx (ImportData file) = do
+      reportProgress ctx 0.0 (Just 1.0) (Just "starting import")
+      logToClient ctx LogInfo (String "opening file")
+      ...
+      reportProgress ctx 1.0 (Just 1.0) Nothing
+  ```
+
+  Both are safe to call unconditionally:
+
+  - `reportProgress` emits `notifications/progress` only when the request
+    carried a `progressToken` (progress values must increase call over call).
+  - `logToClient` emits `notifications/message` only when the request declared
+    `io.modelcontextprotocol/logLevel` — the spec forbids it otherwise — and
+    drops messages below the declared level.
+
+  Delivery is transport-appropriate: on stdio the notifications interleave
+  before the response; on HTTP, a request that opted in is answered with an
+  SSE response stream carrying the notifications followed by the final
+  response (requests that didn't opt in keep the single-JSON response).
+
+  ## Cancellation
+
+  In-flight requests can be cancelled, and per the spec the server then stops
+  work as soon as practical and sends nothing further for that request:
+
+  - **stdio**: each request runs in its own task; a `notifications/cancelled`
+    naming its id cancels the task (cancellations for unknown or completed ids
+    are ignored, as required).
+  - **HTTP**: closing the response stream is the cancellation signal. For SSE
+    responses the handler is cancelled as soon as the disconnect is detected
+    (within one keep-alive interval). For single-JSON responses a disconnect
+    is only detected at the final write — the handler runs to completion
+    first — so mid-handler cancellation applies to streaming requests:
+    clients wanting cancellable calls should opt into streaming via a
+    `progressToken`.
+
+  A consequence of cancellable requests: **requests are now served
+  concurrently on both transports** (stdio previously processed them strictly
+  sequentially). Handlers touching shared mutable state must synchronize
+  (`MVar`, `STM`, ...) — as was already required for HTTP servers.
+
+  Cancellation is delivered to handler code as an asynchronous exception (the
+  standard GHC mechanism, as used by `timeout` and `cancel`). Handlers are
+  interruptible wherever they block in `IO`; a handler that acquires resources
+  must release them with `bracket`/`finally` so cancellation cannot leak them:
+
+  ```haskell
+  handleTool ctx (ImportData file) =
+      bracket (openFile file ReadMode) hClose $ \h -> do
+          ...
+  ```
+
+  Handlers that must not be interrupted mid-operation can shield critical
+  sections with `mask`, but should keep them short — cancellation waits for
+  them.
+
+  ## Change Notifications
+
+  Servers whose tool/prompt/resource lists change at runtime can push change
+  notifications. Create a notifier, hand its source to the transport, and call
+  the notifier when things change:
+
+  ```haskell
+  main :: IO ()
+  main = do
+      (notifier, source) <- newMcpNotifier
+      _ <- forkIO $ appLogic notifier   -- calls notifyToolsListChanged etc.
+      runMcpServerStdioWithConfig
+          defaultStdioConfig { stdioNotifications = Just source }
+          serverInfo handlers
+  ```
+
+  Delivery is transport- and era-aware, and the `listChanged`/`subscribe`
+  capabilities are advertised automatically where delivery is actually
+  possible:
+
+  - **Modern clients (2026-07-28)** open a `subscriptions/listen` stream (a
+    long-lived SSE response over HTTP) and receive only the notification types
+    they opted into, tagged with their subscription id — including
+    `notifications/resources/updated` for watched URIs.
+  - **Legacy stdio clients** receive spontaneous untagged notifications once
+    their `notifications/initialized` arrives (the lifecycle's ready signal).
+  - **Legacy HTTP clients** have no delivery channel (this library does not
+    offer the deprecated GET SSE stream), so nothing is advertised to them.
+
+  ## HTTP Transport
 
   The library supports the MCP Streamable HTTP transport. Compile your
   executable with `ghc-options: -threaded` — Warp requires the threaded runtime:
@@ -352,12 +808,15 @@ description: |-
   -- Custom configuration
   main = runMcpServerHttpWithConfig customConfig serverInfo handlers
     where
-      customConfig = HttpConfig
+      customConfig = defaultHttpConfig
         { httpPort = 8080
         , httpHost = "0.0.0.0"
         , httpEndpoint = "/api/mcp"
         , httpVerbose = True     -- Enable detailed logging
-        , httpAuthorize = Nothing -- No authentication (see below)
+        , httpAllowedOrigins = Just ["https://app.example.com"]
+            -- Origin validation (DNS-rebinding protection): requests with an
+            -- Origin header outside this list are rejected with 403. Nothing
+            -- disables the check (only for servers unreachable from browsers).
         }
   ```
 
@@ -379,17 +838,64 @@ description: |-
 
   **Features:**
   - CORS enabled for web clients
-  - GET `/mcp` for server discovery
-  - POST `/mcp` for JSON-RPC messages
-  - Protocol-version negotiation across supported revisions (`2024-11-05`–`2025-11-25`)
+  - POST `/mcp` for JSON-RPC messages (GET returns 405 — server-to-client
+    notifications flow over the `subscriptions/listen` POST response stream,
+    not a standalone GET stream)
+  - Dual-era protocol support: legacy revisions (`2024-11-05`–`2025-11-25`)
+    negotiate via `initialize`; the stateless `2026-07-28` revision declares its
+    version per request in `_meta`, with full request-metadata header
+    validation (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` including the
+    base64 sentinel encoding)
+  - Change notifications as long-lived SSE streams via `httpNotifications`
+    (see [Change Notifications](#change-notifications))
   - Optional pluggable bearer-token authentication via `httpAuthorize`
+  - Origin validation via `httpAllowedOrigins`
+  - Cacheability hints for modern list/read results via `httpCacheHints`
+
+  ### Embedding in an existing WAI stack
+
+  `runMcpServerHttp` starts its own Warp server, but the MCP endpoint is a
+  plain [WAI](https://hackage.haskell.org/package/wai) application underneath,
+  and it is exported — so you can mount it inside whatever you already run
+  (your own Warp settings, TLS, middleware, or a larger router):
+
+  ```haskell
+  import MCP.Server (mcpApplication, defaultHttpConfig)
+  import qualified Network.Wai.Handler.Warp as Warp
+
+  main :: IO ()
+  main = Warp.runSettings mySettings $ \req respond ->
+      -- route /mcp to the MCP endpoint, everything else to your app
+      mcpApplication defaultHttpConfig serverInfo handlers req respond
+  ```
+
+  `httpPort`/`httpHost` are ignored when embedding (they only configure the
+  server `runMcpServerHttp` starts); the endpoint path, Origin validation,
+  bearer auth and `subscriptions/listen` streaming all apply as usual.
+
+  ## Conformance corpus
+
+  The wire-format fixtures under
+  [`test/golden/`](test/golden/README.md) double as an **API-agnostic MCP
+  conformance corpus**: each case is a raw JSON-RPC `.request.json` and the
+  exact `.response.json` a reference server answers, per protocol era
+  (legacy `initialize`-negotiated revisions and the stateless `2026-07-28`
+  revision), enumerated by a `manifest.json`. Nothing in the corpus is
+  Haskell-specific — any MCP server implementation that reproduces the small
+  reference server described in the corpus README can replay the requests and
+  diff the responses. Contributions of new cases are welcome.
+
+  ## Roadmap
+
+  Design decisions and planned work live as ADRs under
+  [`specs/`](specs/README.md), ordered by [`specs/ROADMAP.md`](specs/ROADMAP.md).
 
   ## Examples
 
   The library includes several examples:
 
   - **`examples/Simple/`**: Basic key-value store using Template Haskell derivation (STDIO)
-  - **`examples/Complete/`**: Full-featured example with prompts, resources, and tools (STDIO)
+  - **`examples/Complete/`**: Full-featured example with prompts, resources, a resource template, tools (enum/nested/list arguments, `isError`), and completions (STDIO)
   - **`examples/HttpSimple/`**: HTTP version of the simple key-value store
 
   ## Docker Usage
@@ -424,7 +930,8 @@ description: |-
 
   ## Documentation
 
-  - [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25/)
+  - [MCP Specification (2026-07-28)](https://modelcontextprotocol.io/specification/2026-07-28/)
+  - [MCP Specification (2025-11-25, newest legacy revision)](https://modelcontextprotocol.io/specification/2025-11-25/)
   - [API Documentation](https://hackage.haskell.org/package/mcp-server)
   - [Examples](examples/)
 
@@ -440,18 +947,23 @@ description: |-
 
   BSD-3-Clause
 description-type: markdown
-hash: 518f56e52ead0dc8288f6a00087edfb72e23d553fb00e68ec6478baf03b94274
+hash: 7b09ac83c868f7a5b453aefd68c769e9cac5c5b60a0bac3cc418df1ba9587945
 homepage: https://github.com/drshade/haskell-mcp-server
-latest: 0.1.0.21
+latest: 0.2.0.1
 license-name: BSD-3-Clause
 maintainer: drshade@gmail.com
 synopsis: Library for building Model Context Protocol (MCP) servers
 test-bench-deps:
   QuickCheck: '>=0'
   aeson: '>=0'
+  async: '>=0'
   base: '>=0'
   bytestring: '>=0'
+  containers: '>=0'
+  directory: '>=0'
   hspec: '>=0'
   mcp-server: '>=0'
   network-uri: '>=0'
+  stm: '>=0'
   text: '>=0'
+  wai: '>=0'
