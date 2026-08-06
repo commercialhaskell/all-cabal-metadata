@@ -8,6 +8,7 @@ all-versions:
 - 0.8.0.0
 - 0.9.0.0
 - 0.10.0.0
+- 0.11.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.2.1 && <2.3'
@@ -16,8 +17,8 @@ basic-deps:
   containers: '>=0.6 && <0.8'
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
-  keiki: '>=0.8 && <0.9'
-  keiro-core: ^>=0.10.0.0
+  keiki: '>=0.9 && <0.10'
+  keiro-core: ^>=0.11.0.0
   keiro-dsl: '>=0'
   megaparsec: '>=9.6 && <9.9'
   mmzk-typeid: '>=0.7 && <0.8'
@@ -34,7 +35,287 @@ changelog: |
   [Keep a Changelog](https://keepachangelog.com/), and the package follows the
   [Haskell Package Versioning Policy](https://pvp.haskell.org/).
 
-  ## [Unreleased]
+  ## [0.11.0.0] - 2026-08-05
+
+  ### Breaking Changes
+
+  - `DiagnosticCode` gains `DecodeBodyPostureUnsupported`,
+    `DispatchOnAppendedUnsupported`, `TimerNotMineUnsupported`, and
+    `IntakeBindHeaderUnknown`; exhaustive matches must be extended. Each closes a
+    spelling the grammar accepted that no runtime implements, and each warns on
+    released languages below 4 and errors from language 4 on. `intake … body
+    lenient` is refused because generated codecs decode a body strictly;
+    `on-appended` other than `AckOk` is refused on both process and router
+    dispatch rows because a successful append is always acked; `not-mine Fired` is
+    refused because the timer worker marks a timer `Fired` only when the fire
+    action returns an appended event id; and an intake `bind … from header "x"`
+    naming a header outside keiro's canonical envelope set is refused because the
+    Kafka inbox reads a fixed header set and cannot be remapped. The spelling that
+    matches the runtime stays accepted and silent in every case.
+  - A process `dispatch-id` line is now checked as strictly as a router's. It must
+    read exactly `strategy=uuidv5 from=(name, correlationId, sourceEventId,
+    emitIndex)` — the tuple `Keiro.ProcessManager` actually derives from — where
+    previously any strategy identifier and any tuple parsed and were discarded.
+    Routers keep their own `(name, key, sourceEventId, targetStreamName,
+    occurrence)`. A process spec that wrote anything else is now a parse error.
+  - `check`'s warning policy now covers structural coverage. When an invocation
+    supplies `--coverage-report`, its findings are ordinary diagnostics of this
+    run: `--deny-warnings` and `--deny CoverageOpaqueSurface` escalate them, they
+    appear in the `keiro-dsl/check-report/1` diagnostics array as line-0 entries,
+    and the report's `ok` therefore accounts for them. Previously
+    `check spec --coverage-report r --deny-warnings` printed coverage warnings and
+    exited 0, so a CI job that believed it had a no-warning gate did not have one.
+    Coverage output is now emitted with the other diagnostics, before `--emit` and
+    `--explain-bindings` output rather than after.
+  - `check --deny CODE` now refuses a code `check` cannot emit instead of
+    accepting a denial that can never match. Cross-revision codes (for example
+    `EvtFieldWireKeyChanged`, `WorkflowShapeChanged`) are a `diff` concern and are
+    rejected outright; structural-coverage codes are rejected unless the same
+    invocation passes `--coverage-report`; `--deny CoverageOpaqueGateExceeded` is
+    rejected in every invocation, because that code is the error `--fail-on-opaque`
+    itself raises and never a deniable warning — pass the flag instead. Any CI
+    file that named such a code was not gating on it and now fails loudly.
+    `Keiro.Dsl.Validate` exports the underlying `DiagnosticOrigin` and
+    `diagnosticOrigin` registry.
+  - `keiro-dsl new intake` no longer spells the unenforced `required cross-check
+    body` flags on its bind row, so the intake skeleton passes the documented
+    `check --min-language 4 --deny-warnings` CI gate as generated (previously it
+    warned `IntakeBindFlagUnenforced` out of the box). The router and process
+    skeletons keep their idiomatic benign-inversion spellings and therefore gate
+    CI with a selective `--deny` list rather than `--deny-warnings`.
+  - The `keiro-dsl/coverage-report/1` JSON now spells warning severity `"warning"`
+    rather than `"advisory"`, matching `keiro-dsl/check-report/1`. There is one
+    severity vocabulary across keiro-dsl's JSON. Consumers matching the literal
+    string `"advisory"` (available since 0.4.0.0) must be updated.
+  - `DiagnosticCode` loses `EmitDeriveHoleUnrealized` and
+    `WqFieldOptionalUnsupported`, and gains `TimerDecodeStatusUnknown`,
+    `TimerDeadLetterTextInvalid`, and `PgmqFanoutFunctionInvalid`; exhaustive
+    matches must be extended. The code fired unconditionally on every `emit` node because
+    `derive … hole` is mandatory grammar, so it carried no information and made
+    `check --deny-warnings` permanently red for any emit-bearing service. The
+    scaffold report's no-modules line already names each emit node that
+    contributes nothing. `WqFieldOptionalUnsupported` is removed with the model it
+    described: every workqueue payload field is required, because generated
+    decoders read all of them with `o .:`. `WqField` therefore loses `wqfRequired`,
+    the `required` marker is accepted but selects nothing, and adding a payload
+    field is now classified breaking however it is spelled — a job already queued
+    under the old shape does not contain it, which the previous "new optional
+    field is additive" classification denied.
+  - The three surfaces ExecPlan 197 recorded as descriptive-only are now checked
+    against the references they name. A timer's `decode unknown-status` must be a
+    status the timer table stores (`Scheduled`, `Firing`, `Fired`, `Cancelled`,
+    `Dead`); its `dead-letter` reason must not be blank, since it is the text an
+    operator-written worker passes to `Keiro.Timer.deadLetterTimer`; a pgmq
+    `dedup key` must be a generated selector of its source read model, reported
+    with the existing `DispatchReadModelFieldUnknown`; and a pgmq `fanout body`
+    must be spellable as a Haskell value identifier. Emit `source`, `key`, and map
+    discriminant names remain the one documented descriptive-only surface, because
+    no typed source namespace exists to resolve them against.
+  - `WorkspaceScaffoldReport` gains `wsrInertNodes`, and a workspace scaffold now
+    renders the same `no-modules:` line the single-spec report has always
+    rendered. `Keiro.Dsl.ScaffoldRun` exports the shared `inertNodesOf` and
+    `renderInertNodeSection`.
+  - `Keiro.Timer.Schema.TimerStatus` (in **keiro**) additionally derives `Enum` and
+    `Bounded` so consumers can enumerate the lifecycle rather than restate it.
+  - `Keiro.Dsl.ScaffoldRun`'s `Refusal` gains `SidecarMovesAlreadyApplied`;
+    exhaustive matches must be extended. Sidecar renames are applied before the
+    later scaffold gates run, so a refusal after that point used to claim "nothing
+    was written" while the renames were on disk. The note is appended to such a
+    refusal set and states that the renames are idempotent and need no undo.
+  - A legacy `keiro-dsl-conformance-record.txt` anywhere in the output tree is now
+    migrated, not only when the run also plans a conformance package. A spec that
+    stopped generating one previously left the record orphaned and unreadable,
+    because the current reader has no legacy parser. The scan is depth-bounded and
+    skips the `.keiro-dsl-name-migrations` backup root.
+  - `FieldWireKeyInvalid` additionally refuses a wire key with leading or trailing
+    whitespace or a control character, naming the offending codepoint. Aliases stay
+    exempt from a declared `wire … fields=camelCase` convention — preserving a
+    brownfield key is what they are for — so this is structural usability only. A
+    spec that shipped `as "family "` now fails `check`.
+  - `Keiro.Dsl.CheckReport`'s `reportLanguage` is now
+    `Maybe CheckReportLanguage`, and the new `workspaceRefusalReport` builds the
+    report for a workspace refused during composition. Such a report serializes
+    `"language": null` because no service graph was composed.
+  - Scaffold sidecars now use role-bearing names. On disk,
+    `keiro-dsl-scaffold-record.<context>.txt` becomes
+    `keiro-dsl-ledger.context.<context>.txt`, the workspace form becomes
+    `keiro-dsl-ledger.workspace.<service>.txt`, `keiro-dsl-conformance-record.txt`
+    becomes `keiro-dsl-conformance-ledger.txt`, and the generated
+    `keiro-dsl-manifest.<context>.<ext>` / `keiro-dsl-manifest.workspace.*` files
+    become `keiro-dsl-cabal-fragment.context.<context>.<ext>` and
+    `keiro-dsl-cabal-fragment.workspace.<service>.<ext>`. The Cabal fragment — not
+    the former manifest name — is the authoritative generated build inventory.
+    An out tree holding legacy names now **refuses without writing**; review the
+    listed moves and rerun `scaffold --apply-name-migrations` to rename them
+    losslessly. Duplicate old files that cannot be renamed are preserved under
+    `.keiro-dsl-name-migrations/sidecar-v1/`.
+  - `Keiro.Dsl.ScaffoldRun`'s `Refusal` gains `SidecarMigrationRequired` and
+    `SidecarMigrationRefusal`; `ScaffoldReport` gains `reportSidecarMoves` and
+    `WorkspaceScaffoldReport` gains `wsrSidecarMoves`. Exhaustive matches and
+    record constructions must be extended. Two new modules are exposed:
+    `Keiro.Dsl.SidecarNames` (the role-bearing name vocabulary and legacy-name
+    recognition) and `Keiro.Dsl.SidecarMigration` (the planned move set and its
+    apply path).
+  - The renamed conformance ledger also changes format: the whitespace-row
+    `keiro-dsl-conformance-record.txt` becomes the versioned
+    `keiro-dsl conformance ledger v1` with typed JSON file rows. The parser
+    ignores unknown row kinds and unknown JSON keys so future rows decode, while
+    retaining the service-key, malformed-record, unsafe-path, and case-folded
+    duplicate-path refusals. Legacy conformance records are converted **only** by
+    the explicit `--apply-name-migrations` path; no implicit upgrade exists.
+  - `AggregateField` gains `aggregateFieldSelector :: Maybe Name` and
+    `aggregateFieldWireKey :: Maybe Text`, and `ContractField` gains
+    `cfSelector :: Maybe Name`, `cfWireKey :: Maybe Text`, and `cfLoc :: Loc`
+    (both in `Keiro.Dsl.Grammar`). Code that constructs these records positionally
+    or matches them exhaustively must be updated; `Nothing` selector and wire-key
+    values reproduce the pre-alias behavior exactly.
+  - `RouterReadModelUnverified` previously existed as a declared but never-emitted
+    `DiagnosticCode` constructor. It now carries real semantics and is emitted
+    when a router's resolved read model cannot be verified, so a consumer that
+    matched the constructor as unreachable — or a `--deny` list that named it as a
+    no-op — now sees live diagnostics.
+  - Router duplicate-disposition notices moved from `ProcessBenignInversion` to
+    the distinct `RouterBenignInversion`. An adopter CI list that passes
+    `--deny ProcessBenignInversion` silently stops matching router rows; add
+    `--deny RouterBenignInversion` to preserve the previous gate.
+  - Requires `keiki >=0.9 && <0.10`, replacing `>=0.8 && <0.9`. Generated
+    aggregate domains continue to use `deriveAggregateCtorsAll` and
+    `deriveWireCtorsAll`, which now produce Keiki's trusted structural
+    constructor evidence. Consumers must solve with Keiki 0.9 and recompile;
+    generated validation results may change where 0.9 can distinguish structural
+    heads or prove replay candidates disjoint.
+  - Generated module segments, types, constructors, values, selectors, and create-once
+    source paths now use one checked UpperCamelCase/lowerCamelCase policy. Compound
+    logical names such as `service_oncall` therefore move from `Service_oncall` to
+    `ServiceOncall`; consumers must apply the reported source migration and recompile.
+  - `DiagnosticCode` gains `IdentUnsafeNormalization`,
+    `GeneratedOccurrenceReserved`, `GeneratedOccurrenceCollision`, and
+    `GeneratedHaskellNameChanged`. `Refusal` gains
+    `GeneratedNameInvariantViolation`, `NameMigrationRequired`, and
+    `NameMigrationRefusal`. Exhaustive matches must be extended.
+  - `ScaffoldReport` and `WorkspaceScaffoldReport` gain generated-name source-move
+    evidence. `ScaffoldRecord` and `WorkspaceRecord` gain a generated-Haskell naming
+    edition and stable module-role rows; missing additive rows decode as the legacy
+    naming edition.
+  - `DiagnosticCode` gains `FieldWireKeyCollision`, `FieldWireKeyInvalid`, and
+    `EvtFieldWireKeyChanged`. Exhaustive matches must be extended.
+  - `DiagnosticCode` appends `LanguageVersionBelowMinimum` and now derives `Ord`,
+    `Enum`, and `Bounded`. Exhaustive matches must be extended. `check`, `scaffold`,
+    and the working-tree side of `diff` add a stderr language-contract notice for
+    compatibility-only sources, changing exact-stderr consumers.
+  - `DiagnosticCode` appends `AggregateEmpty`, `ContractEmpty`,
+    `GeneratedPathCollision`, `GeneratedImportCycle`, `BehaviorDerivationInvalid`,
+    `ConformanceFactKeyCollision`, and `GeneratedPlanningInvariantViolation`.
+    Exhaustive matches must be extended; specs that scaffold already could not lower
+    now fail earlier during `check`.
+  - `DiagnosticCode` appends thirteen accepted-surface warning and language-4 error
+    codes, including process/router resolution, bounded windows, queue payload types,
+    derived IDs, projection/outbox fields, and the distinct
+    `RouterBenignInversion`; exhaustive matches must be extended. The never-emitted
+    `DuplicateUpcasterSource`, `IdentHaskellKeyword`, `IdentNotConstructorSafe`, and
+    `MappedGuardUnsupported` constructors are removed.
+  - `IdExpr` gains the parsed `ideField`, and `ScaffoldReport` gains
+    `reportInertNodes`; callers constructing or exhaustively matching these exported
+    records must be updated.
+
+  ### New Features
+
+  - Generated-name collision planning now registers the selector generation
+    actually emits — the explicit `haskell` alias when declared, otherwise the raw
+    DSL name — instead of a camelized rendering of it. `{foo_bar, fooBar}` in one
+    record is no longer reported as a collision between two fields that in fact
+    generate distinct selectors, and the diagnostic no longer claims `foo_bar`
+    "normalizes to" `fooBar`, which generation never did. A name that cannot be a
+    Haskell selector is still refused, by the generated-name audit that owns that
+    rule and names the offending declaration.
+  - `check --report-out` creates missing parent directories, and a workspace
+    refused during composition now writes the report a single spec has always
+    written for the equivalent failure. A parse failure and an unreadable or
+    unparseable workspace manifest still write none: they precede any coded
+    diagnostic.
+  - `scaffold --apply-name-migrations` applies an explicitly reviewed legacy-to-current
+    source move, backs up original generated and create-once files, rewrites exact
+    Haskell module references outside comments/literals, journals content digests, and
+    resumes exact interrupted states. Ordinary scaffolding reports the complete plan
+    and writes nothing.
+  - Generated-only source evolution is classified as consumer-build advisory with
+    re-scaffold, recompile, and conformance remedies while wire, replay, SQL, runtime,
+    and persisted identities remain compatible.
+  - Language 4 direct aggregate and integration-contract fields accept independent
+    `haskell <selector>` and `as "<wire-key>"` aliases. Generated records use the
+    selector, codecs/goldens use the wire key, and `fields(Command)` preserves both.
+  - `check --min-language N` enforces a registered released-language floor.
+    `--deny-warnings` and repeatable/comma-separated `--deny CODE` make selected
+    warnings CI-failing without changing their severity. `--report-out` writes the
+    append-only `keiro-dsl/check-report/1` schema for sources and workspaces through
+    the new `Keiro.Dsl.CheckReport` module.
+  - Language 4 now resolves every internally decidable process, router, projection,
+    publisher, queue, pgmq source-key, read-model identity, and timer-ID surface,
+    and rejects duration values that cannot fit the runtime `Int` seconds
+    representation. Released languages 1–3 keep their prior acceptance.
+
+  ### Other Changes
+
+  - The conformance-corpus driver cross-checks its plan against
+    `keiro-dsl.cabal`: a suite compiling generated Haskell that no plan entry
+    regenerates now fails `corpus-regen check` naming the suite, and a plan entry
+    no test-suite compiles fails too. The plan is derived from tracked ledgers
+    alone, so deleting one silently dropped a suite from regeneration *and* from
+    both existing consistency checks, which are scoped to plan entries.
+    `regenerate` also refuses a dirty corpus (with `--allow-dirty` for local
+    iteration) and prints the exact `git checkout --` recovery line.
+  - The scaffold report's two sidecar lines are relabelled `fragment:` and
+    `ledger:` to match the files they name; they read `manifest:` and `record:`
+    while pointing at `keiro-dsl-cabal-fragment.*` and `keiro-dsl-ledger.*`.
+    Consumers scraping those stderr labels must be updated.
+  - The `generated-output` Cabal stanza adds `-Werror` behind the new manual flag
+    `werror-generated` (default off, because Hackage rejects an unconditional
+    `-Werror`; this repository's `cabal.project` turns it on), so a warning
+    regression in generated code fails the build instead of building green. `src`
+    keeps `-Wall` non-fatal. Enabling it exposed five real import over-approximations in the
+    generator, all now fixed: a publisher imported `ExponentialBackoffOptions`
+    under a constant backoff; a nominal-projections module imported the four
+    `Keiki.ProjectionDomain` text combinators used only by the unenforced-ID
+    pattern; a transducer imported the type of every write source, when only guard
+    operands are rendered with a `K.Index … Type` annotation; a transducer imported
+    an enforced ID's `parse<Id>`, which only a literal names; and a contract codec
+    imported `(.:)` when every field decodes through `explicitParseField`.
+    Generated output is correspondingly smaller; no behavior changed.
+    `keiro-dsl-conformance-skeletons` keeps `-Wunused-imports`/`-Wunused-matches`
+    non-fatal, because its hole modules are deliberately unfilled templates.
+
+  - Generated behavior contracts and harnesses now carry complete signatures,
+    annotated behavior cells, named sample constants, runtime-backed read-model
+    facts, evidence-rich failures, and usage-conditional imports. The
+    `keiro/behavior-conformance/1` JSON failure object adds the append-only
+    `subject` field. The conformance corpus was regenerated under `-Wall` and now
+    has a clean-tree regeneration policy gate; consumers should re-scaffold and
+    recompile. Behavior keys, wire data, shape hashes, fold identity, and replay
+    semantics are unchanged.
+  - Adds a record-derived conformance-corpus driver with focused public-CLI replay,
+    create-once preservation, record/disk and Cabal/disk consistency checks, and a
+    test-owned accept mode for the six renderer goldens.
+  - Adds the exported stable `ModuleRole`/`moduleRole` projection for
+    `ScaffoldModule` artifacts and a generated-source naming audit plus repository
+    policy gate.
+  - Language 4 selects syntax profile 3. The generated occurrence reserved set is
+    narrowed to the 23 term identifiers GHC rejects under the advertised GHC2024
+    contract, so contextual words including `family`, `via`, and `qualified` are
+    accepted and compile-proven.
+  - Generated aggregate conformance now derives transducer rendering, predicate
+    verification, behavior `EdgeRef`s, and initial live probes from one source-wide
+    transition layout. Replay-only initial edges receive detailed replay witnesses but
+    never `step`-based acceptance helpers, and duplicate generated declarations are
+    rejected before writes.
+  - Source and workspace checking and both scaffold planners now share one pure gate
+    order: fold surface, lowering, module construction, conformance-package planning,
+    then module-plan refusals. Workspace planning therefore reports a lowering refusal
+    before a simultaneous facade-key refusal. Valid generated output is unchanged.
+  - Accepted but inert intake flags, emit derivations, optional queue markers, and
+    inline subscriptions now warn; scaffold reports list emit, pgmq dispatch, and
+    operation nodes that contribute no modules. Timer dead-letter text, pgmq fanout
+    functions, and pgmq top-level dedupe keys are explicitly descriptive-only.
+    Existing valid generated output remains byte-identical.
 
   ## 0.10.0.0 — 2026-08-03
 
@@ -855,9 +1136,9 @@ description: |-
   symbol-free deterministic layer plus typed holes, never a keiki symbolic
   operator (the firewall invariant).
 description-type: haddock
-hash: 4a8201f59c464390e9f2728638ce2f22861c89ff59682f110a04368d9f724cd0
+hash: 3f5a0ade83fa6f24480af0fb17a21e33d330427f174e0b84b33a06b578384d4a
 homepage: ''
-latest: 0.10.0.0
+latest: 0.11.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Typed specification toolchain for keiro services
@@ -873,7 +1154,7 @@ test-bench-deps:
   filepath: '>=1.4 && <1.6'
   hasql-transaction: '>=0'
   hspec: '>=2.11'
-  keiki: '>=0.8 && <0.9'
+  keiki: '>=0.9 && <0.10'
   keiro: '>=0'
   keiro-core: '>=0'
   keiro-dsl: '>=0'
