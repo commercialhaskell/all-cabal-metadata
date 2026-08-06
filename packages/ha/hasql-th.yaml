@@ -32,32 +32,101 @@ all-versions:
 - '0.5'
 - 0.5.0.1
 - 0.5.1
+- 0.5.1.1
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   base: '>=4.11 && <5'
   containers: '>=0.6 && <0.9'
   contravariant: '>=1.5.2 && <2'
   foldl: '>=1.4.5 && <2'
-  hasql: '>=1.10 && <1.11'
+  hasql: '>=1.10 && <1.11 || >=2.0 && <2.1'
   postgresql-syntax: '>=0.5 && <0.6'
   template-haskell: '>=2.8 && <3'
   template-haskell-compat-v0208: '>=0.1.9 && <0.2'
   text: '>=1 && <3'
   uuid: '>=1.3 && <2'
   vector: '>=0.12 && <0.14'
-changelog: ''
-changelog-type: ''
-description: |-
-  Extension-library for Hasql,
-  bringing compile-time syntax checking,
-  great simplification of declaration of statements and
-  other TemplateHaskell-based utilities.
+changelog: |
+  # v0.5.1.1
 
-  For details please see <https://github.com/nikita-volkov/hasql-th the readme>.
-description-type: haddock
-hash: 27330a70e5baa6f2964e759d6cb8d869ebbca2a6cca29b4b479bdf4297919af2
+  - Conform to the new `hasql` API (v2.0)
+changelog-type: markdown
+description: "# Summary\n\nAn extension library for the [\"hasql\"](https://github.com/nikita-volkov/hasql)
+  Postgres driver, bringing compile-time syntax checking of queries atop of a great
+  simplification of declaration of statements. All the user needs to do is just specify
+  SQL.\n\nHere's a brief example of how it works:\n\n> **Note:** these quasiquoters
+  require the `QuasiQuotes` language extension.\n> In a Haskell module, add `{-# LANGUAGE
+  QuasiQuotes #-}`; in GHCi, run\n> `:set -XQuasiQuotes`.\n\n```haskell\n{-# LANGUAGE
+  QuasiQuotes #-}\n\nselectUserDetails :: Statement Int32 (Maybe (Text, Text, Maybe
+  Text))\nselectUserDetails =\n  [maybeStatement|\n    select name :: text, email
+  :: text, phone :: text?\n    from \"user\"\n    where id = $1 :: int4\n    |]\n```\n\nAs
+  you can see, it completely eliminates the need to deal with codecs. The quasiquoters
+  directly produce `Statement`, which you can then [`dimap`](https://hackage.haskell.org/package/profunctors-5.5.1/docs/Data-Profunctor.html#v:dimap)
+  over using its `Profunctor` instance to get to your domain types.\n\n<details>\n<summary>Examples
+  of mapping to custom types</summary>\n\n```haskell\nnewtype UserId = UserId Int32\n\ndata
+  UserDetails = UserDetails {\n  _name :: Text,\n  _email :: Text,\n  _phone :: Maybe
+  Text\n}\n\nselectUserDetails :: Statement UserId (Maybe UserDetails)\nselectUserDetails
+  =\n  dimap\n    (\\ (UserId a) -> a)\n    (\\ case\n      Just (a, b, c) -> Just
+  (UserDetails a b c)\n      Nothing -> Nothing)\n    [maybeStatement|\n      select
+  name :: text, email :: text, phone :: text?\n      from \"user\"\n      where id
+  = $1 :: int4\n      |]\n```\n\nUsing some Haskell's advanced techniques and the
+  [\"tuple\"](http://hackage.haskell.org/package/tuple) library we can reduce the
+  boilerplate in the previous definition:\n\n```haskell\nimport Data.Tuple.Curry --
+  from the \"tuple\" library\n\nselectUserDetails :: Statement UserId (Maybe UserDetails)\nselectUserDetails
+  =\n  dimap coerce (fmap (uncurryN UserDetails))\n    [maybeStatement|\n      select
+  name :: text, email :: text, phone :: text?\n      from \"user\"\n      where id
+  = $1 :: int4\n      |]\n```\n\n</details>\n\n# Status\n\nThe library supports almost
+  all of Postgresql syntax available for preparable statements. This includes Select,
+  Insert, Update and Delete among others. The only thing that is not supported yet
+  is some of its very rarely used XML-related features.\n\n## Quality\n\nThe parser
+  and renderer get heavily tested using the following property: rendering a random
+  AST then parsing it should produce the same AST. This pretty much covers most possible
+  reasons for bugs in the library.\n\n# Implementation\n\nThis library internally
+  implements a port of the original Postgres SQL syntax parser. It might sound like
+  an overkill, but there really were no better options.\n\nUnfortunately Postgres
+  doesn't export it's own parser in any of its distributions, so there's no C-library
+  to link to and wrap.\n\nIsolating the original C-code and including it in a Haskell
+  project is also not an option, because it's heavily based on code generators and
+  complex make-file instructions. Maintaining such a codebase also seems like a non-viable
+  option.\n\nFortunately the original parser is implemented using a declarative notation
+  (the one which the mentioned code generators work with). It being declarative makes
+  the process of porting to Haskell quite straight-forward. \n\nAlso for the purposes
+  of this library we need access to the full syntax tree for extracting data on placeholders
+  and statement results. Quick and dirty hacks won't do.\n\nFor these reasons it's
+  been decided to port the original parser and AST as close as possible to Haskell
+  using the \"megaparsec\" library.\n\n# Error messages\n\nThe parser turns out to
+  be actually better than the one in Postgres in terms of error-reporting. That's
+  because of Haskell's superabilities in the area of parsing compared to C. The library
+  uses the [\"megaparsec\"](http://hackage.haskell.org/package/megaparsec) library
+  and the [\"headed-megaparsec\"](http://hackage.haskell.org/package/headed-megaparsec)
+  extension for it. As the result of that, the error messages produced by this parser
+  are more informative than the ones in Postgres. Following are a few examples.\n\n##
+  Error example 1\n\nConsider the following broken statement:\n\n```sql\nselect 1
+  from a where b >= 3 && b < 4\n```\n\nIt is incorrect, because it uses `&&` instead
+  of `and`. But here's what Postgres' original parser says about it:\n\n```\nERROR:
+  \ syntax error at or near \"<\"\nLINE 1: select 1 from a where b >= 3 && b < 4;\n
+  \                                         ^\n```\n\nHere's what \"hasql-th\" says:\n\n```\n
+  \ |\n2 |     select 1 from a where b >= 3 && b < 4;\n  |                                  ^\nunexpected
+  '&'\n```\n\n## Error example 2\n\nIt's not obvious what is wrong in the following
+  statement either:\n\n```sql\ninsert into user (name) values ($1)\n```\n\nThe Postgres
+  parser doesn't help much:\n\n```\nERROR:  syntax error at or near \"user\"\nLINE
+  1: insert into user (name) values ($1);\n                    ^\n```\n\nHere's what
+  \"hasql-th\" says though:\n\n```\n  |\n2 |       insert into user (name) values
+  ($1)\n  |                       ^\nReserved keyword \"user\" used as an identifier.
+  If that's what you intend, you have to wrap it in double quotes.\n```\n\n## Error
+  example 3\n\nIt turns out that the original Postgres parser never produces any other
+  messages than the opaque \"syntax error at or near\". \"hasql-th\" on the other
+  hand is quite descriptive. E.g., here's how it gradually guides to insert the missing
+  expected pieces.\n\nInput:\n\n```haskell\n[resultlessStatement|insert into |]\n```\n\nError:\n\n```\n
+  \ |\n1 | insert into \n  |             ^\nunexpected end of input\nexpecting identifier
+  or white space\n```\n\nInput:\n\n```haskell\n[resultlessStatement|insert into a
+  |]\n```\n\nError:\n\n```\n  |\n1 | insert into a \n  |               ^\nunexpected
+  end of input\nexpecting \"default\", \"overriding\", \"select\", \"values\", '(',
+  white space, or with clause\n```\n"
+description-type: markdown
+hash: 1daf77f37d566f0af975c70ee0e1163e7a2409a74e4ea987b23251a1af94b6a7
 homepage: https://github.com/nikita-volkov/hasql-th
-latest: 0.5.1
+latest: 0.5.1.1
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Template Haskell utilities for Hasql
