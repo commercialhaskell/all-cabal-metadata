@@ -1,6 +1,7 @@
 all-versions:
 - '0.3'
 - '0.4'
+- 0.4.1
 author: Jens Petersen <juhpetersen@gmail.com>
 basic-deps:
   base: <5
@@ -13,6 +14,7 @@ basic-deps:
   shell-monad: '>=0'
   simple-cmd: '>=0.2.3'
   simple-cmd-args: '>=0.1.8'
+  simple-prompt: '>=0.2'
   text: '>=0'
   time: '>=0'
   toml-reader: '>=0'
@@ -20,6 +22,19 @@ basic-deps:
   xdg-basedir: '>=0'
 changelog: |
   # encapsule releases
+
+  ## 0.4.1 (2026-08-07)
+  - require volume host paths to exist
+  - drop `-P` for `--path` and add `-H` for `--home`
+  - copy `/etc/skel` into home if `~/.bashrc` is missing (`--no-skel` to skip)
+  - config.toml: add dbus, dconf, machine-id capabilities
+  - support mount options for `--home` and `--project` (like `:O` for overlay)
+  - only auto SELinux `:z` for user-owned paths and not overlay `:O`
+  - create `--project`/`--volume` mount points in --home for $HOME targets
+  - add `backup` command to tarball a directory (prompts if >100MB)
+  - `run`,`create`: `--backup-home` / `--backup-project` to tarball those dirs
+  - `refresh`: always update image (drop freshness checks and `--force`)
+  - sanitize `.` to `-` in container hostname
 
   ## 0.4 (2026-08-04)
   - convert to using subcommands
@@ -110,7 +125,7 @@ description: |
   `$ encapsule --version`
 
   ```
-  0.4
+  0.4.1
   ```
 
   `$ encapsule --help`
@@ -133,9 +148,11 @@ description: |
     rm                       Remove an encapsule container
     rmi                      Remove an encapsule image
     stop                     Stop an encapsule container
+    backup                   Create a tarball backup of a directory
     create                   Create an encapsule container
     enter                    Connect to a encapsule container
-    refresh                  Update an encapsule image from a (toolbox) container
+    refresh                  Re-commit an encapsule image from a (toolbox)
+                             container
     run                      Run a temporary encapsule container
   ```
 
@@ -151,31 +168,37 @@ description: |
 
   ```
   Usage: encapsule run TOOLBOX [-v|--volume HOST:CONTAINER[:opts]]
-                       [-e|--env KEY[=VALUE]] [-P|--path DIR] [-i|--init CMD]
-                       [--cap NAME] [--pull] [--home DIR] [-p|--project DIR]
+                       [-e|--env KEY[=VALUE]] [--path DIR] [-i|--init CMD]
+                       [--cap NAME] [--pull]
+                       [(-H|--home DIR[:opts]) [--backup-home]]
+                       [(-p|--project DIR[:opts]) [--backup-project]]
                        [-n|--name NAME] [--readonly] [--no-network] [--no-sudo]
-                       [--podman-opt OPTION] [--debug] [--dryrun] [--refresh]
-                       [CMD]
+                       [--no-skel] [--podman-opt OPTION] [--debug] [--dryrun]
+                       [--refresh] [CMD]
 
     Run a temporary encapsule container
 
   Available options:
     -v,--volume HOST:CONTAINER[:opts]
-                             Bind mounts (default to selinux :z)
+                             Bind mount (user's files default to selinux :z)
     -e,--env KEY[=VALUE]     Set or pass through an environment variable
-    -P,--path DIR            Prepend a directory to PATH inside the container
+    --path DIR               Prepend a directory to PATH inside the container
     -i,--init CMD            A bash snippet run when creating the encapsule
                              container
     --cap NAME               Enable a capability from the config file
     --pull                   Pull newer container image
-    --home DIR               Mount a directory as a writable home (created if
-                             missing)
-    -p,--project DIR         Mount a (project) directory as workdir
+    -H,--home DIR[:opts]     Mount a directory as a writable home (created if
+                             missing; use DIR:O to overlay)
+    --backup-home            Tarball home directory before starting
+    -p,--project DIR[:opts]  Mount a (project) directory as workdir (use DIR:O to
+                             overlay)
+    --backup-project         Tarball project directory before starting
     -n,--name NAME           Optional container name (prefix with '^' prefix to
                              skip 'encapsule-' prefix)
     --readonly               Make the encapsule container filesystem read-only
     --no-network             Disable network access
     --no-sudo                Skip passwordless sudo setup
+    --no-skel                Don't copy /etc/skel into an empty home
     --podman-opt OPTION      Pass an option directly to podman
     --debug                  Show debug output
     --dryrun                 Print the podman command instead of running it
@@ -215,7 +238,7 @@ description: |
   $ encapsule rm my-toolbox
 
   # Set environment variables and prepend to PATH
-  $ encapsule run my-toolbox -e MY_VAR=hello -P ~/.local/bin
+  $ encapsule run my-toolbox -e MY_VAR=hello -e LANG --path ~/.local/bin
 
   # Run a specific command
   $ encapsule run my-toolbox -- ls /
@@ -253,11 +276,11 @@ description: |
 
   Each capability can define:
 
-  - `volumes` — list of bind mount specs
-  - `env` — list of environment variables to set or pass through
-  - `path` — list of directories to prepend to `$PATH`
-  - `init` — a bash snippet to run on encapsule container creation
-  - `security_opts` — list of `--security-opt` values passed to podman
+  - `volumes` : list of bind mount specs
+  - `env` : list of environment variables to set or pass through
+  - `path` : list of directories to prepend to `$PATH`
+  - `init` : a bash snippet to run on encapsule container creation
+  - `security_opts` : list of `--security-opt` values passed to podman
 
   `~` and envvars are expanded in volume and path specs.
   If the host and container paths are the same, you can use the shorthand
@@ -291,13 +314,16 @@ description: |
   cabal install
   ```
 
-  (or to build the latest release: `cabal install encapsule`)
 
   ### Build with stack
   Alternatively you can build with:
   ```
   stack install
   ```
+
+  ### Build release
+  To build the latest release: `cabal install encapsule`
+  or `stack install encapsule`.
 
   ## Runtime Requirements
 
@@ -327,9 +353,9 @@ description: |
   `encapsule` is at <https://github.com/juhp/encapsule> and distributed
   under the Apache-2.0 license.
 description-type: markdown
-hash: 17b09a0051b84aed044e45e2491bbb447bcb288bb6448ddeca4a162788a1a166
+hash: 41909625e13b591dcbdec91ed244188e2a7e30e7e7d3f4bd4feba3341d67cab6
 homepage: https://github.com/juhp/encapsule
-latest: '0.4'
+latest: 0.4.1
 license-name: Apache-2.0
 maintainer: Jens Petersen <juhpetersen@gmail.com>
 synopsis: Run isolated toolbox containers with podman
