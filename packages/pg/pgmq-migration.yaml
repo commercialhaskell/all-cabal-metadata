@@ -7,6 +7,7 @@ all-versions:
 - 0.3.0.0
 - 0.4.0.0
 - 0.4.0.1
+- 0.5.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: ^>=2.2
@@ -22,6 +23,50 @@ basic-deps:
   text: ^>=2.1
 changelog: |
   # Changelog for pgmq-migration
+
+  ## 0.5.0.0 -- 2026-08-06
+
+  ### Bug Fixes
+
+  Migration `0003-notify-crash-safety-and-locking.sql` re-creates three functions. It is
+  appended to the ledger; `0001` and `0002` are unchanged.
+
+  * Insert notifications no longer stop permanently after a PostgreSQL crash.
+    `pgmq.notify_insert_throttle` is `UNLOGGED`, so crash recovery truncates it, and
+    `pgmq.notify_queue_listeners` notified only when its throttle `UPDATE` matched a row.
+    Zero updated rows had two causes — throttled, and row absent — and the trigger treated
+    both as "stay quiet", so after a crash it fired, matched nothing, and silently never
+    notified again until an application restart re-enabled notify. Sends succeeded and
+    messages accumulated while listeners starved. A `NOT EXISTS` probe on the already-failed
+    branch now tells the two cases apart and notifies unthrottled until the next reconcile
+    restores the configured interval. The row is deliberately not re-inserted: the
+    configured interval is the crash's data loss, and inventing one in the hot path would
+    silently change throttling.
+  * Concurrent `pgmq.enable_notify_insert` calls for the same queue no longer race. Two
+    replicas reconciling the same config at startup could both pass the function's internal
+    `DROP TRIGGER IF EXISTS` — on a fresh queue it finds nothing and takes no lock — and the
+    loser then blocked on the throttle row's unique constraint, resumed, and created a
+    trigger that now existed, failing with SQLSTATE 42710 (duplicate_object) and taking down
+    that replica's entire startup reconcile. Measured at roughly a 28% collision rate over
+    200 concurrent iterations. The function now takes the per-queue advisory lock, as
+    `pgmq.create` and `pgmq.create_partitioned` already do, which makes concurrent callers
+    convergent.
+  * `pgmq.enable_notify_insert` coalesces a NULL `throttle_interval_ms` to the documented
+    250 ms, so non-Haskell callers get the same guarantee the pgmq-hasql statement provides
+    client-side.
+  * `pgmq.create_partitioned` is now re-entrant. The advisory lock serialized concurrent
+    creators, but the second one still called `partman.create_parent` on a parent the first
+    had just registered: its `CREATE TABLE IF NOT EXISTS` is a no-op while `create_parent`
+    rejects an already-managed parent. Both `create_parent` calls are now guarded by a
+    `part_config` probe.
+
+  ### Other Changes
+
+  * The test suite derives the migration ledger from the plan rather than enumerating it
+    positionally, so appending a migration no longer turns unrelated tests red. The ledger
+    is spelled out once, in `testNativeComponent`.
+  * Added a pg_partman-gated re-entry test that reports its skip rather than passing
+    silently when the extension is unavailable.
 
   ## 0.4.0.1 -- 2026-07-14
 
@@ -160,9 +205,9 @@ description: |
   The repository guide at `docs/user/schema-migration.md` contains complete fresh-install,
   history-import, validation, and recovery examples.
 description-type: markdown
-hash: e6132f3a6cf2fe770306cdaf12301586d551cd8886da0bb6beac6ea281acfce0
+hash: d48e7e84e57fa07926475a8defdcf5cff9efb30ea286eb8fec08e46394091b76
 homepage: https://github.com/shinzui/pgmq-hs
-latest: 0.4.0.1
+latest: 0.5.0.0
 license-name: MIT
 maintainer: Nadeem Bitar
 synopsis: PGMQ schema migrations without PostgreSQL extension
