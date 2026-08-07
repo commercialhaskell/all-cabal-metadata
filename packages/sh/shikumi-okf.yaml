@@ -1,17 +1,160 @@
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
+- 0.2.0.0
 author: Nadeem Bitar
 basic-deps:
   base: '>=4.20 && <5'
-  okf-core: ^>=0.1.0.0
+  okf-core: ^>=0.5.0.0
   shikumi: '>=0.3.0.0 && <0.4'
-  shikumi-okf: ^>=0.1.0.1
+  shikumi-okf: ^>=0.2.0.0
   text: '>=2.1 && <2.2'
 changelog: |
   # Changelog
 
   ## Unreleased
+
+  ## 0.2.0.0 — 2026-08-07
+
+  ### Added
+
+  - **Generated bundles target OKF v0.2.** The bundle root's `index.md` declares
+    `okf_version: "0.2"` and every concept records its producer in the v0.2
+    `generated` family (`generated.by: process:shikumi-okf`), which is what
+    `okf validate --strict` asks for since okf-core 0.5. `okf validate --strict
+    --profile profile/shikumi.dhall --profile-enforce` passes on the shipped
+    example bundle.
+
+  - `GenerateOptions`, `defaultGenerateOptions`, `defaultGeneratedBy`, and
+    `okfVersion02` in `Shikumi.Okf.Generate`. Build options by overriding
+    `defaultGenerateOptions` rather than as a record literal, so a field added in a
+    later release leaves the call site compiling. `generated = Nothing` writes no
+    provenance at all — this generator will not claim authorship on a caller's
+    behalf — and `okfVersion = Nothing` preserves whatever declaration the
+    destination already carries rather than walking a hand-migrated bundle back.
+
+  - `profile/shikumi.dhall` is now shipped as a Cabal `data-files` entry, so
+    installing this package also installs the profile its bundles are meant to
+    satisfy.
+
+  ### Changed
+
+  - **BREAKING** Upgraded `okf-core` from `^>=0.3.0.0` to `^>=0.5.0.0`, the release
+    that implements OKF v0.2.
+
+  - **BREAKING** `generateBundle`, `writeProgramBundle`, `programConcept`, and
+    `appConcept` take a `GenerateOptions` where they took a `Maybe Text`
+    timestamp. Pass `defaultGenerateOptions` for the previous call shape; move a
+    timestamp you were passing into
+    `defaultGenerateOptions {generated = Just (Generated actor (Just t))}`.
+
+    The parameter could not simply be reinterpreted. It wrote the v0.1 `timestamp`
+    key, which OKF v0.2 supersedes with `generated`, and a bundle that declares
+    v0.2 while still carrying `timestamp` is reported by okf-core 0.5 as retaining
+    a superseded key. Generation still reads no clock: `generated.at` remains
+    caller-supplied and absent by default, so regenerating an unchanged manifest is
+    still byte-identical and the regenerate-and-diff CI check still works.
+
+  - **BREAKING** `profile/shikumi.dhall` targets OKF v0.2. It sets
+    `okfVersion = "0.2"` and `requireBundleVersion = Some "0.2"`, so a bundle that
+    declares no version — or an older one — is now a profile deviation. It replaces
+    the `timestamp` rule with a `generated` object rule constraining `by` (required,
+    `actor` format) and `at` (optional, RFC 3339 UTC). Because `allowUnknownFields`
+    is `False`, a stray `timestamp` is now reported as an undeclared key.
+
+    The descriptor needs `okf` `>=0.5` to load: `requireBundleVersion` and
+    `objectFields` do not exist in the 0.3 schema.
+
+  - **`profile/shikumi.dhall` imports the okf schema from a pinned URL** —
+    `https://raw.githubusercontent.com/shinzui/okf/v0.5.0.0/okf-core/dhall/package.dhall`
+    with a `sha256:` integrity hash — instead of the relative path
+    `../../../okf/okf-core/dhall/package.dhall` into a sibling checkout.
+
+    The relative path resolved against whatever happened to be in a developer's
+    working tree. That is how this descriptor silently stopped type-checking when
+    okf's schema moved ahead of the pinned `okf-core` release, and it could never
+    have worked for anyone installing this package from Hackage, where no sibling
+    checkout exists. The hash covers the fully resolved, normalized expression, so
+    it pins every transitive `defaults/*` and `mk/*` file too, and a moved tag
+    fails the load rather than changing the schema underneath the profile. Dhall
+    serves a hashed import from `~/.cache/dhall` once resolved, so only the first
+    load on a machine touches the network.
+
+  - The committed `example/out` bundle was regenerated: the root index gained its
+    version declaration and each concept gained `generated`.
+
+  ### Fixed
+
+  - The test suite parses one Markdown document on the main thread before tasty
+    forks. `cmark-gfm`'s `commonmarkToNode` calls
+    `cmark_gfm_core_extensions_ensure_registered` inside `unsafePerformIO` on every
+    call, whatever extension list it is given, and that C function is not
+    thread-safe: two threads reaching it at once make `cmark_register_node_flag`
+    print `flag initialization error` and `abort()` the process. okf-core 0.5 made
+    this reachable by enabling footnotes and routing all three of its parse sites
+    through one options list, so validating a bundle now parses far more Markdown
+    than it used to, and this suite runs with `-N`. The result was a reproducible
+    SIGABRT partway through the run — not a test failure, so it reported as an
+    empty log rather than as a diagnosis.
+
+    This is a workaround for a defect in the `cmark-gfm` bindings
+    (`mori://kivikakk/cmark-gfm-hs`), not in okf or shikumi, and it protects only
+    this test suite. A consumer that reads OKF bundles from several threads can hit
+    the same abort; the durable fix is to make the registration thread-safe
+    upstream.
+
+  - The test suite now checks the real `profile/shikumi.dhall` instead of a Haskell
+    paraphrase of it. A new `Profile` group loads the descriptor (located through
+    `Paths_shikumi_okf.getDataFileName`, so it does not depend on the directory
+    `cabal` was invoked from), compiles it, and validates the generated bundle
+    against it under `PermissiveConformance` — the same mode
+    `okf validate --profile --profile-enforce` uses. A descriptor that stops
+    type-checking, stops compiling, or stops describing what the generator emits is
+    now a red test; previously it could rot unnoticed across releases, which is
+    exactly what had happened. The hermetic `Conformance` group it replaces asserted
+    the same conventions against an in-process copy and is gone.
+  - **Breaking for profile consumers.** The profile now checks what frontmatter
+    values *contain*, not only that keys are present. `type`, `title`,
+    `description`, and `resource` are declared `Cardinality.Scalar`, so a
+    list-valued `title` is a violation. `timestamp` is declared as a recommended
+    scalar with the `Rfc3339Utc` format, so a value like `yesterday` is a violation;
+    cardinality and format are checked in every validation mode, so declaring it
+    *recommended* buys the format check without demanding the key be present.
+  - **Breaking for profile consumers.** `allowUnknownFields = False` closes the
+    top-level key set. This cannot reject a generated document — a closed set still
+    always admits the six core OKF keys, which are exactly what the generator emits
+    — but a hand-added stray key in a generated bundle is now reported.
+  - **Breaking for profile consumers.** `resource` moved from the profile-wide
+    `recommended` list into each type's own `required` list and carries
+    `UriWithScheme "shikumi"`, so it is now required on both document kinds and its
+    value must parse as an absolute `shikumi://` URI. `tags` is recommended as a
+    `List` on `Shikumi Program` only.
+  - **Consequence for consumers.** `okf validate --strict` now reports a
+    missing-recommended `timestamp` on bundles generated without one. That is
+    correct for a strict authoring run: `timestamp` is optional by design, because
+    `generateBundle` takes it as an explicit argument and omitting it is what makes
+    regeneration byte-identical. Ordinary (non-`--strict`) validation is unaffected,
+    and the committed `example/out` bundle still validates and regenerates
+    byte-identically.
+  - Moved the `okf-core` bound from `^>=0.1.0.0` to `^>=0.3.0.0`, the newest release
+    on Hackage. No source changes: the producer API this package uses (`Okf.Bundle`,
+    `Okf.ConceptId`, `Okf.Document`, `Okf.Index`) is unchanged across both major
+    bumps, and the breaking changes in `0.2`/`0.3` are confined to the profile
+    compilation and validation API this package does not call.
+  - **Breaking for profile consumers.** Migrated `profile/shikumi.dhall` to the
+    `0.3.0.0` profile schema; reading it now requires `okf` `>=0.3`. The schema made
+    `frontmatter.required`/`recommended` `List FieldRule` instead of `List Text`,
+    added `description`, `allowUnknownFields`, and `idField` to `Profile`, and added
+    `description`, `frontmatter`, and `idPrefix` to `TypeRule`. The descriptor now
+    imports okf's published `dhall/package.dhall` entry point and uses
+    record-completion defaults (`::`) with the `mk.FieldRule` constructors, so later
+    additive, defaulted schema fields will not break it again.
+  - The migrated profile keeps its previous meaning exactly — closed types, the same
+    two required and two recommended keys, open frontmatter, no `idField`, and
+    default `Any` cardinality with no `format` — and now also documents each key and
+    concept type in prose, which the old schema had no field for. Checked with `okf`
+    `0.3.0.0` against the committed `example/out` bundle: `validate` and
+    `--profile-enforce` both exit 0 and regeneration stays byte-identical.
 
   ## 0.1.0.1 - 2026-07-05
 
@@ -50,9 +193,9 @@ description: |-
   @shikumi-trace-otel@ quarantines the OpenTelemetry tree — so shikumi users who
   do not care about OKF never depend on it.
 description-type: haddock
-hash: ed32cd5087a98d5a5e13ede9a522c8b6fb42531e942c8c62207a1d57da347f5e
+hash: ba60670f459ba0aaa02f969e7aa57e1d471e56b64611ab400d1a81cecda77915
 homepage: ''
-latest: 0.1.0.1
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Generate OKF documentation bundles from shikumi programs (EP-31)
@@ -61,9 +204,9 @@ test-bench-deps:
   directory: '>=0'
   effectful: '>=0'
   filepath: '>=0'
-  okf-core: ^>=0.1.0.0
+  okf-core: ^>=0.5.0.0
   shikumi: ^>=0.3.0.0
-  shikumi-okf: ^>=0.1.0.1
+  shikumi-okf: ^>=0.2.0.0
   tasty: '>=0'
   tasty-hunit: '>=0'
   text: '>=0'
