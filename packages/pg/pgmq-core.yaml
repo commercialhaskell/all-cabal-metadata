@@ -7,6 +7,7 @@ all-versions:
 - 0.3.0.0
 - 0.4.0.0
 - 0.4.0.1
+- 0.5.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: ^>=2.2
@@ -16,6 +17,49 @@ basic-deps:
   time: ^>=1.14
 changelog: |
   # Revision history for pgmq-core
+
+  ## 0.5.0.0 -- 2026-08-06
+
+  ### Breaking Changes
+
+  * Queue names are now validated consistently at every entry path. `parseQueueName` rejects
+    the empty string and any character outside lowercase ASCII letters, digits, and
+    underscore — previously uppercase was accepted and the empty string passed every check.
+    `FromJSON QueueName` is now a hand-written instance that validates via `parseQueueName`;
+    it was newtype-derived, accepting any string of any length, so configuration-loaded
+    names bypassed validation entirely.
+
+    Lowercase-only is a correctness requirement, not a style choice. pgmq's SQL lowercases
+    physical table names while `pgmq.meta` stores the caller's original casing, and the
+    notification trigger looks up the lowercased name. `MyQueue` and `myqueue` were
+    therefore two logical queues silently interleaving in one physical table: dropping
+    either destroyed the other's messages, and a mixed-case notification throttle was never
+    matched by the trigger. Rejection was chosen over normalization because normalizing
+    would silently join pre-existing mixed-case metadata and make the parsed name disagree
+    with what the caller wrote.
+
+    **Upgrade note**: `listQueues` re-validates names read back from the database, so a
+    deployment whose `pgmq.meta` still contains mixed-case rows must run the transactional
+    remediation in `docs/design/016-queue-name-validation.md` — which preserves topic
+    bindings and notification configuration — before upgrading. Do not update or delete
+    `pgmq.meta` rows by hand: both child foreign keys cascade on delete.
+
+  ### New Features
+
+  * `notifyChannelName :: QueueName -> Text` returns the LISTEN/NOTIFY channel a queue's
+    insert notifications arrive on (`pgmq.q_<lowercased name>.INSERT`). It is now the
+    contract; do not assemble the name by hand. It lives here rather than in pgmq-hasql
+    because a LISTEN consumer needs a raw connection anyway and may not depend on
+    pgmq-hasql at all.
+  * `UnvalidatedQueue`, a queue listing row whose name is plain `Text`. pgmq's server-side
+    validator checks only name length, so any client sharing the database can create a name
+    `parseQueueName` rejects; this type is what the lenient pgmq-hasql and pgmq-effectful
+    listings decode into.
+
+  ### Other Changes
+
+  * New `pgmq-core-test` suite pinning both queue-name entry paths, `parseQueueName` and
+    `FromJSON`.
 
   ## 0.4.0.1 -- 2026-07-14
 
@@ -69,10 +113,16 @@ description: |-
   for PGMQ (PostgreSQL Message Queue). Provides Message, Queue,
   QueueName, and related types used across pgmq-hs packages.
 description-type: haddock
-hash: 099c1508173c7b2343f41a8c0c5c7536d8da877bf17d4ca28a57d0984780ff39
+hash: c8278bdf968ef414b1f96b2656a9f6fc361ea300338c1efd7bbde1eb32637c1c
 homepage: https://github.com/shinzui/pgmq-hs
-latest: 0.4.0.1
+latest: 0.5.0.0
 license-name: MIT
 maintainer: Nadeem Bitar
 synopsis: Core types for pgmq-hs, a Haskell client for PGMQ
-test-bench-deps: {}
+test-bench-deps:
+  aeson: ^>=2.2
+  base: '>=4.18 && <5'
+  pgmq-core: '>=0'
+  tasty: ^>=1.5
+  tasty-hunit: ^>=0.10
+  text: ^>=2.1
