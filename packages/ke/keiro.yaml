@@ -9,6 +9,7 @@ all-versions:
 - 0.9.0.0
 - 0.10.0.0
 - 0.11.0.0
+- 0.12.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.2.2 && <2.3'
@@ -31,13 +32,13 @@ basic-deps:
   hs-opentelemetry-semantic-conventions: '>=1.40 && <2'
   keiki: '>=0.9 && <0.10'
   keiki-codec-json: '>=0.9 && <0.10'
-  keiro-core: ^>=0.11.0.0
-  kiroku-store: '>=0.3 && <0.4'
+  keiro-core: ^>=0.12.0.0
+  kiroku-store: '>=0.7 && <0.8'
   lens: '>=5.2 && <5.4'
   mmzk-typeid: '>=0.7 && <0.8'
   random: '>=1.2.1 && <1.4'
   scientific: '>=0.3 && <0.4'
-  shibuya-core: '>=0.8.0.1 && <0.9'
+  shibuya-core: ^>=0.9.0.0
   stm: '>=2.5 && <2.6'
   streamly: '>=0.11 && <0.12'
   streamly-core: '>=0.3 && <0.4'
@@ -53,6 +54,456 @@ changelog: |
   [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
   the [Haskell Package Versioning Policy](https://pvp.haskell.org/).
 
+  ## Unreleased
+
+  ## 0.12.0.0 — 2026-08-14
+
+  ### Breaking Changes
+
+  - `Keiro.Workflow.Awakeable` no longer exports
+    `deterministicAwakeableId` or `legacyDeterministicAwakeableId`. Compatibility
+    tooling that must inspect generation-0 rows should import
+    `generation0AwakeableId` or `preUtf8Generation0AwakeableId` from
+    `Keiro.Workflow.Awakeable.Compatibility`; ordinary workflow code must retain and
+    pass the `AwakeableId` returned by allocation.
+  - The schema-versioned rebuild resume contract advances to
+    `versioned-contract-v3` and its persisted runner to
+    `keiro/versioned-rebuild/v3`. The contract adds run-scoped dedup staging and a
+    persisted promotion admission limit. Complete active v2 versioned runs with the old
+    runtime or abandon them before upgrading; they cannot resume under v3.
+  - `adoptCatalogGroups` now returns `CatalogAdoptionResult`, including adopted group
+    metadata, per-registration update/insert outcomes, and removed old-name rows.
+    `CatalogAdoptionPlan` likewise adds planned registration actions and orphan rows; code
+    constructing or exhaustively matching either result must handle the registry-complete
+    contract.
+  - `Keiro.Workflow.Instance.claimInstance` now returns `ClaimOutcome` instead of
+    `Bool`, distinguishing an acquired lease from a live foreign lease, crash
+    pacing, and an instance that became unavailable. `ResumeSummary` adds
+    `advanced`, `paced`, `sleepDue`, and `unregisteredNames`; `advanced` counts
+    only a fresh journal append by the re-invocation, a terminal failure recorded
+    at the crash ceiling, or an external wake observed mid-pass. Replay-only
+    re-suspensions and terminal short-circuit races report no advance, so bounded
+    drains terminate on every reachable pool. `WorkflowRunOptions` adds
+    `onJournalAppend`; direct record constructions must initialize it, while
+    `defaultWorkflowRunOptions` users are unaffected.
+
+  - The catalog rebuild resume contract advances to `contract-v4:` and the persisted runner
+    format to `keiro/projection-replay/v4`. The contract now pins replay-adapter application
+    order. `CatalogRebuildError` gains `CatalogRebuildSliceMismatch`, and
+    `abandonCatalogRebuild` compares group slices rather than resume contracts.
+
+  - Canonical identity advances to `catalog-v3:`, `slice-v2:`, `contract-v3:`, and
+    `keiro/projection-replay/v3`; catalog inventory and rebuild preview JSON advance to v2.
+    Stored `slice-v1:` groups require preview and explicit live-group adoption. An active v2
+    replay cannot resume under the v3 runner: complete it with the old runtime or abandon it
+    before upgrading and adopting metadata.
+  - Catalog fingerprints, group metadata, rebuild contracts, and grouped errors
+    use the new canonical slice identity. `GroupRebuildMetadata.catalogFingerprint`
+    is now `sliceFingerprint`; fingerprint-drift errors are slice-specific; and
+    `RebuildRunReport` adds `groupSliceFingerprint`. Persisted replay format is
+    `keiro/projection-replay/v3`. Complete or abandon active catalog rebuilds before
+    migration `0024` or the v3 runner cutover, then explicitly adopt stale group rows.
+
+  - Requires `kiroku-store >=0.7 && <0.8`. Direct constructors of
+    `SubscriptionDeclaration` and exhaustive matches on grouped
+    `RebuildStartError` must adopt the explicit checkpoint lifecycle surface.
+    `KeiroMetrics` gains the
+    `projectionGlobalPositionDistance` gauge field; code constructing that record
+    directly must initialize it. Exhaustive custom Kiroku interpreters must also
+    implement the 0.5 checkpoint lifecycle, 0.6 visible-head effect surface, and
+    0.7 renewable history-retention lease surface.
+  - Requires `keiro-core ^>=0.12.0.0` and `shibuya-core ^>=0.9.0.0`, replacing
+    the 0.11 package-family and Shibuya 0.8 bounds.
+  - `Keiro.Workflow.JournalAppendOutcome` gains a `JournalRefusedTerminal !Text`
+    constructor. The journal-append transaction now declines an ordinary
+    `StepRecorded` append into a workflow generation that already carries a
+    `__workflow_cancelled__` or `__workflow_failed__` marker, and reports which
+    marker refused it. A refusal is not an error: the wake source should settle
+    its own durable row and deliver nothing. `appendJournalEntry` /
+    `appendJournalEntryReturningId` absorb it and return normally, so only code
+    that pattern-matches on `JournalAppendOutcome` needs to change.
+
+  - A workflow that is terminally *failed* now stops at the next step boundary,
+    as a cancelled one already did. Previously the failure marker was checked only
+    at run entry, so a direct `runWorkflow` call that overlapped the resume
+    worker's `WorkflowFailed` marker kept executing fresh side effects. Runs that
+    relied on that behaviour will now return `Failed` at the boundary.
+
+  - `Keiro.Workflow.Instance.markInstanceSuspended` is replaced by
+    `markInstanceSuspendedAwaiting :: WorkflowName -> WorkflowId -> Int -> Text ->
+    Eff es ()`, which takes the run's generation and the awaited step name and
+    arbitrates the suspended-status write against a concurrent wake delivery.
+
+  - `Keiro.Workflow.Instance.recordCrashTx` returns `Maybe Int32` instead of
+    `Int32`. `Nothing` means the workflow reached a terminal status between
+    crashing and having that crash recorded, so no attempt was counted — an
+    ordinary race, not an error.
+
+  - `Keiro.Workflow.Gc.gcWorkflowsOnce` and `runWorkflowGcWorker` gain an
+    `Error StoreError :> es` constraint, which they need to isolate a failing
+    deletion. Callers running them under `runStoreIO` are unaffected.
+
+  - `Keiro.Workflow.Resume.ResumeLogEvent` gains a `ResumeCrashRecordSkipped
+    !Text !Text` constructor (workflow name, workflow id). Only code that
+    pattern-matches exhaustively on `ResumeLogEvent` needs to change.
+
+  - `Keiro.Workflow.Resume.WorkflowResumeOptions` gains a
+    `maxConcurrentAdvances :: !Int` field. Only code that builds the record
+    without `defaultWorkflowResumeOptions` needs to change; the default is 1,
+    which is the behaviour every previous release had.
+
+  ### New Features
+
+  - Projection revisions now bind every live closure to its exact inline owner or
+    subscription/dedup delivery capability. Catalog validation requires one handler per
+    declared capability and restricts it to the supplying projection's targets; command
+    and subscription paths dispatch only their matching closure. The canonical identity
+    advances to `catalog-v7:` and `slice-v6:`.
+  - Projection revisions may declare explicit `StreamScopedReplay` policies. The targeted
+    runner repairs one complete retained stream against the persisted serving revision in
+    one group-fenced transaction, verifies exact target evidence, backfills ordinary async
+    dedup keys, leaves subscription checkpoints unchanged, and refuses truncated/deleted
+    history, active rebuilds, slice drift, incomplete serving bindings, or a locked event
+    count above the request's positive `maxEvents` admission limit. Oversized work refuses
+    before the group-wide writer fence.
+  - `ProjectionCatalogOperations` adds database-backed targeted-reprojection preview and
+    outcome reports. Preview v2 exposes event count, expected dedup claims, and the
+    reviewed maximum; outcome v2 records the admitted maximum. Jitsurei demonstrates a V2
+    serving-row repair that leaves unrelated streams unchanged.
+
+  - Projection catalogs now declare versioned all-row and keyed external read contracts,
+    including validated query/shape/revision compatibility, immutable SQL signatures,
+    application-owned keyed implementation identity, and monotonic surface generations.
+    Canonical identity advances to `catalog-v5:` and `slice-v4:`.
+  - `Keiro.ReadModel.External` reconciles those declarations into execute-only,
+    security-definer functions in `keiro_read`, backed by private managed bindings and a
+    lifecycle guard with stable `KR001`/`KR002`/`KR003` SQLSTATEs. The adversarial release
+    pass makes crossed-promotion snapshots fail retryably with `KR001`, caps all-row
+    results at 100 with `KR004`, verifies exact keyed set-result types, and reports grants
+    for the selected overload only. Registration,
+    reviewed adoption, versioned-rebuild start, and promotion perform reconciliation in
+    their own transaction; retirement is explicit and dependency/grant previewed.
+    All-row bindings project only the stable composite type's attributes, candidate
+    versions remain metadata-only until promotion, and an explicit implementation-backed
+    compatibility wrapper may retain an old zero-argument signature after a breaking
+    cutover.
+  - `ProjectionCatalogOperations` exposes external-read inspection and retirement reports
+    with stable JSON envelopes over the same dependency/grant preview used by the runtime.
+  - `ProjectionGroupStatusV1`, `ServingPositionBasis`,
+    `listProjectionGroupStatuses`, and `lookupProjectionGroupStatus` decode the frozen
+    public SQL status contract. Catalog registration and reviewed adoption now reconcile
+    per-group append/checkpoint cursor authority transactionally.
+  - Projection catalogs now declare executable `ProjectionRevision` bridges, total
+    `PhysicalTargets` mappings, per-target schema/provisioner/validator contracts, and
+    ordered promotion names. Candidate Language 5 accepts `projection-revision` blocks and scaffolds
+    transaction-local provision, validation, live, replay, and verification holes.
+  - `Keiro.ReadModel.Rebuild` now implements durable schema-versioned target generations,
+    converging candidate replay beside a live serving revision, renewable Kiroku history
+    retention, resumable writer-fence/final-head phases, bounded atomic multi-target
+    promotion, async dedup/checkpoint reconciliation, restricted exact-shape cloning, and
+    dependency-aware retired-generation preview/drop. `ProjectionCatalogOperations`
+    exposes dedicated versioned run and retirement reports without widening the legacy
+    offline rebuild protocol.
+  - `Keiro.DeterministicId.deterministicIdProbes` centralizes the unchanged
+    current-first, legacy-only-for-moved-seeds compatibility order shared by
+    process-manager preflights and generation-0 awakeable adoption.
+  - `QueryFreshness`, `HeadScope`, `QueryCursorAuthority`, `ReadModelBlueprint`, truthful
+    read-model builders, and `runQueryWithFreshness`. Immediate reads need no cursor;
+    captured-head and caller-position waits require one durable cursor and fail with typed
+    missing-cursor or missing-position errors before polling. Candidate Language 5 generated
+    code now constructs only through `immediateReadModel` or `headWaitingReadModel`, deriving
+    cursor authority from its validated projection owner.
+  - Catalog query inventory now records normalized freshness and the optional cursor derived
+    from the validated projection owner. Validation rejects waiting queries with zero or
+    several compatible durable cursors, and canonical identity normalizes set-valued owned
+    targets.
+  - `ProjectionHandlerCapability`, `ResolvedQuerySupply`, and
+    `resolvedQuerySupplies` expose the closure-free relationship from each validated
+    query model to the single projection owner of its complete observed-target set.
+    Validation rejects empty, missing, and split suppliers with stable diagnostic codes;
+    several queries may resolve to one owner without duplicating its handler.
+
+  - `DomainDecision`, `DomainCommandOutcome`, `SilentCommandContext`,
+    `SilentDomainDecision`, and `DomainCommandHandler`, plus `runDomainCommand`
+    and `forgetDomainDecision`. Accepted decisions carry the exact non-empty
+    event batch; explicitly selected state-preserving silent edges carry typed
+    rejection/no-op payloads; unmatched commands and infrastructure failures
+    remain `CommandError`.
+  - Domain-aware SQL and projection runners, including controlled transaction and
+    catalog-fenced outcomes. Rejection/no-op opens no append transaction and runs
+    no callback or inline projection; an optimistic conflict returns only the
+    final rehydrated decision.
+  - Additive `DomainRouter` and `DomainProcessManager` configurations, detailed
+    one-shot result families, and configurable/default workers. Accepted,
+    rejection, and no-op are handled; accepted duplicates remain distinct; only
+    genuine `CommandError` enters existing failure policy. Workers use strict
+    payload-free summaries rather than retaining detailed fan-out results.
+  - The `keiro.command.decision` span attribute and
+    `keiro.command.decisions` counter, with the closed value set `accepted`,
+    `rejected`, and `no_op`. Application payloads never become telemetry labels
+    or error descriptions.
+  - `subscriptionPositionFromInventory` derives a subscription's durable floor
+    across all matching consumer-group members, and `readSubscriptionPosition`
+    consumes Kiroku's public one-statement checkpoint inventory instead of
+    querying the owned table. `storeHeadPosition` delegates to Kiroku 0.6's
+    public payload-free visible-global-head effect; transactional rebuild
+    completion uses its matching public statement.
+  - `recordProjectionGlobalPositionDistance` records the preferred
+    `keiro.projection.global_position_distance` gauge and the deprecated
+    compatibility `keiro.projection.lag` gauge from the visible head and durable
+    member floor. Both use `{position}` and neither claims to count relevant
+    events.
+  - Projection catalog subscriptions now carry Kiroku's
+    `MissingCheckpointPolicy` through registration, inventory, stable rendering,
+    ordering, fingerprints, and operator JSON. Validation rejects
+    `FromCurrentHead` for replayable clear-before-replay ownership.
+  - Group rebuild uses `resetSubscriptionCheckpointsTx`, returns the exact reset
+    member keys, and reports `RebuildSubscriptionCheckpointsMissing` while
+    condemning the entire preparation transaction if a declared subscription has
+    no persisted member. The legacy unmanaged rebuild also uses the public API.
+  - Projection catalog fingerprints now use an injective, length-prefixed
+    canonical preimage and explicit `catalog-v3:` / `slice-v2:` prefixes. Group
+    registration and rebuild lifecycle fences use only the affected group slice,
+    while rebuild runs retain the whole catalog fingerprint as provenance.
+  - `previewCatalogAdoption` and `adoptCatalogGroups` provide a read-only plan and
+    an all-or-nothing path for adopting reviewed slice changes and reconciling
+    query-model registration metadata. Adoption normally requires a live group;
+    a failed stale-format group may adopt while remaining fenced for recovery.
+  - `CatalogRebuildRunPreCanonical` and `preCanonicalRunSliceSentinel` make the
+    migration-0024 recovery boundary explicit. Sentinel runs are never resumable
+    but are inspectable and idempotently abandonable while active; failed
+    stale-format groups can be adopted without lifting their fence, and a fresh
+    rebuild can then start from `failed`.
+  - `CatalogAsyncDedupSpec`, `catalogAsyncIdempotencyKeys`,
+    `AsyncDedupBackfill`, `collectAsyncDedupBackfill`,
+    `resetDeclaredSubscriptions`, `insertProjectionDedupBatchStmt`, and
+    `CatalogRebuildPromotionCheckpointsMissing` expose the catalog-derived
+    redelivery-safety inputs and transactional primitives used by rebuild
+    promotion.
+  - `Keiro.Workflow.Resume.resumeWorkflowsOnceUpTo` runs a resume pass over at
+    most the requested number of candidates. `resumeWorkflowsOnce` retains its
+    unbounded compatibility behavior and delegates to the bounded function.
+
+  - `Keiro.Projection.Catalog.Operations` derives versioned JSON inventory,
+    pure/registered rebuild previews, and start/inspect/resume/abandon actions
+    from one `ValidatedProjectionCatalog`. Callers cannot provide replacement
+    targets, sources, handlers, subscriptions, or dedup lists.
+
+  - `Keiro.ReadModel.Rebuild.abandonCatalogRebuild` records explicit failure
+    evidence against both the durable run and its catalog group while retaining
+    the writer fence.
+
+  - `Keiro.Workflow.Schema.terminalMarkers` / `terminalMarkersTx` report which
+    stopping terminal markers a workflow generation carries, in one query.
+
+  - `Keiro.Workflow.Schema.workflowStepLockKey` exposes the per-step advisory-lock
+    key derivation shared by the append path and the suspend write.
+
+  - `Keiro.Workflow.Gc.runWorkflowGcWorkerWith` takes a `Text -> IO ()` logging
+    hook, mirroring the resume worker's `logEvent`. It reports both a failed pass
+    and a partial one (fewer workflows collected than scanned).
+
+  - A resume pass can advance several workflows at once. Set
+    `WorkflowResumeOptions.maxConcurrentAdvances` above 1 and `resumeWorkflowsOnce`
+    advances that many candidates concurrently, so one slow step body no longer
+    delays every other workflow in the pass. It is safe by construction —
+    discovery returns one row per instance, each advance holds its own lease, and
+    the append path's per-step advisory lock already serializes same-step writers
+    across processes — but it multiplies in-flight database traffic, so size it
+    against the store's connection-pool headroom. The default of 1 preserves the
+    previous sequential behaviour exactly. `logEvent` may now be called from
+    several threads and must be thread-safe when concurrency is enabled.
+
+  - `Keiro.Workflow.Resume.ResumeSummary` has `Semigroup` and `Monoid` instances
+    that add fields, so per-candidate deltas combine into a pass summary that does
+    not depend on the order candidates finish in.
+
+  - `Keiro.Timer.drainDueTimersWith` / `drainDueTimers` claim and fire up to a
+    caller-supplied number of due timers in one pass, returning how many were
+    processed. Per-timer semantics are `runTimerWorkerWith`'s, unchanged; the
+    requeue-and-gauge preamble now runs once per batch instead of once per timer,
+    so a backlog of due timers no longer drains at one row per poll tick.
+    `Keiro.Workflow.Sleep.drainWorkflowSleepTimers` is the batched sibling of
+    `runWorkflowTimerWorker`, routing sleeps and process-manager timers the same
+    way. `runTimerWorker` / `runTimerWorkerWith` are unchanged.
+
+  ### Bug Fixes
+
+  - `Keiro.version` now renders Cabal's generated package metadata instead of a stale
+    hand-maintained literal, so diagnostics and telemetry automatically follow each release.
+  - The durable-workflow reference and worked guide now document at-least-once
+    step actions, opaque awakeable-id publication, fresh publication after
+    `continueAsNew`, and the real `IOE` constraints. Compile-owned forwarding
+    signatures keep the displayed workflow API aligned with the public modules.
+  - Fresh workflow awakeables are now opaque allocation results. Generation-0
+    coordinate probes are isolated behind `Keiro.Workflow.Awakeable.Compatibility`,
+    while runtime adoption and the compatibility surface share one internal identity
+    implementation; ordinary workflow and generated-code APIs no longer expose a
+    coordinate-derived candidate for a fresh awakeable.
+  - Schema-versioned rebuilds now enforce an absolute database-clock deadline for
+    writer-fence and promotion lock attempts, acquire every target relation in one
+    cumulative lock statement, and return typed phase-specific deadline failures.
+    Async redelivery evidence is staged incrementally in PostgreSQL and admitted against
+    a persisted operator limit; candidate verification, set-based dedup installation,
+    checkpoint reconciliation, and lease release complete in a resumable preparation
+    phase before target relations are locked.
+  - Cursorless read models built through `immediateReadModel` with `NoQueryCursor`
+    now fail fast with `ReadModelMissingCursor` on every public wait path. The
+    exported `waitFor` and deprecated `runQueryWith` waiting overrides no longer
+    poll the private cursor sentinel for the full timeout or record a spurious
+    `keiro.projection.wait.timeouts` increment. Models with durable cursors,
+    including all directly constructed 0.11 records, retain their behavior.
+  - `Keiro.ReadModel.Rebuild.startRebuild` now recognizes a cursorless model through
+    `readModelCursorAuthority` and skips the subscription-checkpoint reset because
+    there is no cursor to reset. It no longer passes the private NUL-prefixed
+    compatibility sentinel into Kiroku, while preserving the documented fence,
+    truncate, and dedup clear used by generated inline Language-5 rebuild helpers.
+  - A workflow suspended on a due sleep while no timer worker ran no longer makes
+    the documented `ResumeSummary.advanced > 0` drain loop spin forever. It now
+    reports `advanced = 0` and `sleepDue = 1`, preserving discovery while naming
+    the blocked remedy.
+  - Offline catalog rebuild promotion now backfills replayable async projection
+    dedup rows for each subscription's replayed redelivery window and advances
+    every declared checkpoint member to the captured head in the promotion
+    transaction. Previously the reset checkpoints and deleted dedup rows caused
+    every replayed event to be redelivered and re-applied after promotion,
+    corrupting non-idempotent async read models.
+  - Catalog adoption no longer silently succeeds after a zero-row query-registration
+    update. It updates or inserts every selected catalog registration and deletes a
+    previewed renamed-model row only when no registration in the complete catalog claims
+    the old name, all in the slice-adoption transaction.
+  - A database upgraded by migration 0024 while a catalog rebuild was
+    `rebuilding` or `failed` can now recover entirely through supported APIs:
+    abandon the pre-canonical run, adopt the fenced stale-format group, and start
+    a fresh canonical rebuild.
+  - Resuming an interrupted catalog rebuild after a deploy reorders the group's replayable
+    projection declarations now refuses with `CatalogRebuildContractMismatch` instead of
+    silently applying the remaining history in a different adapter order.
+  - Multi-source catalog rebuilds again apply events in strictly ascending global position
+    across sources. Buffered chunks are clamped to the smallest safe source horizon, and
+    the runner records `replay.global-position-regression` or
+    `replay.buffer-horizon-stalled` invariant evidence instead of promoting if ordering
+    would regress or the merge cannot advance. Per-event source-read counts are unchanged.
+  - Upgrades with non-ASCII process-manager correlations, router keys, or
+    awakeable labels now deduplicate against IDs written before deterministic seed
+    encoding switched to UTF-8. The runtime probes the frozen historical identity
+    alongside the current one, with no extra database probe for ASCII seeds, and
+    adopts in-flight generation-0 awakeables rather than orphaning them. See ADR
+    0024 for the operator-attested removal criteria.
+
+  - Awakeable cancellation now serializes with a concurrent suspend write under
+    the awaited step's advisory lock. Suspend arbitration also consults a valid
+    `awk:` awakeable row after an absent step-index result, keeping the instance
+    `running` when the awakeable is already completed or cancelled. A cancellation
+    that committed just before the stale suspend write can therefore no longer
+    strand the workflow as undiscoverable `suspended` work.
+
+  - A workflow that goes terminal while the resume worker is recording its crash
+    no longer aborts the rest of the pass. The crash-recording `UPDATE` matches no
+    row once the workflow is terminal, which used to fail a single-row decoder;
+    because the crash record sits outside the per-advance error handling, that
+    store error escaped the whole pass and every remaining candidate was skipped
+    until the next tick. The race is now logged as `ResumeCrashRecordSkipped`,
+    counted under `transientErrors`, and the pass continues.
+
+  - Workflow garbage collection survives errors. A failing deletion is isolated to
+    its own workflow instead of aborting the batch, and `WorkflowGcSummary`'s
+    `deleted` now counts workflows actually collected rather than restating
+    `scanned`. `runWorkflowGcWorker`'s loop catches store errors and synchronous
+    exceptions per pass and continues on the next tick — previously a bare
+    `forever` loop that the first transient error ended until process restart.
+
+  - Deterministic ids are derived from the UTF-8 bytes of their seed text rather
+    than each character's codepoint truncated to eight bits. The old encoding gave
+    two different seeds the same id whenever their characters agreed modulo 256
+    (`"ā"` and `"\SOH"`, and many CJK pairs), which wedged the workflow journal —
+    the colliding step's append was refused as a duplicate event id on every
+    retry, until the resume worker marked the workflow failed — and silently
+    suppressed a legitimate process-manager command. Affects
+    `Keiro.Workflow.deterministicJournalId`, `Keiro.Workflow.Sleep.sleepTimerId`,
+    `Keiro.Workflow.Awakeable.deterministicAwakeableId`, and
+    `Keiro.ProcessManager.deterministicCommandId`.
+
+    **For ASCII seeds the two encodings are byte-identical, so every id in a
+    deployment that uses ASCII workflow names, ids, step names, sleep names,
+    awakeable labels, patch ids, and correlation ids is unchanged.** There is no
+    migration. Only non-ASCII seeds derive new ids; in-flight consequences are
+    bounded (a journal still replays, a sleep may arm one duplicate timer whose
+    fire collapses idempotently, a legacy generation-0 awakeable id is no longer
+    adopted, and a retried process-manager emission may emit one duplicate
+    command). The derivation is now frozen and pinned by fixtures: see
+    `docs/adr/0024-deterministic-ids-hash-utf-8-seed-bytes-and-are-frozen-replay-identity.md`.
+
+  ### Other Changes
+
+  - `ConsistencyMode`, `StrongScope`, `Strong`, `Eventual`, `PositionWait`,
+    `defaultStrongWaitOptions`, `runQueryWith`, and the legacy `ReadModel` waiting/cursor
+    record fields remain source-compatible in 0.12 and are scheduled for removal in 0.13.
+    Use the truthful freshness/cursor façade; legacy `PositionWait` with no target retains
+    its historical immediate behavior during the migration window.
+
+  - The source distribution now includes the BSD-3-Clause license file.
+
+  - Bounded workflow drains repeat while `ResumeSummary.advanced > 0`, not while
+    `discovered > 0`. `discovered` remains the admitted pool size; `advanced`
+    counts only fresh journal appends, crash-ceiling terminal failures, and
+    externally delivered wakes observed mid-pass. Replay-only re-suspensions,
+    paced retries, unregistered workflow names, foreign leases, transient errors,
+    and due sleeps remain blocked in place; due sleeps are reported separately as
+    `sleepDue`.
+
+  - Workflow discovery is now exact: `findUnfinishedWorkflowIds` returns an
+    instance only when its status is `running`, or `suspended` with a due
+    `wake_after`. A workflow parked on an awakeable, a child, or a future-dated
+    sleep is no longer re-claimed, replayed, and re-suspended on every resume
+    pass, so idle cost no longer scales with the number of parked workflows.
+    Every path that resolves or abandons a wake writes the instance row in the
+    same transaction; a third-party wake source that transitions its own durable
+    row without appending to the journal must now flip the owning instance row
+    itself. See `docs/adr/0023-workflow-discovery-is-exact-and-the-instance-row-is-the-complete-wake-ledger.md`.
+
+  - `Keiro.Workflow.Awakeable.cancelAwakeable` flips the owning workflow's
+    instance row to `running` in the same transaction as the cancellation, so the
+    workflow is discovered and can observe the cancellation. Its signature is
+    unchanged; `Keiro.Workflow.Awakeable.Schema.cancelAwakeableTx` now returns
+    `Maybe (Text, Text)` (the owner's name and id) instead of `Bool`.
+
+  - `Keiro.Workflow.Sleep.workflowSleepFireAction` clears `wake_after` only when
+    its journal append is fresh, so a stale re-fire can no longer erase the wake
+    hint written by a later sleep's first arm.
+
+  - The resume worker no longer unions `findRunningChildIds` into discovery; a
+    freshly spawned child is already discovered through the instance row
+    `spawnChild` writes. The query remains exported for operator inspection.
+
+  - Fewer database round-trips per workflow step: the run-entry terminal probe is
+    one query instead of two, the terminal boundary check rides the append
+    transaction instead of costing a separate query before and after each action,
+    and `claimInstance` no longer resolves `MAX(generation)` on every claim.
+
+  - `Keiro.Workflow`'s overview gains a "Writing a custom wake source" section
+    stating the four obligations a third-party wake source owes — a durable row
+    keyed by the logical workflow, delivery under the awaited step name, an arm
+    that re-checks the row and re-delivers, and an instance-row write on every
+    lifecycle transition — with the rotation race spelled out on
+    `appendJournalEntryReturningId`. The same contract is written for adopters in
+    `docs/guides/durable-workflows.md` and `docs/user/durable-workflows.md`.
+
+  - `continueAsNew` documents that rotating abandons any awakeable id already
+    handed out: the next generation re-runs the allocation step and hands out a
+    fresh one, so the holder must be re-notified from that step. Stated on
+    `continueAsNew`, on `Keiro.Workflow.Awakeable.awakeableNamed`, and in the
+    guide.
+
+  - A "what suspension costs" section in both durable-workflow documents, the
+    roadmap, and the production-status page: parked workflows are free, and the
+    costs that remain are due sleeps awaiting a timer worker, crash retries, and
+    journal replay under the default `snapshotPolicy = Never`.
+
+  - Corrected drift: `recordStepTx`'s haddock named a two-column conflict key that
+    has been four columns since migration 0008, and `Keiro.Workflow.Gc` now states
+    that collecting a terminal parent deliberately detaches its still-running
+    children.
   ## [0.11.0.0] - 2026-08-05
 
   ### Breaking Changes
@@ -546,14 +997,14 @@ description: |
 
   BSD-3-Clause.
 description-type: markdown
-hash: d9122b01f74c8424165ff1afe9c8c2f3c90418bf8c87b0f336f03a8676ad7c33
+hash: 3f44affc38f1c5364766774e692aa33950209a8e4301bf472c8f23c0971d0f30
 homepage: https://github.com/shinzui/keiro#readme
-latest: 0.11.0.0
+latest: 0.12.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Event sourcing framework and workflow engine
 test-bench-deps:
-  aeson: '>=2.2 && <2.3'
+  aeson: '>=2.2.2 && <2.3'
   base: '>=4.21 && <5'
   bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.8'
@@ -569,14 +1020,14 @@ test-bench-deps:
   hs-opentelemetry-sdk: '>=1.0 && <1.1'
   hs-opentelemetry-semantic-conventions: '>=1.40 && <2'
   hspec: '>=2.11'
-  keiki: '>=0'
+  keiki: '>=0.9 && <0.10'
   keiki-codec-json: '>=0'
   keiro: '>=0'
-  keiro-core: ^>=0.11.0.0
+  keiro-core: ^>=0.12.0.0
   keiro-test-support: '>=0'
-  kiroku-store: '>=0.3 && <0.4'
+  kiroku-store: '>=0.7 && <0.8'
   process: '>=1.6 && <1.7'
-  shibuya-core: '>=0.8.0.1 && <0.9'
+  shibuya-core: '>=0.9.0.0 && <0.10'
   stm: '>=2.5 && <2.6'
   streamly-core: '>=0.3 && <0.4'
   tasty-bench: '>=0.4'
