@@ -9,16 +9,18 @@ all-versions:
 - 0.9.0.0
 - 0.10.0.0
 - 0.11.0.0
+- 0.12.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.2.1 && <2.3'
   base: '>=4.21 && <5'
   bytestring: '>=0.12 && <0.13'
   containers: '>=0.6 && <0.8'
+  cryptohash-sha256: '>=0.11.102 && <0.12'
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
   keiki: '>=0.9 && <0.10'
-  keiro-core: ^>=0.11.0.0
+  keiro-core: ^>=0.12.0.0
   keiro-dsl: '>=0'
   megaparsec: '>=9.6 && <9.9'
   mmzk-typeid: '>=0.7 && <0.8'
@@ -35,6 +37,206 @@ changelog: |
   [Keep a Changelog](https://keepachangelog.com/), and the package follows the
   [Haskell Package Versioning Policy](https://pvp.haskell.org/).
 
+  ## Unreleased
+
+  ## 0.12.0.0 — 2026-08-14
+
+  ### Breaking Changes
+
+  - Generated `WorkflowRuntime` modules no longer expose the pure
+    `awaitAwakeableId` coordinate helper. They instead expose an abstract
+    `AwaitBinding`, one value per declared await, and `allocateDeclaredAwait`, which
+    allocates through the runtime and returns the opaque `AwakeableId` together with
+    its await action. Compiled generated-runtime consumers now need the direct
+    dependencies required by that effectful allocation surface.
+  - Removes the zero-caller Spec-only `pureRefusals` and `constraintPlan` shims
+    from `Keiro.Dsl.ScaffoldRun`. Use `pureRefusalsForService` and
+    `constraintPlanForService`; callers that genuinely have only a `Spec` can
+    cross the compatibility boundary explicitly with `legacyCheckedService`.
+  - The public DSL AST replaces read-model `rmConsistency`/`rmScope`/`rmFeed`/
+    `rmSubscription` with `rmFreshness` and `rmSupply`, replaces projection-owner
+    `poFeed` with `poDelivery`, and adds `ProjectionDelivery`,
+    `QueryFreshnessNode`, and `ReadModelSupply`. `DiagnosticCode` gains the
+    catalog cursor/source-ordering and delivery/freshness evolution cases.
+    Exhaustive consumers and direct record construction must migrate; released
+    source-language behavior is unchanged.
+  - Removes the semantic-only planning and check entry points from
+    `Keiro.Dsl.ScaffoldRun`: `planServiceScaffold`, `planServiceScaffoldWithGoldens`,
+    `planServiceScaffoldWithRuntimePackage`,
+    `planServiceScaffoldWithRuntimePackageAndGoldens`, `planScaffold`,
+    `planScaffoldWithGoldens`, and `checkServiceDiagnostics`. Once behavior provenance
+    became part of planning, these wrappers could only derive a `CompatibilityLineOnly`
+    source index, whose behavior-source join refuses every aggregate transition and
+    rejection anchor — so they refused every transition-bearing service that they
+    planned cleanly under 0.11.0.0. Migrate by parsing with `parseSourceDocument` and
+    passing the document's `documentSourceIndex` to `planIndexedServiceScaffold`,
+    `planIndexedServiceScaffoldWithGoldens`,
+    `planIndexedServiceScaffoldWithRuntimePackage`,
+    `planIndexedServiceScaffoldWithRuntimePackageAndGoldens`, or
+    `checkIndexedServiceDiagnostics`. A `Spec` constructed programmatically can still
+    be planned by building a complete exact index with
+    `Keiro.Dsl.SourceIndex.exactSemanticSourceIndex` over `semanticSourceSubjects`,
+    taking responsibility for the spans it asserts. The Spec-only module-set builders
+    (`scaffoldModules`, `scaffoldModulesWithGoldens`) and every execution entry point
+    are unchanged.
+  - The public DSL AST adds `DomainOutcomeTypes`, `TransitionOutcome`, outcome
+    fields to `Aggregate`/`Transition`, and corresponding located duplicate
+    evidence. `LanguageFeature`, `RuntimeCapability`, and `DiagnosticCode` gain
+    typed-outcome cases, and `BehaviorRequirement` gains
+    `requirementDomainOutcome`; exhaustive consumers and direct record
+    construction must be updated. The syntax and generated API exist only in
+    candidate language 5.
+  - The public DSL AST changes `WqField.wqfType` from `Name` to
+    `QueuePayloadType`, adds `wqfLoc`, and adds optional `queryTypes` to
+    `ReadModelNode`. `UseSite`, `MappedRootKind`, `MappedConsumer`,
+    `TypeGraphError`, `DiagnosticCode`, and `TypeGraph` gain mapped
+    queue/read-model/projection cases or fields; exhaustive consumers and direct
+    record construction must be updated. Existing language-1–4 source and
+    generated meaning is unchanged.
+  - `WorkspaceMember` gains `wmSourceIndex`, `WorkspaceSpec` gains `wsSourceIndex`, and
+    `composeWorkspace` now accepts `ParsedSourceDocument` inputs. `DiagnosticCode` gains
+    `WorkspaceSourceIndexInvalid`; exhaustive matches and direct record construction must be
+    extended. Bare-`Spec` adapters remain available but expose only `CompatibilityLineOnly`
+    positions rather than fabricated exact columns.
+  - `BehaviorRequirement` gains stable `requirementOrigin` and optional
+    `requirementExactLocation` fields; `Refusal` and `DiagnosticCode` gain behavior-source-anchor
+    cases. Exhaustive library consumers must extend their matches. Scaffold and check planning now
+    require a complete exact source index and refuse missing, inexact, duplicate, or colliding
+    behavior anchors before writes.
+  - `ScaffoldRecord` and `WorkspaceRecord` gain optional semantic-impact snapshots;
+    `ScaffoldReport` and `WorkspaceScaffoldReport` gain typed semantic and generated-artifact impact
+    fields. Exhaustive direct record construction must initialize the new fields. Standalone
+    scaffolding now reports an existing byte-identical generated module as `Unchanged`, matching the
+    workspace path instead of rewriting it.
+  - Regenerate mapped-service output once: declaration-wide assertions moved from every aggregate
+    `Harness` into the context `StructuralConformance` module, which must be added to the consuming
+    Cabal module inventory; the context `BehaviorSourceMap` and additive ledger `semantic-impact`
+    row must be added at the same baseline. Compile the runtime package and run the generated service
+    conformance target after reconciling the Cabal fragment. Unrelated aggregate files are now
+    byte-stable when a declaration outside their semantic closure changes, and source-only movement
+    rewrites the source map rather than behavior contracts or create-once witnesses.
+  - Requires `kiroku-store >=0.7 && <0.8`, keeping generated conformance and
+    runtime fixtures on the same Kiroku effect surface as Keiro 0.12.
+
+  ### New Features
+
+  - Publishes Language 5 as the sole stable and default authoring contract. Language 4 remains an
+    immutable published compatibility contract. The conformance manifest now records explicit
+    per-suite language ownership, retains Language 4 generated bytes, and includes the live
+    workflow allocate/signal/completion proof in the stable Language 5 lane.
+  - Candidate Language 5 accepts bounded `external-read` declarations and lowers them to
+    versioned `AllRowsExternalRead` catalog contracts whose result shape is derived from
+    the checked query binding. Validation covers SQL identities, query/target cardinality,
+    revision compatibility, and surface generations; diff, ledger, pretty-print, and
+    workspace paths distinguish retirement, version addition, compatibility changes, and
+    result-shape changes. Create-once catalog holes include a typed keyed-contract helper
+    for application-owned private SQL implementations.
+  - Candidate Language 5 accepts projection-revision bridges and generates catalog
+    provisioner, schema-validator, physical-target live/replay, and verification holes.
+    Revision/provisioner identities and ordered promotion names participate in canonical
+    catalog and group-slice identity; published Languages 1–4 are unchanged.
+
+  - Exposes `checkedProjectionSupplies`, the lazily shared projection-supply
+    analysis attached to each `CheckedService`.
+  - Candidate Language 5 separates projection delivery from query freshness.
+    Projection owners declare `delivery = inline | subscription`; catalog-bound
+    read models declare `freshness = immediate | wait-for-head ...` and derive any
+    durable cursor from their validated owner. Capability diagnostics reject
+    missing, ambiguous, or unreachable waits before generation. Generated code
+    uses the truthful read-model builders, while diffs, ledgers, workspaces,
+    harnesses, fingerprints, and compiled conformance expose delivery, freshness,
+    and cursor facts independently. Languages 1–4 retain byte-compatible
+    `feed`/`consistency`/`scope` behavior.
+  - Exposes `Keiro.Dsl.ProjectionSupply` as the shared order-independent authority for
+    catalog query-to-owner resolution. Candidate Language 5 accepts several query models
+    supplied by one owner without legacy aggregate projection clauses, rejects split or
+    double ownership with located diagnostics, generates source-selected inline handlers
+    once, and records separate backing-target and supplier facts in scaffold ledgers,
+    diffs, harnesses, workspaces, and compiled conformance.
+
+  - Candidate language 5 adds exhaustive typed domain outcomes. Aggregates may
+    declare rejection/no-op result types and label each live transition as
+    accepted, rejected with a checked reason, or no-op with a checked reason.
+    Scaffolding exports the aggregate `DomainCommandHandler`, dispatches directly
+    on Keiki's exact selected edge, and evaluates only the selected reason term.
+    Exact-reason conformance, mutation coverage, semantic diff/behavior identity,
+    and 8/32/128/512 linear generation scaling are included; fold fingerprints,
+    event history, snapshots, replay, and published languages 1–4 are unchanged.
+  - Candidate language 5 registers and generates mapped workqueue fields
+    (`field -> "wire" : TypeExpr`) and atomic read-model query input/result
+    clauses. Both resolve recursively into located `TypeGraph` roots, while
+    languages 1–4 reject the owned colon or `query` token. Workqueues receive
+    exact structural/opaque payload codecs inside their schema-version-1 envelope;
+    read models receive deterministic Haskell query aliases without claiming SQL
+    conversion or migration ownership.
+  - Adds one integrated mapped-surface qualification gate across events,
+    registers, workqueues, query contracts, and aggregate-derived projections.
+    Exact-tree tests prove locality remains constant under unrelated workspace
+    growth; restoring mutations cover bindings, queue arms/null policy, query
+    signatures, projection fingerprints, semantic consumers/reports, service-law
+    uniqueness, and semantic-impact ledger tags.
+  - Exposes `Keiro.Dsl.ConsumerTypePlan`, the codec-agnostic authority for
+    rendering a resolved mapped expression's consumer Haskell occurrence,
+    deterministic imports, and transitive mapped dependencies. Projection
+    semantic impact now derives event-only consumers for aggregate sources and
+    records category/all sources as unsupported heterogeneous boundaries.
+  - Exposes `Keiro.Dsl.SemanticImpact`, the checked and deterministic authority for mapping current
+    command-field, private-event-field, and register roots to aggregate declaration closures and the
+    complete service declaration inventory. Future mapped root constructors must extend its
+    exhaustive `UseSite` fold before the package compiles.
+  - Exposes `Keiro.Dsl.StructuralConformance` and emits one context module for declaration-wide
+    mapped binding, fixture, opaque-boundary, coverage, and projection-witness checks. The generated
+    service facade runs that list once under `structural/`; aggregate harnesses retain codec,
+    wire-policy, snapshot/register, and replay evidence only for their checked mapped closure.
+  - Exposes `Keiro.Dsl.SourceIndex`. `parseSourceDocument` and `lowerSurfaceDocument` return exact,
+    checked aggregate state and transition spans beside the unchanged semantic `ParsedSource`;
+    compatibility parser entry points retain syntax-valid duplicate-name graphs while reusing the
+    same surface/lowering seam. Workspace members retain normalized member-local indices and
+    `WorkspaceSpec` retains their checked, unrelocated union.
+  - Exposes `Keiro.Dsl.BehaviorSourceMap` and emits one deterministic context source map from frozen
+    behavior keys to exact current file, line, and column. Generated behavior contracts resolve
+    failure positions through that map; contracts and newly created witness comments no longer
+    embed volatile source lines. `behavior-obligations` appends exact `file`, `column`, and `quality`
+    location fields without changing schema `keiro-dsl/behavior-obligations/1`.
+  - `SemanticImpactSnapshot`, `MappedImpactDelta`, and `SemanticImpactReport` provide one canonical
+    checked-consumer projection for diff and scaffold explanations. Current single/workspace ledgers
+    persist an additive `semantic-impact` row, and current diff CLI JSON appends `semanticImpact` to
+    `keiro-dsl/diff-report/1`; legacy ledgers retain an explicitly unavailable old baseline.
+
+  ### Bug Fixes
+
+  - Generated await helper names now use the same suffix-aware derivation in
+    validation and emission, so colliding declarations such as `foo-bar` and
+    `foo_bar` are rejected before generation. Compiled workflow-runtime conformance
+    now proves the opaque generated allocation/signalling/resume path against a live
+    migrated PostgreSQL database.
+  - `keiro-dsl diff` now classifies read-model query-policy changes across the language
+    4-to-5 migration. Weakening legacy `consistency = Strong` to
+    `freshness = immediate`, or narrowing the waited head scope, is a breaking
+    `QueryFreshnessChanged` finding. Scope-preserving rewrites are equivalent,
+    strengthenings are additive `CompatibilityStrengthened` findings, and the spurious
+    additive `Strong scope widened` verdict from mixed-policy comparisons is gone.
+    Same-language diff classification is unchanged.
+  - Published languages 1–4 once again accept `outcome` as an ordinary identifier, restoring the
+    0.11.0.0 grammar that candidate-language-5 outcome syntax accidentally narrowed. Outcome clause
+    words are contextual rather than globally reserved, so language-5 sources may also use
+    `outcome` as an identifier while retaining typed accepted, rejected, and no-op clauses.
+
+  ### Other Changes
+
+  - Requires `keiro-core ^>=0.12.0.0`, matching the stable Language 5 runtime
+    contract and the lockstep package release.
+  - The source distribution now includes the BSD-3-Clause license file.
+  - Regenerates the 39-entry checked-in conformance corpus so every generated
+    provenance banner records `keiro-dsl 0.12.0.0`; generated behavior and all
+    non-banner bytes remain unchanged.
+  - Check, scaffold, harness, and diff paths now share one projection-supply
+    analysis per run and per diff side, while replay-impact planning reads each
+    checked service's cached type graph. Diagnostics, generated bytes, scaffold
+    records, and diff reports are unchanged.
+  - Source-span capture now uses Megaparsec's offset-derived consumed chunk instead of repeatedly
+    measuring the complete remaining `Text` suffix. Exact half-open spans, parser compatibility, and
+    generated service behavior are unchanged; the effect is limited to DSL parse-time tooling.
   ## [0.11.0.0] - 2026-08-05
 
   ### Breaking Changes
@@ -1136,9 +1338,9 @@ description: |-
   symbol-free deterministic layer plus typed holes, never a keiki symbolic
   operator (the firewall invariant).
 description-type: haddock
-hash: 3f5a0ade83fa6f24480af0fb17a21e33d330427f174e0b84b33a06b578384d4a
+hash: 9dd0ab1c7d34c9199c156172d70e48adc14b9fd69c036de3a5af0c2b0189eb24
 homepage: ''
-latest: 0.11.0.0
+latest: 0.12.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Typed specification toolchain for keiro services
@@ -1152,20 +1354,23 @@ test-bench-deps:
   directory: '>=1.3 && <1.4'
   effectful-core: '>=0'
   filepath: '>=1.4 && <1.6'
-  hasql-transaction: '>=0'
+  hasql: '>=1.10 && <1.11'
+  hasql-transaction: '>=1.1 && <1.3'
   hspec: '>=2.11'
   keiki: '>=0.9 && <0.10'
   keiro: '>=0'
   keiro-core: '>=0'
   keiro-dsl: '>=0'
   keiro-pgmq: '>=0'
-  kiroku-store: '>=0.3 && <0.4'
+  keiro-test-support: '>=0'
+  kiroku-store: '>=0.7 && <0.8'
   mmzk-typeid: '>=0.7 && <0.8'
   pgmq-config: '>=0'
   pgmq-core: '>=0'
   process: '>=1.6 && <1.7'
-  shibuya-core: '>=0'
+  shibuya-core: '>=0.9.0.0 && <0.10'
   tasty-bench: '>=0.5 && <0.6'
   text: '>=2.1 && <2.2'
   time: '>=1.12 && <1.15'
   uuid: '>=1.3 && <1.4'
+  vector: '>=0.13 && <0.14'
