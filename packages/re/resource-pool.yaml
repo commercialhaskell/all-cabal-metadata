@@ -17,6 +17,7 @@ all-versions:
 - 0.4.0.0
 - 0.5.0.0
 - 0.5.0.1
+- 0.5.1.0
 author: Andrzej Rybczak, Bryan O'Sullivan
 basic-deps:
   base: '>=4.14 && <5'
@@ -26,6 +27,10 @@ basic-deps:
   text: '>=0'
   time: '>=0'
 changelog: |
+  # resource-pool-0.5.1.0 (2026-08-15)
+  * Spawn a collector thread per stripe and make them wake up when appropriate
+    instead of polling every second.
+
   # resource-pool-0.5.0.1 (2026-07-08)
   * Fix a bug where a thread waiting for a resource would get stuck in the queue
     indefinitely if resource creation failed in another thread.
@@ -76,10 +81,45 @@ description: |
 
   A high-performance striped resource pooling implementation for Haskell based on
   [QSem](https://hackage.haskell.org/package/base/docs/Control-Concurrent-QSem.html).
+
+  ## Advice for library authors
+
+  If your library creates a pool on behalf of its users, don't expose your own,
+  restricted set of pool parameters (size, TTL, ...) and construct the
+  `PoolConfig` internally. Such a config inevitably lags behind features of this
+  library (stripe count, labels, whatever comes next) and users can't take
+  advantage of them without waiting for you to mirror each one.
+
+  Instead, take a function of type `IO a -> (a -> IO ()) -> PoolConfig a` as a
+  parameter. Your library supplies the resource creation and destruction actions:
+
+  ```haskell
+  createConnectionPool
+    :: ConnectionSettings
+    -> (IO Connection -> (Connection -> IO ()) -> PoolConfig Connection)
+    -> IO (Pool Connection)
+  createConnectionPool settings mkPoolConfig =
+    newPool $ mkPoolConfig connect disconnect
+    where
+      connect :: IO Connection
+      connect = ...
+
+      disconnect :: Connection -> IO ()
+      disconnect = ...
+  ```
+
+  while users retain full control over the rest of the pool configuration:
+
+  ```haskell
+  pool <- createConnectionPool settings $ \create free ->
+    setPoolLabel "db"
+      . setNumStripes (Just 1)
+      $ defaultPoolConfig create free 60 10
+  ```
 description-type: markdown
-hash: 0008f308ef77bb3d9481b47606613e5ecf3a0a63576619dbb76e8ce43da6bad3
+hash: d335648228caccd4ee8ba23e85db089df07b016e672f235e8078ac97f1debd19
 homepage: ''
-latest: 0.5.0.1
+latest: 0.5.1.0
 license-name: BSD-3-Clause
 maintainer: andrzej@rybczak.net
 synopsis: A high-performance striped resource pooling implementation
