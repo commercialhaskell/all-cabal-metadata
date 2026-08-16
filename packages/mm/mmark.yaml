@@ -28,6 +28,7 @@ all-versions:
 - 0.0.7.5
 - 0.0.7.6
 - 0.0.8.0
+- 0.1.0.0
 author: Mark Karpov <markkarpov92@gmail.com>
 basic-deps:
   aeson: '>=0.11 && <3'
@@ -52,6 +53,126 @@ basic-deps:
   unordered-containers: '>=0.2.5 && <0.3'
   yaml: '>=0.11.5 && <0.12'
 changelog: |
+  ## MMark 0.1.0.0
+
+  * Transformations can now report errors. A transformation runs in the new
+    `TransT` monad and can `report` an error at a `Span` and carry on, or
+    `abort` and give up on the document. Errors are collected in a
+    `ParseErrorBundle Text TransError`, the same type the parser produces, so
+    `errorBundlePretty` renders them against the source of the document
+    exactly like parse errors.
+
+  * Extensions can now perform effects. `TransT` is a monad transformer, so a
+    transformation may be run in `IO` or in any other monad, see `runTransM`.
+
+  * Every block and inline now carries the `Span` of the source it derives
+    from, see `blockSpan` and `inlineSpan`. A node that an extension creates
+    in place of another one inherits its `Span`, and a node assembled from
+    several others should be given the `spanUnion` of theirs.
+
+  * `runScanner` and `runScannerM` take the document as their second argument
+    now rather than their first, which is the order the rest of the pipeline
+    already used and which lets a scanner be partially applied:
+    `documentMetadata = runScanner metadataScanner`.
+
+  * Transformations are now applied to the document right away with `runTrans`
+    and `runTransM`, instead of being accumulated in an extension value and
+    applied just before rendering. `useExtension`, `useExtensions`,
+    `blockTrans`, and `inlineTrans` are gone, and so is the `Endo`-based
+    ordering that came with them: transformations are sequenced with `(>=>)`
+    and abort as soon as one of them reports an error.
+
+  * Added `runCheck` and `runCheckM`, which run a computation in the
+    transformation monad once against a document instead of applying it to
+    every top-level block. This way a check that concerns the document as a
+    whole does not have to be written as a transformation of a block it has no
+    interest in.
+
+  * Transformations are explicit and available in both directions:
+    `bottomUpBlocks`, `topDownBlocks`, `bottomUpInlines`, and
+    `topDownInlines`. The function given to `runTransM` is applied to
+    top-level blocks only, so the transformation that reaches the rest of the
+    document is the caller's choice.
+
+  * Rendering extensions still cannot fail. They are collected in a
+    `RenderExtension` value, which is now passed to `render` explicitly rather
+    than being stored in the document: `render :: RenderExtension -> MMark ->
+    Html ()`. Use `mempty` when there are none. Anything that can fail belongs
+    in a transformation.
+
+  * The `Text.MMark.Extension` module is gone. The two kinds of extension now
+    have a module each: `Text.MMark.Trans` for transformations and
+    `Text.MMark.Render` for render extensions. Both re-export the document
+    types, so writing either kind of extension takes one import. `scanner` and
+    `scannerM` moved to `Text.MMark`, next to `runScanner` and `runScannerM`.
+
+  * Block quotes now follow the CommonMark specification. Every line of a
+    block quote must begin with a `>` character, one per level of nesting,
+    instead of the quote continuing for as long as its content is indented.
+    Paragraphs inside a block quote can be continued lazily, that is, on lines
+    that lack the character. Note that fenced code blocks still have to be
+    closed explicitly, so a code fence that is opened inside a block quote and
+    not closed before the quote ends is a parse error.
+
+  * Block quotes now take precedence over tables. A line that begins with a
+    `>` character opens a block quote even when it looks like the header of a
+    table, so `> foo | bar` is a table inside a block quote instead of a table
+    whose first header cell is `> foo`. Unlike paragraphs, tables cannot be
+    continued lazily: a row that does not carry the block quote markers of the
+    table it belongs to ends both the table and the quote.
+
+  * Emphasis, strong emphasis, strikeout, subscript, and superscript can now
+    be applied to a part of a word. A delimiter run that could both open or
+    close markup used to be rejected; it is now taken to close the markup it
+    is inside of and to open new markup otherwise. Delimiter runs that lean
+    unambiguously one way or the other are classified exactly as before.
+
+  * A delimiter run now opens all of its markup as one group, however long the
+    run is, instead of being split into nested groups of at most two frames
+    each. The delimiters of a run consequently close from the inside out at
+    any length, which only changes the result for runs of five characters and
+    more: `_____foo_____` is now
+    `<em><strong><strong>foo</strong></strong></em>` as in CommonMark, rather
+    than `<strong><strong><em>foo</em></strong></strong>`.
+
+  * A run of underscores surrounded by word characters is now literal text
+    rather than markup, so `snake_case` and `to_string()` no longer have to be
+    escaped. This is the only case in which a markup character does not have
+    to be backslash escaped to be taken literally.
+
+  * Added the `UnmatchedClosingDelimiterRun` constructor to `MMarkErr`. A
+    delimiter run that can only close markup but has no markup to close used
+    to be reported as `NonFlankingDelimiterRun`; the latter is now reserved
+    for runs that have white space on both sides of them and so can neither
+    open nor close anything. Both errors are also reported at the beginning of
+    the whole delimiter run now, rather than at the beginning of the part of
+    it that MMark happened to recognize.
+
+  * An unclosed code fence whose last line lacks a line ending is now reported
+    as “expecting closing code fence or code block content” rather than as
+    “expecting newline”.
+
+  * The contents of a code span are no longer normalized by collapsing every
+    run of white space into a single space and trimming both ends. Following
+    CommonMark, only line endings become spaces now, and a single space is
+    removed from each end when the contents both begin and end with a space
+    without consisting of spaces alone. White space inside a code span is
+    therefore preserved verbatim, so `` `col1  col2` `` keeps its two spaces
+    and `` `a<tab>b` `` keeps its tab.
+
+  * Fixed a bug that made the info string of a fenced code block reject
+    backtick characters even when the fence was made of tildes. Only a
+    backtick fence can be confused with a backtick in its info string, so
+    ` ~~~ aa ``` ~~~ ` opens a code block now instead of being a parse error.
+
+  * Symbols such as `$`, `+`, and `=` now count as punctuation when the type
+    of the characters around a delimiter run is determined, as they do in
+    CommonMark since version 0.31. Emphasis cannot hang on such a character
+    anymore, so `*$*alpha` is a parse error rather than emphasized `$`.
+
+  * The test suite now follows the CommonMark specification 0.31.2 rather than
+    0.28.
+
   ## MMark 0.0.8.0
 
   * Exposed the following modules: `Text.MMark.Internal.Type`,
@@ -204,7 +325,7 @@ changelog: |
 
   ## MMark 0.0.3.0
 
-  * Code can interrupt paragraphs now, as per Common Mark spec.
+  * Code can interrupt paragraphs now, as per CommonMark spec.
 
   * Implemented parsing of reference-links (including collapsed and
     shortcut-style links).
@@ -254,10 +375,10 @@ description: |
   [![Hackage](https://img.shields.io/hackage/v/mmark.svg?style=flat)](https://hackage.haskell.org/package/mmark)
   [![Stackage Nightly](http://stackage.org/package/mmark/badge/nightly)](http://stackage.org/nightly/package/mmark)
   [![Stackage LTS](http://stackage.org/package/mmark/badge/lts)](http://stackage.org/lts/package/mmark)
-  ![CI](https://github.com/mmark-md/mmark/workflows/CI/badge.svg?branch=master)
+  [![CI](https://github.com/mmark-md/mmark/actions/workflows/ci.yaml/badge.svg)](https://github.com/mmark-md/mmark/actions/workflows/ci.yaml)
 
   * [Quick start: MMark vs GitHub-flavored markdown](#quick-start-mmark-vs-github-flavored-markdown)
-  * [MMark and Common Mark](#mmark-and-common-mark)
+  * [MMark and CommonMark](#mmark-and-commonmark)
       * [Differences in inline parsing](#differences-in-inline-parsing)
       * [Other differences](#other-differences)
   * [About MMark-specific extensions](#about-mmark-specific-extensions)
@@ -267,71 +388,52 @@ description: |
   * [License](#license)
 
   MMark (read “em-mark”) is a strict markdown processor for writers. “Strict”
-  means that not every input is considered valid markdown document and parse
+  means that not every input is considered a valid markdown document and parse
   errors are possible and even desirable, because they allow us to spot markup
-  issues without searching for them in rendered document. If a markdown
-  document passes the MMark parser, then it is likely to produce an HTML
-  output without quirks. This feature makes it a good choice for writers and
+  issues without searching for them in the rendered document. If a markdown
+  document passes the MMark parser, then it is likely to produce HTML output
+  without quirks. This feature makes it a good choice for writers and
   bloggers.
 
-  MMark in its current state features:
+  MMark features:
 
   * A parser that produces high-quality error messages and does not choke on
     the first parse error. It is capable of reporting several parse errors
     simultaneously.
 
-  * An extension system that allows us to create extensions that alter parsed
-    markdown document in some way.
+  * An extension system that allows us to create extensions that alter a
+    parsed markdown document or the way it is rendered. Extensions can perform
+    effects and can report errors of their own, which are shown against the
+    source of the document just like parse errors are.
 
-  * A [`lucid`](https://hackage.haskell.org/package/lucid)-based render.
-
-  There is also a blog post announcing the project:
-
-  https://markkarpov.com/post/announcing-mmark.html
+  * A [`lucid`](https://hackage.haskell.org/package/lucid)-based renderer.
 
   ## Quick start: MMark vs GitHub-flavored markdown
 
   It's easy to start using MMark if you're used to GitHub-flavored markdown.
-  There are four main differences:
+  There are three main differences:
 
-  1. URIs are not automatically recognized, you must enclose them in `<` and
+  1. URIs are not automatically recognized; you must enclose them in `<` and
      `>`.
 
-  2. Block quotes require only one `>` and they continue as long as the inner
-     content is indented.
+  2. HTML blocks and inline HTML are not supported.
 
-     This is OK:
+  3. See [differences in inline parsing](#differences-in-inline-parsing).
 
-     ```
-     > Here goes my block quote.
-       And this is the second line of the quote.
-     ```
+  ## MMark and CommonMark
 
-     This produces *two* block quotes:
+  MMark mostly tries to follow the CommonMark specification as given here:
 
-     ```
-     > Here goes my block quote.
-     > And this is another block quote!
-     ```
-
-  3. HTML blocks and inline HTML are not supported.
-
-  4. See [differences in inline parsing](#differences-in-inline-parsing).
-
-  ## MMark and Common Mark
-
-  MMark mostly tries to follow the Common Mark specification as given here:
-
-  https://spec.commonmark.org/0.28/
+  https://spec.commonmark.org/0.31.2/
 
   However, due to the fact that we do not allow inputs that do not make sense,
   and also try to guard against common mistakes (like writing `##My header`
-  and having it rendered as a paragraph starting with hashes) MMark obviously
+  and having it rendered as a paragraph starting with hashes), MMark obviously
   can't follow the specification precisely. In particular, parsing of inlines
-  differs considerably from Common Mark (see below).
+  is stricter than CommonMark (see below).
 
-  Another difference between Common Mark and MMark is that the latter supports
-  more (pun alert) common markdown extensions out-of-the-box. In particular,
+  Another difference between CommonMark and MMark is that the latter supports
+  more (pun alert) common markdown extensions out of the box. In particular,
   MMark supports:
 
   * parsing of an optional YAML block
@@ -346,42 +448,20 @@ description: |
 
   ### Differences in inline parsing
 
-  Emphasis and strong emphasis is an especially hairy topic in the Common Mark
+  Emphasis and strong emphasis is an especially hairy topic in the CommonMark
   specification. There are 17 ad-hoc rules defining the interaction between
-  `*` and `_` -based emphasis and more than an half of all Common Mark
+  `*` and `_` -based emphasis and more than half of all CommonMark
   examples (that's about 300) test just this.
 
-  Not only it is hard to implement, it's hard to understand for humans too.
-  For example, this input:
+  Almost none of that complexity is in deciding *what a delimiter run could
+  do*—CommonMark's notion of left- and right-flanking delimiter runs is
+  straightforward. It is in deciding what to do with a run that could just as
+  well open emphasis as close it, and the answer to that is a pile of special
+  cases that is hard to implement and harder for a human to remember.
 
-  ```
-  *(*foo*)*
-  ```
-
-  results in the following HTML:
-
-  ```
-  <p><em>(<em>foo</em>)</em></p>
-  ```
-
-  (Note the nested emphasis.)
-
-  Could it produce something like this instead?
-
-  ```
-  <p><em>(</em>foo<em>)</em></p>
-  ```
-
-  Well, why not? Without remembering those 17 ad-hoc rules, there going to be
-  a lot of tricky cases when the user won't be able to tell how markdown will
-  be parsed.
-
-  I decided to make parsing of emphasis, strong emphasis, and similar
-  constructs like strikethrough, subscript, and superscript more symmetric and
-  less ad-hoc. In 99% of practical cases it is identical to Common Mark, and
-  normal markdown intuitions will work OK for the users.
-
-  Let's start by dividing all characters into four groups:
+  MMark classifies delimiter runs exactly the way CommonMark does and then
+  resolves the ambiguous ones with a single rule. Let's start by dividing all
+  characters into four groups:
 
   * **Space characters**, including space, tab, newline, carriage return, and
     other characters like non-breaking space.
@@ -389,10 +469,12 @@ description: |
   * **Markup characters**, including the following: `*`, `~`, `_`, `` ` ``,
     `^`, `[`, `]`. These are used for markup and whenever they appear in a
     document, they must form valid markup constructions. To be used as
-    ordinary punctuation characters they must be backslash escaped.
+    ordinary punctuation characters they must be backslash escaped (there is
+    exactly one exception to this, see below).
 
   * **Punctuation characters**, which include all punctuation characters that
-    are not **markup characters**.
+    are not **markup characters**. Following CommonMark, symbols such as `$`,
+    `+`, and `=` count as punctuation here too.
 
   * **Other characters**, which include all characters not falling into the
     three groups described above.
@@ -406,61 +488,67 @@ description: |
   When **markup characters** or **punctuation characters** are escaped with
   backslash they become **other characters**.
 
-  We'll call **markdown characters** placed between a character of level `L`
-  and a character of level `R` *left-flanking delimiter run* if and only if:
+  Now take a run of **markup characters** placed between a character of level
+  `L` and a character of level `R`. It leans towards whichever of its two
+  neighbours is more solid, and that is what decides what it can do:
+
+  * `level(L) < level(R)`—the run hangs on the left hand side of a word, so it
+    can only *open* emphasis markup (and other similar things like
+    strikethrough, which we won't mention explicitly anymore for brevity);
+  * `level(L) > level(R)`—the run hangs on the right hand side of a word, so
+    it can only *close* emphasis markup;
+  * `level(L) == level(R) == 0`—there is white space on both sides of the run,
+    so it can do neither and the run is a parse error;
+  * `level(L) == level(R) > 0`—the run leans nowhere, so it is *ambiguous*.
+
+  The first two cases are exactly what the CommonMark specification calls a
+  left-flanking delimiter run that is not right-flanking, and a right-flanking
+  delimiter run that is not left-flanking. The last case is a run that is
+  both, and it is the only one where MMark has to make a decision of its own:
+
+  > An ambiguous run closes the markup it is inside of and opens new markup
+  > otherwise.
+
+  That is the whole rule, and it is what makes emphasis on a part of a word
+  work:
 
   ```
-  level(L) < level(R)
+  un*frigging*believable
+  H~2~O is not O~2~
+  x^2^ + y^2^ = z^2^
   ```
 
-  These **markup characters** sort of hang on the left hand side of a word.
-
-  Similarly we'll call **markdown characters** placed between a character of
-  level `L` and a character of level `R` *right-flanking delimiter run* if and
-  only if:
+  There is one exception to all of the above, and it is about the `_`
+  character. A run of underscores that has word characters on both sides of it
+  is not markup at all, it is literal text:
 
   ```
-  level(L) > level (R)
+  snake_case and to_string() and __dunder__
   ```
 
-  These **markup characters** hang on the right hand side of a word.
+  This is the one place where a **markup character** does not have to be
+  backslash escaped to be taken literally, and it exists because underscores
+  are so common inside identifiers. Asterisks are the way to emphasize a part
+  of a word.
 
-  *Emphasis markup* (and other similar things like strikethrough, which we
-  won't mention explicitly anymore for brevity) can start only as
-  *left-flanking delimiter run* and end only as *right-flanking delimiter
-  run*.
-
-  This produces a parse error:
+  A run with white space on both sides of it leans nowhere and can do nothing,
+  so these do not parse:
 
   ```
   *Something * is not right.
   Something __is __ not right.
   ```
 
-  And this too:
+  Neither does a run that closes markup that was never opened:
 
   ```
-  __foo__bar
+  Here goes bar*
   ```
 
-  This means that inter-word emphasis is not supported.
-
-  The next example is OK because `s` is an **other character** and `.` is a
-  **punctuation character**, so `level('s') > level('.')`.
-
-  ```
-  Here it *goes*.
-  ```
-
-  In some rare cases backslash escaping can help get the right result:
-
-  ```
-  Here goes *(something\)*.
-  ```
-
-  We escaped the closing parenthesis `)` so it becomes an **other character**
-  with level 2 and so its level is greater than the level of plain punctuation
-  character `.`.
+  Nor markup that is opened and never closed. That last one is what makes
+  `__foo__bar` an error rather than literal text: the first `__` opens strong
+  emphasis, the second one is inside a word and so is literal, and nothing
+  closes the strong emphasis afterwards.
 
   ### Other differences
 
@@ -472,14 +560,11 @@ description: |
   * Setext headings are not supported for the sake of simplicity.
   * Fenced code blocks must be explicitly closed by a closing fence. They are
     not closed by the end of document or by start of another block.
-  * Lists and block quotes are defined by column at which their content
-    starts. Content belonging to a particular list or block quote should start
-    at the same column (or greater column, up to the column where indented
-    code blocks start). As a consequence of this, block quotes do not feature
-    “laziness”.
-  * Block quotes are started by a single `>` character, it's not necessary to
-    put a `>` character at beginning of every line belonging to a quote (in
-    fact, this would make every line a separate block quote).
+  * Lists are defined by column at which their content starts. Content
+    belonging to a particular list should start at the same column (or greater
+    column, up to the column where indented code blocks start). As a
+    consequence of this, lists do not feature “laziness”, unlike in
+    CommonMark.
   * Paragraphs can be interrupted by unordered and ordered lists with any
     valid starting index.
   * HTML blocks are not supported because the syntax conflicts with autolinks
@@ -494,15 +579,15 @@ description: |
   * All URI references (in links, images, autolinks, etc.) are parsed as per
     RFC 3986, no support for escaping or support for entity and numeric
     character references is provided. In addition to that, when a URI
-    reference in not enclosed with `<` and `>`, then closing parenthesis
-    character `)` is not considered part of URI (use `<uri>` syntax if you
+    reference is not enclosed with `<` and `>`, then the closing parenthesis
+    character `)` is not considered part of the URI (use `<uri>` syntax if you
     want a closing parenthesis as part of a URI). Since the empty string is a
     valid URI and it may be confusing in some cases, we also force the user to
     write `<>` to represent the empty URI.
-  * Putting links in text of another link is not allowed, i.e. no nested links
-    is possible.
-  * Putting images in description of other images is not allowed (similarly to
-    the situation with links).
+  * Putting links in the text of another link is not allowed, i.e. no nested
+    links are possible.
+  * Putting images in the description of other images is not allowed (similarly
+    to the situation with links).
   * HTML inlines are not supported for the same reason why HTML blocks are not
     supported.
 
@@ -515,25 +600,34 @@ description: |
   ## Performance
 
   I [have compared](https://github.com/mrkkrp/md-bench) speed and memory
-  consumption of various Haskell markdown libraries by running them on an
-  identical, big-enough markdown document and by rendering it as HTML:
+  consumption of the Haskell markdown libraries that are still maintained by
+  running each of them on the same markdown document (the readme of
+  `megaparsec`, about 19 KB) and rendering it as HTML:
 
-  Library             | Parsing library     | Execution time | Allocated   | Max residency
-  --------------------|---------------------|---------------:|------------:|-------------:
-  `cmark-0.5.6`       | Custom C code       |       323.4 μs |     228,440 |         9,608
-  `mmark-0.0.5.1`     | Megaparsec          |       7.027 ms |  26,180,272 |        37,792
-  `cheapskate-0.1.1`  | Custom Haskell code |       10.76 ms |  44,686,272 |       799,200
-  `markdown-0.1.16` † | Attoparsec          |       14.13 ms |  69,261,816 |       699,656
-  `pandoc-2.0.5`      | Parsec              |       37.90 ms | 141,868,840 |     1,471,080
+  Library              | Parsing library | Execution time | Allocated   | Max residency
+  ---------------------|-----------------|---------------:|------------:|-------------:
+  `cmark-0.6.1`        | Custom C code   |       177.7 μs |     175,464 |        63,112
+  `commonmark-0.3`     | Parsec          |       7.502 ms |  39,616,824 |     1,042,184
+  `mmark-0.1.0.0`      | Megaparsec      |       7.680 ms |  33,609,608 |        70,712
+  `pandoc-3.10.2`      | Parsec          |       26.85 ms | 157,760,336 |     1,029,112
 
-  *Results are ordered from fastest to slowest.*
+  *Results are ordered from fastest to slowest. Measured with GHC 9.10.3.*
 
-  † The `markdown` library is sloppy and parses markdown incorrectly. For
-  example, it parses the following `*My * text` as an inline containing
-  emphasis, while in reality both asterisks must form flanking delimiter runs
-  to create emphasis, like so `*My* text`. This allowed `markdown` to get away
-  with a far simpler approach to parsing at the price that it's not really a
-  valid markdown implementation.
+  `cmark` is a binding to the C reference implementation, so it is in a
+  different league and will stay there. Among the Haskell implementations,
+  `mmark` and `commonmark` take about the same time, `mmark` allocating
+  somewhat less, and `pandoc` costs about three and a half times as much as
+  either—which is the price of being able to read and write everything rather
+  than one thing.
+
+  The number I would draw attention to is the last column. `mmark` holds on to
+  about 70 KB while it works, where `commonmark` and `pandoc` hold on to
+  around a megabyte, roughly fifteen times as much. If you render many
+  documents in one process, that is the figure that decides how the memory
+  profile of your program looks.
+
+  Two libraries that appeared in earlier versions of this table, `cheapskate`
+  and `markdown`, have been dropped: neither has had a release since 2020.
 
   ## Related packages
 
@@ -555,11 +649,11 @@ description: |
 
   Copyright © 2017–present Mark Karpov
 
-  Distributed under BSD 3 clause license.
+  Distributed under the BSD 3-clause license.
 description-type: markdown
-hash: b800f64e3b7688e83beac687ece3fea49cb0b91ba0af6dee5e0eafb21cf245c1
+hash: 7a69122e04c0ca74c741504c37a28af102b5032d585fdf5936a02a606eaf1478
 homepage: https://github.com/mmark-md/mmark
-latest: 0.0.8.0
+latest: 0.1.0.0
 license-name: BSD-3-Clause
 maintainer: Mark Karpov <markkarpov92@gmail.com>
 synopsis: Strict markdown processor for writers
