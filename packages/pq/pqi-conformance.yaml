@@ -15,6 +15,7 @@ all-versions:
 - 1.0.3.0
 - 1.0.4.0
 - 1.0.5.0
+- 1.0.6.0
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   base: '>=4.11 && <5'
@@ -22,11 +23,26 @@ basic-deps:
   containers: '>=0.6 && <0.9'
   directory: '>=1.3 && <1.4'
   hspec: '>=2.11 && <2.12'
+  network: '>=3.1 && <3.3'
   postgresql-libpq: '>=0.11 && <0.12'
   pqi: ^>=1.1
   testcontainers-postgresql: ^>=0.2
   text: '>=1.2 && <3'
 changelog: |
+  # v1.0.6.0
+
+  ## Non-breaking
+
+  - Added a `pipelineSync` spec covering a pipelined command whose result gets misattributed to a later, unrelated command after a prior pipeline aborted on a server error: a named-statement prepare discarded by the server after an earlier command in the same pipeline fails, followed by a plain `SELECT` in the next pipeline on the same connection, which must come back `TuplesOk` rather than short-circuiting as `CommandOk`. `pqi-native` 1.0.1.5 fails it, 1.0.1.6 fixes it. Found via `pqi-native` issue #9.
+
+  - Added a `connectdb` spec covering a mid-handshake server rejection: a listener that accepts the connection, writes the first three bytes of an `E`rrorResponse frame, then closes before the frame completes - mirroring how a server sheds load with e.g. "sorry, too many clients already". A sound adapter reports `ConnectionBad` with a classified error message, the same way it reports any other rejected handshake, instead of letting the underlying I/O exception escape `connectdb`.
+
+    Unlike most operation specs, this one drives a raw listener rather than the shared PostgreSQL container: the failure is about how an adapter reacts to a truncated read, which a real server only triggers racily (e.g. under `max_connections` pressure). A hand-rolled listener reproduces the exact byte pattern deterministically. Adds a new `network` dependency.
+
+    The spec asserts full equality on both `status` and `errorMessage`, not just `status`: an adapter that swaps in a made-up message instead of reproducing libpq's actual wording would otherwise slip through unnoticed. Getting that message comparison to hold required two adjustments once real libpq's behavior was checked against: the conninfo passes `sslmode=disable`, since libpq negotiates SSL before the startup packet by default and the candidate adapters under test never do, so without it the two sides would be reacting to the truncated bytes at different points in the protocol; and the listener's host is given as a literal IP (`127.0.0.1`) rather than a name, since libpq only parenthesizes a resolved IP in its failure message when it differs from the given host string, which a literal IP never does. Both attempts now also share one listener/port, since the failure message embeds the port number and two independently-bound ephemeral listeners would otherwise never produce an equal message even when every other detail matches.
+
+    `pqi-native` throws an uncaught `IOException` out of `connectdb` here, since only the initial TCP connect was wrapped in an exception handler, not the handshake read that follows it. Found via [`pqi-native` issue #8](https://github.com/nikita-volkov/pqi-native/issues/8), itself found while investigating `hasql` issue #329.
+
   # v1.0.5.0
 
   ## Non-breaking
@@ -201,9 +217,9 @@ description: |
   Contributions extending the suite are very welcome. The more thoroughly we
   cover the operations, the more confidence we can have in the adapters.
 description-type: markdown
-hash: 510456339b5efd8d8017e824cf9a79e7ff06dbe9c3b821b511343aa4c0f27c81
+hash: 4c5d0847b7251d59d3d3e6c20e6e7291ea85b087a41b3ad3a133497bd4fcf998
 homepage: https://github.com/nikita-volkov/pqi-conformance
-latest: 1.0.5.0
+latest: 1.0.6.0
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Differential conformance tests for pqi adapters
