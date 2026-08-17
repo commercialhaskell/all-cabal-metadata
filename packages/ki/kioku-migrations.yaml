@@ -2,6 +2,7 @@ all-versions:
 - 0.1.0.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.4.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.1 && <2.3'
@@ -10,8 +11,8 @@ basic-deps:
   containers: '>=0.6 && <0.8'
   hasql: '>=1.10 && <1.11'
   hasql-transaction: '>=1.2 && <1.3'
-  keiro-migrations: ^>=0.11.0.0
-  kiroku-store-migrations: ^>=0.3.0.0
+  keiro-migrations: ^>=0.13.0.0
+  kiroku-store-migrations: ^>=0.4.0.0
   pg-migrate: ^>=1.1.0.0
   pg-migrate-embed: ^>=1.1.0.0
   pg-migrate-import-codd: ^>=1.1.0.0
@@ -19,6 +20,63 @@ basic-deps:
   text: '>=2.0 && <2.2'
 changelog: |
   # Changelog
+
+  ## 0.4.0.0 — 2026-08-17
+
+  ### Breaking Changes
+
+  - `0012-relocate-projections-to-kioku-schema.sql` moves the seven Kioku-owned projections out of
+    the `kiroku` schema and into a dedicated `kioku` one, dropping the now-redundant name prefix:
+    `kiroku.kioku_memories` becomes `kioku.memories`, and likewise for `sessions`, `turns`,
+    `l1_watermarks`, `consolidation_decisions`, `scenes`, and `personas`. The shared Kiroku event
+    store does not move. `ALTER TABLE ... SET SCHEMA` plus `... RENAME TO` preserve each table's
+    OID, rows, indexes, constraints, owner, and grants; index and constraint names are deliberately
+    unchanged. The `vector` extension is not touched.
+  - The migration accepts exactly two catalog states — seven ordinary source tables with no occupied
+    target, or no source with seven ordinary targets — and raises before moving anything otherwise.
+    It is transactional, so a refusal leaves the catalog exactly as it was found. There are no
+    compatibility views: run it with writers stopped, before the new binary starts, and see
+    `docs/user/upgrading-to-the-kioku-schema.md`.
+  - The composed fresh-install plan is now 53 migrations: kiroku 11, keiro 30, kioku 12.
+  - Moved to `keiro-migrations ^>=0.13.0.0` and `kiroku-store-migrations ^>=0.4.0.0`. Those bring
+    eleven new framework migrations that Kioku composes but does not own: kiroku `0009` (the frozen
+    `kiroku.subscription_checkpoints_v1` view), `0010` (replay-history retention leases) and `0011`,
+    and keiro `0021`–`0030` (exact workflow discovery, then the schema-versioned projection rebuild,
+    promotion, and external-read-guard machinery). Keiro `0024` renames a rebuild-group column, so
+    complete or abandon any active catalog rebuild **before** upgrading.
+  - `kiroku-store-migrations` 0.4.0.0 corrects the payload of kiroku `0010`, which changes its
+    checksum. A database that already applied `0010` from the withdrawn 0.3.2.0 or 0.3.2.1 fails
+    every `up` and `verify` with `MigrationChecksumMismatch` until its ledger row is re-baselined
+    with that package's `ledger-fixups/2026-08-16-rebaseline-0010-checksum.sql`; kiroku `0011` then
+    converges its schema. A database that never reached `0010` — which is every database blocked by
+    the PostgreSQL 17 defect this release fixes — needs neither, and applies the corrected `0010`
+    as an ordinary pending migration.
+
+
+  ### Added
+
+  - `0011-kioku-memory-space-partition.sql` adds a non-null `memory_space_id` to `kioku_memories`,
+    `kioku_sessions`, `kioku_turns`, `kioku_l1_watermarks`, `kioku_consolidation_decisions`,
+    `kioku_scenes`, and `kioku_personas`. Existing rows are backfilled into the explicit
+    `kioku_legacy` space; turns and watermarks derive theirs from their parent session, and the
+    migration aborts if any derived row disagrees with a session that exists.
+
+  ### Breaking Changes
+
+  - `kioku_scenes` and `kioku_personas` now have composite primary keys,
+    `(memory_space_id, scene_id)` and `(memory_space_id, persona_id)`, and their scope-uniqueness
+    constraints gained the space. Their ids are derived from the namespace and scope alone, which
+    two spaces are allowed to share, so a single-column key let one space's upsert overwrite the
+    other's row. Stored id strings are unchanged.
+  - Indexes led by a namespace or a scope were rebuilt partition-first and renamed:
+    `kioku_memories_scope_idx` → `kioku_memories_space_scope_idx`, `kioku_memories_type_idx` →
+    `kioku_memories_space_type_idx` (now covering namespace as well), `kioku_sessions_scope_idx`,
+    `kioku_sessions_namespace_started_idx`, `kioku_sessions_namespace_focus_idx`,
+    `kioku_sessions_awaiting_corr_idx`, and `kioku_consolidation_scope_idx` likewise.
+    `kioku_memories_space_namespace_idx` is new. `kioku_scenes_scope_idx` is dropped as a strict
+    prefix of the per-space unique index.
+  - The migration is forward-only and has no down step. Re-running it is a no-op. Rolling the
+    application back is safe only while nothing has been written outside `kioku_legacy`.
 
   ## 0.3.0.0 — 2026-08-05
 
@@ -104,16 +162,17 @@ description: |-
   Owns kioku schema evolution as a native pg-migrate component and composes
   it with the kiroku and keiro migration components.
 description-type: haddock
-hash: 2654271ad6fc3c45197c098f42de148617045526269bd2950429ba5ca204e60a
+hash: e70862de7ed770081b0874645efc6b369065e637ded9441ed814293d18ab7280
 homepage: https://github.com/shinzui/kioku
-latest: 0.3.0.0
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Schema migrations for kioku
 test-bench-deps:
   base: '>=4.18 && <5'
   hasql: '>=1.6'
-  kioku-migrations: '>=0.3.0.0 && <0.4'
+  kioku-migrations: '>=0.4.0.0 && <0.5'
+  kiroku-store-migrations: ^>=0.4.0.0
   pg-migrate: ^>=1.1.0.0
   pg-migrate-embed: ^>=1.1.0.0
   pg-migrate-import-codd: ^>=1.1.0.0
