@@ -19,6 +19,7 @@ all-versions:
 - 1.0.1.6
 - 1.0.1.7
 - 1.0.1.8
+- 1.0.1.9
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   base: '>=4.11 && <5'
@@ -32,11 +33,21 @@ basic-deps:
   ptr-poker: ^>=0.1.3
   unix: '>=2.7 && <2.9'
 changelog: |
+  # v1.0.1.9
+
+  ## Fixes
+
+  - Fixed a DNS resolution failure during `connectdb` reporting the raw `Show`n `Network.Socket.getAddrInfo` exception (e.g. `could not connect to server: Network.Socket.getAddrInfo (called with preferred socket type/protocol: ...): does not exist (nodename nor servname provided, or not known)`) instead of libpq's own sentence for it (`could not translate host name "..." to address: nodename nor servname provided, or not known`). `connectFailureMessage` now recognizes a resolver failure by `Network.Socket.getAddrInfo` naming itself in the exception's `ioe_location`, and reproduces libpq's wording using the exception's `ioe_description`. Caught by the `pqi-conformance` spec `Pqi.Conformance.Operation.Connectdb.UnresolvableHost`.
+
+  - Fixed a handshake-time hard TCP reset (`ECONNRESET`, as opposed to a clean EOF) reporting the raw `Show`n `IOException` (e.g. `Network.Socket.recvBuf: resource vanished (Connection reset by peer)`) instead of libpq's own "server closed the connection unexpectedly" sentence, which it uses for both a reset and a clean EOF alike. `handshakeFailureMessage`'s classification (`isConnectionLost`, factored out as `connectionLostMessage`) now also recognizes a reset - `Network.Socket` surfaces `ECONNRESET` as `ioe_type == ResourceVanished` rather than `System.IO.Error.eofErrorType` - not just a clean EOF. Caught by the `pqi-conformance` spec `Pqi.Conformance.Operation.Connectdb.HandshakeReset`.
+
+  - Fixed a connection reset while a query response was in flight escaping `Pqi.exec`/`execParams`/`prepare`/`execPrepared`/`describePrepared`/`describePortal` as a raw, uncaught `IOException` instead of coming back as a classified `FatalError` result the way libpq's `PQexec` does (a lost connection mid-query never throws there; it reports a result with `FatalError` status and the same "server closed the connection unexpectedly" wording used for a handshake-time loss). Each of those six flows now catches an `IOException` escaping its read loop and reports it through the same `connectionLostMessage` classification, also marking the connection `ConnectionBad`. Caught by the `pqi-conformance` spec `Pqi.Conformance.Operation.Exec.ConnectionLostMidQuery`. Found via `hasql` issue #329.
+
   # v1.0.1.8
 
   ## Fixes
 
-  - Fixed `connectFailureMessage` (used when the initial `connect(2)` fails, e.g. a missing Unix-socket directory) hand-rolling a TCP-shaped message - the raw `Show`n `IOException` prefixed with `"could not connect to server: "` and a `(Unix domain socket '<path>')` parenthetical appended - instead of reporting the failure the way libpq does. That hand-rolled text retained the literal prefix `"could not connect to server: "`, which is also the substring `Hasql.Connection`'s error classifier matches to identify a transient networking failure - so a permanent misconfiguration (missing socket directory) was misclassified as transient. The Unix-socket branch now delegates to `unixSocketFailureMessage`, extracting the underlying `IOException`'s `ioe_description` (the raw OS `strerror` text, e.g. `"No such file or directory"`) instead of embedding its whole `Show`n form, and appending the same `"Is the server running locally and accepting connections on that socket?"` hint libpq appends for this failure - matching libpq's message for this case byte-for-byte. Also fixed `unixSocketFailureMessage` itself quoting the socket path with single quotes (`'<path>'`) instead of libpq's double quotes (`"<path>"`), which affects every message it formats, including the handshake-rejection path this Unix-socket branch now shares. Caught by the `pqi-conformance` spec `Pqi.Conformance.Operation.Connectdb.MissingUnixSocketDirectory`. Found via `hasql` issue #329.
+  - Fixed `connectFailureMessage` (used when the initial `connect(2)` fails, e.g. a missing Unix-socket directory) hand-rolling a TCP-shaped message - the raw `Show`n `IOException` prefixed with `"could not connect to server: "` and a `(Unix domain socket '<path>')` parenthetical appended - instead of reporting the failure the way libpq does. That hand-rolled text retained the literal prefix `"could not connect to server: "`, which is also the substring `Hasql.Connection`'s error classifier matches to identify a transient networking failure - so a permanent misconfiguration (missing socket directory) was misclassified as transient. The Unix-socket branch now delegates to `unixSocketFailureMessage`, extracting the underlying `IOException`'s `ioe_description` (the raw OS `strerror` text, e.g. `"No such file or directory"`) instead of embedding its whole `Show`n form, and appending the same `"Is the server running locally and accepting connections on that socket?"` hint libpq appends for this failure - matching libpq's message for this case exactly. Also fixed `unixSocketFailureMessage` itself quoting the socket path with single quotes (`'<path>'`) instead of libpq's double quotes (`"<path>"`), which affects every message it formats, including the handshake-rejection path this Unix-socket branch now shares. Caught by the `pqi-conformance` spec `Pqi.Conformance.Operation.Connectdb.MissingUnixSocketDirectory`. Found via `hasql` issue #329.
 
   # v1.0.1.7
 
@@ -215,14 +226,14 @@ description: |
   otherwise a Unix-domain socket in `/tmp` on Unix-like systems, or `localhost`
   on Windows.
 description-type: markdown
-hash: d101614e2ae8f0fb61c9a6bed79fe7bebf74f0feaca9400e5522628eb0fa67ee
+hash: cd79fcea2fcfea3d0a81c75a46c334e6840482404f9a417ec6b0021121bdb36d
 homepage: https://github.com/nikita-volkov/pqi-native
-latest: 1.0.1.8
+latest: 1.0.1.9
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Native (pure-Haskell) adapter for pqi
 test-bench-deps:
   base: '>=4.11 && <5'
   hspec: '>=2.11 && <2.12'
-  pqi-conformance: ^>=1.0.8
+  pqi-conformance: ^>=1.0.9
   pqi-native: '>=0'
