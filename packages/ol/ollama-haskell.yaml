@@ -10,6 +10,7 @@ all-versions:
 - 0.2.1.0
 - 0.3.0.0
 - 0.3.0.1
+- 0.4.0.0
 author: Tushar Adhatrao
 basic-deps:
   aeson: '>=2.0 && <3'
@@ -23,6 +24,7 @@ basic-deps:
   http-client: '>=0.6 && <0.8'
   http-client-tls: '>=0.2 && <0.5'
   http-types: '>=0.7 && <0.13'
+  mcp-server: '>=0.2 && <0.3'
   mtl: '>=2.2 && <3'
   ollama-haskell: '>=0'
   resourcet: '>=1.3 && <1.4'
@@ -37,6 +39,30 @@ changelog: |
   All notable changes to `ollama-haskell` will be documented in this file.
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   and this project adheres to [PVP (Haskell Package Versioning Policy)](https://pvp.haskell.org/).
+
+  ---
+
+  ## [0.4.0.0] - 2026-08-20
+
+  ### Added
+  - **Model Context Protocol (MCP) Integration (`Ollama.MCP`)**:
+    - Full bidirectional integration with the Hackage `mcp-server` package (`mcp-server >= 0.2 && < 0.3`).
+    - Seamless conversion between Ollama function calling definitions (`Tool`, `ToolCall`) and MCP definitions (`ToolDefinition`, `ArgumentDefinition`, `Content`, `McpSchema`).
+    - Bridge functions: `toolToMcpDefinition`, `mcpDefinitionToTool`, `toolCallToMcpArgs`, `mcpContentToToolOutput`.
+    - Re-exported MCP server runners (`runMcpServerStdio`, `runMcpServerHttp`, `runMcpServerHttpWithConfig`).
+    - Dedicated unit test suite in `Test.Ollama.Unit.MCP`.
+  - **Automatic JSON Schema Derivation (`Ollama.Types.Format.SchemaDerive`)**:
+    - Typeclasses `ToSchema` and `ToJsonType` enabling generic derivation of JSON schemas directly from Haskell record types via `GHC.Generics`.
+    - Smart handling of optional fields (`Maybe a` omitted from `required`), nested records (`JObject`), lists (`JArray`), and simple sum enums (`string` enum).
+    - Helper functions `schemaFor` and `formatFor` for effortless integration with `chat` / `generate` structured outputs.
+    - Dedicated unit test suite in `Test.Ollama.Unit.SchemaDerive`.
+  - **Configurable Client Timeout**:
+    - Support for custom request timeout intervals in `OllamaClientConfig` (`configTimeout`).
+
+  ### Changed
+  - **PVP Compliance & Upper Bounds**:
+    - Added strict upper bounds for `network-uri` (`>= 2.6 && < 2.8`) and `mcp-server` (`>= 0.2 && < 0.3`).
+    - Upgraded Stack resolvers and snapshot dependencies (`lts-21.25`, `lts-22.44`, `lts-23.28`, `lts-24.52`, `nightly`).
 
   ---
 
@@ -73,44 +99,49 @@ description: "# ollama-haskell\n\n[![Hackage](https://img.shields.io/hackage/v/o
   `OllamaClient` handle with connection pooling and resource management (`newClient`,
   `defaultClient`, `clientFromEnv`, `withClient`).\n- **First-Class Streaming**: `conduit`-based
   response streaming (`chatStream`, `generateStream`, `pullStream`, `pushStream`,
-  `createModelStream`).\n- **Complete API Surface**: Text generation, chat completions,
+  `createModelStream`).\n- **Model Context Protocol (MCP) Bridge**: Bidirectional
+  integration with `mcp-server` for converting between Ollama tools and MCP tools,
+  running MCP servers via stdio or HTTP (`Ollama.MCP`).\n- **Generic JSON Schema Derivation**:
+  Automatically derive JSON schemas from Haskell data types via `GHC.Generics` with
+  `ToSchema` and `formatFor`.\n- **Complete API Surface**: Text generation, chat completions,
   vector embeddings, model management (list, show, copy, delete, pull, push, create),
-  and system endpoints.\n- **Structured Outputs**: Powerful `SchemaBuilder` DSL (`|+`,
-  `|++`, `|!`, `|!!`) for type-safe JSON Schema structured responses.\n- **Function
+  and system endpoints.\n- **Structured Outputs DSL**: Powerful `SchemaBuilder` DSL
+  (`|+`, `|++`, `|!`, `|!!`) for type-safe JSON Schema structured responses.\n- **Function
   / Tool Calling**: Full support for tool definitions (`Tool`), tool calls (`ToolCall`),
   and execution results (`toolResultMessage`).\n- **Thinking Models Support**: Native
   support for reasoning models (`qwen3.5`, `deepseek-r1`) with `Think` / `ThinkingLevel`
   types.\n- **Environment & Auth Integration**: Robust URL normalization for `OLLAMA_HOST`
   and bearer token support for `OLLAMA_API_KEY`.\n- **Configurable Resilience**: Flexible
-  retry policies (`NoRetry`, `ConstantRetry`, `ExponentialRetry`), lifecycle callbacks,
-  and structured logging.\n- **Conversation Store**: Transactional STM-backed `InMemoryStore`
-  and `ConversationStore` typeclass for managing multi-turn chat sessions.\n- **SDK
-  Comparison Matrix**: Detailed feature comparison against Python, JS/TS, and Go SDKs
-  in [doc/COMPARISON.md](doc/COMPARISON.md).\n\n---\n\n## Installation\n\nAdd `ollama-haskell`
-  to your `.cabal` file:\n\n```cabal\nbuild-depends:\n    base >= 4.17 && < 5\n  ,
-  ollama-haskell >= 0.3.0.0\n```\n\nOr using Stack in `package.yaml`:\n\n```yaml\ndependencies:\n
-  \ - ollama-haskell >= 0.3.0.0\n```\n\n---\n\n## Quick Start (5 Lines)\n\n```haskell\nimport
-  Data.List.NonEmpty (NonEmpty ((:|)))\nimport Data.Text.IO qualified as TIO\nimport
-  Ollama\n\nmain :: IO ()\nmain = do\n  client <- defaultClient\n  res <- chat client
-  $ chatRequest \"qwen3.5:2b\" (userMessage \"Why is the sky blue?\" :| [])\n  case
-  res of\n    Left err   -> print err\n    Right resp -> mapM_ (TIO.putStrLn . messageContent)
-  (crMessage resp)\n```\n\n---\n\n## Streaming Responses with Conduit\n\nStream LLM
-  responses token-by-token as they generate:\n\n```haskell\nimport Data.List.NonEmpty
-  (NonEmpty ((:|)))\nimport Data.Text.IO qualified as TIO\nimport Ollama\n\nmain ::
-  IO ()\nmain = do\n  client <- defaultClient\n  let req = chatRequest \"qwen3.5:2b\"
-  (userMessage \"Count from 1 to 5.\" :| [])\n  \n  -- Stream chunks directly into
-  stdout or collect them\n  chunks <- collectStream (chatStream client req)\n  mapM_
-  (TIO.putStr . maybe \"\" messageContent . crMessage) chunks\n  putStrLn \"\"\n```\n\n---\n\n##
-  Function & Tool Calling\n\nDefine function signatures and let the LLM execute structured
-  tool calls:\n\n```haskell\nimport Data.List.NonEmpty (NonEmpty ((:|)))\nimport Ollama\n\ncalculatorTool
-  :: Tool\ncalculatorTool = Tool \"function\" $ FunctionDef\n  { fnName = \"add\"\n
-  \ , fnDescription = Just \"Add two numbers\"\n  , fnParameters = Just (FunctionParameters
-  \"object\" Nothing (Just [\"a\", \"b\"]) Nothing Nothing Nothing)\n  , fnStrict
-  = Just True\n  }\n\nmain :: IO ()\nmain = do\n  client <- defaultClient\n  let req
-  = (chatRequest \"qwen3.5:2b\" (userMessage \"What is 40 + 2?\" :| []))\n        {
-  chatTools = Just [calculatorTool] }\n  res <- chat client req\n  case res of\n    Left
-  err   -> print err\n    Right resp -> print (crMessage resp)\n```\n\n---\n\n## Structured
-  Outputs (JSON Schema DSL)\n\nEnforce structured JSON output formats using `SchemaBuilder`:\n\n```haskell\nimport
+  retry policies (`NoRetry`, `ConstantRetry`, `ExponentialRetry`), custom timeouts,
+  lifecycle callbacks, and structured logging.\n- **Conversation Store**: Transactional
+  STM-backed `InMemoryStore` and `ConversationStore` typeclass for managing multi-turn
+  chat sessions.\n- **SDK Comparison Matrix**: Detailed feature comparison against
+  Python, JS/TS, and Go SDKs in [doc/COMPARISON.md](doc/COMPARISON.md).\n\n---\n\n##
+  Installation\n\nAdd `ollama-haskell` to your `.cabal` file:\n\n```cabal\nbuild-depends:\n
+  \   base >= 4.17 && < 5\n  , ollama-haskell >= 0.4.0.0\n```\n\nOr using Stack in
+  `package.yaml`:\n\n```yaml\ndependencies:\n  - ollama-haskell >= 0.4.0.0\n```\n\n---\n\n##
+  Quick Start (5 Lines)\n\n```haskell\nimport Data.List.NonEmpty (NonEmpty ((:|)))\nimport
+  Data.Text.IO qualified as TIO\nimport Ollama\n\nmain :: IO ()\nmain = do\n  client
+  <- defaultClient\n  res <- chat client $ chatRequest \"qwen3.5:2b\" (userMessage
+  \"Why is the sky blue?\" :| [])\n  case res of\n    Left err   -> print err\n    Right
+  resp -> mapM_ (TIO.putStrLn . messageContent) (crMessage resp)\n```\n\n---\n\n##
+  Streaming Responses with Conduit\n\nStream LLM responses token-by-token as they
+  generate:\n\n```haskell\nimport Data.List.NonEmpty (NonEmpty ((:|)))\nimport Data.Text.IO
+  qualified as TIO\nimport Ollama\n\nmain :: IO ()\nmain = do\n  client <- defaultClient\n
+  \ let req = chatRequest \"qwen3.5:2b\" (userMessage \"Count from 1 to 5.\" :| [])\n
+  \ \n  -- Stream chunks directly into stdout or collect them\n  chunks <- collectStream
+  (chatStream client req)\n  mapM_ (TIO.putStr . maybe \"\" messageContent . crMessage)
+  chunks\n  putStrLn \"\"\n```\n\n---\n\n## Function & Tool Calling\n\nDefine function
+  signatures and let the LLM execute structured tool calls:\n\n```haskell\nimport
+  Data.List.NonEmpty (NonEmpty ((:|)))\nimport Ollama\n\ncalculatorTool :: Tool\ncalculatorTool
+  = Tool \"function\" $ FunctionDef\n  { fnName = \"add\"\n  , fnDescription = Just
+  \"Add two numbers\"\n  , fnParameters = Just (FunctionParameters \"object\" Nothing
+  (Just [\"a\", \"b\"]) Nothing Nothing Nothing)\n  , fnStrict = Just True\n  }\n\nmain
+  :: IO ()\nmain = do\n  client <- defaultClient\n  let req = (chatRequest \"qwen3.5:2b\"
+  (userMessage \"What is 40 + 2?\" :| []))\n        { chatTools = Just [calculatorTool]
+  }\n  res <- chat client req\n  case res of\n    Left err   -> print err\n    Right
+  resp -> print (crMessage resp)\n```\n\n---\n\n## Structured Outputs (JSON Schema
+  DSL)\n\nEnforce structured JSON output formats using `SchemaBuilder`:\n\n```haskell\nimport
   Data.Text.IO qualified as TIO\nimport Ollama\nimport Ollama.Types.Format.SchemaBuilder\n\npersonSchema
   :: Schema\npersonSchema = buildSchema $ emptyObject\n  |+ (\"name\", JString)\n
   \ |+ (\"age\", JInteger)\n  |! \"name\"\n\nmain :: IO ()\nmain = do\n  client <-
@@ -128,18 +159,17 @@ description: "# ollama-haskell\n\n[![Hackage](https://img.shields.io/hackage/v/o
   <> show msg)\n  }\n\nmain :: IO ()\nmain = withClient customConfig $ \\client ->
   do\n  ...\n```\n\n---\n\n## Documentation & SDK Comparison\n\n- [doc/COMPARISON.md](doc/COMPARISON.md)
   — SDK Feature Matrix comparing `ollama-haskell` with Python, JS/TS, and Go SDKs.\n-
-  [ARCHITECTURE.md](ARCHITECTURE.md) — Detailed internal module design and extension
-  guide.\n- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup, testing guidelines,
-  and code style.\n- [CHANGELOG.md](CHANGELOG.md) — Release notes and changelog.\n-
-  [Hackage Documentation](https://hackage.haskell.org/package/ollama-haskell) — Full
-  Haddock reference.\n\n---\n\n## License\n\nMIT © 2024–2026 Tushar Adhatrao\n"
+  [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup, testing guidelines, and
+  code style.\n- [CHANGELOG.md](CHANGELOG.md) — Release notes and changelog.\n- [Hackage
+  Documentation](https://hackage.haskell.org/package/ollama-haskell) — Full Haddock
+  reference.\n\n---\n\n## License\n\nMIT © 2024–2026 Tushar Adhatrao\n"
 description-type: markdown
-hash: 4372013f8502f535a5ddfb72caf6d2532a8e811094847b6eb3d9748afa643b10
+hash: 31f1f2244b2a8698055d679e6c3fa98678543c174749bf387487c93e8f876b6f
 homepage: https://github.com/tusharad/ollama-haskell
-latest: 0.3.0.1
+latest: 0.4.0.0
 license-name: MIT
 maintainer: tusharadhatrao@gmail.com
-synopsis: Industry-grade Haskell client for the Ollama API
+synopsis: Industry-grade Haskell client for Ollama local LLMs
 test-bench-deps:
   QuickCheck: '>=2.14'
   aeson: '>=0'
@@ -147,6 +177,7 @@ test-bench-deps:
   bytestring: '>=0'
   conduit: '>=0'
   containers: '>=0'
+  mcp-server: '>=0'
   ollama-haskell: '>=0'
   tasty: '>=1.5'
   tasty-bench: '>=0.3'
