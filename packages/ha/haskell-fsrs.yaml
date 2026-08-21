@@ -1,5 +1,6 @@
 all-versions:
 - 7.0.0
+- 7.1.0
 author: Flavio Corpa
 basic-deps:
   array: '>=0.5 && <0.6'
@@ -17,6 +18,67 @@ changelog: |
 
   ## Unreleased
 
+  ## 7.1.0 - 2026-08-21
+
+  Track the **finished** FSRS-7. Release 7.0.0 implemented the 35-weight,
+  single-trace draft still published as `models/fsrs_v7.py` in `srs-benchmark`;
+  the algorithm was subsequently finalised with 34 weights and a dual-trace
+  memory model, and that is what "FSRS-7" now means. The reference is
+  [`Expertium/fsrs-rs-speed-autoresearch`](https://github.com/Expertium/fsrs-rs-speed-autoresearch),
+  upstreamed into `fsrs-rs` in
+  [PR #426](https://github.com/open-spaced-repetition/fsrs-rs/pull/426).
+
+  This is a breaking change to the model's numbers and to several signatures.
+  Stored parameter vectors and stored memory states from 7.0.0 are **not**
+  compatible.
+
+  ### Changed
+
+  - `parameterCount` is now `34`, and `defaultParameters`, `parameterBounds` and
+    `orderingConstraints` are the finished model's. The layout is: `w0..w3`
+    initial stability, `w4..w6` difficulty, `w7..w14` slow-trace stability,
+    `w15..w22` fast-trace stability, `w23..w30` forgetting curve, `w31..w33` the
+    curve's modulation by difficulty and stability.
+  - `MemoryState` gained a third field, `memoryStabilityFast`: FSRS-7 tracks two
+    memory traces. A new card's fast trace starts at `fastTraceRatio` (0.8) of
+    its slow one.
+  - `retrievability`, `retrievabilityDerivative` and `nextIntervalDays` take a
+    whole `MemoryState` instead of a `Stability` — the curve mixes both traces
+    and is shaped by the difficulty too. So does `nextReviewInterval`.
+  - `retrievability` is rescaled into `[1e-5, 1 - 1e-5]`, so `retrievability p 0`
+    is now just short of `1` rather than exactly `1`.
+  - `nextDifficulty` takes the retrievability at review time: a lapse's step is
+    weighted by how surprising the lapse was.
+  - `stabilityAfterReview` takes a stability and a difficulty rather than a
+    `MemoryState`, since it now applies to whichever trace is being updated, and
+    its post-lapse branch no longer depends on difficulty.
+  - `nextStability` returns both traces as a `(slow, fast)` pair.
+  - `longTermWeights` / `shortTermWeights` are now `slowTraceWeights` /
+    `fastTraceWeights`, and `StabilityWeights` lost
+    `swFailureDifficultyExponent` — the weight it read was ablated from both
+    blocks.
+  - `CurveWeights` was reshaped: `cwDecay1` became `cwDecayBase1` (the fast
+    component's decay is now scaled by the fast stability, so it is not a
+    constant), `cwDecay2` holds a magnitude rather than a negated value, and
+    `cwDifficultyWeight`, `cwDifficultyDecay` and `cwStabilityDecay1` are new.
+
+  ### Added
+
+  - `fastTraceRetrievability` — the fast trace's own recall probability, which is
+    what drives its stability update.
+  - `initialMemoryState` — the state a card is born with.
+  - `retrievabilityFloor` and `fastTraceRatio`.
+  - `orderingConstraints` is now exported from `FSRS.Parameters`.
+  - The two numeric assertions the reference implementation makes about FSRS-7 in
+    its own test suite are now reproduced in ours, in Haskell and in Python, so
+    the port is pinned to upstream and not only to our own transcription.
+
+  ### Removed
+
+  - `transitionCoefficient`, `transitionRate` and `transitionAmplitude`, along
+    with the two weights behind them. The elapsed-time blend between a long- and
+    a short-term stability update is gone; the fast memory trace replaces it.
+
   ## 7.0.0 - 2026-08-20
 
   Initial release: FSRS-7.
@@ -25,7 +87,8 @@ changelog: |
 
   - `FSRS.Types` — `Rating`, `MemoryState` and the `Stability` / `Difficulty` /
     `Retrievability` / `Days` synonyms.
-  - `FSRS.Parameters` — the 35 FSRS-7 weights, the default set, bounds taken from
+  - `FSRS.Parameters` — the 35 FSRS-7 weights (of the draft model, see 7.1.0),
+    the default set, bounds taken from
     the upstream optimiser's clipper, validation with per-weight errors, clamping,
     and typed views onto the weight blocks (`StabilityWeights`, `CurveWeights`).
   - `FSRS.Algorithm` — the model: the two-component `retrievability` curve and its
@@ -51,10 +114,12 @@ description: |
   model behind Anki's scheduler.
 
   FSRS predicts when you are about to forget a flashcard so it can be shown to
-  you just before that happens. It tracks two numbers per card:
+  you just before that happens. It tracks three numbers per card:
 
   - **stability** — the memory's half-life, in days;
   - **difficulty** — how hard this particular card is for you, on a 1–10 scale;
+  - a second, faster-decaying **stability** — FSRS-7 tracks two memory traces,
+    which is how it tells a review minutes later apart from one weeks later;
 
   and derives **retrievability**, the probability that you can recall the card
   right now.
@@ -64,20 +129,33 @@ description: |
 
   ## What is new in FSRS-7
 
-  FSRS-7 has **35 parameters**, up from FSRS-6's 21. Three things changed:
+  FSRS-7 has **34 parameters**, up from FSRS-6's 21. What changed:
 
-  - **The forgetting curve is a mixture of two power laws** rather than one, with
-    the mixing weights themselves depending on stability. That is where six of
-    the new parameters go, and it means the curve has no closed-form inverse — so
-    computing an interval is a root-find, not a formula.
-  - **The stability update runs twice**, once with a long-term weight block and
-    once with a short-term one, and the two are blended by a smooth transition
-    function of the elapsed time. FSRS-6 instead switched between two separate
-    formulas on a same-day / not-same-day flag.
+  - **A card has two memory traces, not one.** Alongside the familiar stability
+    there is a second, faster-decaying one, and each is updated by its own block
+    of eight weights — the slow trace from the mixed retrievability, the fast
+    trace from its own. This is what makes same-day reviews behave differently
+    from spaced ones, where FSRS-6 switched between two formulas on a same-day /
+    not-same-day flag.
+  - **The forgetting curve is a mixture of two power laws** rather than one, one
+    per trace, with the mixing weights depending on the traces' own stabilities.
+    The curve has no closed-form inverse, so computing an interval is a
+    root-find, not a formula.
+  - **The forgetting curve depends on difficulty**, which it never did in any
+    earlier version: a hard card experiences time faster, and leans more on its
+    slow trace.
+  - **Post-lapse stability no longer depends on difficulty**, and a lapse's
+    difficulty step is weighted by how *surprising* the lapse was — forgetting a
+    card you were expected to recall says more about it than forgetting one that
+    was long overdue.
   - **Intervals are genuinely continuous.** Every earlier version was designed
     around whole-day intervals; FSRS-7 is the first that gives realistic
     predictions for same-day reviews. Ten minutes is `10 / 1440` days and the
     model means it.
+
+  One consequence worth knowing: retrievability is rescaled into
+  `[1e-5, 1 - 1e-5]`, so a card reviewed a moment ago has a retrievability just
+  short of `1` rather than exactly `1`.
 
   ## Getting started
 
@@ -99,12 +177,15 @@ description: |
 
   -- When should it come back, if we want a 90% chance of recall?
   whenDue :: Days
-  whenDue = nextIntervalDays defaultParameters 0.9 (memoryStability secondReview)
+  whenDue = nextIntervalDays defaultParameters 0.9 secondReview
 
   -- How likely are we to recall it three days from now?
   odds :: Retrievability
-  odds = retrievability defaultParameters 3 (memoryStability secondReview)
+  odds = retrievability defaultParameters 3 secondReview
   ```
+
+  Both take the whole `MemoryState`, not just a stability: the FSRS-7 curve mixes
+  the two traces and is shaped by the difficulty too.
 
   Whole-card scheduling — learning steps, due dates, lapses, fuzz — lives in
   `FSRS.Scheduler`:
@@ -120,7 +201,7 @@ description: |
   `reviewCardFuzzed` and hand it the random sample yourself, so scheduling stays
   a pure function of its inputs.
 
-  Optimising the 35 weights against a user's own review history is *not* part of
+  Optimising the 34 weights against a user's own review history is *not* part of
   this package. Use the upstream optimiser and feed the result to `mkParameters`.
 
   ### Modules
@@ -129,25 +210,25 @@ description: |
   | --- | --- |
   | `FSRS` | Re-exports everything below. |
   | `FSRS.Types` | `Rating`, `MemoryState`, the type synonyms. |
-  | `FSRS.Parameters` | The 35 weights, their bounds, validation, typed views onto the blocks. |
+  | `FSRS.Parameters` | The 34 weights, their bounds, validation, typed views onto the blocks. |
   | `FSRS.Algorithm` | The model: forgetting curve, difficulty, stability, interval inversion. |
   | `FSRS.Scheduler` | Cards, due dates, learning steps, fuzz. |
 
   ## Provenance
 
-  `FSRS.Algorithm` is a transcription of the reference implementation the
-  upstream authors benchmark against:
-  [`srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark),
-  `models/fsrs_v7.py` and `models/fsrs_v7_interval_penalty.py` (revision
-  `8c11619`).
+  `FSRS.Algorithm` is a transcription of the **finished** FSRS-7, whose reference
+  implementation is the Rust model the algorithm's author signed off on:
+  [`Expertium/fsrs-rs-speed-autoresearch`](https://github.com/Expertium/fsrs-rs-speed-autoresearch)
+  (`fsrs-rs/src/model.rs`, `PARAM_LEN = 34`), upstreamed into `fsrs-rs` in
+  [PR #426](https://github.com/open-spaced-repetition/fsrs-rs/pull/426).
 
-  Two things are worth knowing about the default weights:
+  Two things are worth knowing about the weights:
 
-  - The published defaults use **1.3** for `w15` and `w24`, the easy bonus of the
-    two stability blocks. The `Default Parameters` section of the `srs-benchmark`
-    README still lists `1.15`; that block has not been touched since 2026-03-18,
-    while the model itself was changed to `1.3` three days later (commit
-    `e274ac3`). This package follows the model.
+  - Indices 31–33 follow the reference's all-positive storage convention: they
+    are stored shifted so that their range starts at zero, and the formulas
+    offset them back (`w - 0.5` for the difficulty weight, `w - 0.3` for the two
+    decay modulators). `parametersToList` gives you the stored values, which is
+    what an upstream optimiser produces and consumes.
   - The parameter bounds in `parameterBounds` come from the clipper the upstream
     optimiser applies after every gradient step, so any weights a real optimiser
     produces will satisfy them.
@@ -159,24 +240,36 @@ description: |
 
   ## Tests
 
-  Two complementary suites, 113 test cases in all:
+  Three complementary suites, 126 test cases in all:
 
-  - **Golden vectors** — 2,589 of them, covering every function of the model
+  - **Golden vectors** — 5,586 of them, covering every function of the model
     across three parameter sets, generated by `reference/fsrs7_reference.py`, a
     pure-Python transcription of the same upstream source. Both implementations
     perform the same floating-point operations in the same order, so they are
     checked to a relative tolerance of `1e-12`.
+  - **Upstream fixtures** — the two numeric assertions the reference
+    implementation makes about FSRS-7 in its own test suite
+    (`test_memory_state_fsrs7` and `test_next_interval_fsrs7`), reproduced
+    verbatim. These are the only fixtures in the package that did not come out of
+    our own transcription, so they are what pins the port to upstream rather than
+    to itself.
   - **Properties** — invariants that should hold for *every* parameter vector
     inside the valid box: retrievability is a probability and decreases with
-    time, a better rating never means less stability, difficulty stays in range
-    however long the history, the interval solver really does land on the desired
-    retention, and so on.
+    time, a better rating never means less stability, post-lapse stability
+    ignores difficulty, difficulty stays in range however long the history, the
+    interval solver really does land on the desired retention, and so on.
 
-  A few properties hold only for well-behaved weights and say so. Because
-  FSRS-7 re-weights its two power laws by stability, adversarial-but-in-bounds
-  weights can make retrievability *fall* as stability grows; the properties about
-  how the model responds to stability are therefore stated for
-  `defaultParameters`.
+  A few properties hold only for well-behaved weights and say so. Two kinds of
+  caveat show up:
+
+  - Because FSRS-7 re-weights its two power laws by stability,
+    adversarial-but-in-bounds weights can make retrievability *fall* as stability
+    grows. Those properties are stated for `defaultParameters`.
+  - Difficulty pulls the curve two ways — it speeds the slow component up, but
+    also shifts mixing weight onto the fast one. At the trace ratio the model
+    itself maintains the first effect wins; for an arbitrarily lopsided pair of
+    traces neither does. Properties about difficulty and about stability are
+    therefore stated over states at that ratio.
 
   To regenerate the golden vectors after touching the reference:
 
@@ -207,9 +300,9 @@ description: |
 
   MIT. See [LICENSE](LICENSE).
 description-type: markdown
-hash: 47ac8a0cfa9ed8b291451977a07e847d3cd186f4ccc56033d45676f6595f8b49
+hash: e529f5407032f7aee49440f351e4c962f28f42619c980b59c98a785ae2363a66
 homepage: https://github.com/kutyel/haskell-fsrs#readme
-latest: 7.0.0
+latest: 7.1.0
 license-name: MIT
 maintainer: https://github.com/kutyel/haskell-fsrs/issues
 synopsis: FSRS-7, the Free Spaced Repetition Scheduler
