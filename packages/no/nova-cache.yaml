@@ -22,6 +22,7 @@ all-versions:
 - 0.9.0.0
 - 0.10.0.0
 - 0.11.0.0
+- 0.11.0.1
 author: Devon Tomlin
 basic-deps:
   base: '>=4.22 && <5'
@@ -41,6 +42,11 @@ basic-deps:
   warp: '>=3.3 && <3.5'
 changelog: |
   # Changelog
+
+  ## 0.11.0.1 - 2026-08-21
+
+  - **`NovaCache.Bzip2` accepts trailing bytes that do not begin another stream, matching upstream.** The decoder re-initialized at every clean stream end while input remained and fed whatever followed to libbz2's magic check, so a stray NUL, a newline, or any non-stream trailer after the last stream failed the decode. Upstream C++ Nix no longer has a bzip2 sink of its own: `compression.cc` drives every libarchive-supported codec through `ArchiveDecompressionSource`, and libarchive decodes the payload and ignores such a trailer. Measured against libarchive 3.8.2 driven exactly as Nix drives it (`filter_all` + `format_raw` + `format_empty`), four of seven cases diverged, so a historical `.nar.bz2` carrying one stray byte substituted under `nix copy` and failed here, falling through to a source build while the operator was told the cache object was corrupt. Trailing bytes that do begin a stream header are still decoded as a concatenated stream, and a truncated one is still refused: libarchive refuses those too, and silently truncating a real stream is the failure mode a bounded decoder exists to prevent. One divergence is deliberate and documented in place: a trailer that is a well-formed header carrying no block data (`BZh9` alone) is refused here and accepted by libarchive, which buffers past it, and refusing is the safer side of a case that does not arise in practice.
+  - **The bzip2 decoder is released on every exit instead of at a GC finalizer's leisure.** `decompress` and `withBzip2Source` handed their `bz_stream` to a `ForeignPtr` finalizer and never ended it themselves, so libbz2's block table (up to 3.6 MB at the largest block size, `malloc`'d and therefore invisible to the RTS allocation counter) stayed live on every path, including clean completion. Because that memory creates no GC pressure of its own and is not bounded by `+RTS -M`, sequential decodes accumulated decoder state in proportion to how rarely the collector ran, and a large nursery made the accumulation large. Both entry points now finalize in a bracket, the discipline `NovaCache.Zstd` already had and the one `NovaCache.Xz` documents as unavailable to it because `lzma-static` exposes no live-stream teardown. Concatenated streams within a single decode were never affected.
 
   ## 0.11.0.0 - 2026-08-21
 
@@ -487,9 +493,9 @@ description: |
 
   <p align="center"><sub>Apache-2.0 - <a href="https://github.com/Novavero-AI">Novavero AI Inc.</a></sub></p>
 description-type: markdown
-hash: 836ef436f6c418c1aacd619f7e9fd9aec86c39866c104ec070010bb93aae8388
+hash: fca7e8bca01f49f72d49eb18614c2e5e2f1652f248e01140c4f5cd1839a13ed4
 homepage: https://github.com/Novavero-AI/nova-cache
-latest: 0.11.0.0
+latest: 0.11.0.1
 license-name: Apache-2.0
 maintainer: devon.tomlin@novavero.ai
 synopsis: Pure-first Nix binary cache protocol library
