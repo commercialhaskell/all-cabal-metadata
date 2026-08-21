@@ -1,0 +1,223 @@
+all-versions:
+- 7.0.0
+author: Flavio Corpa
+basic-deps:
+  array: '>=0.5 && <0.6'
+  base: '>=4.14 && <5'
+  haskell-fsrs: '>=0'
+  time: '>=1.9 && <2'
+changelog: |
+  # Changelog for `haskell-fsrs`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+  The major version tracks the FSRS algorithm version, as `py-fsrs` and `fsrs-rs`
+  do: `7.x.y` implements FSRS-7.
+
+  ## Unreleased
+
+  ## 7.0.0 - 2026-08-20
+
+  Initial release: FSRS-7.
+
+  ### Added
+
+  - `FSRS.Types` — `Rating`, `MemoryState` and the `Stability` / `Difficulty` /
+    `Retrievability` / `Days` synonyms.
+  - `FSRS.Parameters` — the 35 FSRS-7 weights, the default set, bounds taken from
+    the upstream optimiser's clipper, validation with per-weight errors, clamping,
+    and typed views onto the weight blocks (`StabilityWeights`, `CurveWeights`).
+  - `FSRS.Algorithm` — the model: the two-component `retrievability` curve and its
+    derivative, `nextIntervalDays` (a safeguarded Newton root-find, since the
+    FSRS-7 curve has no closed-form inverse), `initialDifficulty`,
+    `nextDifficulty`, `initialStability`, `stabilityAfterReview`,
+    `transitionCoefficient`, `nextStability`, `nextMemoryState` and
+    `replayReviews`.
+  - `FSRS.Scheduler` — cards, due dates, learning and relearning steps, review
+    logs, interval preview and explicit (pure) interval fuzzing.
+  - `FSRS` — an umbrella module re-exporting all of the above.
+  - A test suite of golden vectors generated from a pure-Python transcription of
+    the upstream reference implementation, plus property tests for the model's
+    invariants.
+changelog-type: markdown
+description: |
+  # haskell-fsrs
+
+  [![CI](https://github.com/kutyel/haskell-fsrs/actions/workflows/ci.yml/badge.svg)](https://github.com/kutyel/haskell-fsrs/actions/workflows/ci.yml)
+
+  A Haskell implementation of **FSRS-7**, the seventh version of the [Free Spaced
+  Repetition Scheduler](https://github.com/open-spaced-repetition) — the memory
+  model behind Anki's scheduler.
+
+  FSRS predicts when you are about to forget a flashcard so it can be shown to
+  you just before that happens. It tracks two numbers per card:
+
+  - **stability** — the memory's half-life, in days;
+  - **difficulty** — how hard this particular card is for you, on a 1–10 scale;
+
+  and derives **retrievability**, the probability that you can recall the card
+  right now.
+
+  The package version tracks the algorithm version, the way `py-fsrs` and
+  `fsrs-rs` do: `7.x.y` implements FSRS-7.
+
+  ## What is new in FSRS-7
+
+  FSRS-7 has **35 parameters**, up from FSRS-6's 21. Three things changed:
+
+  - **The forgetting curve is a mixture of two power laws** rather than one, with
+    the mixing weights themselves depending on stability. That is where six of
+    the new parameters go, and it means the curve has no closed-form inverse — so
+    computing an interval is a root-find, not a formula.
+  - **The stability update runs twice**, once with a long-term weight block and
+    once with a short-term one, and the two are blended by a smooth transition
+    function of the elapsed time. FSRS-6 instead switched between two separate
+    formulas on a same-day / not-same-day flag.
+  - **Intervals are genuinely continuous.** Every earlier version was designed
+    around whole-day intervals; FSRS-7 is the first that gives realistic
+    predictions for same-day reviews. Ten minutes is `10 / 1440` days and the
+    model means it.
+
+  ## Getting started
+
+  ```console
+  $ stack build
+  $ stack test
+  $ stack run          # a small demo: one card, graded Good ten times
+  ```
+
+  ## Using it
+
+  ```haskell
+  import FSRS
+
+  -- Grade a brand-new card Good, then grade it again a week later.
+  firstReview, secondReview :: MemoryState
+  firstReview  = nextMemoryState defaultParameters Nothing 0 Good
+  secondReview = nextMemoryState defaultParameters (Just firstReview) 7 Good
+
+  -- When should it come back, if we want a 90% chance of recall?
+  whenDue :: Days
+  whenDue = nextIntervalDays defaultParameters 0.9 (memoryStability secondReview)
+
+  -- How likely are we to recall it three days from now?
+  odds :: Retrievability
+  odds = retrievability defaultParameters 3 (memoryStability secondReview)
+  ```
+
+  Whole-card scheduling — learning steps, due dates, lapses, fuzz — lives in
+  `FSRS.Scheduler`:
+
+  ```haskell
+  import FSRS
+
+  session :: UTCTime -> (Card, ReviewLog)
+  session now = reviewCard defaultScheduler (newCard now) Good now
+  ```
+
+  `reviewCard` is deterministic. If you want Anki-style interval fuzzing, use
+  `reviewCardFuzzed` and hand it the random sample yourself, so scheduling stays
+  a pure function of its inputs.
+
+  Optimising the 35 weights against a user's own review history is *not* part of
+  this package. Use the upstream optimiser and feed the result to `mkParameters`.
+
+  ### Modules
+
+  | Module | What is in it |
+  | --- | --- |
+  | `FSRS` | Re-exports everything below. |
+  | `FSRS.Types` | `Rating`, `MemoryState`, the type synonyms. |
+  | `FSRS.Parameters` | The 35 weights, their bounds, validation, typed views onto the blocks. |
+  | `FSRS.Algorithm` | The model: forgetting curve, difficulty, stability, interval inversion. |
+  | `FSRS.Scheduler` | Cards, due dates, learning steps, fuzz. |
+
+  ## Provenance
+
+  `FSRS.Algorithm` is a transcription of the reference implementation the
+  upstream authors benchmark against:
+  [`srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark),
+  `models/fsrs_v7.py` and `models/fsrs_v7_interval_penalty.py` (revision
+  `8c11619`).
+
+  Two things are worth knowing about the default weights:
+
+  - The published defaults use **1.3** for `w15` and `w24`, the easy bonus of the
+    two stability blocks. The `Default Parameters` section of the `srs-benchmark`
+    README still lists `1.15`; that block has not been touched since 2026-03-18,
+    while the model itself was changed to `1.3` three days later (commit
+    `e274ac3`). This package follows the model.
+  - The parameter bounds in `parameterBounds` come from the clipper the upstream
+    optimiser applies after every gradient step, so any weights a real optimiser
+    produces will satisfy them.
+
+  The scheduling policy in `FSRS.Scheduler` is *not* specified upstream — only
+  the memory model is. It follows the reference scheduler from
+  [`py-fsrs`](https://github.com/open-spaced-repetition/py-fsrs), adapted to
+  FSRS-7's continuous intervals.
+
+  ## Tests
+
+  Two complementary suites, 113 test cases in all:
+
+  - **Golden vectors** — 2,589 of them, covering every function of the model
+    across three parameter sets, generated by `reference/fsrs7_reference.py`, a
+    pure-Python transcription of the same upstream source. Both implementations
+    perform the same floating-point operations in the same order, so they are
+    checked to a relative tolerance of `1e-12`.
+  - **Properties** — invariants that should hold for *every* parameter vector
+    inside the valid box: retrievability is a probability and decreases with
+    time, a better rating never means less stability, difficulty stays in range
+    however long the history, the interval solver really does land on the desired
+    retention, and so on.
+
+  A few properties hold only for well-behaved weights and say so. Because
+  FSRS-7 re-weights its two power laws by stability, adversarial-but-in-bounds
+  weights can make retrievability *fall* as stability grows; the properties about
+  how the model responds to stability are therefore stated for
+  `defaultParameters`.
+
+  To regenerate the golden vectors after touching the reference:
+
+  ```console
+  $ python3 reference/gen_golden.py
+  ```
+
+  The reference gets two checks of its own, both standard-library only:
+
+  ```console
+  $ python3 reference/test_reference.py   # the model's invariants, in Python
+  $ python3 reference/check_golden.py     # the committed vectors still match it
+  ```
+
+  `check_golden.py` compares numerically rather than by `git diff`. `exp` and
+  `pow` are not required by IEEE-754 to be correctly rounded, so the last bit of
+  a literal can legitimately differ between the machine that generated the file
+  and the one checking it; a textual diff would go red for reasons that have
+  nothing to do with the model.
+
+  ## Continuous integration
+
+  [`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds and tests with
+  Stack under `--pedantic` (`-Wall -Werror`), smoke-tests the demo, and runs both
+  reference checks.
+
+  ## Licence
+
+  MIT. See [LICENSE](LICENSE).
+description-type: markdown
+hash: 47ac8a0cfa9ed8b291451977a07e847d3cd186f4ccc56033d45676f6595f8b49
+homepage: https://github.com/kutyel/haskell-fsrs#readme
+latest: 7.0.0
+license-name: MIT
+maintainer: https://github.com/kutyel/haskell-fsrs/issues
+synopsis: FSRS-7, the Free Spaced Repetition Scheduler
+test-bench-deps:
+  QuickCheck: '>=2.14 && <3'
+  base: '>=0'
+  haskell-fsrs: '>=0'
+  tasty: '>=1.4 && <1.6'
+  tasty-hunit: '>=0.10 && <0.11'
+  tasty-quickcheck: '>=0.10 && <0.12'
+  time: '>=0'
