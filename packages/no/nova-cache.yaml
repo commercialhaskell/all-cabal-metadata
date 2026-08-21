@@ -21,6 +21,7 @@ all-versions:
 - 0.8.0.0
 - 0.9.0.0
 - 0.10.0.0
+- 0.11.0.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.22 && <5'
@@ -40,6 +41,18 @@ basic-deps:
   warp: '>=3.3 && <3.5'
 changelog: |
   # Changelog
+
+  ## 0.11.0.0 - 2026-08-21
+
+  - **A failed `withXzSource` or `withZstdSource` pull latches any exception, matching `NovaCache.Bzip2`.** Both sources held only their own decoder errors (`XzError`, `ZstdError`) for replay on later pulls; an exception thrown by the compressed source itself - an HTTP failure, a capped body source refusing to read on - left the state untouched, so a consumer that caught the failure and pulled again at exactly a stream or frame boundary of a concatenated payload could read the empty chunk, the clean-end signal, and take a prefix for complete output. Any exception escaping a pull now marks the transfer unfinishable and is rethrown on every later pull, the breadth `NovaCache.Bzip2` shipped with.
+  - **Bounded bzip2: the new `NovaCache.Bzip2`, a public `nova-cache:bzip2` sublibrary.** Historical cache.nixos.org narinfos declare `Compression: bzip2`, and upstream C++ Nix reads an absent `Compression` field as bzip2, so substituting those paths needs the codec. `decompress` takes the narinfo's declared NarSize as its inclusive output bound and fails past it, and `withBzip2Source` decompresses a chunk source into a chunk source under the same limits - the xz discipline, ported. There is no decoder-memory knob because bzip2 carries no attacker-chosen dictionary size: decoding allocates a fixed small amount (about 4 MiB at the format's largest block size), a constant of the format rather than a parameter. Concatenated streams decode as one output, matching upstream's bzip2 decompression sink, which re-initializes the decoder at stream end while input remains; trailing bytes that do not start a valid stream are refused, and truncated input is refused. A failed pull from the streaming source stays failed: later pulls rethrow the failure instead of reading as a clean end, so a consumer that catches and retries cannot mistake a failed transfer for complete output. No existing binding bundles libbz2's C sources on every platform (`bzlib` links the system library outside Windows), so the module drives libbz2 directly over `bzip2-clib`, which is nothing but the bundled sources - no system library anywhere.
+  - **The publish workflow gates on a dated changelog and survives its own docs half failing.** v0.9.0.0 reached Hackage with its changelog section still headed "## Unreleased" (the dating commit landed after the tag), and the docs build then failed after the sdist was live, so the re-run died on Hackage's duplicate-version 400 and the release stayed docless; a Hackage tarball is immutable, so both scars are permanent. The workflow now refuses to upload anything until the changelog's top section is exactly the tagged version with its date, and an already-published sdist is skipped instead of fatal, so a failed docs upload can be re-run to completion.
+  - **The docs re-upload workflow handles every shipped release, not only 0.10-and-later trees.** Its purpose is re-uploading documentation for versions that predate it, yet it hardcoded the current tree's shape: on v0.8.0.0 the haddock run missed the then-flag-gated xz module, the sublibrary graft loop died on an unmatched glob, and the fixed verification greps failed, while on v0.9.0.0 the zstandard grep failed. The graft now skips when the tag built no sublibraries, verification checks module HTML for exactly the sublibraries actually grafted, and the xz flag is enabled only where the tag's cabal declares it.
+  - **The NAR parser accepts upstream's grammar; Windows-hazard names move to the new `isWindowsHazardName`.** The streaming parser rejected, on every platform, Windows reserved device stems (`aux.c`, `con.h`), names ending in a dot or space, and names containing a colon or backslash. Upstream's C++ restore accepts all of these on Unix, and real cache.nixos.org archives carry them (perl man pages named `ExtUtils::MakeMaker.3`, kernel trees carrying `aux.c`), so substitution failed where upstream succeeds - and `serialise` emitted hazard names that `deserialise` (the same machine, whole-input) refused, so a tree readable from disk did not round-trip through its own NAR. `checkEntryName` now enforces exactly upstream's grammar (no empty name, `.`, `..`, `/`, or NUL, and strict entry order), and the Windows categories live in `isWindowsHazardName` (exported from `NovaCache.NAR.Stream` and re-exported from `NovaCache.NAR`) for store writers to apply at materialization when the target filesystem needs it.
+  - **`narStreamBounded` clamps its bound with alignment headroom.** The bound was clamped to `maxBound :: Int`, but the parser demands a declared length plus its padding in `Int`, so a declared length near the ceiling wrapped that demand negative and a huge structural string "parsed" instantly as empty at an unmoved position. The clamp now sits `narAlignment - 1` below `Int`'s ceiling, so such an archive fails the parse as upstream would at end of input.
+  - **`withNarSource` no longer leaks a handle when sizing a planned file fails.** If `hFileSize` threw after a successful open (the path swapped for a FIFO between plan and pull), the handle was not yet recorded in the source state and nothing ever closed it. The open and the state hand-off now transfer ownership atomically under `bracketOnError`.
+  - **`NovaCache.Zstd` owns its decoder lifecycle: the codec now drives `ZSTD_decompressStream` through the binding's FFI module instead of its high-level streaming driver.** The driver freed decompression contexts only at GC finalization and hid the stream's end state, and four defects traced back to that one root. The context's window buffer (sized by the incoming frame header, i.e. by the peer, up to libzstd's 128 MiB default ceiling) is now created and freed in a bracket, released deterministically on every exit: success, bound violation, corrupt frame, or an exception in the consumer. End of input is now judged by the library's own frame-boundary signal, so a frame cut off mid-way and trailing bytes after the last frame (one to four of which the old path silently accepted) both refuse with `ZstdStreamError`, restoring the complete-stream contract `NovaCache.Xz` already had; the truncation-tolerance divergence documented in 0.10.0.0 is gone. A pull after a failure now rethrows the error instead of reporting a phantom clean end of stream. Concatenated frames still decode as one output, and the inclusive NarSize bound is unchanged. Breaking: `compress` now takes a `ZstdCompressionLevel` (smart constructor `zstdCompressionLevel`, validated against the re-exported `maxCompressionLevel`) instead of a raw `Int`, because the binding's compressor calls `error` on an out-of-range level under `unsafePerformIO`; `defaultCompressionLevel` is a value of the new type, so callers passing it (nova-nix's push) only re-typecheck.
+  - **A failed `withXzSource` pull stays failed, and terminal decoder statuses read as diagnoses.** Every failure path in the streaming pull used to mark the source drained before throwing, and a drained source returns the empty chunk - the clean end-of-output signal - so a consumer that caught the error and pulled again saw truncated output presented as complete; the source now holds the `XzError` and every later pull re-throws it. Separately, unmapped liblzma statuses were shown raw, so a zero-byte input failed with the message `LzmaRetOK` (which reads as success) and a truncated one with `LzmaRetBufError`; the terminal statuses now map to real diagnoses, and the truncated-or-empty-input message is exported as `truncatedInputMessage` so consumers can match the condition. The inclusive output-bound decision is now one shared function under both the pure and streaming paths, with the streaming path tested at exactly the bound, since a narinfo's NarSize is exact. Teardown of a live decoder remains GC-dependent - the `lzma-static` binding exposes no live-stream teardown - and is documented in place with its undo condition.
 
   ## 0.10.0.0 - 2026-08-20
 
@@ -351,7 +364,7 @@ description: |
   <div align="center">
   <h1>nova-cache</h1>
   <p><strong>The Nix binary cache protocol, in Haskell.</strong></p>
-  <p>nix-base32, NAR archives (strict and streaming), narinfo, store paths, Ed25519 signing, and bounded xz decompression - with an optional WAI cache server. A pure core; IO is confined to the storage and server boundaries.</p>
+  <p>nix-base32, NAR archives (strict and streaming), narinfo, store paths, Ed25519 signing, and bounded xz, zstd, and bzip2 codecs as the public nova-cache:xz, nova-cache:zstandard, and nova-cache:bzip2 sublibraries (decompression bounded, zstd compression for the push direction) - with an optional WAI cache server. A pure core; IO is confined to the storage and server boundaries.</p>
 
   [![CI](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml)
   [![Hackage](https://img.shields.io/hackage/v/nova-cache.svg)](https://hackage.haskell.org/package/nova-cache)
@@ -404,8 +417,10 @@ description: |
 
   -- Stream a tree's NAR and hash it in one pass; the archive never
   -- exists in memory. The parsing side is NovaCache.NAR.Stream, a
-  -- chunk-fed event machine, and the nova-cache:xz sublibrary adds
-  -- decompression bounded by a narinfo's declared NarSize.
+  -- chunk-fed event machine; the nova-cache:xz, nova-cache:zstandard,
+  -- and nova-cache:bzip2 sublibraries add decompression bounded by a
+  -- narinfo's declared NarSize, and the zstd side also compresses for
+  -- the push direction.
   narHash <- withNarSource defaultCaseHack path $ \pull ->
     let go ctx = do
           chunk <- pull
@@ -466,15 +481,15 @@ description: |
   cabal test
   ```
 
-  Optional extras: `--flag server` builds the cache server, and the public `nova-cache:xz` and `nova-cache:zstandard` sublibraries carry the bounded codecs (liblzma and libzstd are bundled - no system libraries needed) - consumers depend on them with `build-depends: nova-cache:xz` and the like. Requires GHC 9.14+ and cabal-install 3.10+.
+  Optional extras: `--flag server` builds the cache server, and the public `nova-cache:xz`, `nova-cache:bzip2`, and `nova-cache:zstandard` sublibraries carry the bounded codecs (liblzma, libbz2, and libzstd are bundled - no system libraries needed) - consumers depend on them with `build-depends: nova-cache:xz` and the like. Requires GHC 9.14+ and cabal-install 3.10+.
 
   ---
 
   <p align="center"><sub>Apache-2.0 - <a href="https://github.com/Novavero-AI">Novavero AI Inc.</a></sub></p>
 description-type: markdown
-hash: e5b006945fef2991da398734c9824e6dc0ddc522a4049a2c2e272253e9412368
+hash: 836ef436f6c418c1aacd619f7e9fd9aec86c39866c104ec070010bb93aae8388
 homepage: https://github.com/Novavero-AI/nova-cache
-latest: 0.10.0.0
+latest: 0.11.0.0
 license-name: Apache-2.0
 maintainer: devon.tomlin@novavero.ai
 synopsis: Pure-first Nix binary cache protocol library
