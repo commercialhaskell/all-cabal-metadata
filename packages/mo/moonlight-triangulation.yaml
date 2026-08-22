@@ -4,10 +4,24 @@ all-versions:
 - 1.0.1.0
 - 1.2.0.0
 - 1.2.0.1
+- 1.3.0.0
 author: Fable, Blue Rose
 basic-deps:
-  base: '>=4.19 && <5'
+  aeson: '>=2.2 && <2.4'
+  base: '>=4.22 && <5'
+  bytestring: '>=0.12 && <0.13'
+  containers: '>=0.8 && <0.9'
+  deepseq: '>=1.5 && <1.6'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  moonlight-category: '>=1.1.0.0 && <1.2'
+  moonlight-homology: '>=0.1 && <0.2'
   moonlight-triangulation: '>=0'
+  process: '>=1.6 && <1.7'
+  tasty-bench: '>=0.3 && <0.6'
+  transformers: '>=0.5 && <0.7'
+  unix: '>=2.8 && <2.9'
+  vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog
 
@@ -16,6 +30,62 @@ changelog: |
 
   The serialization format carries its own version tag, independent of the package
   version; any change to it is recorded here explicitly.
+
+  ## 1.3.0.0
+
+  * Add the public GHC-9.14 `cell-complex` component. It interprets an admitted
+    `ExactCellSet` as Homology's generic `CellComplex2D` without copying the mesh
+    or introducing a second cell inventory, and the accompanying observatory
+    executable derives its incidence category and normalized flag nerve.
+  * Keep the LLVM-optimized hot modules buildable with GHC 9.8 by restoring the
+    legacy LLVM pass manager that its supported LLVM 15 toolchain requires.
+  * Withdraw `constrainedExtensionTriangulation`,
+    `constrainedExtensionConstraintOutcomes` and
+    `constrainedExtensionConstraintStats`. A constrained extension now publishes
+    one `ConstraintBatchResult` through `constrainedExtensionConstraintBatch`,
+    read with `constraintBatchTriangulation`, `constraintBatchOutcomes` and
+    `constraintBatchStats`; `constrainedExtensionBuildStats` is unchanged. The
+    batch is the same value `recoverConstraints` returns, so extension and
+    standalone recovery are now read through one accessor set instead of two.
+  * Withdraw the aggregator modules `Moonlight.Triangulation.Handles`,
+    `Moonlight.Triangulation.Handles.Iterators` and
+    `Moonlight.Triangulation.Internal.DcelOperations` from the exposed module
+    list. Every leaf they re-exported remains exposed under its own name; import
+    the leaf.
+  * Add `BoundaryOrientation`, `boundaryLoopOrientation` and
+    `componentBoundaryLoops`, so a face component publishes all of its boundary
+    loops with each loop's orientation rather than only the outer one.
+  * Add `planarValuationsPerimeter`, the certified perimeter of a planar region
+    taken directly from its valuations.
+  * Advance the C boundary to ABI version 2 with opaque exact-region and reusable
+    structuring-element handles, one-call bulk authoring/projection, exact region
+    union/intersection/difference/symmetric difference, point location, exact
+    area plus Euler and certified perimeter observations, and existing polygonal
+    Minkowski morphology with fixed-width receipts.
+  * Rename the former mesh Boolean symbols and Python, TypeScript, and Rust
+    methods to `site_*`; they combine Delaunay site sets and are deliberately not
+    compatibility aliases for the new polygonal region operations.
+  * Restore `-O0` for ordinary test bodies while retaining the filtered-predicate
+    allocation witness at module-local `-O1`.
+  * Move the existing exact Overlay/Minkowski implementations from the `build`
+    sublibrary into the main library and move `HintGenerator` from `dual` into
+    that same apex owner. The `dual` sublibrary is now dcel-only and can compile
+    concurrently with `build`; direct `:dual` consumers of `HintGenerator` must
+    depend on the main library instead. No geometry type or runtime operation is
+    duplicated.
+  * Reserve the planar DCEL bound rather than the general one when joining two
+    separated triangulations. The separated seam copies two planar sources and
+    then only adds, so its peak is its published result; the general reservation
+    was a third again as much arena as the merge can ever reach. Measured at
+    twenty thousand sites over twenty-one processes per arm, the separated join
+    lanes fall 36.4% to 41.3% in allocation and 10.2% to 22.0% in elapsed time,
+    with every unaffected lane byte-identical.
+  * Stop materializing an intermediate validated vector in `mesh_insert_many_f64`.
+    Admission is unchanged — a malformed point anywhere still refuses the whole
+    batch before any insertion — but the canonical coordinate is now applied
+    where the point is used. Against a fifty-thousand-site mesh, allocation falls
+    5.3% at a thousand added points and 26.5% at fifty thousand; wall time is
+    unmoved, because geometric insertion, not admission, is the critical path.
 
   ## 1.2.0.1
 
@@ -128,6 +198,7 @@ description: |
   | `cellValuations` / `regionValuations` | intrinsic measurement | Exact Euler characteristic and rational area plus symbolic radical length with certified bounds. |
   | `minkowskiSum` | polygonal convolution | Exact convex or general polygonal Minkowski addition, with work recorded in a receipt. |
   | `erodeBy` / `openWith` / `closeWith` | regularized morphology | Full-dimensional polygonal erosion and its opening/closing compositions for an origin-anchored convex kernel. |
+  | `fromExactCellSet` | topology interpretation | An opaque `DCELComplex` view of the already-admitted cell inventory; no mesh copy or second validation authority. |
 
   ### Choose the operation
 
@@ -162,16 +233,55 @@ description: |
   | Keep Delaunay faces below an alpha threshold | `alphaShapeContainsFace threshold mesh` | This is the filled-face filtration, not palette logic and not a claim to expose every simplex of a full alpha-complex carrier. |
   | Require construction-independent numbering | `canonicalize` at the observation boundary | Do not canonicalize every intermediate value; it is intentionally global work. |
 
+  ### Cell-complex and category interpretation
+
+  The `cell-complex` component interprets an `ExactCellSet` as
+  Homology's generic `CellComplex2D`. The carrier is opaque and retains the
+  authoritative selected handles and resident DCEL; `fromExactCellSet` is total
+  because `ExactCellSet` construction has already discharged downward closure and
+  handle validity.
+
+  The interpretation is available on GHC 9.14 and newer. Existing Triangulation
+  components retain the package's GHC 9.8–9.14 support range: below 9.14 Cabal
+  marks only `cell-complex`, its focused test, and the category-observatory
+  exporter unbuildable. Hackage aggregates dependencies from every component on
+  the package page, but an ordinary main-library consumer does not inherit the
+  Homology or Category closure.
+
+  ```cabal
+  -- the consumer package
+  build-depends:
+    moonlight-triangulation:cell-complex >= 1.3 && < 1.4,
+    moonlight-homology:cell-category >= 0.1 && < 0.2
+  ```
+
+  ```haskell
+  import Moonlight.Homology.Pure.Topology.CellCategory (complexCategory)
+  import Moonlight.Triangulation.CellComplex (fromExactCellSet)
+
+  incidenceCategory = complexCategory . fromExactCellSet
+  ```
+
+  `moonlight-triangulation-category-observatory-export` is the executable witness:
+  it constructs a real Delaunay mesh, selects its bounded cells, derives the finite
+  incidence category and normalized nerve, validates their overlap counts, and emits
+  only the checked visualization projection.
+
   ## Foreign bindings
 
   The `moonlight-triangulation-c` foreign-library component exposes opaque
-  immutable geometry meshes, batch insertion, finite-set operations, and dense
-  vertex and triangle projections through one versioned C ABI. Python,
-  TypeScript, and Rust bindings live beneath [`bindings/`](bindings/README.md)
-  and descend through that same ABI; none restates the triangulation engine or
-  introduces a second mesh representation.
+  immutable geometry meshes, admitted exact planar regions, and reusable
+  polygonal structuring elements through ABI version 2. Mesh `site_*` operations
+  combine Delaunay sites; region operations perform actual polygonal Boolean
+  selection through the exact overlay owner. Regions cross in one bulk call as
+  coordinates plus loop/component counts and project back as components, loops,
+  and binary64 rendering points. Exact area remains lossless as a reduced ratio;
+  Euler is integral and perimeter carries certified bounds. Python, TypeScript,
+  and Rust bindings live beneath [`bindings/`](bindings/README.md) and descend
+  through that same ABI; none restates overlay, publication, valuation, or
+  morphology.
 
-  `union a a` is `a`; commutativity and associativity hold after explicit
+  For the Haskell mesh algebra, `union a a` is `a`; commutativity and associativity hold after explicit
   `canonicalize`; and a join adds no sites: the result carries
   `|A| + |B| − |A ∩ B|` of them. Structural `Eq` remains exact resident equality
   for caches and serialization rather than secretly rebuilding the mesh.
@@ -195,18 +305,53 @@ description: |
   | `extendConstrainedWith` | Copy-on-write only for a base of at least 200,000 sites, at most 128 incoming sites, exactly one incoming segment, and a pre-thaw corridor with no resident intersection. Every unmeasured or resident-corridor case stays dense. |
   | `refineWithinDomain` | Dense publication. The local transaction candidate preserved semantics but did not improve wall time, so it was removed. |
 
-  ### Benchmark highlights
+  ### Overall Moonlight–Spade comparison
 
-  Fresh source build on 2026-08-12. The comparison binaries passed exact
-  canonical-output agreement before seven interleaved fresh-process timing
-  rounds; brackets are the observed range. Lower is better.
+  The overall referent is broader than the construction board below. Its live
+  inventory contains 17 parity lanes and eight diagnostic cliff lanes. Every
+  timing descends through its declared artifact gate first: cross-language
+  canonical equality where the result is unique, and pinned per-side artifacts
+  where valid refinement or floating-point accumulation may differ.
 
-  | Operation | Workload | Moonlight | Spade 2.15.1 | Result |
-  | --- | ---: | ---: | ---: | ---: |
-  | Removal | remove 125k / 500k sites | 522.067 ms [514.481–539.392] | 16.576 s [15.304–17.308] | **31.75× faster** |
-  | Removal | remove 25k / 100k sites | 72.164 ms [67.604–78.116] | 360.899 ms [264.639–406.783] | **5.00× faster** median |
-  | Natural-neighbour interpolation | 2k queries / 400k sites | 192.792 ms [178.064–201.805] | 233.688 ms [214.695–250.986] | **1.21× faster** |
-  | Incremental insertion | 500k sites | 33.403 s [32.592–36.813] | 30.506 s [28.809–31.688] | within **1.09×** |
+  | Surface | Parity workloads |
+  | --- | --- |
+  | Construction | bulk load at 1k and 10k sites; incremental insertion at 1k, 10k, and 500k sites |
+  | Search and dual | 5k nearest-neighbour queries over 20k sites; Voronoi dual sweep over 1k sites; DCEL traversal over 2k sites |
+  | Constraints | recover 800 constraints over 8k sites; refine with 625 and 2,500 Steiner-site budgets |
+  | Persistent update | remove 250 / 1k, 2.5k / 10k, and 25k / 100k sites |
+  | Natural-neighbour interpolation | 1k queries over 10k sites; 2k queries over 100k sites |
+  | Segment traversal | 500 line intersections over 10k sites |
+
+  The eight diagnostic lanes cover one-at-a-time constraint recovery, constraint
+  splitting, hierarchy insertion, duplicate insertion, hierarchy removal,
+  single-angle sweep collapse, exactly collinear construction with face-less
+  location, and line intersection from outside the hull. They expose known
+  complexity cliffs; they are not omitted merely because the numbers are ugly.
+
+  The package-owned [operation suite](bench/spade-compare/README.md) documents the
+  complete inventory, semantic descent, timing protocol, and evidence rules. Its
+  `scorecard.sh` entry point consumes the closed Haskell lane registry directly;
+  `list` exposes the operation surface, while only a complete, attributable
+  `refresh` may create a retained performance board.
+
+  ```console
+  compiler/foundation/moonlight-triangulation/bench/spade-compare/scorecard.sh list
+  compiler/foundation/moonlight-triangulation/bench/spade-compare/scorecard.sh check
+  ```
+
+  ### Package-owned Delaunay construction board
+
+  The Haskell-owned port of Spade's construction matrix lives with the
+  triangulation library at [`bench/delaunay-compare`](bench/delaunay-compare/README.md).
+  It appends Moonlight to Spade, Spade hierarchy, `cdt`, and `delaunator`, checks
+  all 24 fixture summaries across all five implementations before timing, and
+  derives both pictures from the retained 120-case CSV.
+
+  ![Moonlight Delaunay construction over the small Spade fixtures](https://raw.githubusercontent.com/PaleRoses/moonlight/main/moonlight-triangulation/bench/delaunay-compare/results/moonlight-delaunay-compare-small.svg)
+
+  The [benchmark README](bench/delaunay-compare/README.md) owns the single
+  retained board, its result, receipt, big-point picture, and reproduction
+  procedure. This package overview does not maintain a second benchmark history.
 
   Spade exposes no public triangulation set algebra corresponding to these
   operations. Their independently witnessed Moonlight publication costs are:
@@ -291,10 +436,11 @@ description: |
   * One half-edge mesh underneath. `Cdt` is a mode index on it, not a second
     structure.
 
-  The Haskell facade carries the exact region, overlay, valuation, and morphology
-  algebra. `ExactCellSet` preserves closed point, edge, and face selections;
-  `PlanarRegion` is its full-dimensional polygonal publication. The C ABI and
-  Python, TypeScript, and Rust bindings carry the immutable binary64 mesh surface.
+  The Haskell facade is the authority for exact region, overlay, valuation, and
+  morphology. `ExactCellSet` preserves closed point, edge, and face selections;
+  `PlanarRegion` is its full-dimensional polygonal publication. ABI version 2
+  retains that admitted region behind an opaque handle; foreign binary64 points
+  are authoring/rendering boundaries, not a competing exact representation.
 
   ## Use
 
@@ -609,11 +755,34 @@ description: |
   | --- | --- |
   | `core` | Exact-arithmetic scalars (`Scalar`, `LineSideInfo`) over paged, copy-on-write storage (`Internal.Dyadic`, `.Paged`, `.BoxedPaged`, `.PageDirectory`, `.Growable`, `.PackedIndex`, `.FaceQueue`). Depends only on `base`/`containers`/`deepseq`/`vector` — no other sublibrary. |
   | `dcel` | The finite half-edge mesh and its whole read surface: `Types`, `Math`, exact geometry, closed `CellSet`, `Region`, `Valuation`, `Interop`, `Dcel`, `Payload`, `JoinSemilattice`, `Handles` with its iterator family, `PointLocation`, `Validation`, `FloodFillIterator`, `IntersectionIterator`. Adds `primitive` and `vector-algorithms` over `core`. |
-  | `build` | Everything that *constructs*: `BulkLoad`, `Session`, `Removal`, typed `SetAlgebra`, `Cdt` constraint recovery, `Overlay`, `Minkowski`, and `Refinement`. Adds no external dependency over `core` and `dcel`. |
+  | `build` | The construction kernel: `BulkLoad`, `Session`, `Removal`, typed `SetAlgebra`, `Cdt` constraint recovery, and `Refinement`. Adds no external dependency over `core` and `dcel`. |
   | `parallel` | Concurrent evaluation of the pure union plan. Adds `async` at this effect boundary rather than below it. |
   | `serialize` | `Serialization` — the versioned binary envelope, and the only sublibrary that costs you `binary`, `bytestring`, and `transformers`. Deliberately absent from the facade. |
-  | `dual` | The Voronoi dual and what reads it: `Voronoi`, `Voronoi.Handles`, `Interpolation` (natural-neighbour), `HintGenerator` (Delaunay hierarchy hints). Sits over `core`, `dcel` and `build`. |
-  | facade (`moonlight-triangulation`) | `Moonlight.Triangulation` alone: the equational surface, one export list stating a theory. It re-exports selected names from `core`/`dcel`/`build`/`dual` — and *not* `serialize`. A caller who wants more than the theory names the machine-room module directly. |
+  | `dual` | The dcel-only Voronoi dual and its readers: `Voronoi`, `Voronoi.Handles`, and `Interpolation` (natural-neighbour). It can compile concurrently with `build`. |
+  | facade (`moonlight-triangulation`) | The equational surface plus the two real overlaps: exact `Overlay`/`Minkowski` operations that descend through `build`, and `HintGenerator`, which glues construction to the dual. It re-exports the theory and deliberately excludes `serialize`; there is no duplicate facade implementation beneath it. |
+
+  ### Fast local feedback
+
+  Run exact components through the repository build guard so a local edit never
+  silently expands into the complete package. From the repository's `compiler/`
+  directory, the optimized construction kernel is:
+
+      ../scripts/safe-cabal.sh build moonlight-triangulation:lib:build \
+        --project-file=cabal.project.triangulation-dev \
+        --builddir=dist-newstyle-triangulation-dev
+
+  For type-and-interface feedback where no benchmarkable artifact is required,
+  use the same component and cache at `-O0`:
+
+      ../scripts/safe-cabal.sh build moonlight-triangulation:lib:build \
+        --project-file=cabal.project.triangulation-dev \
+        --builddir=dist-newstyle-triangulation-fast \
+        --disable-optimization
+
+  The full facade is still an admitted five-component closure. Release and
+  runtime claims use the optimized profile; the `-O0` command is deliberately a
+  different feedback workload, not counterfeit evidence of a faster production
+  build.
 
   ## Surface
 
@@ -633,18 +802,21 @@ description: |
   * `.Validation` — structural and Delaunay-property audits.
   * `.Serialization` (sublibrary `serialize`) — versioned binary envelope.
 description-type: markdown
-hash: c7b182549e69ae91ea2bd720b6ee1bc633e3e0d3a9bea1eb04b646062b4fca70
+hash: 4aeabc649628e31362d8f29e95205512b732460d66d48ec83e1bdc8dc501d40f
 homepage: https://github.com/PaleRoses/moonlight
-latest: 1.2.0.1
+latest: 1.3.0.0
 license-name: MIT
 maintainer: rosaliafialkova@gmail.com
 synopsis: Delaunay meshes and exact planar-region algebra.
 test-bench-deps:
-  base: '>=4.19 && <5'
+  base: '>=4.22 && <5'
   binary: '>=0.8 && <0.9'
   bytestring: '>=0.12 && <0.13'
   containers: '>=0.8 && <0.9'
   deepseq: '>=1.5 && <1.6'
+  moonlight-homology: '>=0.1 && <0.2'
   moonlight-triangulation: '>=0'
   primitive: '>=0.9 && <0.10'
+  tasty: '>=1.4 && <1.6'
+  tasty-hunit: '>=0.10 && <0.11'
   vector: '>=0.13 && <0.14'
