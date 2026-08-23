@@ -1,6 +1,7 @@
 all-versions:
 - 0.1.0.0
 - 0.1.0.1
+- 0.1.0.2
 author: Blue Rose
 basic-deps:
   base: '>=4.22 && <5'
@@ -12,6 +13,25 @@ changelog: |
   # Changelog
 
   All notable changes to `moonlight-homology` are documented here.
+
+  ## 0.1.0.2 - 2026-08-22
+
+  - Generalize `FilteredFiniteChainComplex` from the fixed binary64
+    `FiltrationValue` to any ordered birth-key type, preserving exact geometric
+    filtration order through the canonical persistence reducer. Its constructor
+    is now sealed; callers retain read-only projections and construct only
+    through the coverage- and monotonicity-checking boundary.
+  - Add `persistentBettiAt`, the batched `persistentBettiAtMany`, and
+    `persistentBettiAtCriticalValues`. Filtered complexes cache exact critical
+    equivalence classes and dense complex-relative ranks, so all critical Betti
+    profiles are one ordered event sweep rather than one barcode scan per birth.
+  - Lower mod-two persistence through dense integer indices, `IntMap`/`IntSet`
+    columns, degree-wise clearing, and a sealed union-find specialization for
+    graph boundaries, with the general sparse reducer retained for incompatible
+    boundary fibers.
+  - Keep the checked finite-chain constructor as the sole public entrance while
+    deciding sparse boundary-composition zero directly, without materializing a
+    throwaway product matrix on the valid path.
 
   ## 0.1.0.1 - 2026-08-21
 
@@ -111,8 +131,8 @@ description: |
     backend is a compile error.
   - **Exact and spectral sequences.** Filtered spectral families with page-by-page
     reduction and convergence tracking; exact-sequence helpers; Block–Schur reductions.
-  - **Persistence.** One- and two-parameter filtered complexes and mod-2 persistence
-    pairs.
+  - **Persistence.** Arbitrary ordered one-parameter birth keys, mod-2
+    persistence pairs and closed-sublevel Betti queries; two-parameter vocabulary.
   - **Discrete Morse theory.** Acyclic matchings that reduce a complex to its critical
     cells while preserving homology.
   - **Topological carriers.** Cell complexes, graph 1-skeletons, Reeb/macro-scaffold
@@ -132,37 +152,30 @@ description: |
   each oriented edge to `head − tail`; every degree above 1 is empty.
 
   ```haskell
-  {-# LANGUAGE DataKinds #-}
+  import Moonlight.Homology (FiniteChainComplex)
+  import Moonlight.Homology.Presentation
 
-  import Moonlight.Homology
-
-  circle :: Either BoundaryIncidenceShapeError (FiniteChainComplex Rational)
-  circle = do
-    d1 <-
-      mkBoundaryIncidence 3 3
-        [ mkBoundaryEntry 0 0 (-1), mkBoundaryEntry 0 1 1,
-          mkBoundaryEntry 1 1 (-1), mkBoundaryEntry 1 2 1,
-          mkBoundaryEntry 2 2 (-1), mkBoundaryEntry 2 0 1
-        ]
-    pure $
-      mkFiniteChainComplex (HomologicalDegree 1) $ \degree ->
-        case degree of
-          HomologicalDegree 1 -> d1
-          HomologicalDegree 0 -> emptyBoundaryIncidenceOf 3 0
-          _                   -> emptyBoundaryIncidence
+  circle :: Either ChainBuildError (FiniteChainComplex Rational)
+  circle =
+    compileChain
+      ChainSpec
+        { chainCellCounts = [3, 3],
+          chainBoundaries =
+            [ [ (0, 0, -1), (0, 1, 1),
+                (1, 1, -1), (1, 2, 1),
+                (2, 2, -1), (2, 0, 1)
+              ]
+            ]
+        }
   ```
 
-  `mkBoundaryIncidence sourceDim targetDim entries` builds the validated matrix of ∂ₙ,
-  the boundary map from the `sourceDim` cells of degree *n* to the `targetDim` cells of
-  degree *n − 1*. Each `mkBoundaryEntry source target coefficient` is one nonzero
-  incidence: the degree-*n* cell `source` contains the degree-*(n − 1)* cell `target` in
-  its boundary with that `coefficient`. Edge 0, entries `(0, 0, -1)` and
+  `chainCellCounts` lists cell counts from degree zero upward;
+  `chainBoundaries` supplies one sparse `(source, target, coefficient)` section for
+  each positive degree. Edge 0, entries `(0, 0, -1)` and
   `(0, 1, 1)`, encodes ∂(edge₀) = vertex₁ − vertex₀, running from vertex 0 (tail, `-1`)
   to vertex 1 (head, `+1`); edges 1 and 2 close the loop v₀ → v₁ → v₂ → v₀. Construction
-  is total: mismatched shapes are rejected as `BoundaryIncidenceShapeError`. `emptyBoundaryIncidenceOf sourceDim targetDim` is the zero map of that shape
-  (here ∂₀, three vertices to nothing), and `emptyBoundaryIncidence` the empty map used
-  above the top degree. `mkFiniteChainComplex topDegree atDegree` then assembles the
-  complex from its boundary at each degree: a top degree and one `∂` per degree.
+  is total: `compileChain` reports malformed incidence, shape mismatch, or failure of
+  ∂ ∘ ∂ = 0 through `ChainBuildError`; the unchecked matrix constructor remains private.
 
   ### Betti numbers over a field
 
@@ -192,20 +205,16 @@ description: |
   with the 2-cell attached by a degree-2 map, giving H₁(RP²) = ℤ/2.
 
   ```haskell
-  {-# LANGUAGE DataKinds #-}
-
   import Moonlight.Homology
+  import Moonlight.Homology.Presentation
 
-  realProjectivePlane :: Either BoundaryIncidenceShapeError (FiniteChainComplex Integer)
-  realProjectivePlane = do
-    d2 <- mkBoundaryIncidence 1 1 [mkBoundaryEntry 0 0 2]
-    pure $
-      mkFiniteChainComplex (HomologicalDegree 2) $ \degree ->
-        case degree of
-          HomologicalDegree 2 -> d2
-          HomologicalDegree 1 -> emptyBoundaryIncidenceOf 1 1
-          HomologicalDegree 0 -> emptyBoundaryIncidenceOf 1 0
-          _                   -> emptyBoundaryIncidence
+  realProjectivePlane :: Either ChainBuildError (FiniteChainComplex Integer)
+  realProjectivePlane =
+    compileChain
+      ChainSpec
+        { chainCellCounts = [1, 1, 1],
+          chainBoundaries = [[], [(0, 0, 2)]]
+        }
 
   integralHomology ::
     FiniteChainComplex Integer -> Either HomologyFailure [HomologyGroup Integer]
@@ -237,8 +246,15 @@ description: |
   `Moonlight.Homology` umbrella, or from the narrower module noted below.
 
   - **Persistence.** `mkFilteredFiniteChainComplex` builds a filtered complex;
-    `mod2PersistentPairs` reads its birth/death pairs, and `BiPersistencePair` carries
-    the two-parameter case. In `Moonlight.Homology.Persistence`.
+    its birth key may be any ordered type, while `FiltrationValue` remains the
+    binary64 convenience specialization. `mod2PersistentPairs` reads exact
+    birth/death pairs, `persistentBettiAt` answers one closed-sublevel query, and
+    `persistentBettiAtMany` sweeps an arbitrary threshold family without
+    rescanning the barcode. For every admitted critical value,
+    `persistentBettiAtCriticalValues` uses the filtered complex's dense derived
+    ranks while retaining the exact births as the public authority.
+    `BiPersistencePair` carries the two-parameter case. In
+    `Moonlight.Homology.Persistence`.
   - **Spectral sequences.** `mkSpectralSource` and `spectralFamilyPages` produce the
     page-by-page family; `spectralFamilyLimitPage`, `spectralFamilyStableFrom`, and
     `convergenceDepth` track convergence. In `Moonlight.Homology.Sequence`.
@@ -299,7 +315,7 @@ description: |
   | `Moonlight.Homology.Backend` | The `HomologyBackend` dispatcher: Smith / rational / GF(2). |
   | `Moonlight.Homology.Sequence` | Exact and spectral sequences, Block–Schur reductions, graph spectral helpers. |
   | `Moonlight.Homology.Topology` | Cell complexes, graph skeletons, macro-scaffolds, discrete Morse, persistence values, observers, and constraints. |
-  | `Moonlight.Homology.Persistence` | Filtered complexes and mod-2 persistence pairs. |
+  | `Moonlight.Homology.Persistence` | Ordered filtered complexes, mod-2 persistence pairs, and barcode Betti queries. |
   | `Moonlight.Homology.Pure.Topology.CellComplex` | Generic two-dimensional cell incidence; requires `moonlight-homology:cell-complex`. |
   | `Moonlight.Homology.Pure.Topology.CellCategory` | Finite incidence category for a `CellComplex2D`; requires `moonlight-homology:cell-category`. |
   | `Moonlight.Homology.Effect.Laws` | Boundary-nilpotence and reduction law harnesses. |
@@ -314,9 +330,9 @@ description: |
   MIT; see [`LICENSE`](./LICENSE). Third-party notes in
   [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
 description-type: markdown
-hash: 2feb29a84525835b99b4c4ca69d8d0c6a143e80c051364831992b8d312886d1c
+hash: 8468a5e967065f8e6a7ae548e288b54db445ae260f5d9922889fb4dfb4145c34
 homepage: https://github.com/PaleRoses/moonlight
-latest: 0.1.0.1
+latest: 0.1.0.2
 license-name: MIT
 maintainer: rosaliafialkova@gmail.com
 synopsis: Chain complexes, phase-gated homology interfaces, and spectral scaffolding.
@@ -335,3 +351,4 @@ test-bench-deps:
   tasty-hunit: '>=0.10 && <0.11'
   tasty-quickcheck: '>=0.10 && <0.12'
   text: '>=2.0 && <2.2'
+  vector: '>=0.13 && <0.14'
