@@ -1,5 +1,6 @@
 all-versions:
 - 0.5.0.2
+- 0.6.0.0
 author: Sergei Khorev <sergey.khorev@gmail.com>
 basic-deps:
   base: '>=4.14 && <5'
@@ -9,6 +10,10 @@ basic-deps:
   transformers: '>=0.5.6 && <0.7'
   vector: '>=0.12.3 && <0.14'
 changelog: |
+  ## 0.6.0.0 (2026)
+
+  Rethought multiple inheritance for secondary interfaces (`AffineModel`, `Gaussian1dModel`): instead of a second `Upcastable` node, each leaf now gets a standalone, eagerly-materialized upcast (e.g. `hullWhiteAsAffineModel`). This traded a pure wrap at the call site for an explicit `IO`-sequenced conversion, so a few call sites that used to be pure functions are now `IO` actions — a small, deliberate cost for one fewer hand-rolled sum type per interface. Also generalized several accessor return types one `AnyOf` layer deeper (`SwaptionHelper`, `FixedVsFloatingSwap`) to keep them cast-free, and added a further batch of bindings: Gaussian1d model instruments/engines, YoY/CPI inflation vol surfaces and cap/floors, commodities, cross-currency swaps, and BlackAtmVolCurve/SabrVolSurface/OptionletStripper2.
+
   ## 0.5.0.2 (2026)
 
   Support for RelinkableHandle has finally landed. As it turned out the current model is a perfect fit for it: term structures, quotes, and vol surfaces now relink uniformly, so building on top of a live quote or curve propagates updates correctly. Also removed all remaining `dynamic_cast` usage from the C++ shim in favor of dedicated typed bindings, and added a batch of further instrument/engine bindings (SABR vol cubes, Heston FD engines, CDS/counterparty engines, amortizing bonds, exchange rates, CMS legs, and more).
@@ -89,7 +94,7 @@ changelog: |
   ```
 changelog-type: markdown
 description: |
-  Haskell bindings to [QuantLib](https://www.quantlib.org/), the free/open-source C++ library for quantitative finance — rates, bonds, options, swaps, credit, inflation, and equity derivatives, with the associated term structures, indexes, and pricing engines. 1100+ constructors and non-trivial methods are bound so far, covering roughly a tenth of QuantLib's surface.
+  Haskell bindings to [QuantLib](https://www.quantlib.org/), the free/open-source C++ library for quantitative finance — rates, bonds, options, swaps, credit, inflation, and equity derivatives, with the associated term structures, indexes, and pricing engines. 1300+ constructors and non-trivial methods are bound so far, covering roughly a tenth of QuantLib's surface.
 
   hasquant gives Haskell direct access to production-grade pricing, curve-building, and risk models from QuantLib. Rather than wrapping it in a new framework, it stays a thin, close-to-1:1 layer over the C++ API, so it composes into whatever architecture you're already building instead of dictating one.
 
@@ -97,13 +102,13 @@ description: |
 
   Type safety is held to a noticeably higher bar than a typical C++ binding. QuantLib's class hierarchies are mirrored with phantom-typed pointers (`GenBond a`, `GenQuote a`, …) rather than one flat handle type, so passing the wrong kind of object is a compile error, not a runtime crash; upcasting is the only implicit conversion, and it's structurally guaranteed safe. Declarations on the C++ and Haskell sides are kept in step by `c2hs` rather than by hand-written FFI stubs. The C++ shim layer has zero `dynamic_cast`/`dynamic_pointer_cast` call sites — classes that need runtime-checked downcasts upstream get a dedicated leaf type instead — and enum-like C++ types are bound with explicit value mirroring rather than an unchecked numeric cast, closing off a whole class of silent-corruption bugs that plain FFI bindings are prone to.
 
-  The main departures from a thin wrapper are enums and ADTs standing in for things that are classes on the C++ side (see "On Types" below), and the ownership layer that makes the pointer types safe; individual calls still map close to 1:1 onto the underlying QuantLib call.
+  The main departures from a thin wrapper are enums and ADTs standing in for things that are classes on the C++ side (see "On Types" below), and the ownership layer that makes the pointer types safe; individual calls still map close to 1:1 onto the underlying QuantLib call. Coverage is curated rather than exhaustive: getters that only echo a value the caller already passed to the constructor are deliberately left unbound, so the binding surface tracks what's actually useful to call rather than every method QuantLib happens to expose.
 
   This started as a hand-written project in 2012 (see "Project History" below) and has gone through several architecture rewrites since. The core design — the pointer-ownership model, the enum/ADT scheme, the C shim conventions — is hand-designed and predates any AI involvement. More recently I've used AI assistance to extend coverage faster: new classes, methods, day counters, indexes. Every generated binding is still reviewed against the pattern it's supposed to follow, checked against the upstream C++ signature, and covered by a test before it counts as done — see "Testing" below for what that means in practice.
 
   Worked examples live in `test/example/QuantLib/Example`. They're direct translations of QuantLib's own examples and test suite, not idiomatic Haskell — the goal there is fidelity to a known-correct reference, not style. The test suite proper is `test/main/QuantLib/MainTest.hs`, a dispatcher over the topic modules in `test/hspec/QuantLib/Spec`.
 
-  Haddock documentation is published at https://khorser.github.io/hasquant
+  The package is published on Hackage at https://hackage.haskell.org/package/hasquant, with Haddock documentation for the current `master` available at https://khorser.github.io/hasquant
 
   # Testing
 
@@ -166,11 +171,11 @@ description: |
   ## Docker
 
   The repo contains docker compose files for a custom Linux x86_64 image. You can use it like this to run tests using GHC-8.10.6:
-  `docker compose run --rm -it hasquant stack --resolver lts-18.8 test`
+  `docker compose build`, `docker compose run --rm -it hasquant stack --resolver lts-18.8 test`
 
   Drop `-it` when running without a TTY (CI, or a scripted check) — it fails there.
 
-  The config mounts `/root/.stack`, `/root/.ghcup`, and `/root/.cabal` as named volumes so everything installed with stack/ghcup/cabal will persist across runs.
+  The config mounts `~/.stack`, `~/.ghcup`, and `~/.cabal` as named volumes so everything installed with stack/ghcup/cabal will persist across runs.
   `/hasquant/.stack-work` and `/hasquant/dist-newstyle` are mounted as anonymous volumes to avoid polluting host filesystem.
 
   # On Types
@@ -193,18 +198,16 @@ description: |
   While this is convenient, it leads to some allocation and deallocation on each call, so you might consider using `asBond` and `asInstrument` to get an object of the required type.
 
   # TODO
-  - `EndCriteria`/`OptimizationMethod` are bound as raw, Haskell-GC-finalized (`delete`-based) pointers rather than `shared_ptr`-boxed like every other bound class (no `QlEndCriteria`/`QlOptimizationMethod` `typedef shared_ptr<...>` exists anywhere in `cbits/`). This is why every constructor that needs to *store* one long-term as a member (`FittedBondDiscountCurve`'s fitting methods, `sabrInterpolatedSmileSection`, `sabrSwaptionVolatilityCube`) has to hardcode QuantLib-internal defaults instead of accepting a caller-supplied one — a constructor that only *uses* them transiently within one call (`Gsr::calibrateVolatilitiesIterative`, `CalibratedModel::calibrate`) can safely pass the raw pointer through, but nothing that retains one can. The real fix — re-typedef'ing both as `shared_ptr` boxes — would also touch `qlGsrCalibrateVolatilitiesIterative`/`qlCalibratedModelCalibrate`, the two call sites that currently pass them through transiently.
-  - `GlobalBootstrap` is bound for two trait x interpolator combinations only — `Discount`x`LogLinear` (`piecewiseYieldCurveGlobalBootstrap'`) and `SimpleZeroYield`x`Linear` (`piecewiseYieldCurveGlobalBootstrapSimpleZeroLinear'`) — not the full matrix `IterativeBootstrap` supports. Deliberate: QuantLib-SWIG itself only ever binds one `GlobalBootstrap` combination (`GlobalLinearSimpleZeroCurve`), each combination is a separate template instantiation with its own `[temp.inst]` trap (see `CLAUDE.md`), and widening happens per concrete use case, not speculatively.
-  - `GlobalBootstrap`'s functor-callback constructors (`ql/termstructures/globalbootstrap.hpp`): `additionalHelpers`/`additionalDates` are bound for `SimpleZeroYield`x`Linear` only, via `piecewiseYieldCurveGlobalBootstrapSimpleZeroLinearFull'`, using upstream QuantLib-SWIG's canned `AdditionalErrors`/`AdditionalDates` functors (fixed formulas, not user callbacks — no Haskell-side marshalling needed). `additionalDates` must have exactly `length additionalHelpers - 2` entries (`AdditionalErrors`' fixed output size); a mismatch raises a clear error. `additionalPenalties`/`additionalVariables` remain unbound — real optimizer callbacks, a materially larger feature.
   - (Perpetual) Add more classes and methods. You will need to update `cbits/qlaux.h`, `cbits/qlTypesC2HS.h`, and then add some boilerplate to corresponding `.h`, `.cpp`, `Internal/Type.hs` and `.chs` files. This can be simplified with scripting/LLMs. Refer to `CLAUDE.md`, `.claude/skills`, and `tools` for more detailed information useful even for manual steps.
+  - Evaluate whether some [OpenSourceRiskEngine](https://opensourcerisk.org) functionality should be bound
   - Add more nonempty lists or vectors for some functions where applicable
   - Design a declarative embedded DSL
   - Review interfaces for consistency, add obviously missing features and fix contradictions to the current design
   - See [github issues](https://github.com/khorser/hasquant/issues) for more formalized tasks
 description-type: markdown
-hash: 2887cde46f2e503b79cba0ce8eb97d119b452edbdeff7d5d65822f6b61dfd838
+hash: 31ae115e088fac19155278ad29eba7656ca2f998376dc91cdc9f2572ec3ee427
 homepage: https://github.com/khorser/hasquant#readme
-latest: 0.5.0.2
+latest: 0.6.0.0
 license-name: BSD-3-Clause
 maintainer: Sergei Khorev <sergey.khorev@gmail.com>
 synopsis: Bindings to QuantLib
