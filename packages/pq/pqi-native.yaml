@@ -22,6 +22,7 @@ all-versions:
 - 1.0.1.9
 - 1.0.1.10
 - 1.0.1.11
+- 1.0.1.12
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   base: '>=4.11 && <5'
@@ -34,7 +35,14 @@ basic-deps:
   ptr-peeker: ^>=0.2
   ptr-poker: ^>=0.1.3
   unix: '>=2.7 && <2.9'
+  vector: '>=0.12 && <0.14'
 changelog: |
+  # v1.0.1.12
+
+  ## Fixes
+
+  - Fixed a pipeline flow-control deadlock: a pipelined burst of commands larger than the socket buffers along the path can absorb, submitted before any result is read, used to wedge both sides permanently. `Pqi.Native.Transport.send` was a bare blocking `Network.Socket.ByteString.sendAll`, which never reads while sending; once the server has filled its output path with unread results it blocks in `ClientWrite` and stops reading the client's commands, so the client - still blocked in `send` with unsent bytes - can never finish, and neither side progresses again. libpq survives the same situation because its `pqSendSome` (`fe-misc.c`), on an incomplete send, calls `pqReadData()` to absorb incoming data and then `pqWait(true, true, …)` for read-or-write readiness, looping until its output is fully sent. `send` now mirrors that loop: whenever the socket is not writable, incoming bytes are drained into the transport's read buffer and the wait is armed for read-or-write readiness (write-biased, so a streaming server cannot starve the send); a peer closing mid-send surfaces as the same classified EOF the read side reports. On Windows the plain `sendAll` remains, as GHC's I/O manager cannot back the readiness wait there. Surfaced as hasql's `manyLargeResultsViaPipeline` benchmark hanging from 1.0.1.4 onward, after the default host resolution moved to the Unix-domain socket whose 8KB buffers expose what TCP's larger ones absorbed. Caught by the `pqi-conformance` spec `Pqi.Conformance.Operation.SendQueryParams.PipelineFlowControl`.
+
   # v1.0.1.11
 
   ## Fixes
@@ -240,14 +248,14 @@ description: |
   otherwise a Unix-domain socket in `/tmp` on Unix-like systems, or `localhost`
   on Windows.
 description-type: markdown
-hash: 90d0b1ab17d17fdac591ba6454ae05f671754fd109f18c3794b3ffc75ebebe35
+hash: 6cee2c3c31f99f686371b7e41b6c38e8a398daf841049c162c9a75e421eb7208
 homepage: https://github.com/nikita-volkov/pqi-native
-latest: 1.0.1.11
+latest: 1.0.1.12
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Native (pure-Haskell) adapter for pqi
 test-bench-deps:
   base: '>=4.11 && <5'
   hspec: '>=2.11 && <2.12'
-  pqi-conformance: ^>=1.0.11
+  pqi-conformance: ^>=1.0.12
   pqi-native: '>=0'
