@@ -9,6 +9,7 @@ all-versions:
 - 1.3.0.3
 - 1.4.0.1
 - 1.4.0.2
+- 1.4.0.3
 author: Blue Rose
 basic-deps:
   aeson: '>=2.2 && <2.4'
@@ -40,6 +41,19 @@ changelog: |
 
   The serialization format carries its own version tag, independent of the package
   version; any change to it is recorded here explicitly.
+
+  ## 1.4.0.3 - 2026-08-28
+
+  * Restore public `dcel` and `build` sublibraries as safe restrictions of their
+    private implementation owners. The default library reexports the same lawful
+    modules, so consumers may choose the broad surface or a smaller dependency
+    cone without receiving a second implementation.
+  * Publish incremental insertion/removal, sealed edit sessions, typed point and
+    shape queries, owning handles, payload traversals, dynamic constraint
+    operations, and whole-mesh diagnostics through the canonical Haskell facade.
+  * Keep raw identifier constructors, resident representation, admitted-input
+    construction, local transaction scheduling, seam witnesses, and local
+    validation closures private.
 
   ## 1.4.0.2 - 2026-08-28
 
@@ -266,11 +280,15 @@ description: |
   | --- | --- | --- | --- |
   | `delaunayGeometry` | Coordinates own the input | `Vector Point` | Geometry-only mesh / `BuildError` |
   | `delaunayFromCoordinates` | Payloads have a separate plane | Defaults, points, payloads, duplicate policy | `BuildResult` / `BuildError` |
+  | `insert` / `insertAt` / `insertMany` | An immutable mesh gains sites or payload replacements | Mesh plus payloads or explicit points | `InsertionResult` / `BuildResult` / `BuildError` |
+  | `withSession` | Many inserts and removals should publish once | Mesh, peak added-site count, composed `Session` | Result, mesh, and `BuildStats` / `BuildError` |
+  | `removeVertex` / `locateAndRemove` | A resident handle or exact position must be removed | Mesh plus `VertexId` / `Point` | `RemovalResult` / optional result / `BuildError` |
   | `siteRelation` | Supports need exact classification | Two meshes | `SiteRelation` |
   | `union` / `unions` | Unconstrained supports must join | Two meshes / mesh list | Union mesh / `BuildError` |
   | `intersection` / `intersectionWith` | Shared support is required | Two meshes; optional payload combiner | Common-site mesh / `BuildError` |
   | `difference` / `symmetricDifference` | Left-only / exclusive support is required | Source and mask / two meshes | Result mesh / `BuildError` |
   | `constrainedDelaunay` | Segments author topology | Defaults, positioned vertices, index pairs | `BuildResult` / `CdtError` |
+  | `addConstraintEdge(s)` / `removeConstraintEdge` | Constraints change on a resident mesh | Mesh plus vertex pair(s) / edge | Constraint receipt or mesh / `CdtError` |
   | `unionConstrained` / `unionConstrainedWith` | Arbitrary constrained meshes must join | Two meshes; optional payload combiner | Constrained mesh / `ConstrainedUnionError` |
   | `extendConstrainedWith` | One constrained mesh owns identity | Combiner, base, extension | `ConstrainedExtensionResult` / `ConstrainedUnionError` |
   | `joinSeparatedConstrained` | Inputs are strictly x-separated | Face predicate, refinement parameters, two meshes | `ConstrainedSeamResult` / `ConstrainedUnionError` |
@@ -278,6 +296,9 @@ description: |
   | `refineWithinDomain` | Quality applies to admitted faces | Vertex constructor, parameters, face set, mesh | `RefinementDomainResult` / `BuildError` |
   | `faceComponents` | Bounded faces must descend by label | Mesh, `FaceId -> label` | `[(label, FaceComponent)]` |
   | `componentBoundary` | One component must publish as loops | Mesh, `FaceComponent` | `RegionBoundary` / `BoundaryObstruction` |
+  | `locatePoint` / `locatePointWithHint` | An admitted point needs an exact cell classification | Mesh, `QueryPoint`, optional hint | `Location`, optionally with `LocationStats` |
+  | `lineIntersections` | A segment needs its ordered mesh crossings | Mesh and admitted endpoints | `[Intersection]` |
+  | `verticesInCircle` / `verticesInRectangle` | A metric window selects resident sites | Mesh and circle / rectangle | Handles / typed metric error |
   | `overlayLayers` | Layers need one exact arrangement | Two `PlanarLayer`s | `OverlayResult` / `OverlayError` |
   | `overlayClosedUnion` / `overlayClosedIntersection` / `overlayRegularizedDifference` | Boolean output may retain lower cells | Two label predicates, `OverlayResult` | `ExactCellSet` / `OverlaySelectionError` |
   | `overlaySelectedRegion` | Selected faces must publish as polygons | Label-pair predicate, `OverlayResult` | `PlanarRegion` / `RegionPublicationError` |
@@ -348,8 +369,9 @@ description: |
 
   ## Use
 
-  Use the main facade with explicit `Vector` inputs. Construction and set algebra
-  retain their typed obstruction in `Either`:
+  Use the broad default library with explicit `Vector` inputs. It exposes the
+  facade and the safe leaf modules; construction and set algebra retain their
+  typed obstruction in `Either`:
 
   ```cabal
   build-depends:
@@ -363,6 +385,15 @@ description: |
   [example index](docs/examples/README.md) adds constrained interiors,
   alpha-boundary descent, exact overlay and valuations, and polygonal morphology.
 
+  For a smaller compile/dependency cone, depend on only the component modules you
+  import:
+
+  ```cabal
+  build-depends:
+    moonlight-triangulation:dcel >= 1.4.1 && < 1.5,
+    moonlight-triangulation:build >= 1.4.1 && < 1.5
+  ```
+
   ## Architecture
 
   The resident DCEL is immutable structure-of-arrays over paged copy-on-write
@@ -373,14 +404,16 @@ description: |
   ## Consumer libraries
 
   The Cabal manifest owns component visibility and dependencies; this is its
-  consumer-facing projection. External packages normally use the main library
-  and add only the public sublibraries whose modules they import. The finite DCEL
-  and construction kernel remain private behind the main facade.
+  consumer-facing projection. The default library reexports the complete safe
+  geometry surface. Use a public sublibrary directly when its smaller dependency
+  cone matters; the trusted implementation units remain private.
 
   | Dependency | Imports | Purpose |
   | --- | --- | --- |
-  | `moonlight-triangulation` | `Moonlight.Triangulation`, `.HintGenerator`, `.Overlay`, `.Minkowski` | Construction, observations, set algebra, CDT, refinement, alpha geometry, and exact planar operations. |
+  | `moonlight-triangulation` | `Moonlight.Triangulation` and every safe `dcel`, `build`, and `dual` module | Broad construction, observation, set algebra, CDT, refinement, alpha, Voronoi, interpolation, and exact planar surface. |
   | `moonlight-triangulation:core` | `.Scalar`, `.LineSideInfo` | Low-level exact scalars and paged storage primitives. |
+  | `moonlight-triangulation:dcel` | `.Types`, `.Dcel`, `.Handles.*`, `.PointLocation`, `.FloodFillIterator`, `.IntersectionIterator`, `.Alpha`, `.Exact`, `.Region`, `.Valuation` | Immutable mesh vocabulary, observations, typed spatial queries, exact geometry, and owning handles; no construction kernel. |
+  | `moonlight-triangulation:build` | `.BulkLoad`, `.Session`, `.Removal`, `.Cdt`, `.Refinement`, `.SetAlgebra` | Construction and persistent editing over the DCEL; no dual, serialization, concurrency, or Homology dependency. |
   | `moonlight-triangulation:dual` | `.Voronoi`, `.Voronoi.Handles`, `.Interpolation` | Voronoi observations and natural-neighbour interpolation. |
   | `moonlight-triangulation:parallel` | `.Parallel` | Bounded concurrent union; adds `async`. |
   | `moonlight-triangulation:serialize` | `.Serialization` | Versioned binary envelopes; adds `binary`, `bytestring`, and `transformers`. |
@@ -388,9 +421,9 @@ description: |
 
   [Build and validate package components locally.](docs/development.md)
 description-type: markdown
-hash: 1408d62f79b630ee2a8028e17a8f64303655e7fb421dbd9e5bd66056e5ef4c0c
+hash: 009f804d41418f8a06e4be6e863851f55f914acefa1e88f475d98ba1adf561f0
 homepage: https://github.com/PaleRoses/moonlight
-latest: 1.4.0.2
+latest: 1.4.0.3
 license-name: MIT
 maintainer: rosaliafialkova@gmail.com
 synopsis: Delaunay meshes and exact planar-region algebra.
