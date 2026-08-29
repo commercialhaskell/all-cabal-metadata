@@ -7,18 +7,75 @@ all-versions:
 - 0.3.1
 - 0.3.2
 - 0.3.3
+- 0.4.0
 author: Nikolai Kudasov
 basic-deps:
   array: '>=0.5.3.0 && <0.6'
   base: '>=4.19 && <5'
   bifunctors: '>=5.5 && <5.7'
-  containers: '>=0.6 && <0.9'
+  binary: '>=0.8'
+  bytestring: '>=0.11'
+  containers: '>=0.6.8 && <0.9'
   deepseq: '>=1.4 && <1.6'
   kind-generics: '>=0.5.0 && <0.6'
   template-haskell: '>=2.21.0.0 && <2.24'
   text: '>=1.2.3.1 && <2.2'
-changelog: |
+changelog: |+
   # CHANGELOG for `free-foil`
+
+  # Unreleased
+
+  # 0.4.0 — 2026-08-29
+
+  A release about *units*: checking a module independently of its neighbours, linking the results without renaming, and storing a checked one on disk. Scope restriction, a family of $O(1)$ sinks, and a linear α-equivalence rename path come with it.
+
+  Changed:
+
+  - **Clients of `mkFreeFoil` must delete their own `Foil.CoSinkable` instances** for the generated binding types, since `mkFreeFoil` now generates a concrete one ([#87](https://github.com/fizruk/free-foil/pull/87), [#82](https://github.com/fizruk/free-foil/issues/82)). `SinkableK`, `HasNameBinders`, and `UnifiablePattern` remain the client's.
+
+  - **`withPattern`'s continuation now also receives the scope the pattern extends to**, and so do those of `withRefreshedPattern`, `withFreshPattern`, and `withRefreshedPattern'` ([#88](https://github.com/fizruk/free-foil/pull/88), [#84](https://github.com/fizruk/free-foil/issues/84)). Add the argument, and drop the `extendScopePattern` that recomputed it.
+
+  - **`mkFreeFoilConversions` now requires `Bifoldable` on each signature**, for the `tryToX` it generates. `deriveBifoldable` if a signature lacks it.
+
+  - `freeVarsOf` and `freeVarsOfScopedAST` no longer repeat a variable, and return names in ascending order of their identifiers rather than in the order the term mentions them.
+
+  - `rawFreshName` allocates `0` over a scope whose maximum is negative, leaving the negative range to explicit policy, and reports a scope holding `maxBound` as exhausted. Nothing changes on a scope without negative names.
+
+  - `convertToAST` and `convertToScopedAST` are deprecated in favour of `unsafeConvertToAST` and `unsafeConvertToScopedAST`, and `sinkContainer` in favour of `sink1`.
+
+  - `containers >= 0.6.8` is required, for `Data.IntSet.fromRange`. `binary` and `bytestring` are new dependencies, both boot libraries.
+
+  New:
+
+  - **Reserved name ranges, and linking.** `withFreshIn` allocates inside a `NameRange`, so units drawing from disjoint reservations cannot collide. `Control.Monad.Foil.Blocks` tracks that as `ExtWithin` evidence and links two units with `withDisjointUnion`, one sweep over their range sets. `checkExtScope` and `checkScopeUnion` re-mint it for a unit loaded from a cache, and are documented as a trust boundary ([#58](https://github.com/fizruk/free-foil/pull/58)).
+
+  - **Deterministic stripes.** `Control.Monad.Foil.Registry` gives each unit its own run of the name line, `registerUnit` handing out the `StripeIndex` that every reservation for that unit is derived from. A `RegionLayout` does the same for the locals of each declaration, so an edit to one file moves no name in another ([#78](https://github.com/fizruk/free-foil/pull/78), [#80](https://github.com/fizruk/free-foil/pull/80)).
+
+  - **Scope restriction.** `NameSet`, `withRestrictedScope`, `supportOf`, `withRelevantScope`, and `withThinnedNameBinderList`: a term's support, the scope it really inhabits, and a chain of binders thinned against a set of names ([#56](https://github.com/fizruk/free-foil/pull/56)).
+
+  - **Serialisation.** `Control.Monad.Free.Foil.Binary` has opt-in orphan `Binary` instances for the syntax, and `Control.Monad.Free.Foil.Artifact` the checks that loading a stored unit rests on, with relocation of its constants ([#68](https://github.com/fizruk/free-foil/pull/68), [#69](https://github.com/fizruk/free-foil/pull/69)). Decoding mints scope evidence, so both are a trust boundary.
+
+  - **Patterns carrying scope-indexed payloads.** `PatternTransport` is the sanctioned way to rebuild one, and the generic implementation now refuses such a pattern with a type error rather than mis-refreshing it silently ([#71](https://github.com/fizruk/free-foil/pull/71)). `Control.Monad.Foil.Telescope` is the worked example, and `unifyPatternsIn` with the new `AlphaEquiv` class lets payloads take part in α-equivalence ([#72](https://github.com/fizruk/free-foil/pull/72), [#79](https://github.com/fizruk/free-foil/pull/79)).
+
+  - **Conversions that report rather than crash.** `tryConvertToAST` gives the first unresolved identifier together with what was in scope there, in one pass, and `unresolvedNames` pays a second pass for all of them ([#55](https://github.com/fizruk/free-foil/pull/55)). `tryConvertToASTWith` resolves an identifier to a whole term, for constants and abbreviations ([#57](https://github.com/fizruk/free-foil/pull/57)); `convertFromASTWith` names free and bound variables separately, which a raw name alone cannot ([#59](https://github.com/fizruk/free-foil/pull/59)); and `toXIn` and its siblings allocate within a given range, so the same source elaborates to the same term ([#60](https://github.com/fizruk/free-foil/pull/60)).
+
+  - **A family of $O(1)$ sinks.** `sink1` through a `Functor` and `sink2` through a `Bifunctor`, with rewrite rules and hlint hints steering the elementwise forms towards them ([#66](https://github.com/fizruk/free-foil/pull/66)).
+
+  - `nameBinderListOf`, the `Id` and `RawName` synonyms, and `mapWithName` are exported. The `restriction` and `alphaequiv` benchmarks are new.
+
+  Performance:
+
+  - `alphaEquiv` threads the verdict's renamings down the recursion instead of applying them, which turns a quadratic rename path linear: 353 ms to 211 µs on two α-equivalent 2000-binder chains ([#81](https://github.com/fizruk/free-foil/pull/81)).
+
+  - `substitute` short-circuits the empty substitution ([#80](https://github.com/fizruk/free-foil/pull/80)).
+
+  - The binder and substitution operations are `INLINABLE`, so a downstream `SPECIALIZE` reaches through them, and the free foil's `Var` unpacks its name ([#86](https://github.com/fizruk/free-foil/pull/86), [#83](https://github.com/fizruk/free-foil/issues/83)).
+
+  Documentation:
+
+  - Every exported entity carries a `@since`, and CI fails if a new one lacks it.
+
+  - The haddocks and the READMEs are proofread. The README's documentation links pointed at a version of the GitHub Pages haddocks that no longer exists, and point at Hackage now.
 
   # 0.3.3 — 2026-07-20
 
@@ -234,22 +291,38 @@ changelog: |
   # 0.0.1 — 2024-06-08
 
   First release, corresponding to the ICCQ 2024 paper.
+
+
 changelog-type: markdown
 description: |
   # free-foil
+
   Efficient Type-Safe Capture-Avoiding Substitution for Free (Scoped Monads).
+
+  This package provides a scope-safe representation for syntax with binders. Scopes are tracked in a phantom type index, so that capture-avoidance is a property the type checker enforces rather than a discipline the programmer keeps. It builds on the foil of Maclaurin, Radul, and Paszke, extends it with patterns, and adds free scoped monads, so that substitution, α-equivalence, and conversion to and from a raw syntax are implemented once for every language whose syntax is given as a signature bifunctor.
+
+  - `Control.Monad.Foil` — names, scopes, binders, and the `Sinkable`/`CoSinkable` classes.
+  - `Control.Monad.Free.Foil` — the free foil: `AST binder sig n`, substitution, α-equivalence, supports, and conversions.
+  - `Control.Monad.Foil.TH` and `Control.Monad.Free.Foil.TH` — Template Haskell that generates the scope-safe syntax from a raw (BNFC-generated) one.
+  - `Control.Monad.Foil.Blocks` and `Control.Monad.Foil.Registry` — reserved ranges of names, for units that are checked independently and linked afterwards.
+  - `Control.Monad.Free.Foil.Binary` and `Control.Monad.Free.Foil.Artifact` — serialisation of a checked unit, and the checks that loading one rests on.
+
+  See the [repository README](https://github.com/fizruk/free-foil#readme) for the design and the papers behind it, and the [documentation on Hackage](https://hackage.haskell.org/package/free-foil) for the modules themselves.
 description-type: markdown
-hash: 96081952bc5eadcc498b43e597f96ae794d92f89f6480dade565306e81aab1eb
+hash: 4cfd40e7ae9bc0b65e299adb71d67e68a34ebf5e2d05a2f8dd95f70864c8a072
 homepage: https://github.com/fizruk/free-foil#readme
-latest: 0.3.3
+latest: 0.4.0
 license-name: BSD-3-Clause
 maintainer: nickolay.kudasov@gmail.com
 synopsis: Efficient Type-Safe Capture-Avoiding Substitution for Free (Scoped Monads)
 test-bench-deps:
+  QuickCheck: '>=0'
   array: '>=0.5.3.0 && <0.6'
   base: '>=4.19 && <5'
   bifunctors: '>=5.5 && <5.7'
-  containers: '>=0.6 && <0.9'
+  binary: '>=0.8'
+  bytestring: '>=0.11'
+  containers: '>=0.6.8 && <0.9'
   deepseq: '>=1.4 && <1.6'
   doctest-parallel: '>=0'
   free-foil: '>=0'
