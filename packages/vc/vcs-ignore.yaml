@@ -1,19 +1,36 @@
 all-versions:
 - 0.0.1.0
 - 0.0.2.0
+- 0.1.0.0
 author: Vaclav Svejcar
 basic-deps:
-  Glob: '>=0'
-  base: '>=4.7 && <5'
-  containers: '>=0'
-  directory: '>=0'
-  exceptions: '>=0'
-  filepath: '>=0'
-  optparse-applicative: '>=0'
-  text: '>=0'
+  Glob: '>=0.10.2 && <0.11'
+  base: '>=4.20 && <4.23'
+  containers: '>=0.6 && <0.9'
+  directory: '>=1.3.8 && <1.4'
+  filepath: '>=1.4.2 && <1.6'
+  optparse-applicative: '>=0.18 && <0.19'
+  text: '>=2.0 && <2.2'
   vcs-ignore: '>=0'
-changelog: |+
+changelog: |
   # Changelog for vcs-ignore
+
+  ## v0.1.0.0 (2026-08-31)
+
+  - Replace the eager repository scan and separate lazy matcher with one opaque,
+    lazy `GitRepository` session
+  - Add kind-aware ignore queries with consistent Git last-match and
+    ignored-parent semantics
+  - Add a constant-result-memory repository fold with caller pruning and global
+    early termination
+  - Never follow symbolic links during traversal and expose each entry's kind
+  - Support Git directories, gitfiles, linked worktrees, and common directories
+  - Hide pattern and raw filesystem implementation details from the public API
+  - Remove the `Repo` type class, `scanRepo`, eager `Git`, and the separate
+    `GitIgnoreMatcher` API
+  - Update the executable, documentation, tests, and benchmarks for the new API
+  - Document intentionally unsupported Git configuration (`core.excludesFile`,
+    `core.ignoreCase`, and conditional includes) and sparse-checkout index rules
 
   ## v0.0.2.0 (2021-12-29)
   - minor fixes and improvements
@@ -21,127 +38,226 @@ changelog: |+
 
   ## v0.0.1.0 (2021-05-10)
   - initial release
-
 changelog-type: markdown
 description: |
-  ![CI](https://github.com/vaclavsvejcar/vcs-ignore/workflows/CI/badge.svg)
-  [![Hackage version](http://img.shields.io/hackage/v/vcs-ignore.svg)](https://hackage.haskell.org/package/vcs-ignore)
+  # vcs-ignore
+
+  [![CI](https://github.com/xwinus/vcs-ignore/actions/workflows/ci.yml/badge.svg)](https://github.com/xwinus/vcs-ignore/actions/workflows/ci.yml)
+  [![Hackage version](https://img.shields.io/hackage/v/vcs-ignore.svg)](https://hackage.haskell.org/package/vcs-ignore)
   [![Stackage version](https://www.stackage.org/package/vcs-ignore/badge/lts?label=Stackage)](https://www.stackage.org/package/vcs-ignore)
 
-  # vcs-ignore
-  `vcs-ignore` is small Haskell library used to find, check and process files ignored by selected _VCS_.
+  `vcs-ignore` is a Haskell library for querying Git ignore rules and traversing
+  the visible part of a working tree. It uses one lazy repository session for
+  both operations: opening a repository never scans its working tree, and
+  per-directory `.gitignore` files are loaded only when a visible branch needs
+  them.
 
-  ## 1. Table of Contents
-  <!-- TOC -->
+  ## Contents
 
-  - [1. Table of Contents](#1-table-of-contents)
-  - [2. Use as Library](#2-use-as-library)
-      - [2.1. Listing all files/directories ignored by VCS](#21-listing-all-filesdirectories-ignored-by-vcs)
-      - [2.2. Walking files/directories ignored by VCS](#22-walking-filesdirectories-ignored-by-vcs)
-      - [2.3. Checking if path is ignored by VCS](#23-checking-if-path-is-ignored-by-vcs)
-  - [3. Use as Executable](#3-use-as-executable)
-      - [3.1. Checking if path is ignored by VCS](#31-checking-if-path-is-ignored-by-vcs)
+  - [Opening a repository](#opening-a-repository)
+  - [Checking a path](#checking-a-path)
+  - [Listing visible entries](#listing-visible-entries)
+  - [Processing without building a list](#processing-without-building-a-list)
+  - [Pruning and stopping early](#pruning-and-stopping-early)
+  - [Traversal and cache semantics](#traversal-and-cache-semantics)
+  - [Migrating from 0.0.x](#migrating-from-00x)
+  - [Using the executable](#using-the-executable)
 
-  <!-- /TOC -->
+  ## Opening a repository
 
+  Use `openGitRepository` when the working-tree root is already known:
 
-  ## 2. Use as Library
-  Because this library is really simple to use, following example should be enough to understand how to use it for your project.
-
-  ### 2.1. Listing all files/directories ignored by VCS
   ```haskell
-  {-# LANGUAGE TypeApplications #-}
+  import Data.VCS.Ignore
 
-  module Data.VCS.Test where
-
-  import Data.VCS.Ignore ( Git, Repo(..), listRepo )
-
-  example :: IO [FilePath]
-  example = do
-    repo <- scanRepo @Git "path/to/repo"
-    listRepo repo
+  openProject :: IO GitRepository
+  openProject = openGitRepository "/path/to/project"
   ```
 
-  ### 2.2. Walking files/directories ignored by VCS
+  Use `findGitRepository` to search from a file or directory towards its
+  parents. It returns `Nothing` when no enclosing Git worktree exists.
+
   ```haskell
-  {-# LANGUAGE TypeApplications #-}
+  import Data.VCS.Ignore
 
-  module Data.VCS.Test where
-
-  import Data.Maybe       ( catMaybes )
-  import System.Directory ( doesFileExist )
-  import Data.VCS.Ignore  ( Git, Repo(..), walkRepo )
-
-  onlyFiles :: IO [FilePath]
-  onlyFiles = do
-    repo <- scanRepo @Git "path/to/repo"
-    catMaybes <$> walkRepo repo walkFn
-   where
-    walkFn path = do
-      file <- doesFileExist path
-      pure (if file then Just path else Nothing)
-
+  findProject :: IO (Maybe GitRepository)
+  findProject = findGitRepository "/path/to/project/src/Main.hs"
   ```
 
-  ### 2.3. Checking if path is ignored by VCS
+  Both regular `.git` directories and gitfiles used by linked worktrees and
+  submodules are supported.
+
+  ## Checking a path
+
+  Queries take a repository-relative path and an explicit `PathKind`. The path
+  does not need to exist, and the library never guesses its kind from the
+  filesystem or a trailing slash.
+
   ```haskell
-  {-# LANGUAGE TypeApplications #-}
+  import Data.VCS.Ignore
 
-  module Data.VCS.Test where
+  checkBuildDirectory :: IO Bool
+  checkBuildDirectory = do
+      repo <- openGitRepository "/path/to/project"
+      isIgnored repo Directory "dist"
 
-  import Data.VCS.Ignore ( Git, Repo(..) )
-
-  checkIgnored :: IO Bool
-  checkIgnored = do
-    repo <- scanRepo @Git "path/to/repo"
-    isIgnored repo "/some/path/.DS_Store"
+  checkGeneratedFile :: IO Bool
+  checkGeneratedFile = do
+      repo <- openGitRepository "/path/to/project"
+      isIgnored repo RegularFile "generated/output.log"
   ```
 
-  ## 3. Use as Executable
-  While `vcs-ignore` is mainly intended to be used as a library, it also comes with small executable called `ignore` that can be used standalone to verify whether given path is ignored or not.
+  Absolute paths and paths containing a `..` component are rejected. `.` denotes
+  the repository root and is never ignored.
 
+  ## Listing visible entries
+
+  `listRepo` returns non-ignored files and directories. Each path is relative to
+  the repository root, and the root itself is not included.
+
+  ```haskell
+  import Data.VCS.Ignore
+
+  listVisibleFiles :: IO [FilePath]
+  listVisibleFiles = do
+      repo <- openGitRepository "/path/to/project"
+      entries <- listRepo repo
+      pure
+          [ entryPath entry
+          | entry <- entries
+          , entryKind entry == RegularFile
+          ]
   ```
+
+  `listRepo` intentionally materializes its result. Use `forRepo_` or `foldRepo`
+  for large repositories when a complete list is unnecessary.
+
+  ## Processing without building a list
+
+  `forRepo_` performs an action for every non-ignored entry without accumulating
+  the results.
+
+  ```haskell
+  import Data.VCS.Ignore
+  import System.FilePath ((</>))
+
+  printVisiblePaths :: IO ()
+  printVisiblePaths = do
+      repo <- openGitRepository "/path/to/project"
+      forRepo_ repo $ \entry ->
+          putStrLn (repositoryRoot repo </> entryPath entry)
+  ```
+
+  The callback receives the kind already discovered by the walker. Directory
+  symlinks are reported as `SymbolicLink` and are never followed.
+
+  ## Pruning and stopping early
+
+  `foldRepo` is the underlying traversal primitive. `Prune` skips a visible
+  directory for caller-specific reasons, while `Stop` terminates the entire
+  traversal immediately.
+
+  ```haskell
+  import Data.VCS.Ignore
+  import System.FilePath (takeFileName)
+
+  countAtMost :: Int -> GitRepository -> IO (WalkResult Int)
+  countAtMost limit repo =
+      foldRepo repo 0 $ \count entry ->
+          if entryKind entry == Directory
+              && takeFileName (entryPath entry) == ".cache"
+              then pure (count, Prune)
+              else
+                  if count >= limit
+                      then pure (count, Stop)
+                      else pure (count + 1, Continue)
+  ```
+
+  Traversal is depth-first and pre-order. Sibling order is intentionally
+  unspecified. `Prune` on a non-directory is equivalent to `Continue`.
+
+  ## Traversal and cache semantics
+
+  - Ignored entries are not passed to callbacks.
+  - Ignored directories are never opened or scanned.
+  - Git metadata belonging to the opened repository is never emitted.
+  - The default XDG global ignore file and `info/exclude` are loaded when the
+    repository is opened.
+  - A visible directory's `.gitignore` is loaded on first use and at most once
+    per repository session.
+  - A nested `.gitignore` is never loaded below an ignored or caller-pruned
+    directory.
+  - Later rule changes become visible after opening a new `GitRepository`.
+  - Missing, symlinked, and non-regular `.gitignore` files are treated as empty.
+    Other I/O failures are reported instead of being silently ignored.
+
+  These rules ensure that individual queries and traversal use the same Git
+  precedence and ignored-parent behavior.
+
+  The current matcher intentionally does not evaluate Git configuration. In
+  particular, `core.excludesFile`, `core.ignoreCase`, conditional config includes,
+  and index-backed ignore files in sparse checkouts are not supported. It reads
+  the default `$XDG_CONFIG_HOME/git/ignore` (or its platform equivalent) and uses
+  case-sensitive matching. Paths use Haskell `FilePath`; exact round-tripping of
+  arbitrary byte-string filenames is not guaranteed.
+
+  ## Migrating from 0.0.x
+
+  Version `0.1.0.0` replaces the eager and lazy APIs with one repository session:
+
+  | Before | Now |
+  |---|---|
+  | `scanRepo @Git root` | `openGitRepository root` |
+  | `openGitIgnoreMatcher root` | `openGitRepository root` |
+  | `isIgnored repo path` | `isIgnored repo kind path` |
+  | `isIgnoredPath matcher kind path` | `isIgnored repo kind path` |
+  | `repoRoot repo` | `repositoryRoot repo` |
+  | `listRepo :: IO [FilePath]` | `listRepo :: IO [Entry]` |
+  | list-returning callback traversal | `foldRepo`, `walkRepo`, or `forRepo_` |
+
+  The `Repo` type class, eager `Git` value, `scanRepo`, and public pattern and
+  filesystem helpers have been removed. Paths returned in `Entry` remain
+  repository-relative.
+
+  ## Using the executable
+
+  The package includes an executable named `ignore`. Run it from inside a Git
+  working tree to check a path:
+
+  ```console
   $ ignore --help
-  vcs-ignore, v0.0.2.0 :: https://github.com/vaclavsvejcar/vcs-ignore
+  vcs-ignore, v0.1.0.0 :: https://github.com/xwinus/vcs-ignore
 
   Usage: ignore (-p|--path PATH) [--debug] [-v|--version] [--numeric-version]
-    library for handling files ignored by VCS systems
-
-  Available options:
-    -p,--path PATH           path to check
-    --debug                  produce more verbose output
-    -v,--version             show version info
-    --numeric-version        show only version number
-    -h,--help                Show this help text
   ```
 
-  ### 3.1. Checking if path is ignored by VCS
-  To verify if path is ignored by _VCS_, just call the `ignore` executable with `-p` parameter inside the _VCS_ repository like this:
+  The command exits with status `0` when the path is ignored and status `1` when
+  it is visible or no repository is found.
 
-  ```
-  $ ignore -p .stack-work/some-file
-  Found repository at: /path/to/repo
-  Path '.stack-work/some-file' IS NOT ignored
+  ```console
+  $ ignore -p generated/output.log
+  Found repository at: /path/to/project
+  Path 'generated/output.log' IS ignored
 
   $ echo $?
-  1
+  0
   ```
-
-  As you can see, `ignore` executable prints result in human readable form as well as it sets the exit code to `1` if the file is __not__ ignored.
 description-type: markdown
-hash: 851ffd93dc91b34f63107b0e5d3e8561942f6c680a1f6506f92a65a6aacd1c2c
-homepage: https://github.com/vaclavsvejcar/vcs-ignore
-latest: 0.0.2.0
+hash: 25e599fa1f76e5ac82b45861dd64b2dc76656ea38c61d47830cc91be09b42e0c
+homepage: https://github.com/xwinus/vcs-ignore
+latest: 0.1.0.0
 license-name: BSD-3-Clause
 maintainer: vaclav.svejcar@gmail.com
-synopsis: Library for handling files ignored by VCS systems.
+synopsis: Query Git ignore rules and traverse visible repository entries.
 test-bench-deps:
-  base: '>=4.7 && <5'
-  containers: '>=0'
-  directory: '>=0'
-  doctest: '>=0'
-  exceptions: '>=0'
-  filepath: '>=0'
+  Glob: '>=0.10.2 && <0.11'
+  base: '>=4.20 && <4.23'
+  containers: '>=0.6 && <0.9'
+  criterion: '>=0'
+  directory: '>=1.3.8 && <1.4'
+  filepath: '>=1.4.2 && <1.6'
   hspec: '>=0'
-  text: '>=0'
+  process: '>=0'
+  temporary: '>=0'
+  text: '>=2.0 && <2.2'
   vcs-ignore: '>=0'
