@@ -4,11 +4,13 @@ all-versions:
 - 0.2.0.1
 - 0.2.1.0
 - 0.2.2.0
+- 0.3.0.0
 author: Nadeem Bitar
 basic-deps:
   base: '>=4.18 && <5'
   bytestring: '>=0.11 && <0.13'
   directory: '>=1.3 && <1.4'
+  filelock: '>=0.1.1.9 && <0.2'
   filepath: '>=1.4 && <1.6'
   hashable: '>=1.4 && <1.6'
   hasql: '>=1.10 && <1.11'
@@ -16,11 +18,41 @@ basic-deps:
   process: '>=1.6 && <1.8'
   temporary: '>=1.3 && <1.4'
   text: '>=2.0 && <2.2'
+  time: '>=1.12 && <1.17'
   transformers: '>=0.5 && <0.7'
   typed-process: '>=0.2.12 && <0.3'
   unix: '>=2.8 && <2.9'
 changelog: |
   # Changelog
+
+  ## Unreleased
+
+  ## 0.3.0.0
+
+  ### Breaking Changes
+
+  - Add the `sweepStaleOnStart` field to `Config`. Exhaustive constructor uses of
+    `Config` must be updated.
+
+  ### New Features
+
+  - Add `sweepStaleInstances` and default-enabled `sweepStaleOnStart` to reclaim
+    abandoned temporary PostgreSQL clusters on later startup. Live consumers hold
+    external lifetime locks across initialization, cache restore, and restart.
+
+  ### Bug Fixes
+
+  - Verify process identity before bounded fast shutdown; preserve uncertain data,
+    permanent directories, sockets, snapshots, and reusable caches.
+  - Resolve Linux `ps` through `PATH` so process inspection works with Nix-provided
+    procps.
+
+  ### Other Changes
+
+  - Consolidate cached startup fallbacks into one protected allocation and preserve
+    asynchronous cancellation during cache and resource operations.
+  - Validate Linux suites locally with Apple containers and the pinned Nix test
+    shell instead of Debian Dockerfiles.
 
   ## 0.2.2.0
 
@@ -542,13 +574,17 @@ description: |
   | `dumpTraced`                 | `ephemeralpg.dump`              |
   | `restoreTraced`              | `ephemeralpg.restore`           |
 
-  Each span carries the standard database attributes
-  (`db.system.name`/`db.system`, `db.namespace`/`db.name`) plus
+  Each span carries the standard database and server attributes
+  (`db.system.name`/`db.system`, `db.namespace`/`db.name`,
+  `server.address`/`net.peer.name`, `server.port`/`net.peer.port`) plus
   library-specific ones (`ephemeralpg.port`,
-  `ephemeralpg.shutdown.mode`). Attribute name selection obeys
-  `OTEL_SEMCONV_STABILITY_OPT_IN` exactly the way upstream HTTP
-  instrumentation does — set it to `http` for stable names, `http/dup`
-  for both stable and legacy. Errors from `EphemeralPg.start` are
+  `ephemeralpg.shutdown.mode`). `server.address` is the Unix socket
+  directory, which is what a client passes as libpq's `host`. Attribute
+  name selection obeys
+  `OTEL_SEMCONV_STABILITY_OPT_IN` exactly the way upstream database
+  instrumentation does — set it to `database` for stable names,
+  `database/dup` for both stable and legacy. Errors from
+  `EphemeralPg.start` are
   recorded uniformly with `error.type` (constructor name), span status
   `Error`, and a `recordException` event.
 
@@ -577,13 +613,84 @@ description: |
 
   See `ephemeral-pg-opentelemetry/test/Demo.hs` for a runnable example.
 
+  ## Cleanup after a killed consumer
+
+  `start` and `startCached` sweep abandoned temporary PostgreSQL instances before
+  allocating a new cluster. If a consumer exits without cleanup (including SIGKILL),
+  its server can remain alive until the next startup or explicit sweep:
+
+  ```haskell
+  import Data.Monoid (Last (..))
+  import EphemeralPg qualified as Pg
+
+  let config = Pg.defaultConfig
+        { Pg.temporaryRoot = Last (Just "/tmp/my-tests") }
+  removedPaths <- Pg.sweepStaleInstances config
+  ```
+
+  Create a custom temporary root before using it. The sweep returns sorted canonical
+  paths actually removed. Disable automatic sweeping with
+  `config { Pg.sweepStaleOnStart = Last (Just False) }`; explicit sweeps still run,
+  and new temporary instances still hold ownership locks. An absent setting enables
+  automatic sweeping.
+
+  Cleanup uses local filesystem locks to protect live consumers, including startup
+  and data replacement. It waits up to five seconds per abandoned server for fast
+  shutdown, without escalating to SIGKILL. Inspection and deletion add overhead, so
+  a large backlog can delay startup. Uninspectable or unresponsive instances remain
+  for a later attempt. Supported inspection platforms are Linux (`ps` and `/proc`)
+  and macOS (`ps` and `lsof`).
+
+  Only immediate temporary data directories are candidates. Permanent data, socket
+  directories, snapshots, and initialization caches are excluded. Cached startup
+  with permanent data uses ordinary initialization. Historical untracked clusters
+  need a valid PID file; live historical servers also need verified identity and
+  parent PID 1. Untracked directories without PID files remain untouched. The
+  private `.ephemeral-pg-instances-<uid>` registry retains small lock files to avoid
+  concurrent lock-replacement races.
+
+  ## Running tests
+
+  Run all suites locally with the pinned Nix toolchain:
+
+  ```bash
+  nix develop .#test -c cabal test all --test-show-details=direct
+  ```
+
+  On an Apple silicon Mac, run the Linux suites with Apple containers:
+
+  ```bash
+  container system start
+  ./test/platform/apple-container.sh
+  ```
+
+  The script requires `container`, `git`, `jq`, and `tar`. It uses a pinned official
+  Nix image and the repository's `flake.lock`, with GHC 9.12.4 and PostgreSQL from
+  the `test` shell. It copies tracked and non-ignored untracked files from the current
+  working tree into the container's Linux filesystem, then runs every Cabal test
+  suite as an unprivileged user. This includes real process ownership and orphan
+  recovery tests. No Dockerfile or Docker daemon is needed.
+
+  The dedicated `ephemeral-pg-nix-validation` container stops after each run, including
+  failures, and retains Nix and Cabal caches for the next run. Failed source snapshots
+  and Cabal logs remain inside it for inspection. The first run downloads the Linux
+  toolchain and builds dependencies. Defaults are four CPUs and 4 GiB of memory;
+  set `EPHEMERAL_PG_CPUS` and `EPHEMERAL_PG_MEMORY` when creating a container to
+  change those limits. Set `EPHEMERAL_PG_CONTAINER` to use a separate named container;
+  the script refuses to reuse a running container. Extra arguments are passed to
+  `cabal test`, for example `--test-options='--match "Stale instances"'`.
+
+  The `test` shell skips editor tools, Git hook installation and development-database
+  initialization. Linux process inspection requires `procps` on `PATH`, supplied by
+  this shell. Databases and build outputs stay inside the Linux container.
+
   ## License
 
   BSD-3-Clause
 description-type: markdown
-hash: 6f9e6af0babb6492ffeb0c424b3d6d8ec92c1c81c325f3d53a889a9e1f4426cd
+hash: 74c742165f403a4425ff4a1ba5b59ade2393b7740f6e03d652d8c5af346f7b53
 homepage: ''
-latest: 0.2.2.0
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: Nadeem Bitar
 synopsis: Temporary PostgreSQL databases for testing
@@ -593,6 +700,7 @@ test-bench-deps:
   bytestring: '>=0'
   directory: '>=0'
   ephemeral-pg: '>=0'
+  filelock: '>=0'
   filepath: '>=0'
   hashable: '>=0'
   hasql: '>=0'
@@ -601,6 +709,7 @@ test-bench-deps:
   process: '>=0'
   temporary: '>=0'
   text: '>=0'
+  time: '>=0'
   transformers: '>=0'
   typed-process: '>=0'
   unix: '>=0'
