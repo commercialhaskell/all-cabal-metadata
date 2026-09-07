@@ -1,0 +1,329 @@
+all-versions:
+- 0.2.0.0
+author: Arkadii Kholmetskii
+basic-deps:
+  array: '>=0.5.8 && <0.6'
+  base: '>=4.18 && <5'
+  containers: '>=0.6.7 && <0.8'
+  finite-typelits: '>=0.2.0.1 && <0.3'
+  hmatrix: '>=0.20.2 && <0.21'
+  mwc-random: '>=0.15.0.1 && <0.16'
+  primitive: '>=0.9 && <0.10'
+changelog: |
+  # Changelog
+
+  ## 0.2.0.0
+
+  First Hackage release.
+
+  - Added validated dense and sparse probability distributions.
+  - Added type-safe finite transition matrices and locally finite transition
+    kernels, with representation-independent finite-horizon evolution and
+    simulation.
+  - Added finite-time joint and conditional probabilities.
+  - Added exact-time, bounded, eventual, competing, and expected hitting and
+    return quantities.
+  - Added finite- and infinite-horizon visit-count analysis, including the
+    occupation matrix.
+  - Added communicating-class, recurrence, transience, periodicity, and cyclic
+    class analysis.
+  - Added canonical decomposition, fundamental matrices, and absorption
+    probabilities and expectations.
+  - Added extremal stationary distributions for every recurrent class, ordinary
+    limiting matrices, and cyclic subsequential limits.
+  - Added state-labelled and list-based construction and inspection. No
+    `hmatrix` type appears in the public API.
+  - Changed the internal dense storage of `DistributionVector` and
+    `TransitionMatrix` from statically sized values to ordinary `hmatrix`
+    vectors and matrices. The public types remain state-indexed and abstract,
+    and their smart constructors continue to validate dimensions against the
+    finite state cardinality.
+  - Added `Dtmc.Distribution.Map.mapStates` for transforming sparse
+    distributions, combining the weights of states that share a target.
+  - Added `Dtmc.Transition.Matrix.fromRows`, which builds a matrix from a grid
+    of weights and reports shape mismatches as typed errors.
+  - Made GTH stationary-distribution normalisation robust when finite weights
+    have a sum that overflows `Double`.
+  - Reduced dense transition-row lookup from quadratic to linear time and
+    space.
+  - Made `Dtmc.Distribution.Vector.fromList` positional: it now takes one weight
+    per state in canonical state order, so it is the exact inverse of `toList`,
+    and reports a length mismatch through the new `DistributionVectorError`.
+    Labelled construction, where duplicates combine and missing states default
+    to zero, remains `Dtmc.Distribution.Map.fromList`.
+  - Supports GHC 9.6 through 9.14.
+  - Narrowed `Dtmc.Analysis.Classification` to the queries themselves. The
+    `Classification` report and `classify` are no longer exported, and with them
+    the `Of` suffixes that existed only to keep record fields from colliding
+    with the standalone functions. `absorbingStates`, `chainPeriod` and
+    `ergodic` are now functions on a matrix, and `communicatingClasses` returns
+    `[CommClass state]`, carrying each class's period and closedness rather than
+    its members alone.
+changelog-type: markdown
+description: |
+  # dtmc
+
+  Type-safe discrete-time Markov chains for Haskell.
+
+  `dtmc` supports both finite chains and locally finite kernels over countable
+  state spaces. It validates probability data at construction, keeps finite
+  models tied to their state type, and provides finite-time, structural, and
+  long-run analysis alongside simulation.
+
+  ## Features
+
+  - Dense transition matrices indexed by domain-specific finite state types.
+  - Sparse transition kernels for finite or potentially infinite state spaces.
+  - Validated dense and sparse probability distributions.
+  - Distribution evolution, transition probabilities, timed events, and
+    conditional probabilities.
+  - Hitting times, first-return times, and finite or total visit counts.
+  - Communicating classes, recurrence, periodicity, and absorbing states.
+  - Canonical decomposition, fundamental matrices, and absorption analysis.
+  - Stationary distributions, ordinary limits, and cyclic subsequential limits.
+  - Random sampling and trajectory simulation through either representation.
+  - No `hmatrix` types in the public API.
+
+  ## Installation
+
+  Add the package to your Cabal file:
+
+  ```cabal
+  build-depends: dtmc ^>=0.2.0.0
+  ```
+
+  The package requires GHC 9.6 or newer and a BLAS/LAPACK implementation for
+  its internal use of `hmatrix`. On Ubuntu or Debian:
+
+  ```bash
+  sudo apt-get install libblas-dev liblapack-dev
+  ```
+
+  On macOS, `hmatrix` can use Apple Accelerate.
+
+  ## Quick start
+
+  This complete example defines a two-state weather chain and asks three
+  different probability questions:
+
+  ```haskell
+  {-# LANGUAGE DeriveAnyClass #-}
+  {-# LANGUAGE DeriveGeneric #-}
+
+  module Main (main) where
+
+  import Dtmc.Analysis.Event (DiscreteEvent (..))
+  import Dtmc.Analysis.FiniteTime qualified as FiniteTime
+  import Dtmc.Analysis.HittingTime qualified as HittingTime
+  import Dtmc.Distribution.Vector (DistributionVector)
+  import Dtmc.Distribution.Vector qualified as Vector
+  import Dtmc.State (FiniteState)
+  import Dtmc.Transition.Matrix (TransitionMatrix)
+  import Dtmc.Transition.Matrix qualified as Matrix
+  import GHC.Generics (Generic)
+
+  data Weather = Dry | Wet
+    deriving (Eq, Ord, Show, Generic, FiniteState)
+
+  weather :: TransitionMatrix Weather
+  weather =
+    checked $
+      Matrix.fromRows
+        [ [0.9, 0.1]
+        , [0.4, 0.6]
+        ]
+
+  initial :: DistributionVector Weather
+  initial = checked (Vector.fromList [1, 0])
+
+  checked :: Show problem => Either problem value -> value
+  checked = either (error . show) id
+
+  main :: IO ()
+  main = do
+    -- P(X_2 = Wet | X_0 = Dry)
+    print (FiniteTime.nStepProbability 2 weather Dry Wet)
+
+    -- P(H_Wet <= 2) under the initial distribution
+    print (HittingTime.probability (AtMost 2) weather (== Wet) initial)
+
+    -- P(H_Wet < infinity) under the initial distribution
+    print (HittingTime.eventualProbability weather [Wet] initial)
+  ```
+
+  Constructor order is the canonical state order. The rows and columns above
+  therefore represent `Dry` followed by `Wet`; `Vector.fromList` uses the same
+  order. Invalid dimensions, weights, or row sums are returned as typed errors.
+
+  The two hitting queries take their target differently, and the difference is
+  not cosmetic. A bounded query walks forward a fixed number of steps, so it
+  works through any `Transition` — including a kernel over an infinite state
+  space — and takes a predicate. An eventual query solves a linear system over
+  the whole state space, so it requires a finite `TransitionMatrix`, takes an
+  explicit target list, and returns `Either LinearSystemError`.
+
+  Analysis modules intentionally use concise, overlapping names such as
+  `probability` and `expectation`. Import them qualified, as in the example.
+  The top-level `Dtmc` module is an orientation and module map rather than a
+  facade of re-exports.
+
+  ## Choosing a representation
+
+  | State space | Transitions | Initial distribution | Capabilities |
+  | --- | --- | --- | --- |
+  | Finite | `TransitionMatrix` | `DistributionVector` or `DistributionMap` | Complete finite-time, structural, and long-run analysis; simulation |
+  | Finite | `TransitionKernel` | `DistributionVector` or `DistributionMap` | Finite-horizon analysis; simulation |
+  | Potentially infinite | `TransitionKernel` | Finite-support `DistributionMap` | Finite-horizon analysis; simulation |
+
+  A `TransitionKernel` does not enumerate its state space. It only requires each
+  one-step transition law to have finite support, so the same finite-horizon
+  algorithms work without global truncation. Analyses that need the complete
+  state space require a finite `TransitionMatrix`.
+
+  ### Finite states
+
+  For a named enumeration, derive `Generic` and `FiniteState`:
+
+  ```haskell
+  data Queue = Empty | Busy | Full
+    deriving (Eq, Ord, Show, Generic, FiniteState)
+  ```
+
+  Constructors must have no fields. Their declaration order determines the
+  canonical order used by vectors, matrices, and whole-state results. Use
+  `Finite n` when names are unnecessary. Instances are also provided for `()`,
+  `Bool`, and `Ordering`.
+
+  ### Locally finite kernels
+
+  A kernel is a function from a state to a validated sparse distribution:
+
+  ```haskell
+  import Dtmc.Distribution (DistributionError)
+  import Dtmc.Distribution.Map qualified as Distribution
+  import Dtmc.Transition.Kernel (TransitionKernel)
+  import Dtmc.Transition.Kernel qualified as Kernel
+
+  countUp :: TransitionKernel Integer
+  countUp = Kernel.fromLaws (Distribution.pointMass . (+ 1))
+
+  randomWalk :: Either DistributionError (TransitionKernel Integer)
+  randomWalk = do
+    stepLaw <- Distribution.fromList [(-1, 0.5), (1, 0.5)]
+    pure $
+      Kernel.fromLaws $ \position ->
+        Distribution.mapStates (+ position) stepLaw
+  ```
+
+  The random walk has an infinite reachable state space, while every individual
+  transition law remains finite.
+
+  ## Construction guide
+
+  | Value | Constructor | Notes |
+  | --- | --- | --- |
+  | Sparse distribution | `Dtmc.Distribution.Map.fromList` | State-labelled; duplicate states combine |
+  | Point mass | `Dtmc.Distribution.Map.pointMass` | Concentrates probability on one state |
+  | Dense finite distribution | `Dtmc.Distribution.Vector.fromList` | One weight per state in canonical order |
+  | Transition kernel | `Dtmc.Transition.Kernel.fromLaws` | Accepts validated finite-support laws |
+  | Transition matrix | `Dtmc.Transition.Matrix.fromRows` | Plain row-major lists in canonical order |
+  | Matrix from a kernel | `Dtmc.Transition.Matrix.fromKernel` | Materializes a finite-state kernel |
+
+  Transition matrices can be combined with `compose`, `identity`, and `power`.
+  Both matrix and vector values are abstract and nominally associated with their
+  state type, preventing accidental use with a different finite model.
+
+  ## Analysis guide
+
+  | Task | Module |
+  | --- | --- |
+  | Evolve distributions | `Dtmc.Dynamics` |
+  | Transition and timed-observation probabilities | `Dtmc.Analysis.FiniteTime` |
+  | Hitting times and races between target sets | `Dtmc.Analysis.HittingTime` |
+  | First-return times | `Dtmc.Analysis.ReturnTime` |
+  | Bounded and total visit counts; occupation matrix | `Dtmc.Analysis.VisitCount` |
+  | Communication, recurrence, and periodicity | `Dtmc.Analysis.Classification` |
+  | Fundamental matrix and absorption quantities | `Dtmc.Analysis.Absorption` |
+  | Extremal stationary distributions | `Dtmc.Analysis.Stationary` |
+  | Ordinary and cyclic long-run limits | `Dtmc.Analysis.Limiting` |
+  | Sampling and trajectories | `Dtmc.Simulation` |
+
+  Functions ending in `GivenInitialState` condition on a particular starting
+  state. Their shorter counterparts accept any compatible `Distribution`.
+
+  ### Discrete events
+
+  Hitting, return, and visit-count queries use `DiscreteEvent`:
+
+  | Constructor | Event for `Y` |
+  | --- | --- |
+  | `EqualTo n` | `Y = n` |
+  | `LessThan n` | `Y < n` |
+  | `AtMost n` | `Y <= n` |
+  | `GreaterThan n` | `Y > n` |
+  | `AtLeast n` | `Y >= n` |
+
+  For a quantity that may be infinite, `GreaterThan` and `AtLeast` include its
+  mass at infinity. Eventual hitting, eventual return, and infinitely many
+  visits remain explicit operations because they require finite-state analysis.
+
+  ## Validation and numerical behavior
+
+  Distribution constructors reject non-finite values and repair coordinate or
+  total-mass error only within `1e-9`. Tolerated coordinate error is clamped to
+  `[0, 1]`, then the repaired weights are normalized. Transition-matrix rows
+  follow the same policy.
+
+  Structural analysis is combinatorial: a stored matrix entry is an edge exactly
+  when it is greater than zero, with no floating-point tolerance. Numerical
+  analyses use checked `Double` linear algebra and return
+  `Either LinearSystemError result` on failure. Computed results are not silently
+  clamped or renormalized, and mathematically infinite expectations are reported
+  as `InfiniteExpectation` rather than floating-point infinity.
+
+  See each module's Haddock documentation for edge cases and complexity bounds.
+
+  ## Building from source
+
+  ```bash
+  git clone https://github.com/kholmetskii/dtmc.git
+  cd dtmc
+  cabal update
+  cabal build all --enable-tests
+  cabal test all --test-show-details=direct
+  ```
+
+  Generate local API documentation with:
+
+  ```bash
+  cabal haddock all --haddock-hyperlink-source
+  ```
+
+  The package is tested with GHC 9.6.7, 9.8.4, 9.10.3, 9.12.4, and 9.14.1.
+
+  ## Documentation and support
+
+  - Browse the [Haddock API documentation](https://hackage.haskell.org/package/dtmc/docs/Dtmc.html).
+  - Report bugs or request features in the [issue tracker](https://github.com/kholmetskii/dtmc/issues).
+  - See the [changelog](https://hackage.haskell.org/package/dtmc/changelog) for
+    release notes.
+
+  ## License
+
+  `dtmc` is distributed under the BSD 3-Clause License; see the `LICENSE` file
+  in the source distribution.
+description-type: markdown
+hash: 106721994fff33212310e9f6ac31a148b03a5f38498f45a0193e80f3631522f7
+homepage: https://github.com/kholmetskii/dtmc
+latest: 0.2.0.0
+license-name: BSD-3-Clause
+maintainer: Arkadii Kholmetskii <373321aa@gmail.com>
+synopsis: Type-safe discrete-time Markov chains
+test-bench-deps:
+  QuickCheck: '>=2.18 && <2.19'
+  base: '>=0'
+  containers: '>=0'
+  dtmc: '>=0'
+  finite-typelits: '>=0'
+  hspec: '>=2.11.17 && <2.12'
+  mwc-random: '>=0'
