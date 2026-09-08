@@ -115,6 +115,7 @@ all-versions:
 - 0.0.114
 - 0.0.115
 - 0.0.116
+- 0.0.117
 author: maxonfjvipon
 basic-deps:
   aeson: '>=2.2.3 && <2.4'
@@ -130,6 +131,7 @@ basic-deps:
   megaparsec: '>=9.5 && <9.9'
   optparse-applicative: '>=0.18 && <0.20'
   phino: '>=0'
+  process: '>=1.6.17 && <1.7'
   random: '>=1.2 && <1.4'
   regex-pcre-builtin: '>=0.95.2 && <0.96'
   scientific: '>=0.3.7 && <0.4'
@@ -169,38 +171,89 @@ description: "<!--\nSPDX-FileCopyrightText: Copyright (c) 2025 Objectionary.com\
   of `phino` using\nthe `--pin` global option. It exits with an error when the version
   supplied\ndoesn't match the installed one:\n\n```bash\nphino --pin=0.0.0.67 dataize
   hello.phi\n```\n\n## Dataize\n\nThen, you dataize the expression:\n\n```bash\n$
-  phino dataize hello.phi\n68-65-6C-6C-6F\n```\n\nEvery atom fired on the way to the
-  bytes may be recorded in a machine-readable\nprotocol, with the `--evaluations`
-  option. One firing is one line of three\ntab-separated fields: the name of the λ
-  function, the formation it was applied\nto, and the expression it returned:\n\n```bash\n$
-  cat sum.phi\n⟦\n  bytes(data) ↦ ⟦ φ ↦ data ⟧,\n  number(as-bytes) ↦ ⟦ φ ↦ as-bytes,
-  plus(x) ↦ ⟦ λ ⤍ L_number_plus ⟧ ⟧,\n  φ ↦ 5.plus( 6 )\n⟧\n$ phino dataize --evaluations=atoms.tsv
-  --quiet --sweet --hide-rho sum.phi\n$ cat -T atoms.tsv\nL_number_plus^I⟦ x ↦ 6 ⟧^I11\n```\n\nRecords
-  follow the syntax of the other options, such as `--sweet` and\n`--hide-rho`, but
-  always stay on one line. The file is truncated at the\nbeginning of every run, and
-  `--output=phi` is the only output format it\nworks with, since one record must fit
-  into one line.\n\nAn atom that cannot fire fails the run: its λ function is unknown
-  to phino,\nor one of its inputs reaches such an atom. This is what happens when
-  a\ndata input is replaced on purpose by a placeholder formation, such as\n`⟦ λ ⤍
-  Sym_arg_0 ⟧`. With `--partial`, dataization becomes partial\nevaluation instead:
-  what the known inputs decide is computed, the rest\nsurvives as the residual program,
-  which is printed in place of the bytes,\nand the run ends successfully:\n\n```bash\n$
-  cat partial.phi\n⟦\n  bytes(data) ↦ ⟦ φ ↦ data ⟧,\n  number(as-bytes) ↦ ⟦\n    φ
-  ↦ as-bytes,\n    plus(x) ↦ ⟦ λ ⤍ L_number_plus ⟧,\n    times(x) ↦ ⟦ λ ⤍ L_number_times
-  ⟧\n  ⟧,\n  φ ↦ 2.times(3).plus(⟦ λ ⤍ Sym_arg_0 ⟧)\n⟧\n$ phino dataize --partial
-  --sweet --hide-rho partial.phi\n⟦ x ↦ ⟦ λ ⤍ Sym_arg_0 ⟧, λ ⤍ L_number_plus ⟧\n```\n\nHere
-  `2.times(3)` was decided by literals, so it was computed (its result,\n`6`, sits
-  in the hidden `ρ` of the residual program), while `plus` waits\nfor an `x` no atom
-  can produce, so it stays in place as a normal-form\nsubterm. Each such stuck site
-  also lands in the `--evaluations` file, as a\nrecord with the first two fields only,
-  since there is no result to report;\nthe inner stuck atom comes first, then the
-  known atom whose input reached\nit:\n\n```bash\n$ phino dataize --partial --evaluations=atoms.tsv
-  --quiet \\\n    --sweet --hide-rho partial.phi\n$ cat -T atoms.tsv\nL_number_times^I⟦
-  x ↦ 3 ⟧^I6\nSym_arg_0^I⟦⟧\nL_number_plus^I⟦ x ↦ ⟦ λ ⤍ Sym_arg_0 ⟧ ⟧\n```\n\nEvaluation
-  stays demand-driven, as the calculus prescribes: an argument\nthat nothing asked
-  for before the run got stuck is left as it is in the\nresidual program, for the
-  next iteration.\n\nThe nested morphing and dataization recursion is bounded by the\n`--max-steps`
-  option (default `1000`): when the budget is exhausted, the run\nfails with `Dataization
+  phino dataize hello.phi\n68-65-6C-6C-6F\n```\n\n### Atoms\n\nWhich λ functions exist
+  is a property of the object model being dataized, not\nof the calculus, so `phino`
+  implements none of them. They come from a JSON\nregistry given with `--atoms`, keyed
+  by λ name:\n\n```json\n{\n  \"L_number_plus\": {\n    \"rt\": \"node\",\n    \"script\":
+  \"const fs = require('fs'); ...\"\n  }\n}\n```\n\nThe `rt` field names the executable
+  the `script` is run under. Only `node` is\nsupported for now; a registry naming
+  any other runtime is refused when the file\nis read, before dataization starts.\n\nWhen
+  \U0001D53C reaches a λ function the registry carries, `phino` writes its `script`\nto
+  a temporary file and runs it as a POSIX process under that interpreter, with\nthe
+  λ name as the first command-line argument:\n\n```text\nnode /tmp/phino-atom-4f2a.js
+  L_number_plus\n```\n\nThe name matters: one script may be registered under several
+  λ names and branch\non it, which is where `node` puts it — `process.argv[2]`. The
+  script is then\nfed one JSON object on `stdin`:\n\n```json\n{\n  \"b\": \"⟦ x ↦
+  Φ.number( as-bytes ↦ … ), ρ ↦ ⟦ … ⟧ ⟧\",\n  \"s\": \"⟦ bytes ↦ ⟦ … ⟧, number ↦ ⟦
+  … ⟧, φ ↦ … ⟧\"\n}\n```\n\nHere `b` is the formation being evaluated, with its λ
+  binding removed so that\nthe script may dispatch on it, and `s` is the universe
+  Φ. Both are canonical\n\U0001D711-calculus on a single line — no syntax sugar, whatever
+  `--sweet` says about\nthe output of the run — so a script never has to know about
+  `phino`'s sugar in\norder to find a datum: every byte array is spelled out as a
+  Δ binding.\n\nThe script writes one JSON object to `stdout`:\n\n```json\n{ \"n\":
+  \"11\" }\n```\n\nThe `n` field is the \U0001D711-expression the atom answers with,
+  in any syntax\n`phino`'s parser reads — syntax sugar included, so the `11` above
+  and the\n`Φ.number( … )` it stands for are the same answer. `phino` parses it back\nand
+  hands it to \U0001D53C as the atom's raw result, normalizing it exactly as it\nnormalizes
+  anything else, so `--evaluations`, `--partial` and `--max-steps`\nkeep working unchanged.
+  A non-zero exit, output that is not JSON, a missing\n`n` or an `n` that does not
+  parse fails the run, with the script's own\n`stderr` in the message.\n\nA λ name
+  the registry does not carry has no λ function at all, so \U0001D53C gets stuck\non
+  it. Without `--atoms` the registry is empty and every atom gets stuck.\n\n### Reducing
+  the operands of an atom\n\nA script gets at the parts of `b` by calling `phino`
+  again, so no API has to be\nexposed for it. The `--inside` option is how it asks:
+  the expression it names\nis bound to a fresh synthetic attribute of the input expression,
+  which the run\ntakes as the universe, normalized there, and then dataized. This
+  is the same\ntrick `phino` plays internally whenever it has to reduce a sub-expression
+  the\nprogram does not contain:\n\n```bash\n$ phino dataize --atoms=atoms.json --inside='5.plus(
+  6 )' universe.phi\n40-26-00-00-00-00-00-00\n```\n\nHere `universe.phi` is the \U0001D711-program
+  the atom is being fired inside — the very\ntext the script was handed as `s`, which
+  it feeds back on `stdin`.\n\nSo a `L_number_plus` that reduces its own operands
+  reads like this:\n\n```js\nconst fs = require('fs');\nconst { execFileSync } = require('child_process');\nconst
+  atom = process.argv[2];\nif (atom !== 'L_number_plus') {\n  throw new Error(`unsupported
+  atom ${atom}`);\n}\nconst { b, s } = JSON.parse(fs.readFileSync(0, 'utf8'));\nconst
+  dataized = (expr) => execFileSync(\n  'phino',\n  ['dataize', '--atoms=atoms.json',
+  `--inside=${expr}`],\n  { input: s, encoding: 'utf8' }\n).trim();\nconst number
+  = (expr) => Buffer.from(dataized(expr).replace(/-/g, ''), 'hex').readDoubleBE(0);\nconst
+  sum = Buffer.alloc(8);\nsum.writeDoubleBE(number(`${b}.ρ`) + number(`${b}.x`));\nconst
+  hex = [...sum]\n  .map((octet) => octet.toString(16).toUpperCase().padStart(2, '0'))\n
+  \ .join('-');\nprocess.stdout.write(JSON.stringify({\n  n: `Φ.number( as-bytes ↦
+  Φ.bytes( data ↦ ⟦ Δ ⤍ ${hex} ⟧ ) )`\n}));\n```\n\nThe `--inside` option cannot be
+  combined with `--locator`, since it aims the\nrun at the binding it mints itself.
+  Both `dataize` and `morph` take `--atoms`\nand `--inside`.\n\n### Recording what
+  fired\n\nEvery atom fired on the way to the bytes may be recorded in a machine-readable\nprotocol,
+  with the `--evaluations` option. One firing is one line of three\ntab-separated
+  fields: the name of the λ function, the formation it was applied\nto, and the expression
+  it returned:\n\n```bash\n$ cat sum.phi\n⟦\n  bytes(data) ↦ ⟦ φ ↦ data ⟧,\n  number(as-bytes)
+  ↦ ⟦ φ ↦ as-bytes, plus(x) ↦ ⟦ λ ⤍ L_number_plus ⟧ ⟧,\n  φ ↦ 5.plus( 6 )\n⟧\n$ phino
+  dataize --atoms=atoms.json --evaluations=atoms.tsv --quiet \\\n    --sweet --hide-rho
+  sum.phi\n$ cat -T atoms.tsv\nL_number_plus^I⟦ x ↦ 6 ⟧^I11\n```\n\nRecords follow
+  the syntax of the other options, such as `--sweet` and\n`--hide-rho`, but always
+  stay on one line. The file is truncated at the\nbeginning of every run, and `--output=phi`
+  is the only output format it\nworks with, since one record must fit into one line.\n\n###
+  Partial evaluation\n\nAn atom that cannot fire fails the run: its λ function is
+  not in the registry\ngiven with `--atoms`. This is what happens when an operation
+  is deliberately\nleft unimplemented — a data input replaced by a placeholder formation
+  such as\n`⟦ λ ⤍ Sym_arg_0 ⟧`, or an operation whose answer is not known yet. With\n`--partial`,
+  dataization becomes partial evaluation instead: what the known\ninputs decide is
+  computed, the rest survives as the residual program, which is\nprinted in place
+  of the bytes, and the run ends successfully:\n\n```bash\n$ cat partial.phi\n⟦\n
+  \ bytes(data) ↦ ⟦ φ ↦ data ⟧,\n  number(as-bytes) ↦ ⟦\n    φ ↦ as-bytes,\n    plus(x)
+  ↦ ⟦ λ ⤍ L_number_plus ⟧,\n    times(x) ↦ ⟦ λ ⤍ L_number_times ⟧,\n    as-bool ↦
+  ⟦ λ ⤍ L_number_as_bool ⟧\n  ⟧,\n  φ ↦ 2.times( 3 ).plus( 4 ).as-bool\n⟧\n$ phino
+  dataize --atoms=atoms.json --partial --sweet --hide-rho partial.phi\n⟦ λ ⤍ L_number_as_bool
+  ⟧\n```\n\nHere `2.times( 3 ).plus( 4 )` was decided by the atoms the registry carries,
+  so\nit was computed (its result, `10`, sits in the hidden `ρ` of the residual\nprogram),
+  while `as-bool` names a λ function no script answers for, so it stays\nin place
+  as a normal-form subterm. Each such stuck site also lands in the\n`--evaluations`
+  file, as a record with the first two fields only, since there is\nno result to report:\n\n```bash\n$
+  phino dataize --atoms=atoms.json --partial --evaluations=atoms.tsv --quiet \\\n
+  \   --sweet --hide-rho partial.phi\n$ cat -T atoms.tsv\nL_number_times^I⟦ x ↦ 3
+  ⟧^I6\nL_number_plus^I⟦ x ↦ 4 ⟧^I10\nL_number_as_bool^I⟦⟧\n```\n\nEvaluation stays
+  demand-driven, as the calculus prescribes: an argument\nthat nothing asked for before
+  the run got stuck is left as it is in the\nresidual program, for the next iteration.\n\nThe
+  nested morphing and dataization recursion is bounded by the\n`--max-steps` option
+  (default `1000`): when the budget is exhausted, the run\nfails with `Dataization
   did not finish before reaching the limit of steps`.\nThis guards against non-terminating
   terms, which used to loop forever before\nthe bound was introduced:\n\n```bash\n$
   phino dataize --max-steps=50 problem.phi\n[ERROR]: Dataization did not finish before
@@ -212,38 +265,39 @@ description: "<!--\nSPDX-FileCopyrightText: Copyright (c) 2025 Objectionary.com\
   formation back untouched. The\n`morph` command runs \U0001D544 on its own:\n\n```bash\n$
   cat two.phi\n⟦\n  bytes(data) ↦ ⟦ φ ↦ data ⟧,\n  number(as-bytes) ↦ ⟦ φ ↦ as-bytes,
   plus(x) ↦ ⟦ λ ⤍ L_number_plus ⟧ ⟧,\n  φ ↦ 5.plus( 6 ).plus( 7 )\n⟧\n$ phino dataize
-  --sweet --hide-rho two.phi\n40-32-00-00-00-00-00-00\n$ phino morph --locator=Q.φ
-  --sweet --hide-rho two.phi\n⟦ x ↦ 7, λ ⤍ L_number_plus ⟧\n```\n\nThe inner `5.plus(
-  6 )` fires, because `.plus` is dispatched on its result,\nand `11` lands in the
-  `ρ` hidden by `--hide-rho`. The outer application is\nsaturated but bare, so \U0001D544
-  returns it and is finished; firing it is\ndataization's job and takes `dataize`
-  on to `18`.\n\nThe default locator `Q` morphs the whole top formation, which \U0001D544
-  returns\nunchanged, so `--locator` is how one aims \U0001D544 at a subterm, exactly
-  as in\n`dataize`. Unlike \U0001D53B, \U0001D544 is total: where no formation is
-  reachable the answer\nis the terminator `⊥`, printed rather than reported as a failed
-  run:\n\n```bash\n$ phino morph --locator=Q.x <<< '⟦ x ↦ ξ ⟧'\n⊥\n```\n\nThe whole
-  `dataize` option surface applies unchanged — `--sequence`,\n`--headers`, `--steps-dir`,
-  `--evaluations`, `--partial`, `--max-steps`,\n`--shuffle`/`--seed`, `--output`,
-  `--focus` and the rest.\n\n## Rewrite\n\nYou can rewrite this expression with the
-  help of [rules](#rule-structure)\ndefined in the `my-rule.yml` YAML file (here,
-  the `!d` is a capturing group,\nsimilar to regular expressions):\n\n```yaml\nname:
-  My custom rule\npattern: Δ ⤍ !d\nresult: Δ ⤍ 62-79-65\n```\n\nThen, rewrite:\n\n```bash\n$
-  phino rewrite --rule=my-rule.yml hello.phi\n⟦ φ ↦ ⟦ Δ ⤍ 62-79-65 ⟧, t ↦ ξ.k, k ↦
-  ⟦⟧ ⟧\n```\n\nIf you want to use many rules, just use `--rule` as many times as you
-  need:\n\n```bash\nphino rewrite --rule=rule1.yaml --rule=rule2.yaml ...\n```\n\nYou
-  can also use [built-in rules](resources), which are designed\nto normalize expressions:\n\n```bash\nphino
-  rewrite --normalize hello.phi\n```\n\nBoth flags may be combined, so that your own
-  rules are applied\nalongside the built-in ones, in a single rewriting session:\n\n```bash\nphino
-  rewrite --normalize --rule=my-rule.yaml hello.phi\n```\n\nSome rules mint fresh
-  synthetic names via the `random-string` built-in. To\nkeep the output reproducible
-  across runs, `phino` seeds the random generator\ndeterministically with `0` by default.
-  Use `--seed` to pick a different seed:\n\n```bash\nphino rewrite --seed=42 --rule=my-rule.yml
-  hello.phi\n```\n\nIf no input file is provided, the \U0001D711-expression is taken
-  from `stdin`:\n\n```bash\n$ echo '⟦ φ ↦ ⟦ Δ ⤍ 68-65-6C-6C-6F ⟧ ⟧' | phino rewrite
-  --rule=my-rule.yml\n⟦ φ ↦ ⟦ Δ ⤍ 62-79-65 ⟧ ⟧\n```\n\nYou're able to pass [`XMIR`][xmir]
-  as input. Use `--input=xmir` and `phino`\nwill parse given `XMIR` from file or `stdin`
-  and convert it to `phi` AST.\n\n```bash\nphino rewrite --rule=my-rule.yaml --input=xmir
-  file.xmir\n```\n\nAlso `phino` supports \U0001D711-expressions in\n[ASCII](https://en.wikipedia.org/wiki/ASCII)
+  --atoms=atoms.json --sweet --hide-rho two.phi\n40-32-00-00-00-00-00-00\n$ phino
+  morph --atoms=atoms.json --locator=Q.φ --sweet --hide-rho two.phi\n⟦ x ↦ 7, λ ⤍
+  L_number_plus ⟧\n```\n\nThe inner `5.plus( 6 )` fires, because `.plus` is dispatched
+  on its result,\nand `11` lands in the `ρ` hidden by `--hide-rho`. The outer application
+  is\nsaturated but bare, so \U0001D544 returns it and is finished; firing it is\ndataization's
+  job and takes `dataize` on to `18`.\n\nThe default locator `Q` morphs the whole
+  top formation, which \U0001D544 returns\nunchanged, so `--locator` is how one aims
+  \U0001D544 at a subterm, exactly as in\n`dataize`. Unlike \U0001D53B, \U0001D544
+  is total: where no formation is reachable the answer\nis the terminator `⊥`, printed
+  rather than reported as a failed run:\n\n```bash\n$ phino morph --locator=Q.x <<<
+  '⟦ x ↦ ξ ⟧'\n⊥\n```\n\nThe whole `dataize` option surface applies unchanged — `--atoms`,
+  `--inside`,\n`--sequence`, `--headers`, `--steps-dir`, `--evaluations`, `--partial`,\n`--max-steps`,
+  `--shuffle`/`--seed`, `--output`, `--focus` and the rest.\n\n## Rewrite\n\nYou can
+  rewrite this expression with the help of [rules](#rule-structure)\ndefined in the
+  `my-rule.yml` YAML file (here, the `!d` is a capturing group,\nsimilar to regular
+  expressions):\n\n```yaml\nname: My custom rule\npattern: Δ ⤍ !d\nresult: Δ ⤍ 62-79-65\n```\n\nThen,
+  rewrite:\n\n```bash\n$ phino rewrite --rule=my-rule.yml hello.phi\n⟦ φ ↦ ⟦ Δ ⤍ 62-79-65
+  ⟧, t ↦ ξ.k, k ↦ ⟦⟧ ⟧\n```\n\nIf you want to use many rules, just use `--rule` as
+  many times as you need:\n\n```bash\nphino rewrite --rule=rule1.yaml --rule=rule2.yaml
+  ...\n```\n\nYou can also use [built-in rules](resources), which are designed\nto
+  normalize expressions:\n\n```bash\nphino rewrite --normalize hello.phi\n```\n\nBoth
+  flags may be combined, so that your own rules are applied\nalongside the built-in
+  ones, in a single rewriting session:\n\n```bash\nphino rewrite --normalize --rule=my-rule.yaml
+  hello.phi\n```\n\nSome rules mint fresh synthetic names via the `random-string`
+  built-in. To\nkeep the output reproducible across runs, `phino` seeds the random
+  generator\ndeterministically with `0` by default. Use `--seed` to pick a different
+  seed:\n\n```bash\nphino rewrite --seed=42 --rule=my-rule.yml hello.phi\n```\n\nIf
+  no input file is provided, the \U0001D711-expression is taken from `stdin`:\n\n```bash\n$
+  echo '⟦ φ ↦ ⟦ Δ ⤍ 68-65-6C-6C-6F ⟧ ⟧' | phino rewrite --rule=my-rule.yml\n⟦ φ ↦
+  ⟦ Δ ⤍ 62-79-65 ⟧ ⟧\n```\n\nYou're able to pass [`XMIR`][xmir] as input. Use `--input=xmir`
+  and `phino`\nwill parse given `XMIR` from file or `stdin` and convert it to `phi`
+  AST.\n\n```bash\nphino rewrite --rule=my-rule.yaml --input=xmir file.xmir\n```\n\nAlso
+  `phino` supports \U0001D711-expressions in\n[ASCII](https://en.wikipedia.org/wiki/ASCII)
   format and with\nsyntax sugar. The `rewrite` command also allows you to desugar
   the expression\nand print it in canonical syntax:\n\n```bash\n$ echo '[[ @ -> Q.io.stdout(\"hello\")
   ]]' | phino rewrite\n⟦\n  φ ↦ Φ.io.stdout(\n    α0 ↦ Φ.string(\n      α0 ↦ Φ.bytes(\n
@@ -357,44 +411,56 @@ description: "<!--\nSPDX-FileCopyrightText: Copyright (c) 2025 Objectionary.com\
   like `!e`/`\U0001D452` but only\n                binds an absolute sub-expression,
   so no explicit `absolute:`\n                or `nf:` guard is needed\n* `!B` ||
   `\U0001D435` - list of bindings\n* `!d` || `δ` - bytes in meta delta binding\n*
-  `!F` || `\U0001D453` - function name in meta lambda binding\n\nEvery meta variable
-  may also be used with an integer index, like `!B1` or `\U0001D70F0`.\n\nA positional
-  (α) application argument is written as `α0`, `~0` (ASCII), or\n`α\U0001D456`/`~!i`
-  when its index is captured by an `!i`/`\U0001D456` meta variable.\n\nIncorrect usage
-  of meta variables in \U0001D711-expression patterns leads to\nparsing errors.\n\n##
-  Benchmark\n\nTo run performance benchmarks, you need [Java 8+][java] and [curl][curl].\nMaven
-  is downloaded automatically on first run via `benchmark/mvnw`.\n\nThe benchmark
-  uses the compiled [`Native`][jna-native] class from\n[JNA][jna] — a large real-world
-  Java class — as its test input.\nOn first run, `make bench` downloads the class,
-  disassembles it to\n[XMIR][xmir] via [jeo-maven-plugin][jeo], converts it to \U0001D711
-  using\n`phino rewrite`, and caches the results in `benchmark/tmp/`.\nSubsequent
-  runs skip straight to the benchmarks.\n\n```bash\nmake bench\n```\n\n<!-- benchmark_begin
-  -->\n\n```text\n=== parse/phi ===\n  warmup:     3 iterations\n  batches:    10
-  x 1\n  total:      1781621.932 μs\n  avg:        178162.193 μs\n  min:        163679.993
-  μs\n  max:        209804.570 μs\n  std dev:    17409.000 μs\n=== parse/xmir ===\n
-  \ warmup:     3 iterations\n  batches:    10 x 1\n  total:      7611171.011 μs\n
-  \ avg:        761117.101 μs\n  min:        679176.096 μs\n  max:        899930.605
-  μs\n  std dev:    69464.089 μs\n=== rewrite/normalize ===\n  warmup:     3 iterations\n
-  \ batches:    10 x 1\n  total:      811837.328 μs\n  avg:        81183.733 μs\n
-  \ min:        67331.161 μs\n  max:        92232.373 μs\n  std dev:    8117.233 μs\n===
-  print/sweet/multiline ===\n  warmup:     3 iterations\n  batches:    10 x 1\n  total:
-  \     4199718.146 μs\n  avg:        419971.815 μs\n  min:        396063.240 μs\n
-  \ max:        442595.822 μs\n  std dev:    16504.492 μs\n=== print/sweet/flat ===\n
-  \ warmup:     3 iterations\n  batches:    10 x 1\n  total:      4060839.345 μs\n
-  \ avg:        406083.934 μs\n  min:        387257.807 μs\n  max:        417907.724
-  μs\n  std dev:    8861.891 μs\n=== print/salty/multiline ===\n  warmup:     3 iterations\n
-  \ batches:    10 x 1\n  total:      14257603.693 μs\n  avg:        1425760.369 μs\n
-  \ min:        1405945.748 μs\n  max:        1449825.539 μs\n  std dev:    11882.320
-  μs\n```\n\nThe results were calculated in [this GHA job][benchmark-gha]\non 2026-09-07
-  at 19:51,\non Linux with 4 CPUs.\n\n<!-- benchmark_end -->\n\n## How to Contribute\n\nFork
-  repository, make changes, then send us a [pull request][guidelines].\nWe will review
-  your changes and apply them to the `master` branch shortly,\nprovided they don't
-  violate our quality standards. To avoid frustration,\nbefore sending us your pull
-  request please make sure all your tests pass:\n\n```bash\nmake all\n```\n\nTo generate
-  a local coverage report for development, run:\n\n```bash\nmake coverage\n```\n\nTo
-  build a `phino` executable into the root of the repository, run:\n\n```bash\nmake
-  phino\n```\n\nThis produces an executable `phino` (or `phino.exe` on Windows) in
-  the\nproject root, which you can run directly for quick local testing:\n\n```bash\n./phino
+  `!F` || `\U0001D453` - function name in meta lambda binding\n\nA meta variable carries
+  a suffix, like `!B1` or `\U0001D70F0`, to name what it\ncaptured, so that the `result`,
+  `when`, `where` and `having` of a rule can\nread it back.\n\nWritten bare, with
+  no suffix at all, a meta variable is anonymous: it matches\nwhatever term stands
+  in its place, every occurrence on its own, and binds no\nname. Two anonymous metas
+  of one kind are therefore two different captures,\nwhich is what lets a pattern
+  ask for any two attributes without inventing\nnames for them:\n\n```yaml\nname:
+  two-attributes\npattern: '⟦ \U0001D70F ↦ \U0001D452, \U0001D70F ↦ \U0001D452 ⟧'\nresult:
+  '⟦ x ↦ ⟦ Δ ⤍ 2A- ⟧ ⟧'\n```\n\nSpelled with suffixes, that pattern would read `⟦
+  \U0001D70F1 ↦ \U0001D4521, \U0001D70F2 ↦ \U0001D4522 ⟧` and\nname four captures
+  the result never mentions, while `⟦ \U0001D70F1 ↦ \U0001D4521, \U0001D70F1 ↦ \U0001D4521
+  ⟧`\nwould be rejected as a duplicated attribute.\n\nNothing can refer to an anonymous
+  meta, since it has no name to be referred to\nby. Writing one outside a `pattern`
+  (or the `match`, `e-match` and `c-match` of\nan inference rule) is a mistake in
+  the rule and is reported as the rule loads.\n\nA positional (α) application argument
+  is written as `α0`, `~0` (ASCII), or\n`α\U0001D456`/`~!i` when its index is captured
+  by an `!i`/`\U0001D456` meta variable.\n\nIncorrect usage of meta variables in \U0001D711-expression
+  patterns leads to\nparsing errors.\n\n## Benchmark\n\nTo run performance benchmarks,
+  you need [Java 8+][java] and [curl][curl].\nMaven is downloaded automatically on
+  first run via `benchmark/mvnw`.\n\nThe benchmark uses the compiled [`Native`][jna-native]
+  class from\n[JNA][jna] — a large real-world Java class — as its test input.\nOn
+  first run, `make bench` downloads the class, disassembles it to\n[XMIR][xmir] via
+  [jeo-maven-plugin][jeo], converts it to \U0001D711 using\n`phino rewrite`, and caches
+  the results in `benchmark/tmp/`.\nSubsequent runs skip straight to the benchmarks.\n\n```bash\nmake
+  bench\n```\n\n<!-- benchmark_begin -->\n\n```text\n=== parse/phi ===\n  warmup:
+  \    3 iterations\n  batches:    10 x 1\n  total:      1781621.932 μs\n  avg:        178162.193
+  μs\n  min:        163679.993 μs\n  max:        209804.570 μs\n  std dev:    17409.000
+  μs\n=== parse/xmir ===\n  warmup:     3 iterations\n  batches:    10 x 1\n  total:
+  \     7611171.011 μs\n  avg:        761117.101 μs\n  min:        679176.096 μs\n
+  \ max:        899930.605 μs\n  std dev:    69464.089 μs\n=== rewrite/normalize ===\n
+  \ warmup:     3 iterations\n  batches:    10 x 1\n  total:      811837.328 μs\n
+  \ avg:        81183.733 μs\n  min:        67331.161 μs\n  max:        92232.373
+  μs\n  std dev:    8117.233 μs\n=== print/sweet/multiline ===\n  warmup:     3 iterations\n
+  \ batches:    10 x 1\n  total:      4199718.146 μs\n  avg:        419971.815 μs\n
+  \ min:        396063.240 μs\n  max:        442595.822 μs\n  std dev:    16504.492
+  μs\n=== print/sweet/flat ===\n  warmup:     3 iterations\n  batches:    10 x 1\n
+  \ total:      4060839.345 μs\n  avg:        406083.934 μs\n  min:        387257.807
+  μs\n  max:        417907.724 μs\n  std dev:    8861.891 μs\n=== print/salty/multiline
+  ===\n  warmup:     3 iterations\n  batches:    10 x 1\n  total:      14257603.693
+  μs\n  avg:        1425760.369 μs\n  min:        1405945.748 μs\n  max:        1449825.539
+  μs\n  std dev:    11882.320 μs\n```\n\nThe results were calculated in [this GHA
+  job][benchmark-gha]\non 2026-09-07 at 19:51,\non Linux with 4 CPUs.\n\n<!-- benchmark_end
+  -->\n\n## How to Contribute\n\nFork repository, make changes, then send us a [pull
+  request][guidelines].\nWe will review your changes and apply them to the `master`
+  branch shortly,\nprovided they don't violate our quality standards. To avoid frustration,\nbefore
+  sending us your pull request please make sure all your tests pass:\n\n```bash\nmake
+  all\n```\n\nTo generate a local coverage report for development, run:\n\n```bash\nmake
+  coverage\n```\n\nTo build a `phino` executable into the root of the repository,
+  run:\n\n```bash\nmake phino\n```\n\nThis produces an executable `phino` (or `phino.exe`
+  on Windows) in the\nproject root, which you can run directly for quick local testing:\n\n```bash\n./phino
   --version\n```\n\nYou will need [GHC ≥ 9.6.7][GHC] and [Cabal ≥ 3.0 (recommended)][cabal]\nor
   [Stack ≥ 3.0][stack] installed.\n\n[cabal]: https://www.haskell.org/cabal/\n[stack]:
   https://docs.haskellstack.org/en/stable/install_and_upgrade/\n[GHC]: https://www.haskell.org/ghc/\n[guidelines]:
@@ -404,9 +470,9 @@ description: "<!--\nSPDX-FileCopyrightText: Copyright (c) 2025 Objectionary.com\
   https://github.com/java-native-access/jna/blob/master/src/com/sun/jna/Native.java\n[jeo]:
   https://github.com/objectionary/jeo-maven-plugin\n[benchmark-gha]: https://github.com/objectionary/phino/actions/runs/34156988456\n"
 description-type: markdown
-hash: e0c590cdd0b5d45beb3459c1c9fd65ea562c3543ae00bb7911b4ae09d9cc1c9d
+hash: 2a39461671c8f2f4835f146d30cdb99577986e4e9053971b158950a2c8f445e0
 homepage: https://github.com/objectionary/phino#readme
-latest: 0.0.116
+latest: 0.0.117
 license-name: MIT
 maintainer: mtrunnikov@gmail.com
 synopsis: "Command-Line Manipulator of \U0001D711-Calculus Expressions"
