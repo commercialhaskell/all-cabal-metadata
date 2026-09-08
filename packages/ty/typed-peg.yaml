@@ -1,11 +1,238 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Rodrigo Ribeiro
 basic-deps:
   base: '>=4.18 && <5'
-  template-haskell: '>=2.19 && <2.22'
+  bytestring: '>=0.11 && <0.13'
+  template-haskell: '>=2.19 && <2.24'
+  text: '>=2.0 && <2.2'
 changelog: |
   # Changelog
+
+  ## Unreleased — compile time of large grammars
+
+  Checking a grammar was **exponential in the size of its FIRST sets**.  On a
+  chain of `n` mutually referring rules, GHC needed 0.7 s at `n = 8`, 12 s at
+  `n = 12`, and more than five minutes at `n = 15`; anything the size of a real
+  language front end never finished.  The same grammars now check in
+  milliseconds-to-seconds and the curve is polynomial: `n = 12` takes 0.5 s,
+  `n = 30` 1.7 s, `n = 60` 14 s.
+
+  One limit is new rather than fixed: the union of two FIRST sets nests one
+  type-family reduction per element of the result, so a FIRST set of more than
+  about a hundred non-terminals now reports `Reduction stack overflow` instead
+  of being slow.  `-freduction-depth=0` lifts it, and a union of two 128-element
+  sets then takes about 0.3 s.
+
+  ### Fixed
+
+  - **`Union` and `ConsIfAbsent` were exponential.**  `ConsIfAbsent x xs`
+    expanded to `If (Elem x xs) xs (x ': xs)`, naming `xs` three times.  In
+    `Union (x ': xs) ys = ConsIfAbsent x (Union xs ys)` that `xs` is an
+    unreduced `Union`, so each step left GHC three copies of the pending
+    computation to reduce and each of those tripled again: `3^n` reductions for
+    a union of two `n`-element sets.  Both families now dispatch on an
+    already-computed `Ordering` in a helper whose every right-hand side names
+    each argument — and in particular the recursive call — exactly once.
+  - **`Lookup` threaded the whole environment through its recursion** so that
+    the not-found case could list the available non-terminals.  An environment
+    of `n` rules is `O(n^2)` type nodes, because every entry carries a FIRST
+    set, and there is one lookup per occurrence of every non-terminal.  The
+    search now carries only the tail it has still to scan; the environment is
+    named once, in the branch that reports the error.
+  - **`Lookup` matched through `CmpSymbol` and a dispatch family**, two
+    type-family reductions per entry scanned.  It now matches on a non-linear
+    pattern — the name appears twice in the clause — so GHC decides each entry
+    by syntactic equality and apartness, in one reduction.  The trick is
+    `Data.Type.Map`'s, from `type-level-sets`.  Worth 1.4x-1.6x on a large
+    grammar, since the search runs once per occurrence of every non-terminal.
+  - **`nt` and `PExp`'s `NT` made GHC search the environment several times per
+    occurrence.**  Their constraint was
+    `KnownMember n env (TyOf (Lookup n env)) (ResOf (Lookup n env))`, and
+    resolving `KnownMember` walks `env` one instance at a time, re-normalising
+    every index at each step.  Both now name the entry once, through a
+    `Lookup n env ~ 'EnvEntry ty a` equality, and pass the resulting rigid
+    types to `KnownMember`.
+
+  ### Changed
+
+  - **Breaking.  A FIRST set is now written in alphabetical order**, and a
+    declared environment that lists one in any other order is a type error
+    naming the first position that disagrees.  Sortedness is what makes a set
+    have a single spelling, which is what lets `Union` be one merge pass.
+    Migration is mechanical: sort each `'[...]` in your `Env`, so
+    `'["term", "factor", "number"]` becomes `'["factor", "number", "term"]`.
+  - **Breaking.** `Member` and `KnownMember` lose their `Ty` index:
+    `Member s env a` and `KnownMember s env a`.  Every index of a class is
+    carried along and re-normalised at each step of the instance chain that
+    walks the environment, and a `Ty` carries a FIRST set — so an index for it
+    made each step cost `O(|env|)`.  Nothing needed it; `Here` binds the
+    entry's `ty` existentially, which is enough to pull a rule out of a rule
+    table.
+  - `PEG.Syntax` exports `NTGo`, the `Ty` of a reference to a non-terminal
+    whose own `Ty` is already known.  `NTTy n env` is now defined as
+    `NTGo n (TyOf (Lookup n env))` and keeps working in signatures.
+
+  `SeqTy` and `ChoiceTy` are deliberately **unchanged**.  They duplicate their
+  operands across their right-hand sides too, but measurement says that costs
+  nothing here, and writing them as type synonyms is what makes them reduce to a
+  `'MkTy` head while their operands are still abstract — which is what lets a
+  polymorphic combinator such as `lexeme` compose without its caller having to
+  get the nesting of `SeqTy` exactly right.
+
+  ## 0.2.0.0 — 2026-09-04
+
+  This release is **not source-compatible with 0.1.0.0**: `PExp`, `Rules`,
+  `Grammar`, `Result` and `PState` all gain a leading stream type parameter, and
+  a rule whose result is a character-class repetition changes result type. See
+  *Changed* below for the migration.
+
+  ### Added — parsing any stream, not just `String`
+
+  `PEG.Stream` introduces a `Stream` class, with instances for `String`, strict
+  and lazy `Data.Text.Text`, and strict and lazy `Data.ByteString.ByteString`.
+  A grammar written once runs over any of them.
+
+  The genericity reaches the *results*, not just the input: a character-class
+  repetition such as `cs:[a-zA-Z0-9_]+` now produces a **chunk of the input
+  stream** — a real `Text` slice — instead of unpacking into a `[Char]`.  Two new
+  `PExp` constructors, `Span` and `Span1`, carry this; the quasi-quoter emits
+  them for `[...]*`, `[...]+`, `'c'*`, `'c'+`, `.*` and `.+`.
+
+  `ByteString` is read as Latin-1, exactly as `Data.ByteString.Char8` does: fast,
+  correct for ASCII, and wrong for multi-byte UTF-8.  `PEG.Stream`'s Haddock
+  states this as a law rather than a footnote.
+
+  Only `unconsS` has no default, so a user instance is one method.  It returns an
+  unboxed sum rather than `Maybe (Char, s)` on purpose — behind a class
+  dictionary the boxed version would allocate a `Just` and a pair for every
+  character, losing the zero-allocation terminal path.
+
+  ### Changed
+
+  - **Breaking.** `PExp`, `Rules` and `Grammar` take a leading stream parameter:
+    `PExp s env ty a`, `Rules s env defs`, `Grammar s env ty a`.  `Result` and
+    `PState` likewise: `Result s a`, `PState s`.
+  - **Breaking.** A rule whose result is a character-class repetition now has
+    result type `s`, so its `Env` synonym takes a parameter.  Semantic actions
+    that fed such a result to something expecting a `String` need
+    `chunkToString`: `number <- ds:[0-9]+ { Lit (read (chunkToString ds)) }`.
+  - **Breaking.** The symbol variable in `PExp`'s `NT`, in `nt`, and in
+    `Rules`'s `RCons` is now named `n`; `s` is the stream.  `nt @"name"` is
+    unaffected — the name is deliberately still the first quantified variable.
+  - `PEG.Semantics.Simple`'s unrelated `Stream` class is renamed
+    `SimpleStream`, to leave the name to `PEG.Stream`.
+  - `PState`'s input field is now strict.
+
+  A `Grammar` is monomorphic in its stream.  Reusing one across stream types
+  needs a `forall s. Stream s => Grammar s env ty a` signature, which turns the
+  value into a function of a dictionary and so stops the compiled parser being
+  shared between calls.  Give parsers a monomorphic top-level binding where that
+  matters; `PEG.Parse`'s Haddock spells this out.
+
+  ### Performance
+
+  Measured on the benchmark suite, bytes allocated per input byte, against the
+  previous release of the evaluator:
+
+  | grammar | before (String) | String | Text | ByteString | megaparsec |
+  |---|---|---|---|---|---|
+  | arith  | 990 | 943 | 1127 |  969 | 1239 |
+  | csv    | 834 | 787 |  951 |  805 | 1035 |
+  | json   | 459 | 404 |  583 |  452 |  782 |
+  | nested | 265 | 312 |  481 |  336 | 1283 |
+  | quoted `(!'"' .)*` | 162 | 209 | 320 | 250 | 128 |
+
+  `ByteString` is the cheapest column on five of the seven grammars and beats
+  megaparsec on six.  `Text` costs more than `String` throughout — the same
+  result the earlier study found for megaparsec, and worth knowing before
+  reaching for it.
+
+  Two grammars regressed on `String` (`nested` +18%, the `(!'"' .)*` idiom
+  +29%).  Both are dominated by single-character steps rather than bulk scans,
+  where `unconsS` is one indirect call that the previous direct cons-cell match
+  did not need.  The five grammars that do any bulk scanning improved by 5-12%.
+
+  The `idents` and `quoted [^"]*` groups are not in the table because their
+  grammars changed: `ident` moved from `c:[a-zA-Z_] cs:[a-zA-Z0-9_]*` to
+  `&[a-zA-Z_] cs:[a-zA-Z0-9_]+` so that it returns a chunk rather than consing a
+  character onto one, and `Bench.Mega`'s `identP` moved to `takeWhile1P` to keep
+  the comparison like-for-like.  On the new grammars typed-peg allocates 100
+  B/byte over `String` and 84 over `ByteString`, against megaparsec's 179.
+
+  ### Performance
+
+  The evaluator was rewritten twice: once around a compilation step, once around
+  an unboxed step result.  On the benchmark suite in `bench/` (see `cabal bench`),
+  measured against megaparsec 9.8 in the same run, typed-peg went from taking
+  2.1x-58x the time megaparsec takes to taking 0.95x-1.17x of it — and it now
+  allocates less than megaparsec on six of the seven grammars.  The one grammar
+  where it still loses is the `(!'"' .)*` idiom, which scans every character
+  twice by construction; written as `[^"]*` it costs 1.23x-1.35x.
+
+  - A compiled step returns an unboxed sum, `(# (# #) | (# a, PState #) #)`,
+    rather than `Maybe (a, PState)`.  The two are isomorphic, but the unboxed
+    sum travels in registers, so a step that succeeds no longer allocates a
+    `Just` *and* a pair on top of the new state, and a step that fails
+    allocates nothing at all.  This makes `Seq` and `Map` — the two
+    constructors the quasi-quoter emits for every grammar item — completely
+    allocation-free, and cuts total allocation by a further 9–53%.
+  - String literals match in a single loop that builds one `PState`, rather
+    than one per character, whenever the grammar does not use layout.
+  - `PEG.Parse` now *compiles* a `Grammar` into a closure once, instead of
+    walking the `PExp` GADT and the rule list on every step.  Resolving a
+    non-terminal is now one indirect call rather than a linear scan of the rule
+    environment.  `parseWith opts g` is written so that partially applying it
+    yields the compiled parser; bind it to a name to reuse it.
+  - Character classes compile to a single `Sat` node holding a `PEG.CharSet`
+    (a 256-bit bitmap), instead of expanding into a chain of ordered choices.
+    Matching one character of `[a-zA-Z0-9_]` used to cost 63 parser steps.
+  - String literals compile to a single `Str` node instead of a chain of
+    `Seq`/`Map`/`Term`.
+  - The parser no longer builds a `[(Char, Int)]` copy of the input; the column
+    of the current character is carried in the state and updated incrementally.
+  - Terminals take a fast path that skips all interval arithmetic when the
+    ambient column relation is total (`anyR`), which is the case for every
+    grammar that does not use layout.  The new `rdTotal` field of `RelD` records
+    this.
+  - `parse` returns the unconsumed suffix in `O(1)` instead of recomputing it
+    with two `length` calls and a `drop`.
+  - `Star` no longer builds a chain of selector thunks.
+
+  ### Added
+
+  - Negated character classes in the quasi-quoter: `[^"]` matches any character
+    other than a quote.  Previously the only way to write this was
+    `(!'"' .)`, which scans every character twice — once for the lookahead and
+    once for the dot.  On the `quoted` benchmark the class form halves the
+    allocation.
+  - `PEG.CharSet`: compact character sets, re-exported from `PEG`.
+  - `PEG.Syntax.Sat` / `PEG.Syntax.Str` constructors, and the `sat`,
+    `charClass` and `notCharClass` smart constructors.
+  - `PEG.Parse.compileGrammar` and the `Step` and `Res` types, for callers that
+    want the compiled parser directly.
+  - `PEG.Indent.rdTotal`.
+  - A criterion benchmark suite comparing typed-peg with megaparsec
+    (`bench/`, run with `cabal bench`).
+  - `examples/Compat.hs`: a differential battery used to check that the
+    optimisation work did not change any observable behaviour.
+
+  ### Changed
+
+  - **Breaking.** `PState` now holds the remaining input as a `String` plus the
+    current column and offset (`stInput`, `stCol`, `stOff`), rather than a
+    precomputed `[(Char, Int)]`.  `PEG.Parse.Input`, `PEG.Parse.columns` and
+    `PEG.Parse.eval` are gone; use `compileGrammar` instead of `eval`.
+  - **Breaking.** `RelD` has a new `rdTotal` field.
+  - **Breaking.** `PEG.Parse.Step` now returns the unboxed sum `Res a` instead
+    of `Maybe (a, PState)`.  This only affects code that called
+    `compileGrammar` directly; `parse` and `parseWith` are unchanged.
+  - **Breaking.** In a quasi-quoted grammar, a `^` immediately after `[` now
+    negates the class instead of standing for itself; write `[\^]` for a class
+    containing a caret.
+  - The `template-haskell` upper bound now admits the version shipped with
+    GHC 9.10 (`< 2.24`).
 
   ## 0.1.0.0 — 2026-08-28
 
@@ -35,6 +262,45 @@ description: |
   - Compile-time left-recursion detection (type error)
   - Indentation-sensitive parsing (`PEG.Indent`)
   - Quasi-quoter for concrete grammar syntax (`PEG.QQ`)
+  - Parses any `PEG.Stream`: `String`, strict/lazy `Text`, strict/lazy
+    `ByteString`
+
+  ## Input streams
+
+  A grammar is written once and runs over any stream:
+
+  ```haskell
+  import qualified Data.Text as T
+
+  parse arith "1+2*3"              -- Result String Exp
+  parse arith (T.pack "1+2*3")     -- Result Text   Exp
+  ```
+
+  Character classes produce a **chunk of the stream**, not a `[Char]`: matching
+  `[a-z]+` against a `Text` yields a `Text` slice and copies nothing.  Semantic
+  actions that want a `String` ask for one:
+
+  ```haskell
+  number <- ds:[0-9]+   { Lit (read (chunkToString ds)) }
+  strlit <- '"' cs:[^"]* '"'   { cs }     -- :: s, no copy
+  ```
+
+  Only `unconsS` has no default, so adding a stream is one method.
+
+  `ByteString` is read as Latin-1, like `Data.ByteString.Char8`: fast and
+  correct for ASCII, wrong for multi-byte UTF-8.  Decode to `Text` if that
+  matters.
+
+  A `Grammar` is monomorphic in its stream.  To reuse one across several, give
+  it a `forall s. Stream s => Grammar s Env _ A` signature — but note that makes
+  it a function of a dictionary, so the compiled parser is no longer shared
+  between calls.  Bind a monomorphic parser where that matters:
+
+  ```haskell
+  arithString :: String -> Result String Exp
+  arithString = parse arith
+  {-# NOINLINE arithString #-}
+  ```
 
   ## Quick start
 
@@ -44,6 +310,42 @@ description: |
   -- Define a grammar using the quasi-quoter
   -- See examples/Arith.hs for a complete arithmetic expression parser
   ```
+
+  ## Grammar size
+
+  The nullability and FIRST set of every rule are computed by GHC while it
+  type-checks the grammar, so a grammar's size shows up as compile time.  A
+  FIRST set is a type-level list of non-terminal names kept in **alphabetical
+  order**:
+
+  ```haskell
+  type CalcEnv =
+    '[ '("expr" , 'EnvEntry ('MkTy 'False '["atom", "term", "unary"]) Expr)
+     , '("term" , 'EnvEntry ('MkTy 'False '["atom", "unary"])         Expr)
+     , '("unary", 'EnvEntry ('MkTy 'False '["atom"])                  Expr)
+     , '("atom" , 'EnvEntry ('MkTy 'False '[])                        Expr)
+     ]
+  ```
+
+  The order is not cosmetic.  It gives a set exactly one spelling, which is what
+  lets the union of two FIRST sets be a single merge pass; listing one in some
+  other order is a type error naming the first position that disagrees.
+
+  That merge nests one type-family reduction per element of the result, so a
+  grammar with a FIRST set of more than about a hundred non-terminals hits GHC's
+  default reduction limit and reports `Reduction stack overflow`.  Add
+  `-freduction-depth=0` to `ghc-options` if you get there; it is a limit rather
+  than a slowdown, and a union of two 128-element sets takes about 0.3 s once it
+  is lifted.
+
+  ## Patterns
+
+  [`peg-patterns.md`](peg-patterns.md) works through patterns for specifying
+  languages with PEGs and this library, following Willis and Wu's *Design
+  Patterns for Parser Combinators* (Haskell 2021) and noting where a PEG differs
+  — committed choice, left recursion as a type error, keywords as negative
+  lookahead — and where typed-peg cannot yet follow.  Every fragment in it
+  compiles, in [`examples/Patterns.hs`](examples/Patterns.hs).
 
   ## Building
 
@@ -57,16 +359,78 @@ description: |
   cabal test typed-peg-examples
   ```
 
+  ## Benchmarks
+
+  `bench/` holds a criterion suite that measures typed-peg against
+  [megaparsec](https://hackage.haskell.org/package/megaparsec) on seven grammars
+  (arithmetic expressions, CSV, identifier lists, a mini JSON, deeply nested
+  parentheses, and quoted strings spelled two ways) written twice, rule for
+  rule.  Both libraries consume byte-identical inputs, and the suite
+  cross-checks that they produce the same result before timing anything.
+
+  ```bash
+  cabal bench
+  ```
+
+  `cabal bench --benchmark-options=--alloc` prints bytes allocated per parse
+  instead of running criterion; allocation is the number that separates the two
+  libraries most clearly once the algorithmic differences are gone.
+
+  On GHC 9.10.3 against megaparsec 9.8.1, bytes allocated per input byte on the
+  largest input of each group:
+
+  | grammar | typed-peg `String` | `Text` | `ByteString` | megaparsec `String` |
+  |---|---|---|---|---|
+  | arithmetic | 943 | 1127 | 969 | 1239 |
+  | CSV | 787 | 951 | 805 | 1035 |
+  | identifiers | 100 | 190 | 84 | 179 |
+  | JSON | 404 | 583 | 452 | 782 |
+  | nested parens | 312 | 481 | 336 | 1283 |
+  | `'"' [^"]* '"'` | 90 | 167 | 65 | 128 |
+  | `'"' (!'"' .)* '"'` | 209 | 320 | 250 | 128 |
+
+  `ByteString` is the cheapest column on five of the seven grammars and beats
+  megaparsec on six.  `Text` costs more than `String` throughout — the same
+  result the study found for megaparsec, so reach for it for interoperability
+  rather than for speed.
+
+  Allocation is deterministic and reproduces exactly.  Time is the noisier
+  measurement: on a machine with heterogeneous cores, unpinned runs of the
+  *same* megaparsec binary varied by up to 1.8x, so only the ratio taken within
+  one run is meaningful.
+
+  The reference implementation is `Bench.Peg`; its megaparsec twin is
+  `Bench.Mega`.  Since PEG ordered choice backtracks unconditionally while
+  megaparsec's `<|>` does not, every megaparsec alternative that can consume
+  input before failing is wrapped in `try`, so the two are recognising the same
+  language.
+
+  ### Parsing many inputs
+
+  `parseWith opts grammar` traverses the grammar and returns a compiled closure.
+  Bind it once and reuse it, rather than calling `parse grammar input` inline in
+  a loop:
+
+  ```haskell
+  myParser :: String -> Result Exp
+  myParser = parse myGrammar
+  ```
+
   ## License
 
   BSD-3-Clause. See [LICENSE](LICENSE).
 description-type: markdown
-hash: 7477bd7ad084cbf925425da03997bab10839b97dd5b52634473dcd1a85d89b4e
+hash: 9ba8276163a35b252fe5cbbba68e8bc13a8d9b413127f8608760c65b2dcd5e5d
 homepage: https://github.com/rodrigogribeiro/typed-peg
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: rodrigo.ribeiro@ufop.edu.br
 synopsis: Type-safe PEG parser combinators
 test-bench-deps:
   base: '>=0'
+  bytestring: '>=0'
+  criterion: '>=1.6 && <1.7'
+  deepseq: '>=0'
+  megaparsec: '>=9.5 && <10'
+  text: '>=0'
   typed-peg: '>=0'
