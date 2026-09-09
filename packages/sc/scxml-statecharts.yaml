@@ -1,0 +1,369 @@
+all-versions:
+- 0.1.0.0
+author: Axel Ulmestig
+basic-deps:
+  base: '>=4.18 && <5'
+  containers: '>=0.6.6 && <0.9'
+  template-haskell: '>=2.20 && <2.24'
+  text: '>=2.0 && <2.2'
+  xml-conduit: '>=1.9 && <1.11'
+changelog: |
+  # Changelog
+
+  ## 0.1.0.0 -- unreleased
+
+  First release.
+
+  - `scxml` declaration quasiquoter generating `FsmState`, `FsmEvent`,
+    `fsmChart`, `initiateStateMachine` and `notifyStateMachine`.
+  - Hierarchy (compound states as sum types), parallel regions (as products),
+    `<onentry>` and `<onexit>` callbacks named in the XML, entry callbacks that
+    raise events, and SCXML `done.state.X` completion events.
+  - Unmatched events leave the state unchanged, as in SCXML.
+  - Compile-time validation: strict XML (via `xml-conduit`), state ids, event
+    names, callback names, a level rule requiring a transition to target a
+    sibling of its source, and a rule forbidding transitions on a region of a
+    `<parallel>`. `initial` is required on every compound state and must name a
+    direct child; SCXML's "first child in document order" default is not
+    supported.
+  - The evaluator is a single recursive pass over the tree. Because a transition
+    may only target a sibling, a state only ever rearranges its own children, so
+    there are no least common ancestors, exit-set filters over the whole
+    configuration, or conflicts between transitions at different depths. The
+    derived index is gone, along with lookup by id, parent links and document
+    order. Innermost-wins is now explicit: children are asked first and a state
+    acts only if nothing below it did.
+  - A `<final>` state is rejected as a direct region of a `<parallel>`. SCXML
+    does not allow it, and it used to report the whole parallel complete before
+    the other regions had run.
+  - The chart is a tree: a state owns its children as `Node`s, and a compound
+    state keeps its initial child first, so a dangling child, a disagreeing
+    parent and an initial child that is not one of its own are all
+    unrepresentable. Parent and document order are derived into an index rather
+    than stored. A compound state's initial child is therefore its first
+    generated constructor, which changes derived `Ord` for charts that do not
+    write the initial state first.
+    Only the interpreter needs the derived index; the parser and the generator
+    walk the tree, so a transition target is checked against the source's
+    siblings rather than by looking up parents.
+  - `done.state.X` may only be handled on `X` itself, so completion climbs one
+    level at a time through `<final>` states and validation is entirely local to
+    a state and its neighbours.
+  - A transition on an enclosing state acts as a default that an inner state can
+    override, since the innermost matching transition wins and only it is taken.
+    Documented rather than warned about: a Template Haskell warning becomes an
+    error under `-Werror` and cannot be exempted by flag.
+  - The public API is the `scxml` quasiquoter alone. `serializeStateMachine` and
+    `deserializeStateMachine` are generated into the calling module, so a chart
+    needs no other import. The remaining modules are not exposed.
+  - Transitions are a map from event name to target, so two transitions on one
+    state for the same event are unrepresentable, and document order never
+    decides which transition is taken. A transition naming more than one target
+    is rejected; both previously compiled and silently produced a wrong state.
+  - `Kind` carries each state's children, so an atomic or final state with
+    children, a compound state without an initial child, and a `<parallel>`
+    without regions are all unrepresentable rather than merely rejected.
+  - `Show`/`Read` on every generated type, and `toStateIds`/`fromStateIds` for
+    storing a state outside Haskell as the SCXML configuration.
+changelog-type: markdown
+description: |
+  # scxml-statecharts
+
+  Define a [statechart](https://statecharts.dev/) in SCXML inside a Haskell
+  module and get typed states, events and a step function out of it. Compound
+  states become sum types and parallel states become products, so a value of the
+  state type is exactly one legal configuration: illegal states are
+  unrepresentable and `case` is exhaustive.
+
+  The library exports one name, the `scxml` quasiquoter. Everything a chart needs
+  is generated into your own module.
+
+  ## Example
+
+  A monitor that polls something and reports when it is healthy:
+
+  ```haskell
+  {-# LANGUAGE QuasiQuotes #-}
+  module Monitor where
+
+  import Scxml.Statechart (scxml)
+  import Control.Monad.Trans.State.Strict (StateT, gets, modify')
+
+  [scxml|
+  <scxml initial="Idle">
+    <state id="Idle">
+      <transition event="Check" target="Polling"/>
+    </state>
+    <state id="Polling" initial="Fetching">
+      <onexit><script>recordRun</script></onexit>
+      <state id="Fetching">
+        <onentry><script>fetchStatus</script></onentry>
+        <transition event="Ok" target="Reporting"/>
+      </state>
+      <state id="Reporting">
+        <onentry><script>sendReport</script></onentry>
+      </state>
+      <transition event="Done" target="Idle"/>
+      <transition event="Failed" target="Idle"/>
+    </state>
+  </scxml>
+  |]
+
+  data Monitor = Monitor {healthy :: Bool, runs :: Int, reports :: Int}
+
+  -- Signatures for the generated functions are optional and go after the
+  -- quasiquote, like anything else mentioning the generated types.
+  initiateStateMachine :: StateT Monitor IO FsmState
+  notifyStateMachine :: FsmState -> FsmEvent -> StateT Monitor IO FsmState
+
+  -- The callbacks named in <script>. They must share one monad, and the type
+  -- checker enforces it.
+  fetchStatus, sendReport :: FsmState -> Maybe FsmEvent -> StateT Monitor IO (Maybe FsmEvent)
+  fetchStatus _ _ = gets (\m -> Just (if healthy m then Ok else Failed))
+  sendReport _ _ = modify' (\m -> m {reports = reports m + 1}) >> pure (Just Done)
+
+  recordRun :: FsmState -> Maybe FsmEvent -> StateT Monitor IO ()
+  recordRun _ _ = modify' (\m -> m {runs = runs m + 1})
+  ```
+
+  The quasiquote generates:
+
+  ```haskell
+  data FsmState = Idle | Polling Polling
+  data Polling  = Fetching | Reporting
+  data FsmEvent = Check | Ok | Done | Failed
+
+  initiateStateMachine    -- enter the initial state, running its entry callbacks
+  notifyStateMachine      -- deliver one event
+  serializeStateMachine   :: FsmState -> [Text]
+  deserializeStateMachine :: [Text] -> Maybe FsmState
+  ```
+
+  A compound state becomes a constructor carrying a sum type of the same name,
+  which Haskell allows since types and constructors live in separate namespaces.
+  Names in the XML are used verbatim, so they must be valid constructor names
+  (`PaymentAuthorized`, not `payment.authorized`).
+
+  A compound state's initial child is always its first constructor, whether or
+  not you wrote it first, so derived `Ord` follows that rather than document
+  order. Use `Ord` for `Map` keys and sorting, not for anything you store.
+
+  Do not give a chart module an explicit export list, or the generated functions
+  you do not call will draw unused-binding warnings.
+
+  One `Check` runs the whole cycle. The chart enters `Polling` and `Fetching`,
+  whose entry callback raises `Ok` or `Failed`, and either way it returns to
+  `Idle` before `notifyStateMachine` hands back. Anything the callbacks need
+  lives in the monad, which plays the role of the SCXML datamodel.
+
+  ## Callbacks
+
+  `<script>name</script>` inside `<onentry>` or `<onexit>` names a Haskell
+  function defined in the same module, after the quasiquote:
+
+  ```haskell
+  -- onentry: may decide where to go next by raising an event
+  name :: FsmState -> Maybe FsmEvent -> m (Maybe FsmEvent)
+  -- onexit: cleanup only, enforced by the generated code
+  name :: FsmState -> Maybe FsmEvent -> m ()
+  ```
+
+  Entry callbacks receive the state being entered, exit callbacks the state being
+  left. The event is the one being processed, or `Nothing` during
+  `initiateStateMachine`.
+
+  Returning `Just event` raises it, which is SCXML's `<raise>`. Raised events are
+  queued and processed before `notifyStateMachine` returns. This is how branching
+  is expressed: a decision becomes a state whose entry callback raises one of the
+  events leading out of it, which keeps the branching visible in the chart as
+  named events and puts the criterion in Haskell where the data is.
+
+  A top-level splice and the declarations after it form one declaration group, so
+  callbacks can be defined after the quasiquote. They have to be, since they
+  mention the generated types.
+
+  Callbacks need not share a constraint, only a monad. Their constraints union
+  at the generated call site, so one `MonadIO m` callback makes both generated
+  functions require `MonadIO`, while a `Monad m` callback keeps its own weaker
+  signature and stays usable elsewhere. Declaring the weakest constraint each
+  callback needs is therefore still worth it.
+
+  ## Semantics
+
+  `notifyStateMachine` runs `<onexit>` callbacks of exited states, innermost
+  first, then `<onentry>` callbacks of entered states, outermost first. It then
+  processes raised events the same way until none is left, and returns.
+
+  An event with no matching transition in the current state is ignored, as in
+  SCXML: the state comes back unchanged and nothing runs. A poll result arriving
+  after the chart moved on is the typical case. A raised event nothing handles is
+  dropped too.
+
+  ### A transition on an enclosing state is a default
+
+  When an event arrives, each active state looks for a transition starting at the
+  innermost active state and working outward, and the first one found wins. So a
+  transition on an enclosing state applies everywhere inside it, and an inner
+  state can override it:
+
+  ```xml
+  <state id="Processing" initial="Authorizing">
+    <state id="Authorizing">...</state>
+    <parallel id="Fulfilment">
+      ...
+      <transition event="Cancel" target="Refunding"/>   <!-- wins while fulfilling -->
+    </parallel>
+    <state id="Refunding">...</state>
+    <transition event="Cancel" target="Cancelled"/>     <!-- applies elsewhere inside -->
+  </state>
+  ```
+
+  `Cancel` refunds while fulfilment is under way and cancels outright anywhere
+  else in `Processing`. Only the inner transition is taken, never both, so the
+  outer one is a fallback rather than an additional step. Writing the same event
+  on a state and on one of its descendants is therefore meaningful, not a
+  mistake, but it is worth a comment in the chart since the reader has to know
+  this rule to see which one applies.
+
+  Entering a `<final>` state raises `done.state.Parent`, and `done.state.G` when
+  every region of a parallel grandparent `G` has reached a final state. Each done
+  event is handled on the state it names, so completion climbs one level at a
+  time. That is how a parallel state completes:
+
+  ```haskell
+  [scxml|
+  <scxml initial="Fulfilment">
+    <parallel id="Fulfilment">
+      <state id="Parcel" initial="Packing">
+        <state id="Packing"><transition event="Packed" target="Shipped"/></state>
+        <final id="Shipped"/>
+      </state>
+      <state id="Invoice" initial="Unpaid">
+        <state id="Unpaid"><transition event="Paid" target="Settled"/></state>
+        <final id="Settled"/>
+      </state>
+      <transition event="done.state.Fulfilment" target="Complete"/>
+    </parallel>
+    <final id="Complete"/>
+  </scxml>
+  |]
+  ```
+
+  ```haskell
+  data FsmState = Fulfilment Parcel Invoice | Complete
+  data Parcel   = Packing | Shipped
+  data Invoice  = Unpaid | Settled
+  data FsmEvent = Packed | Paid | DoneFulfilment | DoneParcel | DoneInvoice
+  ```
+
+  The parallel state is a product, so both regions advance independently and the
+  type cannot represent one of them being absent. `done.state.X` becomes the
+  constructor `DoneX`. Whichever region finishes second fires it:
+
+  ```haskell
+  Fulfilment Packing Unpaid  --Packed-->  Fulfilment Shipped Unpaid  --Paid-->  Complete
+  ```
+
+  ## Storing a state
+
+  Every generated type derives `Show`, `Read`, `Eq` and `Ord`, so `Show` and
+  `Read` round-trip exactly and are convenient in tests. For a state that
+  outlives the process, such as one parked in a database between AWS Lambda
+  invocations, use the generated pair:
+
+  ```haskell
+  serializeStateMachine (Fulfilment Shipped Unpaid)
+    == ["Fulfilment","Invoice","Parcel","Shipped","Unpaid"]
+  ```
+
+  This is SCXML's own notion of a chart's state, so it is portable to another
+  implementation of the same chart, readable in a log, and queryable as a text or
+  JSON array in Postgres.
+
+  The array is a set, so nothing positional leaks in. Order and duplicates in the
+  input do not matter, and reordering the regions of a `<parallel>` in the SCXML
+  does not change it, even though the Haskell field order flips. Positional
+  formats such as `Show` do not survive that edit.
+
+  Deserializing returns `Maybe` and validates by round-tripping, so an incomplete
+  set, an unknown id, or a list that merely starts like a valid configuration are
+  rejected rather than decoded into some other state. That matters when a chart is
+  redeployed while states are in flight: a value stored under the old chart fails
+  loudly and you migrate it deliberately.
+
+  Two things not to persist: `Ord` on states and `fromEnum` on events. Both are
+  positional, so adding a state or an event changes them.
+
+  JSON is two lines in your own module, so the library does not depend on
+  `aeson`:
+
+  ```haskell
+  instance ToJSON FsmState where
+    toJSON = toJSON . serializeStateMachine
+  instance FromJSON FsmState where
+    parseJSON v = parseJSON v >>= maybe (fail "stale FsmState") pure . deserializeStateMachine
+  ```
+
+  ## Differences from SCXML
+
+  The quasiquoter is intolerant by design, and stricter than the specification.
+  A chart that compiles is a chart that runs. Loosening a rule later is a
+  compatible change, so the defaults are tight.
+
+  - **No `cond` guards and no eventless transitions.** Raise an event from an
+    entry callback instead.
+  - **A transition must target a sibling of its source.** Events never cross
+    levels. To leave an enclosing state, declare the transition on that state,
+    where it applies anywhere inside it.
+  - **`initial` is required on every compound state** and must name a direct
+    child, which the model records by keeping that child first. The
+    specification's "first child in document order" default is not supported,
+    because it makes the entry point depend on the order children happen to be
+    written in.
+  - **One transition per state per event**, held as a map from event name to
+    target, so nothing has to break a tie. `event="A B"` is still shorthand for
+    two transitions to the same target.
+  - **`done.state.X` may only be handled on `X` itself.** Since a transition
+    also targets a sibling, completion climbs one level at a time: a state that
+    finishes moves to a `<final>` sibling, which completes their parent and
+    raises its own done event. Listening for another region's completion from
+    inside a sibling region is not supported; raise your own event from the final
+    state's `<onentry>` if you want that.
+  - **State ids and event names must be Haskell constructor names**, and ids must
+    be unique across the whole chart, which SCXML requires anyway.
+  - **Parsing is strict.** Malformed XML cannot quietly nest one state inside
+    another.
+  - **A `<final>` may not be a direct region of a `<parallel>`.** SCXML forbids
+    it, and a region must be something that can be in progress.
+  - **Not supported yet:** `<history>` states, wildcard event descriptors,
+    executable content other than `<script>`, and a `<parallel>` directly inside
+    another `<parallel>`, which can almost always be flattened into one.
+
+  ## Building
+
+  ```
+  cabal build
+  cabal test
+  ```
+
+  The toolchain comes from a Nix flake. With direnv, `direnv allow` puts GHC
+  9.10.3, cabal and haskell-language-server on the path on entering the
+  directory; without it, `nix develop`. Two further shells hold the GHCs a
+  Hackage or Stackage builder is likely to pick, for checking a release:
+
+  ```
+  nix develop .#ghc9124 --command cabal test
+  nix develop .#ghc9141 --command cabal test
+  ```
+description-type: markdown
+hash: 12c1763b646f2560e79ae060eaaa0e8b112180c7357bee2c2b016f4be5f72368
+homepage: https://github.com/AxelUlmestig/scxml-statecharts
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: axel.ulmestig@gmail.com
+synopsis: Typed statecharts from SCXML, via Template Haskell
+test-bench-deps:
+  base: '>=4.18 && <5'
+  scxml-statecharts: '>=0'
+  text: '>=2.0 && <2.2'
+  transformers: '>=0.6 && <0.7'
