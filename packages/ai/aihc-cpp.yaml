@@ -2,11 +2,12 @@ all-versions:
 - 1.0.0.0
 - 1.0.0.1
 - 1.0.0.2
+- 2.0.0.0
 author: David Himmelstrup
 basic-deps:
   base: '>=4.16 && <5'
-  bytestring: '>=0.10.8 && <0.13'
-  containers: '>=0.5 && <0.8'
+  bytestring: '>=0.11 && <0.13'
+  containers: '>=0.5 && <0.9'
   deepseq: '>=1.4 && <1.6'
   filepath: '>=1.3.0.1 && <1.6'
   text: '>=1.2 && <2.2'
@@ -17,7 +18,85 @@ changelog: |
 
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-  ## [Unreleased]
+  ## [2.0.0.0] - 2026-09-10
+
+  ### Performance
+
+  - Preprocessing the whole Stackage `lts-24.58` corpus is about 3.5x faster —
+    one sweep over 5,802 CPP-using modules went from 3.07 s to 0.87 s on the
+    same machine, with byte-identical output and diagnostics for every module.
+    Net of the file reads every tool pays for, that is 4.5x faster than `cpphs`,
+    against 1.12x before. The changes:
+    - Macro expansion now scans byte offsets and copies nothing until a macro
+      actually expands, so a line that names no macro is returned as the very
+      `ByteString` that came in. Previously every line of every module was
+      rebuilt one character at a time through a `Builder`.
+    - A 64-bit first-byte filter over the macro names rejects an identifier
+      that can name no macro without walking the macro map, which is the
+      outcome for nearly every identifier in a Haskell module.
+    - Token pasting in a function-like macro body no longer appends to the end
+      of a list once per token, which was quadratic in the body length and the
+      single largest source of allocation.
+    - The GCC string-continuation check tests the two trailing bytes of a line
+      before scanning it for quote state, removing a full scan from every line;
+      and a module that defines no function-like macro skips the multi-line
+      call lookahead entirely.
+    - Splitting the input into lines uses `memchr` rather than a byte-at-a-time
+      walk that allocated a cursor per byte of the input.
+    - The line scanner works on byte offsets rather than a cursor per byte, and
+      a line that opens no comment — nearly every line — is recognised by a
+      loop over unboxed arguments and returned as a single span, skipping the
+      accumulator-threading scanner entirely.
+    - Loop-carried `where` bindings that only some branches use were thunks
+      allocated once per byte and once per identifier scanned; they are now
+      forced or pushed into the branch that needs them.
+
+  ### Changed
+
+  - **Breaking:** the preprocessor is now agnostic to the source encoding.
+    `resultOutput` is a `ByteString` rather than `Text`, and `configMacros`
+    is keyed by `ByteString`. Bytes the preprocessor did not generate itself
+    are copied from input to output verbatim, so a module in any encoding —
+    or in no consistent encoding — passes through unchanged. Nothing but
+    `Diagnostic` message text is ever decoded.
+
+    To migrate, decode at the boundary if you want `Text`:
+    `Data.Text.Encoding.decodeUtf8With Data.Text.Encoding.Error.lenientDecode (resultOutput r)`.
+
+  ### Fixed
+
+  - `preprocess` no longer throws an impure exception on source that is not
+    valid UTF-8 (for example a Latin-1 encoded module containing byte `0xa9`,
+    as shipped in Ebnf2ps). Previously `Data.Text.Encoding.decodeUtf8` raised
+    from inside a pure function, escaping the `Diagnostic` mechanism the API
+    otherwise uses; such bytes now simply pass through. GHC accepts an
+    undecodable byte in a comment and rejects one where a token must be
+    lexed, so this leaves the encoding decision to the compiler front-end
+    instead of failing modules that genuinely compile.
+  - Whitespace and identifier classification is now ASCII-only. Using
+    `Data.Char.isSpace` on a byte treated `0xA0` — an ordinary UTF-8
+    continuation byte — as whitespace, which could split a multi-byte
+    character in half.
+  - Macro arguments are now expanded before substitution, so a function-like
+    macro invocation produced by an expansion is rescanned and expanded, matching
+    GHC's C preprocessor and `cpphs`. The C standard's non-recursive-expansion
+    rule is honoured, so a macro is never expanded inside its own expansion.
+  - A pragma nested inside a Haskell block comment no longer terminates that
+    comment. `{-#` is treated as a pragma delimiter only outside a comment;
+    inside one it counts as an ordinary nested `{-`, balancing the `-}` of the
+    closing `#-}`. Previously each such pragma decremented the comment depth,
+    making CPP directives in the rest of the commented-out region live —
+    producing spurious `unmatched #endif` warnings and, with a commented-out
+    `#if 0`, silently dropping the comment's contents
+    ([#1](https://github.com/ai-haskell-compiler/aihc-cpp/issues/1)).
+
+  ## [1.0.0.3] - 2026-07-26
+
+  ### Changed
+
+  - Moved development to the standalone
+    [`ai-haskell-compiler/aihc-cpp`](https://github.com/ai-haskell-compiler/aihc-cpp)
+    repository, including the full test and compatibility CI configuration.
 
   ## [1.0.0.2] - 2026-05-27
 
@@ -53,21 +132,25 @@ description: |-
   package provides deterministic preprocessing with include continuations and
   oracle-backed tests against cpphs.
 description-type: haddock
-hash: 4f96dfcafde40841982e70a56dfc31bfce4b812f3ab38bf6f6c9794e8828f65b
-homepage: https://github.com/ai-haskell-compiler/aihc/tree/main/components/aihc-cpp
-latest: 1.0.0.2
+hash: 70b7f8538cd816475b406ea45fa74cea113697e1f610be031816ec101b55f950
+homepage: https://github.com/ai-haskell-compiler/aihc-cpp
+latest: 2.0.0.0
 license-name: Unlicense
 maintainer: lemmih@gmail.com
 synopsis: Pure Haskell C preprocessor for aihc
 test-bench-deps:
-  aihc-cpp: '>=1.0 && <1.1'
+  aihc-cpp: '>=2.0 && <2.1'
   base: '>=4.16 && <5'
-  bytestring: '>=0.10.8 && <0.13'
-  containers: '>=0.5 && <0.8'
+  bytestring: '>=0.11 && <0.13'
+  containers: '>=0.5 && <0.9'
   cpphs: '>=1.20 && <1.21'
+  deepseq: '>=1.4 && <1.6'
   directory: '>=1.2.3 && <1.5'
   filepath: '>=1.3.0.1 && <1.6'
+  hpp: '>=0.6 && <0.7'
   tasty: '>=1.5 && <1.6'
+  tasty-bench: '>=0.4 && <0.5'
   tasty-hunit: '>=0.10 && <0.11'
   tasty-quickcheck: '>=0.11.1 && <0.12'
   text: '>=1.2 && <2.2'
+  transformers: '>=0.5 && <0.7'
