@@ -1,15 +1,34 @@
 all-versions:
 - 0.5.0.2
 - 0.6.0.0
+- 0.7.0.0
 author: Sergei Khorev <sergey.khorev@gmail.com>
 basic-deps:
   base: '>=4.14 && <5'
+  containers: '>=0.6.5.1 && <0.9'
+  directory: '>=1.3.6.0 && <1.4'
+  filepath: '>=1.4.2.1 && <1.6'
   hasquant: '>=0'
+  process: '>=1.6.13.2 && <1.7'
   template-haskell: '>=2.16 && <2.25'
   time: '>=1.9.3 && <1.16'
-  transformers: '>=0.5.6 && <0.7'
   vector: '>=0.12.3 && <0.14'
 changelog: |
+  ## 0.7.0.0 (2026)
+
+  The final broad API-coverage batch adds Haskell callbacks for payoffs, optimization, regression and
+  finite-difference workflows, wider pricing and curve support, index history analysis with the
+  matrix decompositions that feed PCA and correlation salvaging, a standalone SOFR-OIS exposure
+  example, and substantially more upstream-derived test coverage. Collections now
+  encode emptiness and numeric scale more precisely, and the C++ shims share more of their template
+  dispatch and allocation plumbing.
+
+  Many functions have been renamed and/or compacted where a single function accepts a sum type and
+  calls different internal functions depending on its arguments. The breaking rename is an attempt to make the API easier to explore and discover; the compact
+  API is still in flux.
+
+  Another breaking change is the removal of the `QuantLib.Syntax` module and its Template Haskell partial-call helpers.
+
   ## 0.6.0.0 (2026)
 
   Rethought multiple inheritance for secondary interfaces (`AffineModel`, `Gaussian1dModel`): instead of a second `Upcastable` node, each leaf now gets a standalone, eagerly-materialized upcast (e.g. `hullWhiteAsAffineModel`). This traded a pure wrap at the call site for an explicit `IO`-sequenced conversion, so a few call sites that used to be pure functions are now `IO` actions — a small, deliberate cost for one fewer hand-rolled sum type per interface. Also generalized several accessor return types one `AnyOf` layer deeper (`SwaptionHelper`, `FixedVsFloatingSwap`) to keep them cast-free, and added a further batch of bindings: Gaussian1d model instruments/engines, YoY/CPI inflation vol surfaces and cap/floors, commodities, cross-currency swaps, and BlackAtmVolCurve/SabrVolSurface/OptionletStripper2.
@@ -94,34 +113,101 @@ changelog: |
   ```
 changelog-type: markdown
 description: |
-  Haskell bindings to [QuantLib](https://www.quantlib.org/), the free/open-source C++ library for quantitative finance — rates, bonds, options, swaps, credit, inflation, and equity derivatives, with the associated term structures, indexes, and pricing engines. 1300+ constructors and non-trivial methods are bound so far, covering roughly a tenth of QuantLib's surface.
+  Haskell bindings to [QuantLib](https://www.quantlib.org/).
 
-  hasquant gives Haskell direct access to production-grade pricing, curve-building, and risk models from QuantLib. Rather than wrapping it in a new framework, it stays a thin, close-to-1:1 layer over the C++ API, so it composes into whatever architecture you're already building instead of dictating one.
+  Supported functionality includes
+  - yield, credit, inflation, and volatility curves;
+  - IBOR, overnight, swap, and inflation indexes;
+  - fixed, floating, amortizing, callable, and convertible bonds;
+  - vanilla, barrier, Asian, compound, variance, and basket options;
+  - vanilla, CMS, OIS, CDS, zero-coupon, and portfolio-credit (synthetic CDO, nth-to-default) swaps and instruments;
+  - risk statistics (VaR, expected shortfall, ...) over caller-supplied samples;
+  - and analytic, tree, finite-difference, and Monte Carlo engines from Black-Scholes through SABR and Heston.
 
-  Coverage already spans the parts of QuantLib people actually reach for in practice: yield/credit/inflation/volatility term structures and their bootstrapping helpers, IBOR/overnight/swap/inflation indexes, fixed and floating bonds (including amortizing, callable, and convertible), vanilla and exotic options (barrier, Asian, compound, variance, basket), swaps (vanilla, CMS, OIS, CDS, zero-coupon), and the corresponding pricing engines — analytic, tree, finite-difference, and Monte Carlo — for models from Black-Scholes through SABR and Heston.
+  hasquant is a close-to-1:1 `c2hs` wrapper over QuantLib's C++ API, not a framework. It binds 1,900+ constructors and non-trivial methods (around 20% of QuantLib's surface) and deliberately excludes 2000+ methods (mostly mutators or getters that only repeat constructor inputs).
 
-  Type safety is held to a noticeably higher bar than a typical C++ binding. QuantLib's class hierarchies are mirrored with phantom-typed pointers (`GenBond a`, `GenQuote a`, …) rather than one flat handle type, so passing the wrong kind of object is a compile error, not a runtime crash; upcasting is the only implicit conversion, and it's structurally guaranteed safe. Declarations on the C++ and Haskell sides are kept in step by `c2hs` rather than by hand-written FFI stubs. The C++ shim layer has zero `dynamic_cast`/`dynamic_pointer_cast` call sites — classes that need runtime-checked downcasts upstream get a dedicated leaf type instead — and enum-like C++ types are bound with explicit value mirroring rather than an unchecked numeric cast, closing off a whole class of silent-corruption bugs that plain FFI bindings are prone to.
+  Type safety is a primary API goal. Phantom-typed pointers (`GenBond a`, `GenQuote a`, …) preserve the relevant part of QuantLib's object hierarchy in Haskell, so invalid object combinations are compile-time errors rather than failed casts at runtime. The C++ shim uses no runtime downcasts; bindings expose a concrete leaf type when one is needed. Enums mirror upstream values explicitly.
 
-  The main departures from a thin wrapper are enums and ADTs standing in for things that are classes on the C++ side (see "On Types" below), and the ownership layer that makes the pointer types safe; individual calls still map close to 1:1 onto the underlying QuantLib call. Coverage is curated rather than exhaustive: getters that only echo a value the caller already passed to the constructor are deliberately left unbound, so the binding surface tracks what's actually useful to call rather than every method QuantLib happens to expose.
+  hasquant does not depend on [QuantLib-SWIG](https://github.com/lballabio/QuantLib-SWIG). References to it identify prior art for API-shape decisions only.
 
-  This started as a hand-written project in 2012 (see "Project History" below) and has gone through several architecture rewrites since. The core design — the pointer-ownership model, the enum/ADT scheme, the C shim conventions — is hand-designed and predates any AI involvement. More recently I've used AI assistance to extend coverage faster: new classes, methods, day counters, indexes. Every generated binding is still reviewed against the pattern it's supposed to follow, checked against the upstream C++ signature, and covered by a test before it counts as done — see "Testing" below for what that means in practice.
+  The ownership model, enum/ADT design, and C-shim conventions predate AI assistance. AI now helps extend coverage, but each binding is checked against upstream signatures and established patterns, then tested.
 
-  Worked examples live in `test/example/QuantLib/Example`. They're direct translations of QuantLib's own examples and test suite, not idiomatic Haskell — the goal there is fidelity to a known-correct reference, not style. The test suite proper is `test/main/QuantLib/MainTest.hs`, a dispatcher over the topic modules in `test/hspec/QuantLib/Spec`.
+  Examples are in `test/example/QuantLib/Example`; most deliberately follow QuantLib examples and tests, prioritizing fidelity to the upstream fixture over idiomatic Haskell. `QuickStart` is the readability-oriented exception. The Hspec suite is dispatched from `test/main/QuantLib/MainTest.hs`.
 
-  The package is published on Hackage at https://hackage.haskell.org/package/hasquant, with Haddock documentation for the current `master` available at https://khorser.github.io/hasquant
+  Published package: https://hackage.haskell.org/package/hasquant. Current Haddock: https://khorser.github.io/hasquant.
+
+  # Quick Example
+
+  Build and price a five-year SOFR OIS:
+
+  ``` haskell
+  import Data.List.NonEmpty (NonEmpty(..))
+
+  let today = 2 `january` 2024
+  setEvaluationDate (Just today)
+
+  cal <- calendar TARGET
+  settle <- advance cal today (2, Days) Following False
+  let maturity = addGregorianYearsClip 5 settle
+
+  dc <- dayCounter (Actual360 False)
+  curve <- interpolatedZeroCurve
+    ((settle, 0.030) :|
+      [ (addGregorianYearsClip 1 settle, 0.032)
+      , (addGregorianYearsClip 2 settle, 0.034)
+      , (addGregorianYearsClip 5 settle, 0.036)
+      , (addGregorianYearsClip 10 settle, 0.038)
+      ]) dc cal [] Linear
+
+  sofr <- overnightIborIndex Sofr (Just curve)
+
+  sched <- schedule (Just settle) maturity (1, Years) cal
+    ModifiedFollowing ModifiedFollowing Backward False Nothing Nothing
+
+  ois <- overnightIndexedSwap Payer 10000000 sched 0.035 dc sofr 0.0
+    0 Following cal False AveragingCompound Nothing 0 False
+
+  engine <- discountingSwapEngine curve (Just False) Nothing Nothing
+  setPricingEngine ois engine
+
+  npv ois >>= print       -- 70994.8441727506
+  fairRate ois >>= print  -- 3.6554153626327204e-2
+  ```
+
+  This is `QuantLib.Example.QuickStart.run`, compiled by `stack exec hasquant_example` and covered by `test/hspec/QuantLib/Spec/Examples.hs`.
+
+  # Goals and Scope
+
+  hasquant provides pricing, curve-building, and risk primitives; callers own orchestration. `app/SofrXva` owns CSV parsing and pipeline wiring, and uses hasquant for curve construction and discounting.
+
+  Two things follow from that split:
+
+  - Calendar, currency, day-counter, and index enums are usable without a pricing engine.
+  - Monte Carlo tests and examples use fixed nonzero RNG seeds; QuantLib treats `seed = 0` as entropy.
+
+  Out of scope:
+
+  - Reimplementing or independently binding QuantLib's interpolation, optimization, linear-algebra, and RNG internals, unless another binding needs one exposed.
+  - A declarative composition DSL; any such DSL belongs in a sibling project.
+
+  ## Roadmap
+  - Identify which [OpenSourceRiskEngine](https://opensourcerisk.org) functionality should be bound
+  - Join forces with [HQuantLib](https://github.com/paulrzcz/hquantlib): a bivariate copula CDF catalogue
+  - Build a declarative composition DSL as a sibling project.
+  - Expose that DSL through an agent-callable tool, so an LLM can construct and price products through validated hasquant operations rather than generated pricing logic.
+  - See [github issues](https://github.com/khorser/hasquant/issues) for more formalized tasks
 
   # Testing
 
-  Bindings aren't just compiled and eyeballed. Where QuantLib's own `test-suite/*.cpp` covers a class or scenario, the corresponding hasquant test reuses its inputs and cached expected values directly, rather than deriving numbers by hand or relying on self-consistency alone. Enum-dispatched cases (currencies, calendars, day counters, index variants) get a standalone `test/smoke/` check that constructs the cases and asserts on the output — this is what caught a real bug where two enum cases silently aliased to the wrong upstream values despite a clean build and a passing test suite.
+  Tests reuse QuantLib fixtures and cached values when available. Enum-dispatched bindings also get smoke tests that construct and check representative values; these catch stale or incorrect enum mappings that can survive a clean build and the ordinary test suite.
 
-  Coverage is tracked rather than claimed: `tools/ql-methods-1.43.txt` is a line-by-line dump of every constructor and non-trivial method in QuantLib's headers, and each new binding flips its line as it lands.
+  `tools/ql-methods-1.43.txt` tracks constructors and non-trivial methods. Coverage: https://khorser.github.io/hasquant/coverage/hpc_index.html.
 
   # Building
 
-  Day-to-day development happens on GHC-9.10. GHC-8.10.6 (`base >= 4.14`) is the supported floor and is verified on every change against the lts-18.8 Docker image below; newer versions should work too, as the public API sticks to widely available language features.
+  GHC 9.10 is the primary development version. GHC 8.10.6 (`base >= 4.14`) is the supported floor and is checked with lts-18.8. GitHub CI also tests with GHC 9.6.7, 9.8.4, 9.12.4, 9.14.1.
 
-  First you need QuantLib version 1.43 or higher, see installation documentation for [Linux](https://www.quantlib.org/install/linux.shtml), [MacOS](https://www.quantlib.org/install/macosx.shtml),
-  or cross-platform [CMake-based build](https://www.quantlib.org/install/cmake.shtml)
+  Install QuantLib 1.43 or later: [Linux](https://www.quantlib.org/install/linux.shtml), [macOS](https://www.quantlib.org/install/macosx.shtml), or [CMake](https://www.quantlib.org/install/cmake.shtml).
 
   Linux and macOS are the primary, well-tested platforms. Windows builds work too, but QuantLib has to be rebuilt with GHC's own bundled Clang first — see [`WINDOWS.md`](WINDOWS.md) for the recipe.
 
@@ -134,27 +220,16 @@ description: |
   Build and run examples: `stack build --flag hasquant:buildExample --no-haddock && stack exec hasquant_example`.
   The example executable is `buildable: False` without that flag, so HLS also needs it — add `package hasquant` / `flags: +buildExample` to a local `cabal.project.local` to edit `main/exe` with HLS.
 
-  Build and run examples enabling tracking of memory allocations (log every object as it
-  is created and deleted):
+  To trace allocations:
   `stack build --no-haddock --flag hasquant:buildExample --flag hasquant:trackAllocations && stack exec hasquant_example`
 
-  The trace goes to stderr by default. Set the `QLTRACK_ALLOCATIONS` environment variable
-  to send it to a file instead, which is usually what you want — redirecting stderr also
-  swallows the program's own output, and a trace is only useful next to the values it
-  explains:
+  The trace defaults to stderr. Use a file to keep program output separate:
 
   `QLTRACK_ALLOCATIONS=/tmp/trace.log stack exec hasquant_example`
 
-  A raw trace is thousands of interleaved lines. `tools/alloc-summary.py /tmp/trace.log`
-  pairs allocations with frees by pointer and reports what is still live, grouped by
-  class, listing double frees separately from ordinary leaks; it exits non-zero if
-  anything is unaccounted for, so it can gate a check.
+  `tools/alloc-summary.py /tmp/trace.log` pairs allocations and frees, reports live objects and double frees, and exits nonzero on an accounting failure.
 
-  **One trap worth knowing:** neither cabal nor stack recompiles `cxx-sources` when only
-  a flag changes, so turning `trackAllocations` on for an already-built tree reports
-  success and produces a library with no tracing in it — an empty trace and no error.
-  Delete the built C++ objects (the `build/cbits` directory) first, and confirm with
-  `strings <a built .o> | grep -c allocated` before trusting an empty result.
+  **Caution:** Cabal and Stack do not rebuild `cxx-sources` when only a flag changes. Before enabling `trackAllocations`, delete `build/cbits` and confirm a built object contains `allocated` before trusting an empty trace.
 
   Run GHCi: `stack ghci --ghci-options $(find .stack-work \( -name "*.so" -o -name "*.dylib" \) -print -quit)`
 
@@ -170,23 +245,28 @@ description: |
 
   ## Docker
 
-  The repo contains docker compose files for a custom Linux x86_64 image. You can use it like this to run tests using GHC-8.10.6:
-  `docker compose build`, `docker compose run --rm -it hasquant stack --resolver lts-18.8 test`
+  Use the Linux x86_64 image for GHC 8.10.6:
+  `docker compose build`, then `docker compose run --rm -it hasquant stack --resolver lts-18.8 test`.
 
   Drop `-it` when running without a TTY (CI, or a scripted check) — it fails there.
 
-  The config mounts `~/.stack`, `~/.ghcup`, and `~/.cabal` as named volumes so everything installed with stack/ghcup/cabal will persist across runs.
-  `/hasquant/.stack-work` and `/hasquant/dist-newstyle` are mounted as anonymous volumes to avoid polluting host filesystem.
+  The image persists Stack, GHCup, and Cabal caches and keeps build outputs off the host.
 
   # On Types
 
-  I deliberately kept typeclasses out of public signatures, as the code quickly becomes polluted by typeclass constraints. A few remain as internal plumbing, but you never have to satisfy one yourself.
+  Public APIs use concrete types by default. Public capability classes are reserved for genuine
+  multiple-inheritance interfaces and operations shared by related types with the same signature and
+  semantics. Blanket constraints still expose implementation details and can rule out otherwise valid
+  callers; concrete types and explicit upcasts remain the better choice when no common capability is
+  being expressed.
+
+  The practical exception is collections of related QuantLib objects. Types such as `[GenQuote q]` and `NonEmpty (GenRateHelper rh)` carry one shared phantom parameter, so every element must have the same type. Supporting an arbitrary mixture of sibling types directly would require existential wrappers or additional public constraints throughout higher-level APIs. Instead, callers explicitly upcast elements to their common parent before putting them in one list.
+
+  Container types also communicate intent. Ordinary lists are used for small or genuinely optional collections; `NonEmpty` makes required schedules, helpers, notionals, and curve nodes impossible to omit accidentally. Large homogeneous numeric data—Monte Carlo paths, regression data, and volatility grids—uses storable `RealVector` and `RealMatrix` values, avoiding the allocation overhead of boxed lists while retaining explicit dimensions. These distinctions put useful invariants and performance expectations in the API instead of leaving them to documentation and runtime checks.
 
   ## How to read types
 
-  If you see a function accepting `CallableBond`, you can pass only callable bonds.
-  But if a function accepts `GenBond a`, you can pass a `Bond` or any of its derivatives: `FixedRateBond`, `ConvertibleBond`, `CallableBond`.
-  This works thanks to the following definition:
+  `CallableBond` accepts only callable bonds. `GenBond a` accepts `Bond` and its derivatives:
   ``` haskell
   type Bond = GenBond CBond
   type FixedRateBond = GenBond CFixedRateBond
@@ -194,20 +274,16 @@ description: |
   type CallableBond = GenBond CCallableBond
   ```
 
-  And if a function accepts `GenInstrument a` (like `npv`), you can pass any instrument at all.
-  While this is convenient, it leads to some allocation and deallocation on each call, so you might consider using `asBond` and `asInstrument` to get an object of the required type.
+  `GenInstrument a` (for example, `npv`) accepts every instrument. An implicit upcast allocates a temporary C-side handle and frees it after the call, so reuse `asBond` or `asInstrument` when making repeated calls through a common parent type.
 
-  # TODO
-  - (Perpetual) Add more classes and methods. You will need to update `cbits/qlaux.h`, `cbits/qlTypesC2HS.h`, and then add some boilerplate to corresponding `.h`, `.cpp`, `Internal/Type.hs` and `.chs` files. This can be simplified with scripting/LLMs. Refer to `CLAUDE.md`, `.claude/skills`, and `tools` for more detailed information useful even for manual steps.
-  - Evaluate whether some [OpenSourceRiskEngine](https://opensourcerisk.org) functionality should be bound
-  - Add more nonempty lists or vectors for some functions where applicable
-  - Design a declarative embedded DSL
-  - Review interfaces for consistency, add obviously missing features and fix contradictions to the current design
-  - See [github issues](https://github.com/khorser/hasquant/issues) for more formalized tasks
+  Cash flows follow the same pattern: `GenCashFlow cf` is the common root, with
+  `GenFloatingRateCoupon`, `GenIndexedCashFlow`, and `GenDigitalCoupon` preserving useful
+  intermediate families. A homogeneous subtype list can be passed directly to `cashFlowLeg`;
+  heterogeneous lists explicitly materialize `CashFlow` elements with `asCashFlow` first.
 description-type: markdown
-hash: 31ae115e088fac19155278ad29eba7656ca2f998376dc91cdc9f2572ec3ee427
+hash: 336e61eb085778656ccd96676a719e9bb57e870c3b147e34d82f38123fc73233
 homepage: https://github.com/khorser/hasquant#readme
-latest: 0.6.0.0
+latest: 0.7.0.0
 license-name: BSD-3-Clause
 maintainer: Sergei Khorev <sergey.khorev@gmail.com>
 synopsis: Bindings to QuantLib
@@ -215,6 +291,10 @@ test-bench-deps:
   HUnit: '>=1.6.2 && <1.7'
   QuickCheck: '>=2.14.2 && <2.19'
   base: '>=4.14 && <5'
+  directory: '>=1.3.6.0 && <1.4'
+  filepath: '>=1.4.2.1 && <1.6'
   hasquant: '>=0'
   hspec: '>=2.7.10 && <2.12'
+  process: '>=1.6.13.2 && <1.7'
   time: '>=1.9.3 && <1.16'
+  vector: '>=0.12.3 && <0.14'
