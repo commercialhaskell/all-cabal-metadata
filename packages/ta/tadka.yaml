@@ -1,0 +1,814 @@
+all-versions:
+- 2.0.0.0
+author: Sabrinathan Nair
+basic-deps:
+  aeson: '>=2.1 && <2.4'
+  ansi-terminal: '>=1.0 && <1.2'
+  array: '>=0.5 && <0.6'
+  base: '>=4.18 && <4.23'
+  bytestring: '>=0.11 && <0.13'
+  containers: '>=0.6 && <0.9'
+  network-uri: '>=2.6 && <2.7'
+  prettyprinter: '>=1.7 && <1.8'
+  prettyprinter-ansi-terminal: '>=1.1 && <1.2'
+  template-haskell: '>=2.20 && <2.25'
+  text: '>=2.0 && <2.3'
+changelog: "# Changelog for `tadka`\n\nAll notable changes are recorded here. \n\n##
+  2.0.0.0 — miette-parity hardening\n\n### Multi-source diagnostics (Phase 12)\n-
+  **Breaking:** `Tadka.Internal.Renderer.Json`'s `LabelDTO` gains a `file`\n  field,
+  present on every label (`ldFile`/`\"file\"` in the serialized JSON),\n  including
+  stale ones. Every existing JSON golden fixture with at least one\n  label changes
+  shape (`json-single`, `json-cycle`, `json-truncated`);\n  `json-cause` is unaffected
+  (its diagnostic has no context at all). This\n  closes a real, pre-existing gap
+  independent of multi-source support: the\n  JSON DTO never named which file a label
+  belonged to, even for a\n  single-source diagnostic.\n- `Context` now holds a non-empty,
+  ORDERED sequence of source groups\n  (`SourceGroup`: one `NamedSource` plus its
+  own non-empty, order-preserving\n  label list) instead of exactly one source. This
+  is a strict generalisation:\n  a single-source `Context` is now the one-group case
+  of the same\n  representation, not a different shape. Every existing guarantee —\n
+  \ label count/order preserved, `LabelStale` in place rather than dropped —\n  now
+  holds pointwise, per group; group order itself is preserved too.\n- New construction
+  API, mirroring the single-source functions one level up:\n  `mkContextMulti` (strict;
+  `Left` on the first out-of-bounds span in\n  group-then-label order), `mkContextMultiDegrading`
+  (total; degrades per\n  label within its own group), and `Tadka.Internal`'s `buildContextMulti`\n
+  \ (the multi-source convenience entry point, analogous to `buildContext`\\/\n  `buildContextWith`
+  — a source paired with no labels contributes no group,\n  mirroring `buildContext`'s
+  empty-list convention per source). `mkContext`,\n  `mkContextDegrading`, `buildContext`,
+  and `buildContextWith` are now\n  implemented as the one-group special case of their
+  multi- counterparts —\n  not a second copy of the resolution logic — and are unchanged
+  in signature\n  and behaviour (proven byte-identical: every existing graphical and\n
+  \ narratable golden fixture is unchanged).\n- All three renderers updated to walk
+  every source group, in order:\n  - **Graphical** — one `┌─ file:line:col` gutter
+  block per group, separated\n    by the same lone-rail-line convention `relatedChild`
+  already uses between\n    a nested diagnostic's snippet and its related forest.
+  The gutter width is\n    now the maximum needed across every group, so indentation
+  (help/see/\n    related lines) stays aligned across a multi-file report. A one-group\n
+  \   context renders exactly the single block it always did, with no\n    separator.\n
+  \ - **Narratable** — one `Location: ...` sentence and its label readouts per\n    group,
+  in group order.\n  - **JSON** — every label's DTO carries the name of its own group's
+  source\n    via the new `file` field.\n- The derive macro (`deriveDiagnostic`) and
+  `genericContext` remain\n  single-source only in v1; `buildContextMulti` is a hand-written-instance\n
+  \ entry point. Deferred, not forgotten, for a future release. §6.\n- New `Phase12`
+  property group (6 properties, 100 generated cases each):\n  `mkContextMulti`/`mkContextMultiDegrading`'s
+  per-group and cross-group\n  count/order guarantees, the single-source functions'
+  exact equivalence to\n  their one-group multi- counterparts, and `buildContextMulti`'s
+  empty-group\n  handling. New `cross-file` / `narr-cross-file` / `json-cross-file`
+  golden\n  fixtures, exercising a real two-file diagnostic through all three handlers.\n
+  \ Full existing suite (property + golden) re-verified with zero regressions\n  beyond
+  the three JSON fixtures the `file` field intentionally changes.\n\n### Issue remediation
+  pass\n- **Breaking:** `StaleReason` loses its `SourceMismatch` constructor.\n  `resolveSpan`
+  never produced it — the only real producer path is\n  out-of-bounds resolution —
+  so it was a representable-but-unreachable state.\n  Removing it also tightens `Narratable.hs`'s
+  `staleSentence`, which handled\n  it, to a total single-clause match that will now
+  fail to compile (instead\n  of silently matching a wildcard) if a future `StaleReason`
+  constructor is\n  ever added without updating every renderer.\n- Fixed: multiple
+  same-kind labels (e.g. two `Secondary` labels on one line)\n  were visually indistinguishable
+  under `ColorNever`, since `caretGlyph` only\n  looked at `LabelKind`, not position.
+  The underline glyph is now chosen by a\n  per-kind rank: the first label of a kind
+  keeps its existing anchor (`^` for\n  `Primary`, `-` for `Secondary`), and a second-or-later
+  same-kind label\n  cycles through `~` (then `=`). Colour-mode output is unaffected
+  — the glyph\n  is always `^` there, exactly as before.\n- Fixed: the graphical handler
+  previously discarded `Ann` annotations\n  (`AnnCode`, `AnnKeyword`, `AnnFilename`,
+  `AnnEmphasis`) on message/label/help\n  text, rendering plain, unstyled text regardless
+  of author intent. It now\n  interprets them at its own render boundary — ANSI styling
+  under any colour\n  mode, a plain-text fallback marker (backtick/quote) under `ColorNever`
+  — the\n  same way `Narratable.hs`'s `toProseMarker` already did for prose output.\n-
+  Fixed: `deriveDiagnostic` had no way to generate `diagnosticCause`. New\n  `specCause`
+  field on `DiagnosticSpec` names a `Maybe SomeDiagnostic`-typed\n  field (validated
+  at splice time, same discipline as `specRelated`); the\n  generated method body
+  is a bare field accessor. New `WrongCauseType`\n  compile-fail case.\n\n### Collection
+  labels in `deriveDiagnostic`\n- New `specLabelCollectionFields`/`specSecondaryLabelCollectionFields`
+  on\n  `DiagnosticSpec`: each names a `[Span]`-typed field (validated at splice\n
+  \ time, same as `specLabelFields`), and every element of that field's runtime\n
+  \ list becomes its own label sharing the given text — for a variable number of\n
+  \ same-kind occurrences (every prior declaration of a name, every match of a\n  banned
+  pattern) known only when the diagnostic is built, where\n  `specLabelFields` needs
+  one field per label fixed at splice time. Rendered\n  after all fixed-field labels,
+  in field order then list order; an empty\n  runtime list simply contributes no labels.\n-
+  TH-layer only, as intended: `buildContext`/`buildContextWith` are completely\n  unchanged,
+  since they already accept a plain, arbitrary-length list — the\n  splice just expands
+  a collection field into that same shape and appends it.\n  A spec with no collection
+  fields generates byte-identical code to before\n  this feature existed (the expansion
+  is only spliced in when at least one\n  collection field is actually declared),
+  so no existing derived instance's\n  generated code changes shape.\n- New `WrongCollectionType`
+  compile-fail case (a `Span`-typed, not\n  `[Span]`-typed, field must be rejected
+  at the splice site) alongside the\n  existing ones in `tools/check-compile-fail.sh`.
+  A new `LabelCollection`\n  property group proves a derived instance with collection
+  fields renders\n  identically, across all three handlers, to a hand-written\n  `buildContext`/`buildContextWith`
+  call expanding the same randomly generated\n  list — for varying list lengths (including
+  empty and a 200-element\n  totality check), an all-primary-only collection, and
+  a mixed\n  fixed-primary-plus-secondary-collection instance.\n\n### Terminal hyperlinks:
+  OSC 8 for the `= see:` URL\n- The graphical handler now wraps a diagnostic's `url`
+  in an OSC 8 terminal\n  hyperlink escape when `HyperlinkMode` allows it, so a supporting
+  terminal\n  renders the `= see:` line as a clickable link instead of plain text
+  a user\n  must select and copy by hand. New `HyperlinkMode` (`Auto`/`Always`/`Never`,\n
+  \ mirroring `ColorMode`/`UnicodeMode`) and `withHyperlinkMode`; `TerminalCaps`\n
+  \ gains `capNoHyperlink`/`capForceHyperlink` (`NO_HYPERLINK`/`FORCE_HYPERLINK`\n
+  \ — the latter an existing convention from the `supports-hyperlinks` package)\n
+  \ and `resolveHyperlink` resolves `Auto` the same three-tier way `resolveColor`\n
+  \ does. Defaults to `HyperlinkNever`, not `Auto` (unlike colour/Unicode): OSC 8\n
+  \ has no reliable capability query the way TTY-ness does, so defaulting off\n  keeps
+  every existing caller's output byte-for-byte unchanged until they opt\n  in. Narratable
+  and JSON output are untouched — this is a graphical-only\n  affordance. Only ever
+  wraps an already-validated `Url` (never raw `Text`), so\n  the wrap is injection-safe
+  by construction rather than by an extra runtime\n  check: `mkUrl`'s absolute-URI
+  grammar has no production admitting a raw\n  control byte. A new `single-label-hyperlink`
+  golden fixture pins the exact\n  escape bytes; a dedicated property group proves
+  the resolver mirrors colour's\n  three-tier law, the wrap touches only the URL (a
+  diagnostic without one\n  renders identically under `Always` and `Never`), and `Never`
+  output never\n  contains an escape.\n\n### Security hardening (untrusted-input robustness)\n-
+  **Terminal-escape / control-character injection (High).** Raw control\n  characters
+  (`ESC`, `BEL`, `BS`, DEL, C1) in attacker-controlled source or label\n  text previously
+  passed through verbatim into graphical and narratable output,\n  even in `ColorNever`
+  mode — a terminal-injection vector when diagnosing\n  untrusted code. All three
+  handlers now strip control characters from rendered\n  text (source lines keep `\\t`
+  for tab expansion; the substitution is\n  width-preserving so caret columns are
+  unmoved). JSON is included because aeson\n  escapes only `<0x20`, leaving DEL/C1
+  raw. A property asserts no control\n  character other than the `\\n` line separator
+  survives in any handler's output\n  over adversarial generated input.\n- **Unbounded
+  output from wide spans (Medium, availability).** A span across a\n  huge line range
+  rendered output proportional to the span (a line-1→5000 span\n  produced 5002 lines).
+  The planner now caps the contiguous range and falls back\n  to a bounded context
+  window with elision, so output is proportional to the\n  diagnostic, not the span
+  (that case now renders ~11 lines); every labelled line\n  still appears. Small diagnostics
+  are unchanged, so golden fixtures stay\n  byte-identical. A property bounds output
+  for a 10000-line span.\n\n\n### Robustness: production edge cases mined from miette's
+  history\n- Added a `Production edge cases (from miette)` property group translating\n
+  \ miette's bug-fix history into tadka tests, and fixed the two gaps it exposed:\n
+  \ CRLF (`\\r\\n`) sources left a stray carriage return in rendered lines\n  (miette
+  #37) — `SourceCode` now strips a trailing `\\r` per line; and a newline\n  embedded
+  in a label or message could break the caret/gutter layout\n  (miette #318) — the
+  graphical and narratable handlers now flatten newlines in\n  rendered text fragments
+  to spaces (JSON keeps them, escaped). tadka was\n  already robust to the rest: zero-length/point
+  spans (#204/#159/#32), spans\n  past end-of-line/EOF (#221/#347), empty sources
+  (#183), offset-0 labels,\n  wide-char + tab alignment (#202), combining marks (#312/#314),
+  nested/\n  overlapping spans (#316), and multi-line spans not skipping lines (#81),
+  plus\n  a totality sweep over out-of-range spans on all three targets.\n\n\n###
+  Snippet renderer rework — Phase III: multi-line span rendering\n- Multi-line spans
+  (start line < end line) are no longer clamped to the start\n  line: they render
+  with a connector gutter between the rail and the source —\n  `\\x256D` opening,
+  `\\x2502` continuation, `\\x2570` closing (ASCII `/`, `|`,\n  `\\\\`) — with the
+  label shown inline on the closing line. The pure core lives\n  in `Tadka.Internal.Renderer.Layout`:
+  greedy interval-graph lane assignment so\n  overlapping spans get distinct lanes
+  while disjoint spans reuse one, plus a\n  `cellAt` classifier. It is glyph-free
+  and Int-only, so it is fully proven:\n  distinct spans on one lane never share a
+  line (the collision proof), lanes are\n  contiguous, coverage is order-preserving,
+  and `cellAt` classifies correctly.\n  End-to-end properties add that every multi-line
+  span draws exactly one opening\n  and one closing corner and that the label text
+  is shown — the second of which\n  caught a real lane-reuse bug (a lane hosting two
+  disjoint spans rendered only\n  the first) before it could ship. Single-line diagnostics
+  are unaffected (the\n  gutter has zero width when there are no multi-line spans),
+  so all existing\n  golden fixtures stay byte-identical; a `multi-line` fixture locks
+  the art.\n- Note: multiple single-line labels on the same line still render as stacked\n
+  \ caret lines (correct, and unchanged) rather than horizontally packed onto one\n
+  \ line with routed connectors. True same-line packing is deferred as optional\n
+  \ polish; it does not fall out of the multi-line lane engine as cleanly as first\n
+  \ thought, and stacked carets are unambiguous.\n\n### Snippet renderer rework —
+  Phase II: context lines + gap elision\n- New pure planner `Tadka.Internal.Renderer.LinePlan`
+  (`PlanEntry`, `planLines`)\n  decides which source lines to render and where to
+  elide, as an IR between\n  resolved labels and glyphs. `withContextLines n` shows
+  n lines around each\n  labelled line and elides the gaps (a `⋮` marker); unset (default)
+  renders the\n  contiguous labelled range with no elision, so all golden fixtures
+  stay\n  byte-identical. The graphical window fetch now derives from the plan's shown\n
+  \ lines (via `SourceCode.scLineCount`), not the anchor range. Properties prove\n
+  \ the planner is total, `Nothing` reproduces the contiguous range, and with\n  context
+  every in-range anchor is shown, line numbers strictly increase and\n  stay in bounds,
+  and every elision hides at least one line.\n\n### Snippet renderer rework — Phase
+  I: pluggable SourceCode\n- New `Tadka.Internal.SourceCode` class: a total, windowed
+  source-reading seam\n  (`scName`, `scLines (firstLine, lastLine)`). `NamedSource`
+  is the canonical\n  in-memory instance; the graphical and narratable handlers now
+  fetch only the\n  line window they render through it, so a lazy/file-backed instance
+  is possible\n  later. Pure refactor — all golden fixtures byte-identical. Properties
+  prove the\n  instance is total and its windows equal a filter of the full line enumeration.\n\n\n###
+  Totality: no partial functions in the library\n- Removed every use of a partial
+  function primitive from `src/`. `head`/`!!`,\n  `maximum`/`minimum`, and `Data.Array.(!)`
+  are gone from all call sites: caret\n  layout and line lookup now pattern-match
+  `drop`; gutter/line-range use\n  `foldr max`/`foldr min` with seeds; palette indexing
+  uses total `NonEmpty`\n  operations; and array indexing is encapsulated in a single
+  total `atMay`\n  (guarded by `inRange`, returning `Maybe`). Behaviour is unchanged
+  — all 14\n  golden fixtures remain byte-identical — so this is a pure totality hardening.\n\n\n###
+  Primary vs secondary labels\n- Labels now carry a `LabelKind` (`Primary`/`Secondary`).
+  `buildContext` marks\n  everything `Primary` (so existing callers and fixtures are
+  unchanged); a new\n  `buildContextWith` takes explicit kinds, and the derive macro
+  gained\n  `specSecondaryLabelFields`. All three handlers are kind-aware: the graphical\n
+  \ and narratable reports anchor their location on the first primary label; the\n
+  \ graphical handler draws primary labels with `^` in the severity colour and\n  secondary
+  labels with `-` in a palette colour; the narratable handler leads\n  with \"The
+  problem is at\" vs \"Related context is at\"; and the JSON DTO gains a\n  per-label
+  `primary` flag. Properties prove the location anchors on the primary,\n  the JSON
+  flag tracks the kind, `^`/`-` by kind, and — extending the Phase 8\n  guarantee
+  — a derived instance with secondary fields renders byte-identically\n  to a hand-written
+  `buildContextWith` instance across all three handlers.\n\n### Cause chain (diagnostic_source
+  analogue)\n- New `diagnosticCause :: e -> Maybe SomeDiagnostic` class method (default\n
+  \ `Nothing`) and a total, depth- and cycle-safe `walkCauses` (cycle detection by\n
+  \ `diagnosticId`, mirroring `walkRelated`). The chain renders as lightweight\n  linear
+  provenance — graphical `= caused by: …` lines, narratable `Caused by: …`\n  sentences,
+  and a JSON `causes` array — kept deliberately distinct from the\n  tree-shaped `related`.
+  The shared generator now emits causes, so the Phase 11\n  render-totality-over-every-target
+  property covers cause chains too; dedicated\n  properties prove cyclic chains terminate
+  on every target, an id-cyclic cause's\n  marker renders at most once, and a real
+  chain produces a \"caused by\" line.\n- Hardened `tools/check-compile-fail.sh` to
+  build the library under the default\n  configuration first, so `cabal exec` always
+  exposes a consistent `tadka`.\n\n### Terminal detection & ANSI colour (graphical
+  handler)\n- `reportDiagnostic` now detects the sink's capabilities and resolves
+  `ColorAuto`\n  / `UnicodeAuto` to concrete modes before rendering: `NO_COLOR` disables
+  colour,\n  `CLICOLOR_FORCE` forces it, otherwise colour follows TTY status; Unicode
+  follows\n  a UTF-8 locale check (`LC_ALL` > `LC_CTYPE` > `LANG`). So piped/CI output
+  no\n  longer risks stray escapes, and non-UTF-8 terminals get the ASCII box glyphs\n
+  \ automatically. `selectRenderer` stays pure — resolution is the only new IO.\n-
+  New `Tadka.Internal.Terminal`: `detectTerminalCaps` (IO) plus the pure, total\n
+  \ `resolveColor` / `resolveUnicode` / `resolveConfig`. Properties prove explicit\n
+  \ modes pass through untouched; `NO_COLOR` always wins; force beats TTY; `Auto`\n
+  \ otherwise follows TTY/locale; `resolveConfig` eliminates every `Auto`, is\n  idempotent,
+  and changes only the two mode fields.\n- The graphical handler now emits ANSI: the
+  severity/code header is coloured by\n  severity (bold), and each label's carets
+  + text take their palette colour\n  (`withLabelPalette`) — delivering the per-label
+  colour deferred in Phase 5.\n  Under `ColorNever` no ANSI is emitted (proved over
+  generated diagnostics) and\n  underline glyphs cycle `^`/`~`/`-`, so all golden
+  fixtures stay byte-identical.\n  A structural property proves colour adds only ANSI
+  and a uniform caret glyph,\n  never a layout change.\n\n### Tab-stop expansion (graphical
+  handler)\n- Source lines are rendered with tabs expanded to the next tab stop, and
+  caret\n  columns are computed with the same tab-aware `displayColumnAt`, so a caret
+  now\n  aligns under a span on a tab-indented line instead of drifting. Tab width
+  is\n  configurable via `withTabWidth` (default 4); character columns reported by
+  the\n  narratable and JSON handlers are unchanged (a tab is one character).\n- New
+  total helpers `Tadka.Internal.Width.displayColumnAt` / `expandTabs`, with\n  properties
+  proving: expansion leaves no tabs; expanded width equals\n  `displayColumnAt` of
+  the whole line; `displayColumnAt` is monotonic; a tab\n  always lands on a tab stop;
+  and — the alignment guarantee — a caret's display\n  offset equals the width of
+  the tab-expanded source preceding the span. A\n  `tab-indented` golden fixture locks
+  the visual result.\n\n## 1.0.0.0 — v1\n\nFirst release. All eleven phases of the
+  implementation spec are complete; the\npublic API matches vision §8.\n\n### Phase
+  11 — Consolidation & Release Audit\n- Public API surface reconciled to vision §8:
+  `Offset`/`Length` (and their\n  constructors, accessors, error types, and the `spanOffset`/`spanLength`\n
+  \ accessors that exposed them) are no longer public — spans are the public\n  position
+  type, and the offset representation lives in \"Tadka.Internal.Types\"\n  with no
+  compatibility guarantee. A negative compile check confirms they are\n  unreachable
+  from `Tadka`.\n- Dependency upper bounds added to the library and every interop
+  sub-library;\n  `cabal check` is clean. Version set to `1.0.0.0`.\n- Consolidated
+  golden suite (10 fixtures: the six canonical renderings, the\n  prose and JSON depth-truncation
+  forms, the JSON cycle form, and the\n  generated-instance discipline fixture) and
+  property suite (all groups from\n  Phases 1–9) run together via `make test` / CI.\n-
+  New consolidated properties: `render` totality broadened to a single Hedgehog\n
+  \ property over *every* target; a cycle-detection marker property (a repeated\n
+  \ `diagnosticId`'s marker renders at most once, on all three handlers); and the\n
+  \ vision's Success Criterion end-to-end — a misspelled span field is a compile\n
+  \ error (`test/compile-fail/SuccessCriterion.hs`), and a genuinely staled span\n
+  \ renders a clear in-report reason (graphical, narratable, and an explicit JSON\n
+  \ `\"stale\":true`) rather than a silently shorter report.\n\n\n### Phase 10 — Interop
+  Helpers\n- One-directional adapters turning parser positions into tadka `Span`/`Offset`,\n
+  \ each a plain function against Phase 1/2 types with no new core surface:\n  - `Tadka.Interop.Megaparsec`:
+  `spanFromError` from a megaparsec\n    `ParseError`'s stream `errorOffset`.\n  -
+  `Tadka.Interop.Attoparsec`: `consumedOffset`/`spanFromConsumed` (attoparsec\n    reports
+  no line/column, so position is recovered as characters consumed).\n  - `Tadka.Interop.GHC`:
+  `spanFromSrcSpan` converting a GHC `SrcSpan` (with the\n    source text, to turn
+  1-based line/column into an offset).\n- Each adapter is a **separate cabal sub-library**
+  (`interop-megaparsec`,\n  `interop-attoparsec`, `interop-ghc`) depending on `tadka`,
+  so the core library\n  never depends on a parser package and no core module can
+  import interop — the\n  adapters are one-directional by construction. Minimum upstream
+  versions are\n  pinned (`megaparsec >=9.0`, `attoparsec >=0.14`, the GHC 9.10 `ghc`
+  library)\n  and noted in each module's haddock.\n- Exit criteria met: a per-library
+  round-trip test (`test-suite interop`)\n  constructs a known failure, converts its
+  position, resolves against the same\n  source, and confirms the line/column matches
+  what the library reports\n  (megaparsec, GHC) or the consumed offset (attoparsec);
+  and an audit confirms\n  the core library has no parser/ghc dependency and imports
+  no interop module.\n\n### Phase 9 — Generics-Based Label-Wiring Derivation\n- `genericContext
+  :: (Generic e, ...) => e -> Context` derives __only__ the\n  `context` method, via
+  GHC.Generics, for a record with exactly one\n  `NamedSource` field and one or more
+  `Span` fields — using each span field's\n  record-selector name as its label text
+  and calling the same `buildContext`.\n  Used as `context = genericContext` inside
+  an otherwise hand-written instance.\n- Deliberately scoped: its type (`e -> Context`)
+  can touch nothing else, so\n  `code`/`severity`/`help`/`url`/`message`/`diagnosticId`
+  stay hand-written\n  (each defaultable). This is one method, not \"most of the ergonomics\"
+  — for the\n  fuller path use `deriveDiagnostic`.\n- The record shape is checked
+  at compile time (a `Nat`-counting type family over\n  the generic `Rep`): zero or
+  several `NamedSource` fields, or no `Span` field,\n  is a type error — never a silent
+  guess about which field was meant. A\n  compile-fail test (`TwoSources`) covers
+  the two-source case.\n- Exit criteria met: a property proves a generics-wired instance
+  renders\n  byte-for-byte identically to a hand-written `buildContext` twin across
+  all\n  three handlers, and the `e -> Context` signature confirms no other method
+  is\n  touched.\n\n### Phase 8 — Derive Macro (`deriveDiagnostic`)\n- `DiagnosticSpec`
+  (with `specCode`, `specSeverity`, `specHelp`, `specUrl`,\n  `specSourceField`, `specLabelFields`,
+  `specRelated`, `specId`, `specMessage`)\n  and `defaultSpec`, plus `deriveDiagnostic
+  :: DiagnosticSpec -> Name -> Q [Dec]`,\n  an ordinary TH splice (no type-level DSL).\n-
+  `reify`-validated at splice time: `specSourceField` must be `NamedSource`,\n  each
+  `specLabelFields` name `Span`, `specId` `Text` or `DiagnosticId`, and\n  `specRelated`
+  `[SomeDiagnostic]`; `specCode`/`specUrl` literals run through\n  `mkDiagnosticCode`/`mkUrl`.
+  Any mismatch is a compile error at the splice site.\n  The default `message` (`pretty
+  . show`) requires `Show`, checked via `isInstance`.\n- Every generated method body
+  is a direct call to a shared function exported\n  from `Tadka.Internal` (`buildContext`,
+  `unsafeDiagnosticCode`, `unsafeUrl`,\n  `mkDiagnosticId`) or the field accessor
+  — the derive path and a hand-written\n  instance are two doors into the same room.
+  `mkDiagnosticId` was added to the\n  `Tadka.Internal` export list, and that module's
+  haddock now states the\n  discipline.\n- Exit criteria met: compile-fail tests (`test/compile-fail/`,
+  run by\n  `tools/check-compile-fail.sh`) reject a wrong-typed field, a non-field
+  name,\n  and an invalid code literal at compile time; a property proves a derived\n
+  \ instance renders byte-for-byte identically to a hand-written twin across all\n
+  \ three handlers; the generated instance source is captured as a golden fixture\n
+  \ and `tools/check-generated.sh` (a **required** CI check) fails the build on any\n
+  \ non-direct-call method body; and a `CONTRIBUTING.md` checklist entry records\n
+  \ the review convention.\n\n### Phase 7 — JSON Report Handler + DTO\n- Dedicated
+  `DiagnosticDTO` / `LabelDTO` with hand-written `ToJSON` — never\n  `deriving ToJSON`
+  on a `Diagnostic`-bearing type. `ToJSON` only in v1;\n  `FromJSON` is deferred.\n-
+  DTO shape per the canonical example: `code`, `severity`, `message`, `labels`\n  (each
+  `line`, `column`, `length`, `text`, and an explicit `stale`), `help`,\n  `url`,
+  `related`, `truncated`, `cycleOmitted`. The `stale` flag is derived\n  from `LabelState`
+  (stale labels carry null `line`/`column`/`length`), never\n  inferred from absence.\n-
+  `related` recurses into nested DTOs; `truncated`/`cycleOmitted` are set from\n  the
+  Phase 3 walk's `TerminationReason` — the same two values the graphical and\n  narratable
+  handlers consume, serialized instead of prose-rendered.\n- `renderJson` builds the
+  DTO inside the `'TJson` branch and is the only route\n  to `Output 'TJson = Aeson.Value`
+  (audited: no `Diagnostic` type produces a\n  `Value` except through this conversion).
+  `render` now dispatches `'TJson`.\n- Golden fixtures: `json-single` (byte-for-byte
+  to the vision example, modulo\n  the same coherent column correction as the other
+  handlers), `json-cycle`\n  (`cycleOmitted: true`), and `json-truncated` (nested
+  `truncated: true`). The\n  runner serializes the `Value` with a deterministic ordered
+  pretty-printer to\n  match the vision's canonical layout. Property suite: ok labels
+  serialize\n  `stale:false` with positions, stale labels `stale:true` with null positions,\n
+  \ and the handler is total over the shared generated set.\n\n### Phase 6 — Narratable
+  Report Handler\n- `renderNarratable` produces the accessibility-first prose form:
+  an\n  `Error,`/`Warning,`/`Advice,` opener with an optional `code X:` clause (dropped\n
+  \ when there is no code), a `Location: file, line N, column M.` sentence, a\n  `Source
+  line N: \"…\".` readout, and a `The problem is at column(s) …, labeled: …`\n  sentence
+  per label.\n- `LabelStale` has a prose equivalent of the graphical degraded marker\n
+  \ (`A labeled position could not be shown because …`, carrying the stale reason\n
+  \ and label) — never silently omitted.\n- Related chains render as prose, consuming
+  the Phase 3 walk: `Related: code —\n  message.`, a cycle sentence, and an `N more
+  related diagnostics … omitted at\n  the depth limit.` marker (with correct singular/plural).\n-
+  `toProseMarker :: Ann -> Text` interprets `Ann` at this handler's boundary\n  (inline
+  code and file names are surrounded with quotes); rendered via\n  `renderSimplyDecorated`
+  so annotated content reads naturally.\n- `render` now dispatches the `'TNarratable`
+  branch to `renderNarratable`.\n- Golden fixtures: `narr-single` (same diagnostic
+  as the graphical single-label\n  fixture, so the two handlers stay cross-consistent)
+  and `narr-truncated`\n  (a related chain past the depth limit, exercising the prose
+  truncation marker).\n  Property suite: `AnnCode` renders quoted, and the handler
+  is total over the\n  same shared generated set (now in `GenDiag`) used by Phase
+  5's smoke check.\n- Field-coverage cross-check confirmed: code, severity, location,
+  source line,\n  label text, stale reason, help, url, and related each have a narratable\n
+  \ equivalent — no field is dropped between renderers.\n\n### Phase 5 — Graphical
+  Report Handler\n- `renderGraphical` renders a full graphical report: `error[code]:
+  message`\n  header (no brackets when there is no code; `advice:`/`warning:`/`error:`
+  per\n  severity), a `┌─ file:line:col` location line, a line-numbered gutter with
+  a\n  `│` rail, source lines sliced from the single stored `NamedSource`, and\n  underline
+  carets positioned by display width via `Tadka.Internal.Width`\n  (combining marks,
+  East-Asian-width, and emoji handled).\n- Per-label underline cycling: label index
+  *i* selects palette entry *i mod p*\n  (`labelStyle`); under `ColorNever` the underline
+  character cycles `^`/`~`/`-`\n  so labels stay distinguishable in plain text. `UnicodeAscii`
+  degrades the\n  box-drawing glyphs to `|`/`+`/`-`.\n- Stale labels render as `(span
+  unavailable — source no longer matches at this\n  position)` in place of a source
+  line, in original order.\n- Related chains consume the Phase 3 walk: each `CycleOmitted`
+  node renders\n  `= related: (cycle omitted)`, each `DepthTruncated` node\n  `= related:
+  (N more related diagnostics omitted)`, and ordinary nodes render\n  a `= related:
+  code — message` summary plus their own (indented) snippet.\n- `render` now dispatches
+  the `'TGraphical` branch to `renderGraphical`.\n- Golden suite (byte-for-byte):
+  single-label, multi-label, degraded, and\n  cycle-omitted fixtures, rendered `ColorNever`/`UnicodeAlways`
+  for determinism.\n  Property suite: caret layout is non-negative, never collapses,
+  and is\n  width-aware (doubling as a width-table sync check); palette cycling equals\n
+  \ *i mod p*; and the handler is total over fuelled generated diagnostics\n  (including
+  stale labels and both id-bearing and `Nothing`-id self-cycles).\n\n  Deviations
+  from the vision's hand-drawn examples (which are internally\n  inconsistent) are
+  deliberate and documented in the fixtures: correct column\n  numbers, coherent underline-character
+  cycling, full diagnostic codes in\n  related summaries, and real line numbers rather
+  than fabricated ones.\n\n### Phase 4 — Renderer/Config Scaffolding\n- `Tadka.Internal.Config`:
+  `Target` (`TGraphical`/`TNarratable`/`TJson`,\n  closed), `ColorMode`, `UnicodeMode`,
+  opaque `Config` with `defaultConfig` and\n  the `withColorMode` / `withUnicodeMode`
+  / `withRelatedDepthLimit` /\n  `withLabelPalette` / `withTarget` setters, plus the
+  default six-colour palette.\n- Three renderer modules with opaque `GraphicalOptions`
+  / `NarratableOptions` /\n  `JsonOptions` (no public constructor or accessor) and
+  placeholder\n  `renderGraphical` / `renderNarratable` / `renderJson` bodies (Phases
+  5–7).\n- `Tadka.Internal.Render`: the `Renderer (t :: Target)` GADT (constructors\n
+  \ exported for pattern matching), the closed `Output` type family, `SomeRenderer`,\n
+  \ `render`, and `reportDiagnostic`. `selectRenderer` is the sole constructor of\n
+  \ any `*Options` value and the sole reader of `Config` — the \"one path\".\n- Property
+  suite (Phase 4): an explicit `withTarget` override always yields the\n  matching
+  renderer constructor (even after other setters), the no-target\n  default is graphical,
+  and each target's render path runs. Verified by audit\n  that `selectRenderer` is
+  the only `*Options` construction site, and by\n  negative compile check that the
+  `*Options`/`Config` constructors are\n  unreachable from `Tadka`.\n\n### Phase 3
+  — `Diagnostic` Typeclass & Related/Cycle Walk\n- `Tadka.Internal.Diagnostic`: the
+  `Diagnostic` class (only `message`\n  mandatory, no `Show` superclass; the other
+  seven methods defaulted) and the\n  `SomeDiagnostic` existential (no `Show` constraint).\n-
+  `Tadka.Internal.Related`: the single renderer-agnostic `related`-chain walk\n  (`walkRelated`)
+  producing a `RelatedTree` of `(SomeDiagnostic,\n  TerminationReason)` where `TerminationReason`
+  is `NotTerminated` /\n  `DepthTruncated` / `CycleOmitted`. Cycle detection is by
+  `diagnosticId` along\n  the current path; termination is always guaranteed by the
+  finite depth\n  budget (`defaultRelatedDepth = 8`). Factored once here so Phases
+  5–7 share it\n  rather than reimplementing.\n- Property suite (Phase 3): cycle nodes
+  are visited once and never descended;\n  a structurally infinite `Nothing`-only
+  chain still terminates by depth (v4\n  fallback intact); the walk is total and depth-bounded
+  for any fuelled tree.\n\n### Phase 2 — Span Resolution & `Context`\n- `Tadka.Internal.Span`:
+  resolution-indexed `SpanF` GADT (`Span` /\n  `ResolvedSpan`), `mkSpan`, `resolveSpan`,
+  `LineCol`, `StaleReason`,\n  `SpanError`. `ResolvedSpan` carries positions only
+  — no owned text (v5 fix);\n  its raw constructors are hidden so a resolved span
+  can only come from\n  `resolveSpan`.\n- `Tadka.Internal.Context`: `Labeled`, `LabelState`
+  (`LabelOk` / `LabelStale`),\n  `Context` (`NoContext` / `HasLabels`), `mkContext`
+  (strict), and\n  `mkContextDegrading` (total). The degrading path turns an unresolvable
+  span\n  into a `LabelStale` marker in its original position, never dropping it —
+  so\n  label count and ordering are independent of which spans stayed valid.\n- `Tadka.Internal.Context.buildContext`
+  — the single plain dispatch both the\n  derive macro (Phase 8) and manual instances
+  call; re-exported from\n  `Tadka.Internal`.\n- `Tadka.Internal.Ann` (`Ann`) pulled
+  forward from Phase 3, since `Labeled` /\n  `buildContext` need `Doc Ann`; the renderer-boundary
+  interpreters remain in\n  Phases 5–7.\n- Property suite (Phase 2): `resolveSpan`
+  bounds safety, `mkContext` Left iff a\n  span is out of bounds, the `mkContextDegrading`
+  count/order guarantee, and\n  `buildContext` dispatch. Suite reorganised into per-phase
+  modules.\n\n### Phase 1 — Primitive Types, Smart Constructors & the Width Table\n-
+  `Tadka.Internal.Types`: validated `Offset`, `Length`, `NamedSource`,\n  `DiagnosticCode`,
+  `Url`, `Severity`, and `DiagnosticId`, each with a smart\n  constructor that enforces
+  its invariant and a hidden raw constructor\n  (\"illegal states unrepresentable\").
+  Explicit custom error types\n  (`OffsetError`, `LengthError`, `SourceError`, `CodeError`,
+  `UrlError`).\n- Diagnostic-code grammar `^[a-z][a-z0-9_]*::E[0-9]{4,}$` validated
+  without a\n  regex dependency; URLs validated as absolute URIs via `network-uri`.\n-
+  `Severity` display strings centralised in `severityLabels` /\n  `severityJsonTag`
+  (one source of truth for Phases 5–7).\n- Internal `unsafeDiagnosticCode` / `unsafeUrl`
+  exposed only via\n  `Tadka.Internal` for Phase 8 splice use; verified unreachable
+  from `Tadka`.\n- `Tadka.Internal.Width`: `charWidth`, `textWidth`, `graphemeBreakProperty`,\n
+  \ and `isExtendedPictographic`, backed by a generated, checked-in\n  `Tadka.Internal.Width.Table`
+  (UCD 15.1.0), with binary-searched ranges.\n- `tools/gen-width-table.hs` implemented:
+  fetches four pinned UCD 15.1.0 files\n  and emits the table; UCD version recorded
+  in the generated header.\n- Property suite (Hedgehog): smart-constructor rejection
+  (with an independent\n  grammar oracle), `NamedSource` round-trip, and width point
+  lookups.\n- Gated `-Werror` behind a manual `werror` flag (enabled for dev/CI via\n
+  \ `cabal.project`) so `cabal check` passes and released builds stay installable.\n\n###
+  Phase 0 — Repo & Tooling Setup\n- Cabal package skeleton with the fixed public/internal
+  module layout\n  (`Tadka` public; `Tadka.Internal.*` no-compatibility-guarantee).\n-
+  Dependency pins: `text`, `prettyprinter`, `prettyprinter-ansi-terminal`,\n  `ansi-terminal`,
+  `template-haskell`, `aeson`.\n- `tools/gen-width-table.hs` scaffold (implemented
+  in Phase 1).\n- Two independently-runnable test suites (`golden`, `props`), each
+  passing\n  trivially on zero tests.\n- CI skeleton building the library and running
+  both suites independently.\n- Warnings-as-errors (`-Wall -Wcompat -Werror`) from
+  the first commit.\n"
+changelog-type: markdown
+description: |
+  # Tadka
+
+  **Tadka** is a Haskell library for structured error diagnostics and source-span reporting.
+
+  It turns ordinary error values into useful diagnostic reports with source
+  locations, labeled spans, error codes, help text, related diagnostics, and
+  underlying causes.
+
+  The same diagnostic can be rendered as graphical terminal output, accessible
+  prose, or JSON.
+
+  `tadka` is useful for compilers, parsers, command-line tools, static
+  analyzers, DSLs, and other developer tooling.
+
+  It is inspired by Rust's [`miette`](https://github.com/zkat/miette), but is
+  designed around Haskell's types and conventions.
+
+  A snapshot of the error produced by tadka is as under:
+
+
+  ![Tadka graphical diagnostic](https://raw.githubusercontent.com/Bombay-Boyz/tadka/main/assets/tadka-diagnostic.png)
+
+
+  ## Why tadka?
+
+  **Tadka** adds a reporting layer to your existing error types. It does not
+  replace your application's error-propagation mechanism.
+
+  You can keep using:
+
+  ```haskell
+  Either MyError a
+  ```
+
+  or:
+
+  ```haskell
+  ExceptT MyError IO a
+  ```
+
+  or another error-handling design. Add a `Diagnostic` instance to describe how
+  the error should be presented.
+
+  The main features are:
+
+  - Source-aware diagnostics with labeled spans.
+  - Graphical, narratable, and JSON output.
+  - Primary and secondary labels, including collections of labels.
+  - Diagnostics spanning multiple source files.
+  - Error codes, severity, help text, and documentation URLs.
+  - Related diagnostics and underlying cause chains.
+  - Bounded rendering and cycle protection for diagnostic chains.
+  - Unicode-aware source positioning, including tabs, combining characters,
+    East Asian width, and emoji.
+  - Explicit handling of stale source spans when source text has changed.
+  - Adapters for GHC `SrcSpan`, Megaparsec, and Attoparsec.
+
+  ## What it looks like
+
+  A graphical diagnostic can look along these lines:
+
+  ```text
+  error[E1001]: unexpected token
+
+   --> example.td:4:9
+    |
+  4 | let x = foo(
+    |         ^^^ expected an expression
+    |
+    = help: check the expression following `foo`
+  ```
+
+  The same diagnostic can be rendered as accessible prose or as JSON, depending
+  on the selected target.
+
+  ## Installation
+
+  Add `tadka` to your package's dependencies:
+
+  ```cabal
+  build-depends:
+      tadka
+  ```
+
+  Then import the public API:
+
+  ```haskell
+  import Tadka
+  ```
+
+  `tadka` is designed to work with ordinary Cabal projects and existing
+  `Either`, `ExceptT`, or custom error types.
+
+  ## Five-minute example
+
+  Define an ordinary error type:
+
+  ```haskell
+  data MyError
+    = UnexpectedToken Span
+    | MissingName Span
+    deriving stock (Show)
+  ```
+
+  Give it a diagnostic description:
+
+  ```haskell
+  instance Diagnostic MyError where
+    message = \case
+      UnexpectedToken _ -> "unexpected token"
+      MissingName _     -> "missing name"
+
+    context = \case
+      UnexpectedToken span ->
+        mkContext source
+          (Labeled span Primary (Just "expected an expression") :| [])
+
+      MissingName span ->
+        mkContext source
+          (Labeled span Primary (Just "a name is required here") :| [])
+
+    code = const (Just (mkDiagnosticCode "E1001"))
+  ```
+
+  Then report it:
+
+  ```haskell
+  reportDiagnostic defaultConfig err
+  ```
+
+  The reporting layer remains separate from the way your application creates,
+  returns, or handles `MyError`.
+
+  ## Deriving diagnostics
+
+  For error types where the diagnostic information follows a regular structure,
+  `tadka` provides Template Haskell support.
+
+  For example:
+
+  ```haskell
+  data ParseError = ParseError
+    { parseMessage :: Text
+    , parseSpan    :: Span
+    }
+    deriving stock (Show)
+
+  $(deriveDiagnostic defaultSpec
+      { specMessage     = [| \e -> pretty (parseMessage e) |]
+      , specSourceField = Just 'parseSpan
+      })
+  ```
+
+  The derivation API can also describe error codes, help text, URLs, primary and
+  secondary labels, related diagnostics, causes, and diagnostic identity.
+
+  ## Source spans
+
+  `tadka` keeps source text and source locations explicit.
+
+  A `Span` identifies a range in a named source. It can be resolved against the
+  source text to obtain line and column information:
+
+  ```haskell
+  resolved <- resolveSpan source span
+  ```
+
+  The implementation accounts for details that can make source positioning
+  non-trivial, including:
+
+  - tabs
+  - Unicode characters
+  - combining characters
+  - East Asian character width
+  - emoji
+  - large source offsets
+
+  When source text has changed and a span can no longer be trusted, `tadka`
+  represents that condition explicitly rather than silently presenting a
+  misleading location.
+
+  ## Labeled source context
+
+  A diagnostic can contain primary and secondary labels:
+
+  ```haskell
+  mkContext source
+    (Labeled span1 Primary (Just "the problem is here")
+      :| [Labeled span2 Secondary (Just "this is also relevant")])
+  ```
+
+  Multiple source files are supported as well.
+
+  `tadka` can also degrade stale spans when source text no longer matches the
+  coordinates stored by an error value.
+
+  ## Rendering
+
+  **Tadka** currently provides three output targets:
+
+  - `TGraphical` — terminal-oriented diagnostic output.
+  - `TNarratable` — accessible prose-oriented output.
+  - `TJson` — machine-readable JSON output.
+
+  A `Config` controls reporting behavior such as color, Unicode, hyperlinks,
+  context lines, tab width, related-diagnostic depth, label palettes, and the
+  selected target.
+
+  For example:
+
+  ```haskell
+  let config =
+        withTarget TGraphical
+        $ withColorMode ColorAuto
+        $ defaultConfig
+
+  reportDiagnostic config err
+  ```
+
+  The renderer selection and lower-level rendering APIs are also available when
+  applications need more control.
+
+  ## Existing error types
+
+  **Tadka** does not require a new application-wide error architecture.
+
+  If an application already has error types, they can remain ordinary Haskell
+  values. A `Diagnostic` instance describes how each error should be presented
+  to a human or another tool.
+
+  This separation is useful when the same error value needs to be:
+
+  - returned through `Either`
+  - propagated through `ExceptT`
+  - logged
+  - displayed in a terminal
+  - returned as JSON
+  - embedded in another diagnostic
+
+  ## Related diagnostics and causes
+
+  Diagnostics can contain related diagnostics and an underlying cause chain.
+
+  This lets an application represent structures such as:
+
+  ```text
+  top-level error
+      |
+      +-- related diagnostic
+      |
+      +-- underlying cause
+              |
+              +-- underlying cause
+  ```
+
+  **Tadka** bounds traversal depth and supports diagnostic identity so that
+  recursive or cyclic structures cannot cause unbounded rendering.
+
+  ## Parser and compiler integration
+
+  **Tadka** includes integration packages for common Haskell tooling:
+
+  ```text
+  tadka:interop-ghc
+  tadka:interop-megaparsec
+  tadka:interop-attoparsec
+  ```
+
+  These adapters allow existing parser and compiler source locations to be
+  translated into **Tadka** source-span information without requiring the
+  application to redesign its diagnostics.
+
+  ## JSON output
+
+  JSON output is intended for applications that need to pass diagnostics to
+  other programs, scripts, editor tooling, or services.
+
+  The JSON representation should be treated as an output format of the
+  corresponding Tadka release. If another program depends on its exact shape,
+  pinning the `tadka` version is the safest approach.
+
+  ## Accessibility
+
+  The narratable renderer provides a prose-oriented representation of the same
+  structured diagnostic.
+
+  This is useful when graphical terminal formatting, Unicode drawing
+  characters, or visual source annotations are not appropriate.
+
+  ## Public API boundary
+
+  The primary application-facing API is:
+
+  ```haskell
+  import Tadka
+  ```
+
+  The package also exposes internal modules for implementation-level use, but
+  they are not intended to provide the same compatibility guarantees as the
+  public API.
+
+  Applications should prefer the public `Tadka` module unless they have a
+  specific reason to use an internal module.
+
+  ## Testing and engineering
+
+  **Tadka** is tested across multiple supported GHC versions and includes:
+
+  - unit and property tests
+  - renderer tests
+  - golden tests
+  - parser/compiler interop tests
+  - generated-code checks
+  - compile-failure checks
+  - adversarial source-position cases
+  - Unicode and tab-positioning cases
+  - stale-source handling
+  - multi-source diagnostics
+  - related/cause-chain protection
+
+  The project is developed with warnings enabled and maintains explicit
+  dependency bounds.
+
+  ## Current scope
+
+  **Tadka** focuses on structured diagnostic representation and rendering.
+
+  It intentionally does not attempt to be all of the following at once:
+
+  - an application-wide error-handling framework
+  - an LSP implementation
+  - an editor integration layer
+  - a syntax-highlighting engine
+  - a general-purpose logging framework
+  - a replacement for parser-specific error types
+
+  Those concerns can be built around the diagnostic representation when an
+  application needs them.
+
+  ## License
+
+  **Tadka** is released under the Mozilla Public License 2.0 (MPL-2.0).
+
+  See [`LICENSE`](LICENSE) for the complete license text.
+
+  ## Acknowledgement
+
+  The design is inspired in part by Rust's [`miette`](https://github.com/zkat/miette),
+  particularly its approach to structured diagnostics, source snippets, labels,
+  and human-friendly reporting.
+
+  Tadka is an independent Haskell implementation designed around Haskell's
+  type system, libraries, and conventions.
+description-type: markdown
+hash: ef6feeeac9f36a4fa78d9b2c31b9c75a25dc551d6085a2a1f687137483beefad
+homepage: https://github.com/Bombay-Boyz/tadka
+latest: 2.0.0.0
+license-name: MPL-2.0
+maintainer: 259497327+Bombay-Boyz@users.noreply.github.com
+synopsis: "Structured error diagnostics & source-span reporting \nlike Rust's miette"
+test-bench-deps:
+  aeson: '>=2.1 && <2.4'
+  attoparsec: '>=0.14 && <0.15'
+  base: '>=4.18 && <4.23'
+  containers: '>=0.6 && <0.9'
+  ghc: '>=9.6 && <9.15'
+  hedgehog: '>=1.7 && <1.8'
+  megaparsec: '>=9.0 && <9.9'
+  prettyprinter: '>=1.7 && <1.8'
+  prettyprinter-ansi-terminal: '>=1.1 && <1.2'
+  tadka: '>=0'
+  template-haskell: '>=2.20 && <2.25'
+  text: '>=2.0 && <2.3'
