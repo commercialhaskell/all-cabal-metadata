@@ -10,18 +10,20 @@ all-versions:
 - '1.8'
 - '1.9'
 - '1.10'
+- '1.11'
 author: Andrzej Rybczak
 basic-deps:
   aeson: '>=2.0.0.0'
   async: '>=2.2.5'
   attoparsec: '>=0'
-  base: '>=4.19 && <4.22'
+  base: '>=4.20 && <4.23'
   bytestring: '>=0'
   containers: '>=0'
   deepseq: '>=0'
   directory: '>=0'
   filepath: '>=0'
-  ghc-lib: '>=9.12 && <9.13'
+  ghc: '>=9.10 && <9.15'
+  ghc-boot: '>=9.10 && <9.15'
   ghc-paths: '>=0'
   optparse-applicative: '>=0'
   process: '>=0'
@@ -32,6 +34,62 @@ basic-deps:
   vector: '>=0'
   yaml: '>=0'
 changelog: |
+  # ghc-tags-1.11 (2026-09-13)
+  * Generate a tag for each name that a pattern binding defines, e.g. `pairA`
+    and `pairB` in `(pairA, pairB) = ...`. Earlier versions skipped pattern
+    bindings. The tag points at the start of the pattern.
+  * Generate a tag for a standalone `deriving instance` declaration, with the
+    same kind as a class instance.
+  * Fix the tag of an associated type default, e.g. `type AT a = Maybe Int` in a
+    class body. Earlier versions read the name from the wrong side of the
+    equation and tagged the head of the right-hand side, `Maybe` in this
+    example. A jump to `Maybe` landed in the class, and `AT` had no tag for the
+    default. The tag now carries the name of the type family.
+  * Don't generate a tag for a `default` method signature in a class. Earlier
+    versions tagged it as a second class member with the same name. A jump to
+    the member then offered a line that is not its declaration.
+  * Read the configuration from `.ghc-tags.yaml` when `ghc-tags.yaml` doesn't
+    exist. When both files exist, `ghc-tags.yaml` is read and a warning names
+    the file in use.
+  * Recognise `module M (module M) where` as an export list that exports
+    everything. Earlier versions saw no matching name in such a list and marked
+    every tag with the ctags `file:` field. That field tells vim that the tag is
+    visible only inside its own file.
+  * Reject a `--threads` value below 1 with a usage error. Earlier versions ended
+    the run with an uncaught error from `setNumCapabilities`.
+  * Enable `BinaryLiterals`, `LinearTypes` and `QualifiedDo` by default, and
+    `MultilineStrings` with GHC 9.12 and later.
+  * Ignore a flag in an `OPTIONS_GHC` pragma that the bundled GHC API doesn't
+    know. Earlier versions reported an error and dropped all the tags of the file.
+    This made a source tree that is built with a newer compiler hard to index.
+  * Recover from a broken tags file instead of crashing. A header comment without
+    its closing slash and a byte that is not valid UTF-8 both ended the run with
+    an uncaught exception.
+  * Reject a tags file that is only partly readable. Earlier versions stopped at
+    the first bad line and dropped every tag after it without a word, and the
+    stored modification times stopped those tags from ever coming back. The bad
+    line is now reported and all the source files are scanned again.
+  * Decode source lines and names leniently. A byte that is not valid UTF-8 in a
+    source file or in its name no longer crashes the run.
+  * If the configuration file cannot be parsed, exit with a failure code. The
+    error message now goes to standard error. Earlier versions printed the message
+    to standard output and exited with success.
+  * Normalise `exclude_paths` before matching them against source paths. An entry
+    that begins with `./` or ends with a path separator now excludes the path it
+    names.
+  * Fix the kind characters of type families in ctags. An uppercase character now
+    always marks the family and a lowercase one the instance: `T` and `t` for a
+    type family, `D` and `d` for a data type family. Reading a tags file no longer
+    swaps `T` with `t`, and a data type family now gets `D` instead of `d`. Delete
+    the old tags file to regenerate it from scratch.
+  * Add support for GHC 9.14 and drop support for GHC 9.8.
+  * Accept `GHC2021` and `GHC2024` as values of the `language` configuration key.
+  * Support disabling a language extension in the configuration file by prefixing
+    its name with `No`, e.g. `NoStarIsType`.
+  * Drop the `ghc-lib` dependency and the `ghc-lib` flag. The parser now comes
+    from the `ghc` library of the compiler that builds `ghc-tags`. The supported
+    syntax is the syntax of that compiler.
+
   # ghc-tags-1.10 (2025-11-19)
   * Add support for GHC 9.12 and drop support for GHC 9.6.
 
@@ -86,7 +144,7 @@ changelog-type: markdown
 description: |
   # ghc-tags
 
-  [![Build Status](https://github.com/arybczak/ghc-tags/workflows/Haskell-CI/badge.svg?branch=master)](https://github.com/arybczak/ghc-tags/actions?query=branch%3Amaster)
+  [![Build Status](https://github.com/arybczak/ghc-tags/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/arybczak/ghc-tags/actions?query=branch%3Amaster)
   [![Hackage](https://img.shields.io/hackage/v/ghc-tags.svg)](https://hackage.haskell.org/package/ghc-tags)
 
   A command line tool that generates etags
@@ -114,15 +172,19 @@ description: |
   etags) or `ghc-tags -c` (for ctags) in the root directory of the project.
 
   For more complicated projects you need to create the configuration file
-  (`ghc-tags.yaml` by default). It can contain the following keys:
+  (`ghc-tags.yaml` or `.ghc-tags.yaml` by default, the first one that exists is
+  read and a warning is printed when both exist). It can contain the following
+  keys:
 
   * `source_paths` - a list of paths for `ghc-tags` to process. Directories are
     traversed recursively.
   * `exclude_paths` - a list of paths for `ghc-tags` to exclude from processing.
-  * `language` - the flavour of Haskell, either `Haskell98` or `Haskell2010`.
-  * `extensions` - a list of GHC language extensions to enable when parsing. Note
-    that GHC needs much less extensions for parsing alone, so you should almost
-    never need to override this.
+  * `language` - the flavour of Haskell, one of `Haskell98`, `Haskell2010`,
+    `GHC2021` or `GHC2024`.
+  * `extensions` - a list of GHC language extensions to enable when parsing. A
+    `No` prefix disables the extension instead, e.g. `NoStarIsType`. Note that GHC
+    needs much less extensions for parsing alone, so you should almost never need
+    to override this.
   * `cpp_includes` - include paths for the C pre-processor.
   * `cpp_options` - other options for the C pre-processor, e.g. defines (usually
     undefined `MIN_VERSION_x` macros will go here).
@@ -132,7 +194,7 @@ description: |
 
   **Note:** it is possible to specify multiple project configurations in the
   configuration file by separating them with `---`. For example, here is a
-  configuration for GHC on Linux (compiler, utils and base):
+  configuration for GHC on Linux (the compiler, the boot libraries and haddock):
 
   ```yaml
   source_paths:
@@ -141,26 +203,32 @@ description: |
   cpp_includes:
   - _build/stage1/compiler/build
   - compiler
-  - includes/dist-derivedconstants/header
 
   ---
 
   source_paths:
   - libraries/base
+  - libraries/ghc-internal
 
   exclude_paths:
-  - libraries/base/GHC/Conc/POSIX/Const.hsc
-  - libraries/base/GHC/Event/Windows.hsc
-  - libraries/base/GHC/Event/Windows/ConsoleEvent.hsc
-  - libraries/base/GHC/Event/Windows/FFI.hsc
-  - libraries/base/GHC/IO/Windows/Handle.hsc
-  - libraries/base/System/CPUTime/Windows.hsc
+  - libraries/base/src/System/CPUTime/Javascript.hs
+  - libraries/base/src/System/CPUTime/Windows.hsc
   - libraries/base/tests
+  - libraries/ghc-internal/src/GHC/Internal/Conc/POSIX/Const.hsc
+  - libraries/ghc-internal/src/GHC/Internal/Event/Windows.hsc
+  - libraries/ghc-internal/src/GHC/Internal/Event/Windows/ConsoleEvent.hsc
+  - libraries/ghc-internal/src/GHC/Internal/Event/Windows/FFI.hsc
+  - libraries/ghc-internal/src/GHC/Internal/IO/Windows/Handle.hsc
+  - libraries/ghc-internal/src/GHC/Internal/JS/Prim.hs
 
   cpp_includes:
-  - _build/stage1/libraries/base/build/include
-  - includes
-  - libraries/base/include
+  - _build/stage1/libraries/ghc-internal/build/include
+  - _build/stage1/rts/build/include
+  - libraries/ghc-internal/include
+  - rts/include
+
+  cpp_options:
+  - -DBIGNUM_GMP
 
   ---
 
@@ -179,13 +247,45 @@ description: |
   - libraries/ghc-boot
   - libraries/ghc-boot-th
   - libraries/ghc-compact
-  - libraries/ghc-heap
+  - libraries/ghc-experimental
   - libraries/ghc-prim
+  - libraries/ghc-platform
+  - libraries/template-haskell
 
   exclude_paths:
   - libraries/ghc-compact/tests
-  - libraries/ghc-heap/tests
   - libraries/ghc-prim/tests
+
+  ---
+
+  source_paths:
+  - libraries/ghc-heap
+
+  cpp_includes:
+  - _build/stage1/rts/build/include
+  - rts/include
+
+  cpp_options:
+  - -DMIN_TOOL_VERSION_ghc(x,y,z)=1
+
+  exclude_paths:
+  - libraries/ghc-heap/tests
+
+  ---
+
+  source_paths:
+  - utils/haddock/haddock
+  - utils/haddock/haddock-api
+  - utils/haddock/haddock-library
+  - utils/haddock/driver
+
+  cpp_includes:
+  - _build/stage1/rts/build/include
+  - rts/include
+
+  exclude_paths:
+  - utils/haddock/haddock-api/src/Haddock/InterfaceFile.hs
+  - utils/haddock/haddock-api/src/Haddock/Types.hs
   ```
 
   ## Acknowledgments
@@ -193,9 +293,9 @@ description: |
   Thanks to Marcin Szamotulski for his work on
   [ghc-tags-plugin](https://github.com/coot/ghc-tags-plugin) `ghc-tags` is based on.
 description-type: markdown
-hash: b6a422d6af64b86cb767f8df07b3d0b11865ec4f3fcf5032e9e81f39baace26f
+hash: 5b6636c62263faebf83f1071c18aa2d84631b2bbeffd39dad27918fc40126cdf
 homepage: https://github.com/arybczak/ghc-tags
-latest: '1.10'
+latest: '1.11'
 license-name: MPL-2.0
 maintainer: andrzej@rybczak.net
 synopsis: Utility for generating ctags and etags with GHC API.
