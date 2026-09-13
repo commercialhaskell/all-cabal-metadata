@@ -1,5 +1,6 @@
 all-versions:
 - 1.2.0.0
+- 1.3.0.0
 author: Marius Georgescu
 basic-deps:
   aeson: ^>=2.2
@@ -20,16 +21,136 @@ basic-deps:
   text: ^>=2.0
   vector: ^>=0.13
   web3: ^>=1.1
-  web3-provider: ^>=1.1
+  web3-provider: '>=1.1 && <1.2'
 changelog: |
   # Revision history for solana-haskell-sdk
+
+  ## 1.3.0.0 -- 2026-09-13
+
+  * Fixed (security): `readSigningKeyFromFile` accepted key files of any length
+    and silently wrapped out-of-range values, producing a malformed
+    `SolanaPrivateKey` whose use in `dsign`/`sign` read past the end of the key
+    buffer in the ed25519 C code. The loader now decodes the file as a JSON
+    array of exactly 64 bytes and verifies the public-key half against the seed
+    (as `solana-sdk`'s `Keypair::from_bytes` does), throwing an `IOError`
+    otherwise.
+  * Added `mkPrivateKeyFromBytes`, a total constructor performing those checks
+    on raw bytes.
+  * Changed: `unsafeSolanaPublicKeyRaw` and `unsafeSolanaPrivateKeyRaw` now call
+    `error` unless given exactly 32 / 64 bytes, matching the other `unsafe*`
+    constructors; `mkPrivateKeyFromString` (and so `unsafeSolanaPrivateKey`)
+    applies the same public-key-half check as `mkPrivateKeyFromBytes`.
+  * Changed (breaking): `SolanaPublicKey`, `SolanaPrivateKey` and
+    `SolanaSignature` no longer derive `Generic`, which let generic code build
+    unchecked values behind the abstract constructors.
+  * Fixed: `newTransaction` now names its first signing key as the fee payer
+    (via `newTransactionIntentWithPayer`), so transactions whose only signer is
+    a read-only authority -- a memo-only transaction, or a standalone SPL
+    `mintTo`/`transferChecked` -- are no longer rejected by the node with
+    "Transaction failed to sanitize accounts offsets correctly". The first key
+    is forced writable and pinned to account 0 even if no instruction
+    references it (sponsored fees), the remaining keys may be passed in any
+    order, an empty key list throws `userError`, and an unused key is reported
+    as a `CompileException` before the send. Output is byte-identical for every
+    transaction that was already valid.
+  * Added `compileV0MessageWithPayer` and `newV0TransactionIntentWithPayer`,
+    the explicit-fee-payer counterparts of the v0 compiler and signer
+    (mirroring the Rust SDK's `v0::Message::try_compile(payer, ..)`), plus
+    `mkNewMessageWithPayer` and `orderSigningKeys` as exported building blocks.
+  * Fixed: `newNonceTransaction` now submits with `preflightCommitment =
+    "confirmed"` (new `cfgNonceSendConfirmed`), matching the commitment it reads
+    the nonce account at. Previously the node's default `finalized` preflight
+    rejected the send with `BlockhashNotFound` whenever the nonce account had
+    been created or advanced within the last ~32 slots -- i.e. on every
+    back-to-back use -- unless the caller first waited for finalization.
+  * Fixed: `AccountData`'s `FromJSON` decoded a bare `data` string as (lenient)
+    base64. Per the RPC account-data format a bare string is the node's legacy
+    `binary` encoding, i.e. base58, so `getAccountInfo'`, `getProgramAccounts'`
+    and `getTokenAccountsByOwner'`/`ByDelegate'` called with a configuration
+    that omits `encoding` (or sets `"binary"`), and `getMultipleAccounts'` with
+    `"binary"`, returned silently corrupted bytes for accounts of up to 128
+    bytes. Bare strings now decode strictly as
+    base58 (invalid input is a parse error) and `AccountData` round-trips
+    through its own `ToJSON`; the `[data, "base64"]` form and the
+    base64-requesting wrappers are unchanged.
+  * Fixed: `AccountData` now parses the `{program, parsed, space}` object a
+    node returns for `encoding: "jsonParsed"` when it has a parser for the
+    owner program (nonce, SPL Token, stake, vote, sysvars, ...). Previously
+    every such response failed with `parsing AccountDataArray failed, expected
+    Array, but encountered Object` through `getAccountInfo'`,
+    `getMultipleAccounts'`, `getProgramAccounts'`, `getTokenAccountsByOwner'`
+    and `getTokenAccountsByDelegate'`. The base64 pair the node falls back to
+    when no parser exists still decodes to `AccountDataBinary`.
+  * Changed (breaking): `AccountDataJSON` now carries `accDataProgram ::
+    String`, `accDataParsed :: Data.Aeson.Value` and `accDataSpace :: Word64`
+    instead of `accDataObj :: String`, and its `ToJSON` instance emits the
+    node's object. The `["...","json"]` / `["...","jsonParsed"]` pair forms,
+    which no node emits, are no longer accepted. `base64+zstd` account data is
+    still rejected as unsupported.
+  * Fixed: `createMasterEditionV3` now marks the metadata account (index 5)
+    writable, matching the official `mpl-token-metadata` client. Previously the
+    on-chain program silently left `token_standard` un-upgraded
+    (`FungibleAsset` instead of `NonFungible`) when the instruction was sent on
+    its own. The builder's account metas are now golden-tested against the
+    crate (`master-edition-some-accounts`).
+  * Fixed: `compileInstruction`, and every message compiler built on it
+    (`newMessage`, `newTransactionIntent`, `newTransactionIntentWithPayer`, the
+    durable-nonce variants, `compileV0Message`, `newV0TransactionIntent`, and
+    the `SolanaWeb3` senders), silently wrapped account indices at or past 256
+    into the wrong byte, producing a message the node rejects; such messages
+    now fail with a `CompileException` (`MissingIndex` carrying an "account
+    index overflow" message), mirroring the Rust SDK's
+    `CompileError::AccountIndexOverflow`. Messages with up to 256 account keys
+    (static plus table-loaded for v0) are unaffected.
+  * Changed (breaking): `Context.apiVersion` is now `Maybe Text`,
+    `PerformanceSample.numNonVoteTransactions` is now `Maybe Word64` and
+    `SolanaVersion.feature_set` is now `Maybe Word32`, matching the upstream
+    schema where older nodes and some RPC proxies omit `apiVersion` and older
+    performance samples report `numNonVoteTransactions` as `null`; previously
+    such responses failed to parse.
+  * WebSocket: a `signatureNotification` whose value lacks the `err` key is now
+    rejected by `parseWsMessage` (and reported as `Left` by `awaitSignature`)
+    instead of being treated as a successful confirmation.
+  * Docs: `getBlock`/`getBlock'`/`getBlockTime` now document that skipped,
+    pruned and not-yet-available slots are JSON-RPC errors (-32007/-32001/
+    -32004) raised as a `JsonRpcException` that `runWeb3'` does not catch,
+    rather than `Nothing`; module headers added for `Core.Instruction`,
+    `NativePrograms.ComputeBudget`, `NativePrograms.SystemProgram` and
+    `SplPrograms.Memo`; the `SolanaWeb3` header reflects the integration suite;
+    CONTRIBUTING links defined.
+  * Added `confirmFinalized` to `SolanaWeb3`: polls `getSignatureStatuses` up
+    to 60 s until a signature is `finalized`, throwing on an on-chain error or
+    timeout (previously an integration-suite-only helper). Use it before
+    `printBalances`/`getBalance`, which read at the node's default `finalized`
+    commitment; `confirmTransaction` returns at `confirmed`, so balances read
+    right after it can still show pre-transaction state.
+  * README usage examples are now complete flows that run as-is against
+    `solana-test-validator`: payers are funded and finalized, the SPL example
+    creates its own mint and token account, and every flow finalizes before
+    reading state. The SPL and priority-fee examples are built as the
+    `example-spl-transfer` and `example-priority-fee` executables, and a unit
+    test keeps the README text identical to them. The README now states that
+    the examples also need the `web3-provider` package (`Network.Web3.Provider`)
+    in `build-depends`.
+  * Corrected the 1.2.0.0 note below, which overstated RPC golden-test coverage.
+    `tools/rpc-record` now records every RPC method the SDK binds except
+    `requestAirdrop`, `sendTransaction` and `simulateTransaction`, aborts
+    instead of silently skipping a method the node rejects, and requires
+    `solana-test-validator --slots-per-epoch 32` so `getInflationReward` can be
+    captured; `Test.RPC.Parsers` now asserts every RPC-layer `FromJSON`
+    instance, including default-encoding (base58) and `jsonParsed` account data.
+  * The integration suite gains cases for the fixes above: memo-only sends
+    through `newTransaction` (legacy and v0), the README SPL and priority-fee
+    flows, back-to-back durable-nonce use right after a confirmed create or
+    advance, default-encoding and `jsonParsed` account reads, and `getBlock` on
+    a slot holding no block.
 
   ## 1.2.0.0 -- 2026-08-03
 
   * Added on-chain account-state decoders (SPL token accounts and mints, address lookup tables, stake and nonce accounts, Metaplex metadata) with typed SolanaWeb3 fetch helpers; decoded lookup tables feed compileV0Message directly.
   * Added developer-experience helpers: explicit fee-payer transactions with automatic signature ordering (sponsored fees supported), a durable-nonce transaction flow, and priority-fee estimation.
   * Added an opt-in local-validator integration test suite (`integration-tests`, behind the `integration` cabal flag) covering SOL and sponsored transfers, the SPL token lifecycle, durable nonces, address lookup tables with v0 transactions, priority fees, and WebSocket confirmation; the suite skips itself when no validator is running.
-  * Added golden tests for the JSON-RPC response parsers, replaying 37 responses recorded from a live validator by `tools/rpc-record`, so every `FromJSON` instance is asserted against JSON a node actually sends.
+  * Added golden tests for the JSON-RPC response parsers, replaying 37 responses recorded from a live validator by `tools/rpc-record` (36 of the SDK's 52 RPC methods; every RPC-layer `FromJSON` instance except `HighestSnapshotSlot`, `PrioritizationFee` and `InflationReward`; account data in `base64` encoding only -- see the 1.3.0.0 entry).
   * Added Solana PubSub (WebSocket) support in `Network.Solana.RPC.WebSocket`: signature and account subscribe/unsubscribe requests, notification parsing, and `awaitSignature` — a push-based confirmation that replaces polling. The module is transport-agnostic (`WsTransport`), so the library gains no new dependency and works with both `ws://` and `wss://` endpoints.
 
   ## 1.1.0.0 -- 2026-08-01
@@ -171,7 +292,7 @@ description: "\n<p align=\"center\">\n  <a href=\"https://solana.com/docs\">\n  
   tables, stake and nonce accounts, Metaplex metadata)\n- [x] PubSub (WebSocket) signature
   and account subscriptions, with push-based confirmation\n- [x] Serialization verified
   byte-for-byte against the official Rust crates (solana-sdk, spl-token, mpl-token-metadata)
-  (golden-vector tests)\n\n### Release status\n\nThe current stable release is **v1.2.0.0**.
+  (golden-vector tests)\n\n### Release status\n\nThe current stable release is **v1.3.0.0**.
   Serialization is verified byte-for-byte against the official Rust SDK by golden-vector
   tests (see test/fixtures/ and [tools/README.md](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/tools/README.md)).\n\n##
   Usage Examples\n\n### Simple transfer\n\nThis example demonstrates how to use the
@@ -180,79 +301,111 @@ description: "\n<p align=\"center\">\n  <a href=\"https://solana.com/docs\">\n  
   and transferring SOL tokens.\n\nIn the provided sample:\n\n1. We start by generating
   a new keypair to act as the transaction sender and fee payer.\n\n2. We connect to
   a local Solana validator using an HTTP provider.\n\n3. The newly generated keypair
-  receives an airdrop of 10 SOL to ensure it has sufficient funds.\n\n4. We define
-  a recipient's public address from a base58 encoded string.\n\n5. We **construct**,
-  **sign** and **submit** the transaction by defining the signers and the transaction's
-  list of instructions with their parameters.\n\nBefore and after performing the transfer
-  of 1 SOL to the recipient, we check and print the account balances to verify the
-  transaction's success.\n\nThis straightforward example highlights the convenience
-  and expressiveness of Haskell when building decentralized applications on Solana.\n\n>
-  The examples use `GHC2021` (this package's `default-language`). If you compile them
-  under `Haskell2010`, additionally enable `NumericUnderscores` and `ImportQualifiedPost`.\n\n```haskell\n{-#
-  LANGUAGE OverloadedStrings #-}\n\nmodule Main where\n\nimport Control.Monad (void)\nimport
-  Control.Monad.IO.Class (liftIO)\nimport Network.Solana.Core.Crypto\nimport Network.Solana.NativePrograms.SystemProgram
+  receives an airdrop of 10 SOL, and we wait for it to be finalized (later sends are
+  simulated against the finalized bank).\n\n4. We define a recipient's public address
+  from a base58 encoded string.\n\n5. We **construct**, **sign** and **submit** the
+  transaction by defining the signers and the transaction's list of instructions with
+  their parameters.\n\nBefore and after performing the transfer of 1 SOL to the recipient,
+  we check and print the account balances to verify the transaction's success. The
+  second read happens after waiting for the transfer to finalize: `getBalance` reads
+  at the node's default commitment, `finalized`, so a balance read right after a merely
+  `confirmed` transaction would still show the old value.\n\nThis straightforward
+  example highlights the convenience and expressiveness of Haskell when building decentralized
+  applications on Solana.\n\n> The examples use `GHC2021` (this package's `default-language`).
+  If you compile them under `Haskell2010`, additionally enable `NumericUnderscores`
+  and `ImportQualifiedPost`.\n\n> The programs need `solana-haskell-sdk` and `web3-provider`
+  (the package providing `Network.Web3.Provider`, i.e. `runWeb3'` and `HttpProvider`)
+  in `build-depends`. RPC failures such as a rejected preflight simulation are raised
+  as a `JsonRpcException` from `runWeb3'`, not returned as `Left`. Each example is
+  also built as an executable of this package (`solana-haskell-sdk`, `example-spl-transfer`,
+  `example-priority-fee`) and runs as-is against `solana-test-validator`.\n\n```haskell\n{-#
+  LANGUAGE OverloadedStrings #-}\n\nmodule Main where\n\nimport Control.Monad.IO.Class
+  (liftIO)\nimport Network.Solana.Core.Crypto\nimport Network.Solana.NativePrograms.SystemProgram
   qualified as SystemProgram\nimport Network.Solana.RPC.HTTP.Transaction\nimport Network.Solana.SolanaWeb3\nimport
   Network.Web3.Provider\n\nmain :: IO ()\nmain = do\n  -- Generate keypairs for fee
   payer (sender)\n  (myPublicKey, myPrivateKey) <- createSolanaKeyPair\n\n  -- Create
   Connection, local validator in this example\n  result <- runWeb3' (HttpProvider
-  \"http://127.0.0.1:8899\") $ do\n    -- Fund fee payer\n    void $ requestAirdrop
-  myPublicKey 10_000_000_000\n    wait 15 -- Wait 15 seconds be sure the tx was confirmed\n\n
+  \"http://127.0.0.1:8899\") $ do\n    -- Fund the fee payer and wait until the airdrop
+  is finalized: sends are\n    -- preflighted against the finalized bank, and balances
+  are read there too\n    requestAirdrop myPublicKey 10_000_000_000 >>= confirmFinalized\n\n
   \   -- Define recipient's address from a base58-encoded string\n    let recipient
   = \"A988FuUtUVk8jMUuVc1ccaoTA3VS9CB4dkEf9XUAUqV4\"\n\n    -- Check balance\n    printBalances
   [myPublicKey, recipient]\n\n    -- Create a new transaction.\n    txId <-\n      newTransaction\n
-  \       [myPrivateKey] -- Signing keys (with all required signers)\n        -- List
-  of instructions\n        [ SystemProgram.transfer\n            myPublicKey -- sender
-  address\n            recipient -- recipient address\n            1_000_000_000 --
-  amount to transfer 1 SOL\n        ]\n    liftIO $ putStrLn (\"Transaction sent:
-  \" <> show txId)\n\n    void $ confirmTransaction txId\n    -- Check balance\n    printBalances
-  [myPublicKey, recipient]\n\n  either (\\e -> putStrLn (\"RPC error: \" <> show e))
-  pure result\n```\n\n### SPL token transfer (Associated Token Accounts)\n\nTokens
-  live in *associated token accounts* (ATAs) — program-derived addresses computed
-  from the wallet and the mint. This example derives both ATAs with `getAssociatedTokenAddress`,
-  creates the recipient's ATA if missing (idempotent, safe to include unconditionally),
-  and moves tokens with the decimals-checked `transferChecked`.\n\n```haskell\n{-#
-  LANGUAGE OverloadedStrings #-}\n\nmodule Main where\n\nimport Control.Monad (void)\nimport
-  Data.Maybe (fromJust)\nimport Network.Solana.Core.Crypto\nimport Network.Solana.SolanaWeb3\nimport
+  \       [myPrivateKey] -- Signing keys (the first key pays the fee)\n        --
+  List of instructions\n        [ SystemProgram.transfer\n            myPublicKey
+  -- sender address\n            recipient -- recipient address\n            1_000_000_000
+  -- amount to transfer 1 SOL\n        ]\n    liftIO $ putStrLn (\"Transaction sent:
+  \" <> show txId)\n\n    -- Wait for finalization (throws if the transaction failed
+  on-chain or\n    -- timed out), so the balances below reflect the transfer\n    confirmFinalized
+  txId\n    printBalances [myPublicKey, recipient]\n\n  either (\\e -> putStrLn (\"RPC
+  error: \" <> show e)) pure result\n```\n\n### SPL token transfer (Associated Token
+  Accounts)\n\nTokens live in *associated token accounts* (ATAs) — program-derived
+  addresses computed from the wallet and the mint. This example first creates a mint
+  and funds the sender's token account (so it runs as-is against a local validator),
+  then derives both ATAs with `getAssociatedTokenAddress`, creates the recipient's
+  ATA if missing (idempotent, safe to include unconditionally), and moves tokens with
+  the decimals-checked `transferChecked`.\n\n```haskell\n{-# LANGUAGE OverloadedStrings
+  #-}\n\nmodule Main where\n\nimport Control.Monad.IO.Class (liftIO)\nimport Data.Maybe
+  (fromJust)\nimport Network.Solana.Core.Crypto\nimport Network.Solana.NativePrograms.SystemProgram
+  qualified as SystemProgram\nimport Network.Solana.RPC.HTTP.Tokenomics (getMinimumBalanceForRentExemption)\nimport
+  Network.Solana.RPC.HTTP.Transaction (requestAirdrop)\nimport Network.Solana.SolanaWeb3\nimport
   Network.Solana.SplPrograms.AssociatedTokenAccount qualified as Ata\nimport Network.Solana.SplPrograms.Token
   qualified as Token\nimport Network.Web3.Provider\n\nmain :: IO ()\nmain = do\n  (myPublicKey,
-  myPrivateKey) <- createSolanaKeyPair\n\n  void $ runWeb3' (HttpProvider \"http://127.0.0.1:8899\")
-  $ do\n    let mint = \"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\" -- the token's
-  mint address\n        recipient = \"A988FuUtUVk8jMUuVc1ccaoTA3VS9CB4dkEf9XUAUqV4\"
-  -- recipient wallet\n\n        -- ATAs are PDAs of (wallet, token program, mint):
-  derived, not generated.\n        sourceAta = fromJust (Ata.getAssociatedTokenAddress
-  myPublicKey mint)\n        destinationAta = fromJust (Ata.getAssociatedTokenAddress
-  recipient mint)\n\n    void $\n      newTransaction\n        [myPrivateKey]\n        [
-  -- Create the recipient's token account if it does not exist yet (no-op otherwise).\n
-  \         Ata.createAssociatedTokenAccountIdempotent\n            myPublicKey --
-  funder (pays rent)\n            recipient -- wallet that will own the ATA\n            mint,\n
-  \         -- Transfer 1 token (here: 6 decimals); mint and decimals are verified
-  on-chain.\n          Token.transferChecked\n            sourceAta -- source token
-  account\n            mint -- token mint\n            destinationAta -- destination
-  token account\n            myPublicKey -- owner of the source account\n            []
-  -- extra multisig signers (none)\n            1_000_000 -- amount in base units\n
-  \           6 -- decimals of the mint\n        ]\n```\n\n### Priority fees and memo\n\nCompute
+  myPrivateKey) <- createSolanaKeyPair\n  (mint, mintPrivateKey) <- createSolanaKeyPair
+  -- the new token's mint account\n\n  result <- runWeb3' (HttpProvider \"http://127.0.0.1:8899\")
+  $ do\n    requestAirdrop myPublicKey 10_000_000_000 >>= confirmFinalized\n\n    let
+  recipient = \"A988FuUtUVk8jMUuVc1ccaoTA3VS9CB4dkEf9XUAUqV4\" -- recipient wallet\n\n
+  \       -- ATAs are PDAs of (wallet, token program, mint): derived, not generated.\n
+  \       sourceAta = fromJust (Ata.getAssociatedTokenAddress myPublicKey mint)\n
+  \       destinationAta = fromJust (Ata.getAssociatedTokenAddress recipient mint)\n\n
+  \   -- Setup: create a mint with 6 decimals (we are its mint authority), our own\n
+  \   -- token account, and mint 10 tokens into it. The mint keypair co-signs\n    --
+  because createAccount requires the new account's signature.\n    mintRent <- getMinimumBalanceForRentExemption
+  82 -- a mint account is 82 bytes\n    setupTx <-\n      newTransaction\n        [myPrivateKey,
+  mintPrivateKey]\n        [ SystemProgram.createAccount myPublicKey mint mintRent
+  82 Token.tokenProgramId,\n          Token.initializeMint2 mint 6 myPublicKey Nothing,\n
+  \         Ata.createAssociatedTokenAccount myPublicKey myPublicKey mint,\n          Token.mintTo
+  mint sourceAta myPublicKey [] 10_000_000\n        ]\n    confirmFinalized setupTx\n\n
+  \   -- Transfer 1 token to the recipient\n    transferTx <-\n      newTransaction\n
+  \       [myPrivateKey]\n        [ -- Create the recipient's token account if it
+  does not exist yet (no-op otherwise).\n          Ata.createAssociatedTokenAccountIdempotent\n
+  \           myPublicKey -- funder (pays rent)\n            recipient -- wallet that
+  will own the ATA\n            mint,\n          -- Transfer 1 token (6 decimals);
+  mint and decimals are verified on-chain.\n          Token.transferChecked\n            sourceAta
+  -- source token account\n            mint -- token mint\n            destinationAta
+  -- destination token account\n            myPublicKey -- owner of the source account\n
+  \           [] -- extra multisig signers (none)\n            1_000_000 -- amount
+  in base units\n            6 -- decimals of the mint\n        ]\n    confirmFinalized
+  transferTx\n\n    -- Read back the recipient's token account (decoded on-chain state)\n
+  \   account <- getTokenAccount destinationAta\n    liftIO $ putStrLn (\"Recipient
+  token balance: \" <> show (Token.taAmount <$> account))\n\n  either (\\e -> putStrLn
+  (\"RPC error: \" <> show e)) pure result\n```\n\n### Priority fees and memo\n\nCompute
   Budget instructions raise a transaction's scheduling priority by paying a fee per
   compute unit; a memo attaches a signed, human-readable note recorded on-chain. Both
-  are ordinary `Instruction`s added to the same instruction list.\n\n```haskell\n{-#
-  LANGUAGE OverloadedStrings #-}\n\nmodule Main where\n\nimport Control.Monad (void)\nimport
+  are ordinary `Instruction`s added to the same instruction list. The payer is funded
+  first.\n\n```haskell\n{-# LANGUAGE OverloadedStrings #-}\n\nmodule Main where\n\nimport
   Network.Solana.Core.Crypto\nimport Network.Solana.NativePrograms.ComputeBudget qualified
   as ComputeBudget\nimport Network.Solana.NativePrograms.SystemProgram qualified as
-  SystemProgram\nimport Network.Solana.SolanaWeb3\nimport Network.Solana.SplPrograms.Memo
-  qualified as Memo\nimport Network.Web3.Provider\n\nmain :: IO ()\nmain = do\n  (myPublicKey,
-  myPrivateKey) <- createSolanaKeyPair\n\n  void $ runWeb3' (HttpProvider \"http://127.0.0.1:8899\")
-  $ do\n    let recipient = \"A988FuUtUVk8jMUuVc1ccaoTA3VS9CB4dkEf9XUAUqV4\"\n\n    void
-  $\n      newTransaction\n        [myPrivateKey]\n        [ ComputeBudget.setComputeUnitLimit
-  200_000, -- cap the compute units this tx may use\n          ComputeBudget.setComputeUnitPrice
+  SystemProgram\nimport Network.Solana.RPC.HTTP.Transaction (requestAirdrop)\nimport
+  Network.Solana.SolanaWeb3\nimport Network.Solana.SplPrograms.Memo qualified as Memo\nimport
+  Network.Web3.Provider\n\nmain :: IO ()\nmain = do\n  (myPublicKey, myPrivateKey)
+  <- createSolanaKeyPair\n\n  result <- runWeb3' (HttpProvider \"http://127.0.0.1:8899\")
+  $ do\n    requestAirdrop myPublicKey 10_000_000_000 >>= confirmFinalized\n\n    let
+  recipient = \"A988FuUtUVk8jMUuVc1ccaoTA3VS9CB4dkEf9XUAUqV4\"\n\n    txId <-\n      newTransaction\n
+  \       [myPrivateKey]\n        [ ComputeBudget.setComputeUnitLimit 200_000, --
+  cap the compute units this tx may use\n          ComputeBudget.setComputeUnitPrice
   10_000, -- priority fee: micro-lamports per compute unit\n          SystemProgram.transfer
   myPublicKey recipient 1_000_000_000, -- 1 SOL\n          Memo.buildMemo \"thanks
-  for the coffee\" [myPublicKey] -- signed on-chain note\n        ]\n```\n\n## Contributing\n\nWe
-  welcome all contributors! See [contributing guide](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/CONTRIBUTING.md)
+  for the coffee\" [myPublicKey] -- signed on-chain note\n        ]\n    confirmFinalized
+  txId\n    printBalances [recipient]\n\n  either (\\e -> putStrLn (\"RPC error: \"
+  <> show e)) pure result\n```\n\n## Contributing\n\nWe welcome all contributors!
+  See [contributing guide](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/CONTRIBUTING.md)
   for how to get started.\n\n## Credits\n\nCreated and maintained by Marius Georgescu.\n\n##
   License\n\n[Apache-2.0](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/LICENSE)\n"
 description-type: markdown
-hash: dc382f5aa63c16df178b40b356376233a3226f3f251d48a980f16df9b93317d7
+hash: 7970d47ff417a581ae51c66b29384f32bf05741ec1778148922ed8c74849ecb0
 homepage: https://github.com/mariusgeorgescu/solana-haskell-sdk
-latest: 1.2.0.0
+latest: 1.3.0.0
 license-name: Apache-2.0
 maintainer: georgescumarius@live.com
 synopsis: 'Solana SDK: transaction building, signing, program clients, and JSON-RPC.'
