@@ -1,12 +1,58 @@
 all-versions:
 - 0.0.0.1
 - 0.0.0.2
+- 0.0.0.3
 author: Jeremy Nuttall
 basic-deps:
   base: '>=4.17 && <4.23'
   sdl3-bindgen-sys: '>=0'
 changelog: |
   # Changelog — sdl3-bindgen-sys
+
+  ## Unreleased
+
+  ## 0.0.0.3 - 2026-09-13
+
+  ### Added
+
+  - Cabal flag `abi-assertions-exact` (default off): asserts every `sizeof`
+    exactly, including the union-member structs the default checks as a
+    prefix. For maintainers checking the bindings against a newer SDL;
+    consumers should leave it off.
+
+  ### Fixed
+
+  - ABI check fixed for every SDL from 3.2.0 to 3.4.16. In 3.4.16,
+    `SDL_PenProximityEvent` gained a new `pen_state` member, which caused
+    the previous (stricter) ABI check to fail on the new version.
+
+  ### Changed
+
+  - ABI assertions: structs that are read only inside a named union
+    (e.g. `SDL_Event` or `SDL_HapticEffect`) are now checked as a prefix
+    of the total layout instead of an exact check. Field offsets and
+    alignments are enforced, but `sizeof` is allowed to increase. The union's
+    size renders this safe, since Haskell must allocate enough room for the whole
+    union, and we still enforce that it is sized equivalently.
+  - ABI assertions: below SDL 3.2.12, `SDL_MouseWheelEvent`'s pre-growth
+    layout (48 bytes, 8-aligned) is asserted instead of nothing.
+  - ABI assertion messages state the SDL version the bindings were
+    generated from and how to report or fix a mismatch.
+  - README: `ABI verification` section (every assertion message pointed
+    at it; it did not exist).
+  - README: a native Windows `cabal` recipe (Git Bash against MSYS2
+    UCRT64) next to the Stack one, as reported working by a user.
+  - README: correct the function-like macro caveat. hs-bindgen translates
+    macro bodies to Haskell functions on a best-effort basis; 31 of SDL's
+    function-like macros already ship in the raw `SDL3.Sys.Bindgen.*`
+    layer (the curated layer does not alias them yet, and pending
+    hs-bindgen#2184 they take C integer types rather than SDL newtypes),
+    and the rest are unbound rather than unbindable.
+  - README: attribute the variadic gap to Haskell's FFI rather than to
+    hs-bindgen.
+
+  Thanks to the hs-bindgen team for the correction on [r/haskell](https://www.reddit.com/r/haskell/comments/1v960p9/ann_sdl3bindgensys_machinegenerated_lowlevel/)
+  and for their [survey of SDL's macros](https://github.com/dschrempf/hs-bindgen-sdl-survey).
 
   ## 0.0.0.2 - 2026-07-26
 
@@ -16,6 +62,7 @@ changelog: |
 
   - README: per-platform install list in Quick start and a
     `Windows set up` section.
+  - Add @oddron as a contributor.
 
   Thanks to @oddron in the Haskell GameDev Discord for giving the library
   a try on Windows!
@@ -78,8 +125,8 @@ description: |
     and notes from the code generator's curation layer.
   - **ABI-verified:** A generated translation unit of C `_Static_assert`s
     verifies the library's baked layouts against _your_ SDL at every
-    build — divergence is a compile error naming the declaration, not
-    memory corruption.
+    build. Divergence is a compile error naming the declaration, not
+    memory corruption. See [ABI verification](#abi-verification) for more.
 
   ## Quick start
 
@@ -166,7 +213,7 @@ description: |
   1. Run the `pacman` commands above through `stack exec -- pacman ...` so
      that the packages are installed in `stack`'s MSYS2.
   2. Add `msys-environment: UCRT64` to your `stack.yaml`.
-  3. Add `sdl3-bindgen-sys-0.0.0.2` to `extra-deps` in your `stack.yaml`. Running
+  3. Add `sdl3-bindgen-sys-0.0.0.3` to `extra-deps` in your `stack.yaml`. Running
      `stack build` should print out a helpful, pasteable entry for
      this purpose.
 
@@ -177,9 +224,26 @@ description: |
   packages:
     - .
   extra-deps:
-    - sdl3-bindgen-sys-0.0.0.2 # hash may be here if you copy from stack build
+    - sdl3-bindgen-sys-0.0.0.3 # hash may be here if you copy from stack build
   msys-environment: UCRT64 # important: build will not work without this
   ```
+
+  ##### Direct cabal build using an MSYS2 Bash session (e.g., Git Bash)
+
+  This can additionally be used with Git bash. You can point `cabal` at the
+  UCRT64 toolchain and your ghcup GHC:
+
+  ```sh
+  export PKG_CONFIG_PATH="/c/msys64/ucrt64/lib/pkgconfig"
+  export PATH="/c/msys64/ucrt64/bin:$PATH"
+  cabal build \
+    --with-compiler=/c/ghcup/ghc/9.12.2/bin/ghc.exe \
+    --extra-lib-dirs=/c/msys64/ucrt64/lib \
+    --extra-include-dirs=/c/msys64/ucrt64/include
+  ```
+
+  Adjust the GHC path to match your install. This provides a simple way to build
+  and run the examples.
 
   ## Library structure
 
@@ -256,15 +320,28 @@ description: |
 
   Known gaps, so you can discover them here instead of mid-build:
 
-  - **Variadic functions** — hs-bindgen skips them. That means the
-    `SDL_Log` family (including the `V`-suffixed `va_list` variants),
-    `SDL_SetError`, and `SDL_RenderDebugTextFormat` (the fixed-string
-    `SDL_RenderDebugText` _is_ bound). For logging, format in Haskell
-    first and write a one-line `"%s"` C shim if you need SDL's log
-    routing; for `SDL_SetError` there is currently **no workaround** in
-    this package.
-  - **Function-like macros** — no linkable symbol exists. Macro
-    _constants_ are bound; see [Typed constants](#typed-constants).
+  - **Variadic functions**: Haskell's FFI cannot express C varargs, so
+    hs-bindgen has nothing to bind them to; the `SDL_Log` family,
+    `SDL_SetError`, and `SDL_RenderDebugTextFormat` are currently
+    unbound. In a future version, these will be bound via a fixed-arity
+    C shim.
+  - **Most function-like macros**: a macro has no linkable symbol, but
+    hs-bindgen does not need one: it parses and typechecks macro bodies
+    and translates them to Haskell functions on a best-effort basis. From
+    the SDL 3.4.2 headers, 31 function-like macros translate and ship in
+    the raw layer (e.g. `sDL_AUDIO_BITSIZE`, `sDL_VERSION_ATLEAST`,
+    `sDL_DEFINE_PIXELFORMAT`, `sDL_WINDOWPOS_CENTERED_DISPLAY` in
+    `SDL3.Sys.Bindgen.*`). Two caveats: the curated `SDL3.Sys.*` layer
+    does not alias them yet, and pending
+    [hs-bindgen#2184](https://github.com/well-typed/hs-bindgen/issues/2184)
+    they accept only the underlying C integer types, not SDL's newtypes
+    such as `SDL_AudioFormat` (unwrap first). The hs-bindgen
+    team's
+    [survey of SDL's macros](https://github.com/dschrempf/hs-bindgen-sdl-survey)
+    counts 108 user-facing function-like macros, so most remain unbound
+    for now: upstream is extending coverage, and a `capi` import or a C
+    shim can reach the rest. Macro _constants_ are bound; see
+    [Typed constants](#typed-constants).
   - The seven `long`-typed `SDL_stdinc.h` libc clones (`strtol`/`ltoa`
     families, `lround`/`lroundf`): their FFI types cannot be correct on
     both LP64 and LLP64, so they are omitted.
@@ -278,7 +355,7 @@ description: |
   The 0.0.x series is experimental: pin to the minor
   (e.g., `>=0.0.0.1 && <0.0.1`) and expect surface-shaping changes.
 
-  SDL **>= 3.2.0** is required; the surface is generated from 3.4.2.
+  SDL **>= 3.2.0** is required; the surface is generated from 3.4.16.
   Declarations newer than your SDL still compile and link — their wrapper
   C is gated on SDL's own version macros, so calling one on an older SDL
   fails at the call site via `SDL_GetError` (exactly like the Linux-only
@@ -289,13 +366,53 @@ description: |
   corrects — where they disagree, the registry wins, and a gated call's
   `SDL_GetError` message states the true floor.
 
-  Two semantic deltas to know when running against a 3.2-series SDL:
+  Three semantic deltas to know when running against an older SDL:
 
   - `SDL_COLORSPACE_YUV_DEFAULT` is baked at its 3.4 value
     (`BT601_LIMITED`); 3.2 defined it as `JPEG`.
   - Below SDL 3.2.12, `SDL_MouseWheelEvent.integer_x`/`integer_y` read
     bytes SDL never wrote — memory-safe (`SDL_Event` is 128 bytes), but
     meaningless.
+  - Below SDL 3.4.16, `SDL_PenProximityEvent.pen_state` likewise reads
+    bytes SDL never wrote.
+
+  ## ABI verification
+
+  The cabal flag `abi-assertions` (default) turns on ABI verification,
+  which guards against unexpected layout divergence between SDL3 header
+  versions and varying operating systems.
+
+  When ABI assertions are on, `cbits/abi_assertions.c` statically checks
+  every layout the Haskell side expects against your SDL headers.
+
+  ### Layouts
+
+  - Most structs are asserted at their exact size. A future SDL that expects
+    a bigger allocation for the struct would be an out-of-bounds memory write.
+  - Structs the bindings associated _solely_ with a union (like the event structs),
+    are asserted as a prefix. The union's size provides the exact ceiling, so
+    upstream can and will add fields in minors.
+
+  Maintainers can build with `-f abi-assertions-exact` to assert every
+  `sizeof` exactly. That is how a CI job against a newer SDL flags that
+  the bindings need regenerating; consumers should leave it off.
+
+  ### What to do when you get "static assertion failed"
+
+  1. Check your SDL: `pkg-config --modversion sdl3`. SDL >= 3.2.0 is
+     required
+  2. Make sure you are on a supported architecture. 32-bit targets are not
+     presently supported (see [Platform support](#platform-support)).
+  3. Report it at the [issue tracker](https://github.com/jtnuttall/lithon/issues)
+     with the failing lines, your SDL version, and your platform.
+  4. If you are comfortable doing so, open a PR regenerating the bindings
+     from the newer SDL. The
+     [`lithon-codegen` README](https://github.com/jtnuttall/lithon/tree/main/lithon-codegen#sdl3)
+     describes the pipeline.
+
+  Building with `-f-abi-assertions` turns off the check, not the
+  mismatch: the bindings would then read and write the baked layout
+  against headers that disagree with it.
 
   ## Known documentation issues
 
@@ -309,9 +426,9 @@ description: |
   ## Provenance and licensing
 
   Generated by [hs-bindgen](https://github.com/well-typed/hs-bindgen)
-  driven by the repository's `lithon-codegen`, from the SDL 3.4.2
+  driven by the repository's `lithon-codegen`, from the SDL 3.4.16
   headers. The generated tree is never hand-edited, but bugs are mine, not
-  SDL's: report them at the
+  SDL's or hs-bindgen's: report them at the
   [issue tracker](https://github.com/jtnuttall/lithon/issues).
 
   - `sdl3-bindgen-sys` is BSD-3-Clause (see `LICENSE`).
@@ -320,9 +437,9 @@ description: |
   - The vendored hs-bindgen and c-expr runtimes are BSD-3-Clause, (c) Well-Typed LLP
     and Anduril Industries (`LICENSE_hs-bindgen-runtime`, `LICENSE_c-expr-runtime`).
 description-type: markdown
-hash: 9a4a35cc06e91a2a97c5fb16ed35c3528a647db15403e0919e9d47b5ae6f1ddd
+hash: 6e395d06adee6e7124dcff69449cb585de5dd64ddd2313d663d36f085436424b
 homepage: https://github.com/jtnuttall/lithon#readme
-latest: 0.0.0.2
+latest: 0.0.0.3
 license-name: BSD-3-Clause
 maintainer: jeremy@jeremy-nuttall.com
 synopsis: Complete SDL3 bindings, raw + curated, generated by hs-bindgen

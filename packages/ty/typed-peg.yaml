@@ -2,16 +2,143 @@ all-versions:
 - 0.1.0.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.4.0.0
 author: Rodrigo Ribeiro
 basic-deps:
   base: '>=4.18 && <5'
   bytestring: '>=0.11 && <0.13'
+  containers: '>=0.6 && <0.8'
   template-haskell: '>=2.19 && <2.24'
   text: '>=2.0 && <2.2'
 changelog: |
   # Changelog
 
   ## Unreleased
+
+  ### Breaking. A non-terminal is a key, and `pegGrammar` declares the key type
+
+  `PExp` and `Grammar` are indexed by the type of the grammar's non-terminal
+  keys, `nt :: Type -> Type`, instead of by a type-level environment:
+
+  ```haskell
+  data PExp    (s :: Type) (nt :: Type -> Type) (a :: Type)
+  data Grammar (s :: Type) (nt :: Type -> Type) (a :: Type)
+
+  NT :: nt a -> PExp s nt a
+  ```
+
+  `pegGrammar` in declaration position now declares a GADT with one constructor
+  per rule, its `Tabulate` instance, and one binding per rule whose signature is
+  the rule's annotation:
+
+  ```haskell
+  data ArithEnv s a where
+    ArithEnv_expr :: ArithEnv s Exp
+    ArithEnv_term :: ArithEnv s Exp
+  instance Tabulate (ArithEnv s)
+  arith'expr :: Stream s => PExp s (ArithEnv s) Exp
+  arith      :: Stream s => Grammar s (ArithEnv s) Exp   -- = Keyed rules start
+  ```
+
+  A grammar written that way needs no change beyond `{-# LANGUAGE GADTs #-}`,
+  which the splice asks for by name when it is missing: `%env` still names the
+  generated type and `Grammar s (ArithEnv s) Exp` is still its signature.
+
+  A type-level environment is still supported, through the key `InEnv env`, a
+  membership proof into it.  `nt @"expr"`, `ntw`, `pegRules`, `RCons` and
+  `pegGrammar` in expression position all go through it, and so does a
+  hand-written environment, whose signatures gain an `InEnv`:
+
+  ```haskell
+  calc :: Stream s => Grammar s (InEnv (CalcEnv s)) Expr   -- was Grammar s (CalcEnv s) Expr
+  ```
+
+  A combinator over expressions, `PExp s env a -> PExp s env a`, works unchanged
+  over either kind of key.  `PEG.Syntax.NTW` is gone (`ntw` remains, as
+  `NT . InEnv`), and `nt` no longer asks for `KnownSymbol`.
+
+  **Why.**  Removing the FIRST sets from the environment left a cost that grew
+  faster than the grammar, and it was the proof itself.  A reference into a list
+  carries `There (There ... Here)`, and GHC's evidence for it is proportional to
+  the rule's depth times the size of what is left of the list.  Handing GHC the
+  proof instead of having it search saved a constant; the proof still had to be
+  checked.  Through `pegGrammar` a 128-rule grammar needed 2.2 GB of heap, and a
+  256-rule one did not fit in 8 GB.  A constructor's type does not depend on the
+  rest of the grammar (`ghc -fno-code`, `bench-compile/`):
+
+  | rules | before | key type |
+  |---|---|---|
+  | 64   | 1.16 s,   385 MiB | 0.44 s,  49 MiB |
+  | 128  | 5.70 s, 2 180 MiB | 0.50 s,  51 MiB |
+  | 256  | exhausts 8 GB     | 0.57 s,  80 MiB |
+  | 512  | —                 | 0.70 s,  98 MiB |
+  | 1024 | —                 | 1.17 s, 159 MiB |
+
+  The per-rule bindings also cut what the simplifier does with a grammar:
+  MiniPython at `-O1` went from 2.4 s and 177 MiB to 1.5 s and 111 MiB.
+
+  Parsing is unaffected: the allocation benchmark agrees with the previous
+  commit on every row, to within 0.1 byte per input byte on three of the
+  smallest inputs, and MiniPython over its key type allocates what it does over
+  an environment.
+
+  ### Added
+
+  - `PEG.Key`: `Tabulate`, `Table` and `InEnv`.
+  - `Keyed`, the `Grammar` constructor for a key type.
+  - `%param name :: Type` in `pegGrammar`: the grammar and every rule take an
+    argument in scope in every semantic action, which is what a grammar that
+    used to be written in expression position to capture a variable needs.
+    Repeatable.
+  - `examples/MiniPython.hs`, the 27-rule grammar of the MiniPython language of
+    the compilers course at UFOP, and a `minipython` mode in `bench-compile/`.
+  - `bench-compile/run.sh` reports GHC's peak heap, and has `qq-grammar-expr`
+    (a grammar over a list, through `pegGrammar`) and `lookup-key` (the keys
+    with no library) modes.
+
+  ### Shared prefixes of alternatives are parsed once
+
+  The quasi-quoters translate consecutive alternatives that begin with the same
+  items as the common prefix followed by a choice of the remainders:
+  `A B / A C` becomes `A (B / C)`, recursively, with each remainder's action
+  still seeing the prefix under its own labels.  In a PEG the two accept the
+  same inputs with the same results, since `A` would parse exactly the same
+  thing the second time.
+
+  Without it, a precedence level written `e:or_expr ws "if" ... / e:or_expr`
+  parses its operand twice, and the cost is exponential in how deeply the
+  *input* nests.  On MiniPython, `print(str(mdc(f(g(x)))))` took 348 ms, eight
+  times as long per level; a 13.6 KB file of the course's examples took 965 ms.
+  Both now take under 15 ms.  The copy of the library the course's reference
+  compiler used to vendor escaped this only by accident: its grammar was static
+  combinator code, and GHC's CSE shared the repeated call.  Compiled with
+  `-O0` it took 6.9 s on the same expression.
+
+  Only consecutive alternatives are grouped, and an alternative that is not a
+  sequence is left alone.  `PEG.QQ.Syntax`'s `PExpr`, `Item` and `RelS` now
+  derive `Eq`.
+
+  ### Fixed
+
+  - The library builds with GHC 9.6 again, as `tested-with` and the
+    `template-haskell >= 2.19` bound said it did: `PEG.Parse` no longer needs
+    `TypeAbstractions`, the binders `pegGrammar` generates go through
+    `PEG.QQ.Compat` rather than naming `BndrReq`, which template-haskell 2.21
+    introduced, and the analysis test-suite no longer relies on `foldl'` being
+    in the Prelude.
+
+  ### The analysis is linear
+
+  `PEG.Analysis` ran on every splice and computed every rule's FIRST set by
+  Kleene iteration over whole sets, rebuilding and comparing all of them on
+  each pass.  A precedence ladder of `N` rules has FIRST sets of `N^2/2` names,
+  and on 1024 rules that was 49 of the 58 seconds a keyed grammar took to
+  compile.  The diagnostics need none of it: nullability is a fixpoint over
+  booleans, left recursion is a cyclic strongly connected component of the
+  direct-head graph, and the cycle reported is a shortest one, found breadth
+  first.  The FIRST sets in the environment `analyse` returns are that graph's
+  closure, built only when the environment is inspected — 0.5 s at 1024 rules
+  when they are.  `typed-peg` now depends on `containers`.
 
   ### Breaking. The environment no longer carries FIRST sets
 
@@ -455,9 +582,11 @@ description: |
 
   Type-safe PEG (Parsing Expression Grammar) parser combinators for Haskell.
 
-  Grammar non-terminals are checked at the type level against an environment
-  that binds each rule to the type it returns, and left-recursive grammars are
-  caught when the grammar is written rather than looping at runtime.
+  Grammar non-terminals are checked at the type level — a reference is a key
+  whose type is the result of the rule it names — and left-recursive grammars
+  are caught when the grammar is written rather than looping at runtime.
+  Checking a grammar costs GHC time and memory linear in its size: a 1024-rule
+  grammar type-checks in about a second.
 
   ## Features
 
@@ -496,7 +625,7 @@ description: |
   matters.
 
   A `Grammar` is monomorphic in its stream.  To reuse one across several, give
-  it a `forall s. Stream s => Grammar s Env _ A` signature — but note that makes
+  it a `forall s. Stream s => Grammar s (Env s) A` signature — but note that makes
   it a function of a dictionary, so the compiled parser is no longer shared
   between calls.  Bind a monomorphic parser where that matters:
 
@@ -525,27 +654,71 @@ description: |
   |]
   ```
 
-  That declares three things: `type ArithEnv s`, the signature
-  `arith :: Stream s => Grammar s (ArithEnv s) Exp`, and `arith` itself.  Run
-  it with `parse arith "1+2*3"`.
+  That declares the grammar's key type, one constructor per rule,
+
+  ```haskell
+  data ArithEnv s a where
+    ArithEnv_expr   :: ArithEnv s Exp
+    ArithEnv_term   :: ArithEnv s Exp
+    ...
+  ```
+
+  a binding per rule (`arith'expr :: Stream s => PExp s (ArithEnv s) Exp`, ...),
+  and `arith :: Stream s => Grammar s (ArithEnv s) Exp`.  Run it with
+  `parse arith "1+2*3"`.  The module needs `GADTs`.
 
   A rule's **result type** is the one thing the grammar does not determine — it
   comes from the Haskell in the semantic action — which is what the `:: T`
-  annotations are for.  They are claims, and GHC checks them: `Grammar` demands
-  `Rules s env env`, so an annotation that disagrees with what the body returns
-  is a type error.
+  annotations are for.  They are claims, and GHC checks them: each is the
+  signature of that rule's binding, so an annotation that disagrees with what the
+  body returns is a type error reported against the rule.
+
+  A grammar that needs a value from outside — a file name for error positions,
+  a table of operators — takes it as a parameter:
+
+  ```haskell
+  [pegGrammar|
+    %name   lang
+    %stream String
+    %param  file :: FilePath
+    %start  program
+    ...
+  |]
+  -- lang :: FilePath -> Grammar String (LangEnv String) Program
+  ```
 
   `pegRules` remains, for a rule set that is only part of a grammar or that is
-  combined with hand-written `PExp` combinators.  It needs the environment
-  written out by hand; `examples/Compat.hs` and `examples/Patterns.hs` show
-  that style.  See `examples/Arith.hs` and `examples/Layout.hs` for the
-  generated one.
+  combined with hand-written `PExp` combinators.  Its non-terminals are a
+  type-level list written out by hand, and the grammar is a
+  `Grammar s (InEnv env) a`; `examples/Compat.hs` and `examples/Patterns.hs`
+  show that style.  See `examples/Arith.hs`, `examples/Layout.hs` and
+  `examples/MiniPython.hs` for the generated one.
 
   ## Grammar size, and what is checked where
 
   A grammar's size shows up as compile time, because every reference in it is a
-  constraint GHC has to solve against the environment.  An entry of that
-  environment is a rule's name and the type it returns:
+  constraint GHC has to solve.  How much each one costs depends on what the
+  reference points into.
+
+  **A declared key type** — what `pegGrammar` generates — makes a reference a
+  constructor, `NT ArithEnv_term`, whose type GHC checks without looking at the
+  rest of the grammar.  The cost is linear in the number of rules
+  (`ghc -fno-code`, GHC 9.10; `bench-compile/`):
+
+  | rules | through a key type | through a type-level list |
+  |---|---|---|
+  | 64   | 0.44 s,  49 MiB | 1.10 s,   375 MiB |
+  | 128  | 0.50 s,  51 MiB | 5.74 s, 2 298 MiB |
+  | 256  | 0.57 s,  80 MiB | exhausts 8 GB |
+  | 1024 | 1.17 s, 159 MiB | — |
+
+  The 27-rule MiniPython grammar in `examples/` takes 0.43 s and 57 MiB.
+
+  **A type-level list** is what `nt @"expr"`, `pegRules` and `pegGrammar` in
+  expression position use.  A reference carries a proof of where its rule sits
+  in the list, `There (There Here)`, and GHC's evidence for it grows with the
+  rule's depth and the size of the list, so the total grows faster than the
+  grammar.  An entry of that list is a rule's name and the type it returns:
 
   ```haskell
   type CalcEnv =
@@ -567,7 +740,7 @@ description: |
   the measurements.
 
   Nullability and FIRST sets are still computed — by `PEG.Analysis`, in ordinary
-  Haskell, when the quasi-quoter runs, in 6 ms for a 64-rule grammar.  It is
+  Haskell, when the quasi-quoter runs, in time linear in the grammar.  It is
   what reports left recursion, a nullable repetition, an undefined non-terminal
   or a duplicate rule **from the splice**, naming the rule and the chain of head
   references that closes the cycle:
@@ -581,11 +754,16 @@ description: |
           would not consume input before calling itself
   ```
 
+  A PEG does not memoise, so `A B / A C` parses `A` twice when `B` fails.  The
+  quasi-quoters factor such alternatives into `A (B / C)` when they are
+  consecutive, which keeps a grammar whose precedence levels are written that
+  way linear in the input rather than exponential in its nesting.
+
   So the checks divide like this:
 
   | what | checked by | when |
   |---|---|---|
-  | a reference names a rule that exists, at the right type | GHC | every compilation |
+  | a reference names a rule that exists, at the right type | GHC, or the splice for `pegGrammar` | every compilation |
   | a rule's `:: T` annotation matches what its body returns | GHC | every compilation |
   | left recursion, nullable repetition, duplicate rule | `PEG.Analysis` | at the splice |
 
@@ -596,8 +774,7 @@ description: |
   closes *across* two blocks is reported by neither it nor GHC.  Writing the
   grammar as one `pegGrammar` closes both gaps — it is closed-world, so every
   reference resolves and every cycle is visible — and it is also the fastest to
-  compile, because it knows each rule's position and emits the membership proof
-  instead of a `KnownMember` search.
+  compile, because it declares a key type instead of a list.
 
   Since nothing recomputes what `PEG.Analysis` concludes, the
   `typed-peg-analysis` test-suite checks it against a separate statement of what
@@ -686,9 +863,9 @@ description: |
 
   BSD-3-Clause. See [LICENSE](LICENSE).
 description-type: markdown
-hash: 8869f10c834c9bb3cea82145e8fb19ef95dc50e78e5e4daab53fbdd742d61381
+hash: fef3b07f5be19415d226796aa613378e36185ea94c88168422c2099454599fc5
 homepage: https://github.com/rodrigogribeiro/typed-peg
-latest: 0.3.0.0
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: rodrigo.ribeiro@ufop.edu.br
 synopsis: Type-safe PEG parser combinators
