@@ -1,0 +1,156 @@
+all-versions:
+- 0.2.0.0
+author: Nadeem Bitar
+basic-deps:
+  aeson: '>=2.2 && <2.3'
+  base: '>=4.18 && <5'
+  effectful-core: '>=2.5 && <3'
+  notion-client: '>=0.8 && <0.9'
+  text: '>=2.0 && <2.2'
+changelog: |
+  # Changelog for `notion-client-effectful`
+
+  ## 0.2.0.0 - 2026-09-15
+
+  ### Breaking Changes
+
+  * Requires `notion-client >=0.8 && <0.9`.
+  * `queryDataSource` and `search` now return `ListOf PageOrDataSource` (was `ListOf PageObject` and `ListOf Value`), following `notion-client`.
+  * `updateBlock` takes `Blocks.BlockUpdatePayload` (was `Blocks.BlockUpdate`).
+  * `createComment` returns `CommentResponse` (was `CommentObject`).
+  * Remove `queryView` / `QueryView`; use `createViewQuery`, `getViewQueryResults` and `deleteViewQuery`.
+
+  ### New Features
+
+  * New operations `createPageFiltered`, `updatePageFiltered`, `createPageAsync`, `updatePageMarkdownAsync`, `retrieveAsyncTask`, `retrieveComment`, `updateComment`, `deleteComment`, `createViewQuery`, `getViewQueryResults`, `deleteViewQuery`, `createMeetingNote` and `queryMeetingNotes`.
+
+  ## 0.1.0.0 - 2026-04-17
+
+  * Initial release: `Notion` effect and `runNotion` interpreter covering
+    every `Notion.V1.Methods` field at the time of release
+    (notion-client 0.7.x).
+changelog-type: markdown
+description: |
+  # notion-client-effectful
+
+  An [effectful][effectful] surface for
+  [`notion-client`](https://hackage.haskell.org/package/notion-client).
+
+  [effectful]: https://hackage.haskell.org/package/effectful
+
+  This package wraps the `Notion.V1.Methods` record as a dynamic
+  effect — so code written against `effectful` does not have to
+  thread the `Methods` value through every call site and does not
+  have to drop into `IO` at each API boundary.
+
+  ## Purpose
+
+  `notion-client` exposes a single `Methods` record whose fields
+  are `IO`-typed API calls. That is ergonomic for a plain-`IO`
+  program but awkward for an `effectful`-based caller: every call
+  requires `liftIO` and escapes the ambient `Error` / `Reader` /
+  `Log` stack.
+
+  `notion-client-effectful` gives that caller an equivalent set of
+  operations surfaced as an `Effect` so the stack is preserved.
+
+  ## Import pattern
+
+  Every smart constructor shares its name with the matching
+  `Notion.V1.Methods` record selector. That is on purpose — it
+  keeps migration from IO mechanical — but it means a file that
+  imports both modules unqualified will see name clashes. Import
+  one of the two qualified:
+
+  ```haskell
+  import Notion.V1                    (Methods, getClientEnv, makeMethods)
+  import Notion.V1.Effectful qualified as NE
+  ```
+
+  Then `NE.retrievePage`, `NE.search`, `NE.runNotion`, and so on.
+
+  ## Error handling
+
+  `runNotion` catches `Notion.V1.Error.NotionError` thrown by the
+  underlying `Methods` and re-raises it via the `Error NotionError`
+  effect, so callers can branch on API error shapes
+  (`object_not_found`, validation failures, etc.) without reaching
+  for `IO`-level exception handling.
+
+  Other `Servant.Client.ClientError` values — network failures,
+  decoding errors — are *not* caught and remain `IO` exceptions.
+  This preserves the contract of the underlying `notion-client`
+  library and lets callers layer their own `Error ClientError`
+  interpretation on top later. The same applies to
+  `UnknownHTTPResponseError`, `RequestTimeoutError` and
+  `InvalidPathParameterError` from `Notion.V1.Error`. Retries of
+  rate-limited requests happen inside `Methods`, before an error reaches
+  `runNotion`.
+
+  ## Minimum viable usage
+
+  ```haskell
+  module Demo where
+
+  import Data.Text (Text)
+  import Data.Text qualified as Text
+  import Effectful (Eff, runEff, (:>))
+  import Effectful.Error.Static (Error, runErrorNoCallStack)
+  import Notion.V1                    (getClientEnv, makeMethods)
+  import Notion.V1.Common             (UUID (..))
+  import Notion.V1.Effectful qualified as NE
+  import Notion.V1.Error              (NotionError)
+  import System.Environment qualified as Env
+
+  demo ::
+    (NE.Notion :> es, Error NotionError :> es) =>
+    UUID ->
+    Eff es Text
+  demo pid = do
+    page <- NE.retrievePage pid
+    pure (Text.pack (show page))
+
+  main :: IO ()
+  main = do
+    token <- Text.pack <$> Env.getEnv "NOTION_TOKEN"
+    env <- getClientEnv "https://api.notion.com/v1"
+    let methods = makeMethods env token
+    result <-
+      runEff
+        . runErrorNoCallStack @NotionError
+        . NE.runNotion methods
+        $ demo (UUID "00000000-0000-0000-0000-000000000000")
+    print result
+  ```
+
+  ## What you get
+
+  One smart constructor per field of `Notion.V1.Methods`. The
+  argument types and order match the underlying field, so an
+  existing call like
+
+  ```haskell
+  page <- retrievePage methods pid
+  ```
+
+  becomes
+
+  ```haskell
+  page <- NE.retrievePage pid
+  ```
+
+  with no other change to the call site.
+
+  ## Versioning
+
+  The `0.y.z` series tracks `notion-client` 0.7.x. A major version
+  bump is planned if `notion-client` changes the shape of `Methods`
+  in a way that forces a constructor rename.
+description-type: markdown
+hash: 41b592d9228a8ba619aa6ced424685c1d2075efb1fdda1622fff8d569c3509f5
+homepage: ''
+latest: 0.2.0.0
+license-name: MIT
+maintainer: nadeem@gmail.com
+synopsis: Effectful effects for notion-client
+test-bench-deps: {}
