@@ -2,13 +2,14 @@ all-versions:
 - 0.1.0.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.3.1.0
 author: Nadeem Bitar
 basic-deps:
   base: '>=4.21 && <5'
   bytestring: '>=0.11 && <0.13'
   case-insensitive: '>=1.2 && <1.3'
   containers: '>=0.6 && <0.8'
-  effectful-core: '>=2.5 && <2.7'
+  effectful-core: '>=2.5 && <2.8'
   hs-opentelemetry-api: '>=1.0 && <1.1'
   hs-opentelemetry-exporter-otlp: ^>=1.0
   hs-opentelemetry-sdk: ^>=1.0
@@ -25,6 +26,91 @@ changelog: |
   All notable changes to `kafka-effectful` are documented here.
 
   This package follows the [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.3.1.0 — 2026-09-15
+
+  ### Fixed
+
+  - `pollMessage` no longer throws on partition-scoped conditions that a healthy
+    consumer meets in normal operation. `RdKafkaRespErrPartitionEof`,
+    `RdKafkaRespErrAutoOffsetReset` and `RdKafkaRespErrUnknownTopicOrPart` now
+    return `Nothing` alongside the timeout. Previously any of them killed the
+    consumer, and because the interpreter's bracket closes the consumer on the
+    way out, a supervised service would restart, re-subscribe, meet the same
+    persistent partition condition, and crash-loop. Partition EOF in particular
+    is delivered on every catch-up when `enable.partition.eof` is set, so the old
+    behaviour killed consumers precisely when they had succeeded. The batch
+    variant `pollMessageBatch` already kept these in-band; the two are now
+    consistent.
+
+  - The three commit operations (`commitOffsetMessage`, `commitAllOffsets`,
+    `commitPartitionsOffsets`) treat `RdKafkaRespErrNoOffset` as success.
+    hw-kafka-client's own offset-commit callback documentation states that this
+    code "is not to be considered an error" — it simply means nothing had
+    advanced. Previously an idle consumer could die on a shutdown commit.
+
+  - The traced interpreter no longer leaks one record's trace context into the
+    next. `withConsumerSpan` extracted each record's context into the *current*
+    thread-local context and never detached what it attached, so a record with no
+    `traceparent` was parented to the previous record's remote trace — directly
+    contradicting this module's documented "new root span when no inbound context
+    is present" — and the leak persisted across batch entries and after the poll
+    returned. Extraction now starts from an empty context and the attach is
+    paired with its detach in a bracket, giving per-record isolation and
+    restoring the caller's ambient context.
+
+  - Kafka headers are decoded leniently, so a header carrying non-UTF-8 bytes no
+    longer costs a record its inbound trace context. Previously the partial
+    decode raised inside carrier construction, the propagator's catch-all
+    swallowed it, and the record lost its `traceparent` while logging a
+    `Propagator extract failed` warning on every message. Extraction now also
+    filters headers to the propagator's own declared fields, so application
+    payload headers never reach the decoder at all.
+
+  ### Documentation
+
+  - Corrected the `produceMessageBatch` docs. The 0.2.0.0 entry below says the
+    interpreter inlines "the upstream definition" because Hackage 5.3.0 "does not
+    re-export" it. Both halves are wrong: upstream *deleted* the function in
+    October 2021, before v5.3.0, and it is absent from upstream `main` too — the
+    copy that suggested otherwise was a local addition in our corpus checkout.
+    More usefully, the function does not batch: it loops calling
+    `produceMessage`, so it saves no network round-trips. Throughput comes from
+    `linger.ms` / `batch.size`, which apply to every produce call. Now tracked as
+    upstream issue `hw-kafka-client-no-produce-batch-binding` in
+    `mori/upstream-issues.dhall`.
+
+  ### Added
+
+  - `Kafka.Effectful.Consumer.Classify`, a new exposed module holding the in-band
+    error policy as pure, testable functions: `PollErrorDisposition`,
+    `classifyPollError` and `isBenignCommitError`. Both interpreters route
+    through it, so their taxonomies cannot drift apart.
+
+  - `pollMessageEither`, which returns every in-band condition as a `Left`
+    instead of swallowing or throwing it. Use it for bounded reads that must
+    observe partition EOF. Additive; `pollMessage` is unchanged in type.
+
+  - The first tests for the consumer interpreters, covering the classifier
+    taxonomy, brokerless interpreter behaviour, and trace-context hygiene.
+
+  ### Other Changes
+
+  - Detecting a fatal consumer error in `CallbackPollModeAsync` requires a
+    patched `hw-kafka-client`. Hackage 5.3.0 drops consumer-queue messages in
+    `pollConsumerEvents'`, and librdkafka delivers a raised fatal error to the
+    high-level consumer only on that queue — never through `error_cb` — so in the
+    default async mode a fatal such as a fenced static group member is
+    unobservable at every layer and the application polls forever. This
+    repository pins a fork that reports it in-band from `pollMessage` /
+    `pollMessageBatch`, which is what lets `Kafka.Effectful.Consumer.Classify`
+    see the fatal and throw. The pin governs builds of this repository only: a
+    downstream package does not inherit it and must add the same
+    `source-repository-package` stanza to its own `cabal.project`, or it silently
+    keeps async-mode fatal blindness. Sync-mode consumers are unaffected.
+
+  - Support `effectful-core` 2.7 (upper bound raised from `<2.7` to `<2.8`).
+    Built and tested against 2.7.1.2; no source changes were needed.
 
   ## 0.3.0.0 — 2026-05-31
 
@@ -230,10 +316,16 @@ description: |
 
   ##### Scenario 4 — High-throughput batching
 
-  Combine `produceMessageBatch` with `linger.ms`, `batch.size`, and
-  `compression` to trade a few milliseconds of latency for substantially
-  higher throughput. The result contains only records that failed to
-  enqueue.
+  Set `linger.ms`, `batch.size`, and `compression` to trade a few
+  milliseconds of latency for substantially higher throughput. That is where
+  the batching happens: librdkafka coalesces its own send queue, for every
+  produce call.
+
+  `produceMessageBatch` is a convenience over that, not a second lever — it
+  loops calling `produceMessage` per record and returns only the records that
+  failed to enqueue. Using it does not reduce network round-trips; `hw-kafka-client`
+  exposes no API-level batch send (tracked as upstream issue
+  `hw-kafka-client-no-produce-batch-binding`, see `mori upstream-issues show`).
 
   ```haskell
   batchProps =
@@ -351,8 +443,16 @@ description: |
             loop
   ```
 
-  `pollMessage` returns `Nothing` when the timeout elapses without a message
-  arriving; non-timeout failures are thrown via the `Error KafkaError` effect.
+  `pollMessage` returns `Nothing` when nothing was delivered. That covers the
+  timeout, and also three partition-scoped conditions that librdkafka reports as
+  errors but which a healthy consumer meets in normal operation: partition EOF,
+  an offset reset, and an as-yet-unknown topic or partition. Everything else --
+  transport failures, authentication failures, and fatal errors among them -- is
+  thrown via the `Error KafkaError` effect.
+
+  Use `pollMessageEither` when you need to see those conditions rather than have
+  them swallowed, for example to detect partition EOF in a bounded read. The full
+  policy, and the reasoning for each code, is in `Kafka.Effectful.Consumer.Classify`.
 
   ### Running it
 
@@ -488,9 +588,9 @@ description: |
 
   MIT
 description-type: markdown
-hash: 9c84a84b6f3f78e21be24a9157d5883cd9b205b8af2484dfb9d99e8dddc4122a
+hash: 5809340ef9f86fd88a6d41dea2acc89df30bcc368e2eba3f83825e16d5eebd09
 homepage: ''
-latest: 0.3.0.0
+latest: 0.3.1.0
 license-name: MIT
 maintainer: Nadeem Bitar
 synopsis: Effectful effects for hw-kafka-client
@@ -499,7 +599,7 @@ test-bench-deps:
   bytestring: '>=0.11 && <0.13'
   case-insensitive: '>=1.2 && <1.3'
   containers: '>=0.6 && <0.8'
-  effectful-core: '>=2.5 && <2.7'
+  effectful-core: '>=2.5 && <2.8'
   hs-opentelemetry-api: ^>=1.0
   hs-opentelemetry-exporter-in-memory: ^>=1.0
   hs-opentelemetry-sdk: ^>=1.0
