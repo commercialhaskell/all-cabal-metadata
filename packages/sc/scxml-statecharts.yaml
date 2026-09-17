@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Axel Ulmestig
 basic-deps:
   base: '>=4.18 && <5'
@@ -10,7 +11,42 @@ basic-deps:
 changelog: |
   # Changelog
 
-  ## 0.1.0.0 -- unreleased
+  ## 0.2.0.0 -- 2026-09-17
+
+  - **Breaking.** The `event` attribute now names one event and then the Haskell
+    types its constructor holds, so `event="Order Items Int"` declares
+    `Order Items Int`. SCXML reads the attribute as a space-separated list of
+    event descriptors, and that shorthand is gone: `event="A B"` no longer means
+    two transitions with one target, which is written as two `<transition>`
+    elements instead. This is the one place the parser knowingly differs from
+    the specification.
+  - The event reaching a callback is now the one the caller passed in rather
+    than a value rebuilt from its name, so whatever payload it carries survives
+    the trip, and an event a callback raises carries its own. The evaluator is
+    parameterised over the event type and still selects transitions by name
+    alone, so a payload never decides where the chart goes; that stays with the
+    events a callback raises. `Def` trades `defEventFromName :: Text -> Maybe ev`
+    for a total `defDoneEvent :: StateId -> ev`, since `done.state` events are
+    the only ones the evaluator synthesises and they carry nothing.
+  - A payload type is one type constructor, optionally module-qualified,
+    resolved after the quasiquote like a callback name, so it may be defined
+    below it. `Maybe Int`, `[Int]` and tuples cannot be told apart from separate
+    fields in an attribute whose parts are separated by spaces, so they go
+    through a type alias; writing one directly is rejected with a message naming
+    the way in. Allowing them later is a compatible change.
+  - Every transition naming an event must declare the same payload for it, since
+    they all reach the one generated constructor, and a disagreement is a
+    compile error naming both places.
+  - **Breaking.** An event that carries data costs `FsmEvent` its derived `Ord`,
+    `Enum` and `Bounded`: `Ord` would demand an instance of every payload type,
+    and the other two need every constructor nullary. A chart whose events carry
+    nothing derives all of them as before.
+  - The Nix dev shell gained zlib, which `xml-conduit` reaches through
+    `conduit-extra` and `streaming-commons`. Without it `cabal build` compiled
+    everything and then failed at the link with `cannot find -lz`, and every
+    Template Haskell splice warned about `libz.so`.
+
+  ## 0.1.0.0 -- 2026-09-09
 
   First release.
 
@@ -170,7 +206,8 @@ description: |
 
   Entry callbacks receive the state being entered, exit callbacks the state being
   left. The event is the one being processed, or `Nothing` during
-  `initiateStateMachine`.
+  `initiateStateMachine`. It is the event the caller passed in, so whatever
+  payload it carries arrives with it.
 
   Returning `Just event` raises it, which is SCXML's `<raise>`. Raised events are
   queued and processed before `notifyStateMachine` returns. This is how branching
@@ -187,6 +224,57 @@ description: |
   functions require `MonadIO`, while a `Monad m` callback keeps its own weaker
   signature and stays usable elsewhere. Declaring the weakest constraint each
   callback needs is therefore still worth it.
+
+  ## Events that carry data
+
+  The `event` attribute holds the event name and then the Haskell types its
+  constructor carries:
+
+  ```xml
+  <state id="Idle">
+    <transition event="Order Item Int" target="Checking"/>
+  </state>
+  ```
+
+  That declares `Order Item Int` in `FsmEvent`, and the payload reaches the
+  callbacks of the states the transition enters:
+
+  ```haskell
+  check :: FsmState -> Maybe FsmEvent -> m (Maybe FsmEvent)
+  check _ (Just (Order (Item what) n))
+    | n > 0     = pure (Just Ok)
+    | otherwise = pure (Just (Reject (Reason ("nothing ordered of " <> what))))
+  check _ _     = pure (Just (Reject (Reason "no order")))
+  ```
+
+  Selection is still by name alone: a payload never decides which transition
+  fires, which is the same rule as the missing `cond` and keeps the routing
+  readable from the chart. A decision that depends on the data is a state whose
+  entry callback raises one of the events leading out of it, and that raised
+  event may carry data of its own.
+
+  A payload belongs to its event rather than to the step. An event a callback
+  raises carries its data to the callbacks that event reaches, but a
+  `done.state` event raised afterwards is a different event and carries nothing.
+
+  A few things to know:
+
+  - **Payload types are written as one type constructor**, optionally qualified:
+    `Int`, `Data.Text.Text`, `Order.LineItem`. `Maybe Int`, `[Int]` and
+    `(Int, Int)` cannot be written directly, because the attribute separates one
+    field from the next by a space; give them a type alias and name that. Like
+    callback names, the types are resolved after the quasiquote, so they may be
+    defined below it.
+  - **Every transition naming an event must declare the same payload**, since
+    they all reach the one constructor. Disagreeing declarations are a compile
+    error naming both.
+  - **`done.state.X` events carry nothing.** The chart raises them itself, so
+    there is nowhere for a payload to come from.
+  - **An event that carries data costs `FsmEvent` its derived `Ord`, `Enum` and
+    `Bounded`.** `Ord` would demand an instance of every payload type, and the
+    other two need every constructor nullary. A chart whose events carry nothing
+    derives all of them as before. `Show`, `Read` and `Eq` are always derived,
+    so payload types need them.
 
   ## Semantics
 
@@ -321,8 +409,11 @@ description: |
     because it makes the entry point depend on the order children happen to be
     written in.
   - **One transition per state per event**, held as a map from event name to
-    target, so nothing has to break a tie. `event="A B"` is still shorthand for
-    two transitions to the same target.
+    target, so nothing has to break a tie. The `event` attribute names one event
+    and then the types its constructor carries, which is the one place this
+    knowingly differs from the specification: SCXML reads the attribute as a
+    space-separated list of event descriptors. Two events reaching one target
+    are two `<transition>` elements.
   - **`done.state.X` may only be handled on `X` itself.** Since a transition
     also targets a sibling, completion climbs one level at a time: a state that
     finishes moves to a `<final>` sibling, which completes their parent and
@@ -356,9 +447,9 @@ description: |
   nix develop .#ghc9141 --command cabal test
   ```
 description-type: markdown
-hash: 0b65fa39ee1c6579467f2369587f12c8b3ff065c546f33730b3e7cc879faa3b6
+hash: 38af3066b3e2ccd9f50488646c383e0730b82578d15171035ff8c37bd212fa5e
 homepage: https://github.com/AxelUlmestig/scxml-statecharts
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: axel.ulmestig@gmail.com
 synopsis: Typed statecharts from SCXML, via Template Haskell
