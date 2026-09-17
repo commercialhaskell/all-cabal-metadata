@@ -8,6 +8,7 @@ all-versions:
 - 3.0.0.0
 - 3.0.1.0
 - 3.0.1.1
+- 4.0.0.0
 author: David Himmelstrup
 basic-deps:
   base: '>=4.19 && <5'
@@ -25,6 +26,105 @@ changelog: |
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   ## [Unreleased]
+
+  ## [4.0.0.0] - 2026-09-17
+
+  ### Fixed
+
+  - A `{-# LINE n "file" #-}` pragma now applies its file name. The file name was
+    dropped for every well-formed LINE pragma, so spans after one kept the source
+    name the caller passed in while taking their line and column from the pragma.
+    The equivalent `#line` directive was already handled correctly.
+
+  ### Removed
+
+  - The CPP preprocessor benchmark. `BENCHMARKS.md` no longer carries a "CPP
+    Performance" table comparing `aihc-cpp` against `clang -E` and `cpphs`, and
+    `aihc-parser-bench` no longer depends on `cpphs` or shells out to `clang`.
+    `aihc-cpp` is still used to preprocess the parser corpus before measurement;
+    only its benchmark is gone.
+
+  ### Changed
+
+  - Remove the `NoSourceSpan` constructor and `noSourceSpan`. A `SourceSpan` is
+    now always a concrete span. Parsed syntax gets the span of the tokens it
+    consumed, or the zero-width span where the parser stands when it consumed
+    none. Every parse error has a span too: an error that names no token, such
+    as one raised with `fail`, is located at the token the parser stood on when
+    it was raised.
+  - `sourceSpanSourceName` is now a `Text` rather than a `FilePath`. Callers
+    that read the field get a `Text`; callers that build a `SourceSpan` by hand
+    pass a `Text`. The name given as `parserSourceName` is still a `FilePath`
+    and is converted once when lexing starts.
+  - `SourceSpan` is now a bidirectional record pattern synonym over a packed
+    representation. Constructing a span, matching on one, reading a field and
+    record-update syntax all work exactly as before. Two things change: import
+    it as `SourceSpan, pattern SourceSpan` plus the field names you use, since
+    `SourceSpan (..)` no longer brings the fields into scope, and the `Data`
+    instance sees three `Word64` fields rather than six `Int` ones.
+  - `applyImpliedExtensions` returns its result in `Extension` constructor order
+    and without duplicates when it has anything to add, rather than in
+    most-recently-enabled-first order. Only membership was ever meaningful; a
+    list that is already closed is still returned untouched.
+
+  ### Performance
+
+  - A `SourceSpan` holds its six positions in three unboxed `Word64` fields
+    rather than six `Int` ones, two positions to a word. It is the most numerous
+    object in a parse tree, so a third off its size shows up in peak heap as
+    well as in allocation.
+  - Expression parsing dispatches the block forms (`do`, `mdo`, qualified `do`,
+    `if`, `case`, `let`, `proc`, `\`) and prefix negation on the next token
+    instead of trying them in turn. Each block form starts with its own
+    keyword, so at most one could ever match, but the old chain of alternatives
+    allocated a continuation for all nine plus a backtracking negation at every
+    expression position.
+  - The type-atom parser's fallback branch tries only the three alternatives
+    whose leading token is not already dispatched, instead of re-running the
+    full eleven-way chain.
+  - The implied-extension fixpoint runs on the `ExtensionSet` bitset instead of
+    on lists, so closing a set costs word operations rather than a `filter` per
+    implication and a pair of `sort`s per round. It ran once per file.
+
+  Together these cut the `bench-aihc-base` benchmark's allocation by about 20%
+  (2.93 GB to 2.34 GB over five iterations), its wall time by about 12%
+  (152 ms to 134 ms per iteration) and its peak heap by about 20%
+  (21.4 MB to 17.1 MB).
+
+  A second round of the same kind:
+
+  - The layout engine builds one `LayoutState` per token instead of several.
+    Its intermediate results were bound with lazy tuple patterns, so every token
+    of every file allocated a pair and a selector thunk per component of it
+    before anything was looked at. The emitted token list also skips its three
+    `(<>)` thunks in the usual case, where no virtual token was inserted.
+  - Peeking at the next token is a Megaparsec primitive (`peekToken` and
+    friends) that reads the stream's memoized successor, rather than
+    `lookAhead anySingle`. Every dispatch point in the parser used the latter,
+    and paid for a state save and restore, the `token` machinery and a monadic
+    bind each time.
+  - Optional tokens are decided on the peeked token — `optionalTok` for a token
+    on its own, `optionalTokThen` for one that introduces a parser — instead of
+    by running a parser and recovering from its failure. This replaced 45 uses
+    of `MP.optional (expectedTok …)`, including the record braces and record dot
+    that used to be tried after every atom in the file.
+  - The infix-operator chain, parenthesized operator sections such as `(+)`, the
+    record-construction base and type applications as function arguments are all
+    now chosen on the next token rather than by trying and backtracking.
+  - A pragma declaration is recognized from the pending-pragma list on the
+    parser state, so an ordinary declaration no longer starts with a failed
+    pragma parse.
+  - A declaration that starts with a variable identifier only tries the pattern
+    binding parser when the token after it is `@`, a constructor operator or a
+    backtick. Nothing else can make such a declaration a pattern binding, and a
+    function definition with arguments is the most common declaration there is.
+  - `label` is a primitive too: a successful parse now goes straight to the
+    caller's continuation, with no `Either` box from `MP.observing` and no bind,
+    and the found token comes from the state the failure happened in.
+
+  Together these cut the benchmark's allocation by a further 19% (2.52 GB to
+  2.05 GB over five iterations) and its wall time by about 11% (150 ms to
+  134 ms per iteration), at unchanged peak heap.
 
   ## [3.0.1.1] - 2026-09-15
 
@@ -216,9 +316,9 @@ description: |-
   The package is validated with golden tests and oracle-backed differential
   tests against GHC.
 description-type: haddock
-hash: 7ce1a36da07f7cac342560e366346e7aa513119e1f39699cda923ef1d7051c9e
+hash: 03a50fcf1e6da34043e54468a78adaa2dc12d6a61f88762f24df8631e82d4466
 homepage: https://github.com/ai-haskell-compiler/aihc-parser
-latest: 3.0.1.1
+latest: 4.0.0.0
 license-name: Unlicense
 maintainer: lemmih@gmail.com
 synopsis: Haskell parser
