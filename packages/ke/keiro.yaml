@@ -14,6 +14,7 @@ all-versions:
 - 0.14.0.0
 - 0.15.0.0
 - 0.16.0.0
+- 0.17.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.2.2 && <2.3'
@@ -36,7 +37,7 @@ basic-deps:
   hs-opentelemetry-semantic-conventions: '>=1.40 && <2'
   keiki: '>=0.9 && <0.10'
   keiki-codec-json: '>=0.9 && <0.10'
-  keiro-core: ^>=0.16.0.0
+  keiro-core: ^>=0.17.0.0
   kiroku-store: '>=0.8 && <0.9'
   lens: '>=5.2 && <5.4'
   mmzk-typeid: '>=0.7 && <0.8'
@@ -59,6 +60,78 @@ changelog: |
   the [Haskell Package Versioning Policy](https://pvp.haskell.org/).
 
   ## [Unreleased]
+
+  ## 0.17.0.0 — 2026-09-17
+
+  ### Breaking Changes
+
+  - `Keiro.Outbox.enqueueProducerEventTx` now takes the source `RecordedEvent` and
+    a `Word32` emission index instead of a caller-supplied `OutboxId`, and is a pure
+    `Tx.Transaction ProducerEnqueueOutcome` rather than an `Eff` action producing a
+    transaction. It derives a deterministic UUIDv8 `OutboxId` and an opaque
+    `<namespace>_v1_<sha256-hex>` message ID from producer source/name and the
+    source-event coordinates, and returns `ProducerInserted`,
+    `ProducerDuplicateIdentical`, or `ProducerIdentityConflict` with the differing
+    field classes (never payload values). Missing `sourceEventId` /
+    `sourceGlobalPosition` default from the recorded event, and `occurredAt` is
+    normalized to microseconds. Replays leave retained publication/audit state
+    untouched. Canonical producer message IDs are no longer TypeIDs; historical
+    random IDs need a drained checkpoint cutover or an application-owned mapping
+    before old events are replayed (see ADR-42 and `docs/user/outbox.md`). No schema
+    migration is required.
+  - `mkIntegrationProducer` now rejects an empty `messageIdPrefix`.
+  - `KeiroMetrics` gains an `outboxIdentityConflict` field; code that constructs
+    the record directly rather than through `newKeiroMetrics` must supply it.
+
+  ### New Features
+
+  - Add no-Store delegated inbox single, retry, and sequential batch wrappers for
+    consumers whose downstream operation owns a durable idempotence receipt.
+  - Add frozen `delegatedEventId`, safe aggregate-command dispatch, and typed
+    process-manager result adaptation. Command failures, no-event successes, and
+    unconfirmed event-ID collisions are never acknowledged as duplicates.
+  - Add `Keiro.ProcessManager.Reaction`, an additive typed process-manager API
+    with explicit no-advance and accepted-only follow-ups, atomic saga/timer
+    mutation, target-keyed dispatch identity, exact accepted-witness recovery,
+    detailed one-shot results, and strict worker integration.
+  - Add `Keiro.Timer.cancelTimerTx`, the transaction-level form of guarded timer
+    cancellation, so callers can compose cancellation with an event append and
+    other timer mutations.
+  - Add `Keiro.Outbox.Identity` (`ProducerEventKey`, `ProducerIdentity`,
+    `ProducerEnqueueOutcome`, `ConflictField`, `deriveIdentity`,
+    `producerIdentityBytes`, `producerContentDigest`, `differingContentFields`,
+    `normalizeProducerEvent`), re-exported from `Keiro.Outbox` together with
+    `deriveProducerIdentity`, `recordProducerEnqueueOutcome`, and
+    `freshIntegrationEvent`. `Keiro.Outbox.Schema` adds `enqueueProducerOutboxTx`.
+  - Add the `keiro.outbox.identity.conflict` counter
+    (`keiroOutboxIdentityConflictName`, `recordOutboxIdentityConflict`), recorded
+    once after the transaction runner returns.
+
+  ### Other Changes
+
+  - Reactions with no schedule or cancel follow-ups skip the empty timer
+    transaction while preserving dispatch behavior and zero timer effects.
+  - Read-model compatibility deprecations now name retirement of the frozen
+    Language 4 generator as their removal boundary instead of an expired version.
+  - Add matched table/delegated inbox benchmarks for fresh, repeated, duplicate,
+    chunked, metrics, and long-history receipt-probe workloads.
+  - Deprecate `mintIntegrationEvent` in favor of `freshIntegrationEvent`, which
+    names its fresh-envelope behavior explicitly; use `enqueueProducerEventTx` for
+    replay-safe producer identity. Caller-owned `enqueueOutboxTx` is unchanged.
+  - The `ProcessManagerAction` documentation now states the real atomicity
+    boundary: manager-state append and timer writes share one transaction, while
+    each target command commits in its own.
+  - Add a producer identity benchmark with retained baseline results.
+
+  - Existing process-manager APIs and positional deterministic identities remain
+    unchanged. Switching an existing manager name to the reaction runner is an
+    identity migration: drain source redelivery, partial fan-out, pending timers,
+    and permitted historical replay first. The reaction family has no automatic
+    legacy or router identity fallback.
+  - Outbox reads now preserve non-canonical stored `content_type` text. A retained
+    row containing, for example, `application/json; charset=utf-8` publishes that
+    exact `content-type` header instead of normalizing it to `application/json`;
+    inbox decoding continues to normalize either representation.
 
   ## 0.16.0.0 — 2026-09-07
 
@@ -1080,9 +1153,9 @@ description: |
 
   BSD-3-Clause.
 description-type: markdown
-hash: e6096b8f4a8b40c85721912cae8dbd5bd6cada293e21345bd030e00d1ed96cf3
+hash: 4749d4b99f491a68f225025285f64d08ceaf0f244480740fe176f4df5f8536d1
 homepage: https://github.com/shinzui/keiro#readme
-latest: 0.16.0.0
+latest: 0.17.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Event sourcing framework and workflow engine
@@ -1092,8 +1165,11 @@ test-bench-deps:
   bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.8'
   contravariant-extras: '>=0.3 && <0.4'
+  deepseq: '>=1.5 && <1.6'
+  directory: '>=1.3 && <1.4'
   effectful: '>=2.6 && <2.7'
   effectful-core: '>=2.6 && <2.7'
+  filepath: '>=1.4 && <1.6'
   hasql: '>=1.10 && <1.11'
   hasql-pool: '>=1.2 && <1.5'
   hasql-transaction: '>=1.1 && <1.3'
@@ -1106,8 +1182,8 @@ test-bench-deps:
   keiki: '>=0.9 && <0.10'
   keiki-codec-json: '>=0'
   keiro: '>=0'
-  keiro-core: ^>=0.16.0.0
-  keiro-test-support: '>=0.16.0.0 && <0.17'
+  keiro-core: ^>=0.17.0.0
+  keiro-test-support: '>=0.17.0.0 && <0.18'
   kiroku-store: '>=0.8 && <0.9'
   process: '>=1.6 && <1.7'
   shibuya-core: '>=0.9.0.0 && <0.10'
