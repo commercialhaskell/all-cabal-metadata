@@ -1,0 +1,109 @@
+all-versions:
+- 0.1.0.0
+author: goolord
+basic-deps:
+  base: '>=4.17 && <4.23'
+  deepseq: '>=1.4 && <1.6'
+  primitive: '>=0.9 && <0.10'
+  text: '>=2.0 && <2.2'
+changelog: "# Changelog\r\n\r\n## 0.1.0.0 — unreleased\r\n\r\nInitial release.\r\n\r\n-
+  Persistent B-tree rope with UTF-8 chunks up to 512 bytes and structural\r\n  sharing
+  between versions.\r\n- Indexing and conversion in bytes, code points, UTF-16 code
+  units, and lines,\r\n  plus zero-based line-and-column positions.\r\n- Insert, delete,
+  and replace operations, with a single-descent fast path for\r\n  small edits and
+  a bounded buffer for consecutive keystrokes.\r\n- Cached metrics for constant-time
+  length queries, including pending input.\r\n- Line lookup, slicing, chunk folds,
+  and zero-copy chunk views.\r\n- Shared range descent for `slice` and `sliceText`,
+  avoiding tree rebuilding\r\n  above the lowest node containing the range.\r\n- Combined
+  line-start and position lookup with `metricsAtLineAndPosition`,\r\n  for column
+  conversion and detection of clamped or rounded positions.\r\n- Unlifted tree nodes
+  to avoid evaluation checks during traversal. Requires\r\n  GHC 9.4 or later.\r\n-
+  Buffered UTF-8 output through `hPutUtf8` and `writeFileUtf8`.\r\n- Runtime-selected
+  SSE2 and AVX2 chunk scans on supported x86-64 systems,\r\n  with portable C elsewhere
+  and an optional Haskell-only build.\r\n- Direct CPU feature detection without compiler-runtime
+  symbols, supporting\r\n  GHCi and Template Haskell linking on Windows.\r\n- Custom
+  monoidal measures and prefix searches in `Data.Text.NanoRope.Measured`.\r\n- Representation,
+  scan primitives, and invariant checks in\r\n  `Data.Text.NanoRope.Internal`, without
+  API stability guarantees.\r\n"
+changelog-type: markdown
+description: "# nano-rope\r\n\r\nA persistent UTF-8 rope for Haskell. Index and edit
+  by bytes, Unicode code\r\npoints, UTF-16 units, or lines in logarithmic time. Versions
+  share unchanged\r\ntext for undo and snapshots.\r\n\r\nUses a B-tree of chunks up
+  to 512 bytes, buffered consecutive insertions,\r\nzero-copy chunk reads, and optional
+  custom monoidal summaries.\r\n\r\n## Quick start\r\n\r\nRequires GHC 9.4+. Add `nano-rope`
+  and `text` to your Cabal `build-depends`.\r\n\r\n```haskell\r\n{-# LANGUAGE OverloadedStrings
+  #-}\r\n\r\nimport Data.Text.NanoRope (Rope, Unit (..), Position (..))\r\nimport
+  qualified Data.Text.NanoRope as Rope\r\n\r\ndocument :: Rope\r\ndocument = Rope.fromText
+  \"let x = \\\"\U0001F600\\\"\\nlet y = x\\n\"\r\n\r\nedited = Rope.replace Lines
+  1 2 \"let z = x\\n\" document\r\n-- document remains valid\r\n\r\nline = Rope.getLine
+  1 edited                          -- \"let z = x\"\r\nsize = Rope.length Utf16 document
+  \                    -- 23\r\nbyte = Rope.convert Utf16 Bytes 11 document           --
+  13\r\npos  = Rope.offsetToPosition Bytes Utf16 17 document   -- Position 1 2\r\n```\r\n\r\n##
+  Coordinates\r\n\r\n| Unit | Meaning |\r\n| --- | --- |\r\n| `Bytes` | UTF-8 bytes
+  |\r\n| `Chars` | Unicode code points, not graphemes or display columns |\r\n| `Utf16`
+  | UTF-16 code units; LSP's default position encoding |\r\n| `Lines` | Line starts;
+  `length Lines` counts `\\n` characters |\r\n\r\n- Offsets are zero-based and clamped.
+  Offsets inside a code point round down.\r\n- Ranges are half-open; both endpoints
+  refer to the original rope. If `j <= i`,\r\n  slicing is empty, deletion does nothing,
+  and replacement inserts at `i`.\r\n- `Position` is a zero-based line and column,
+  with the column unit supplied\r\n  separately. Columns clamp before `\\n` or `\\r\\n`;
+  lines past the document\r\n  clamp to its end. Negative lines and columns clamp
+  to zero. Only `\\n` starts\r\n  a new line.\r\n- `getLine` strips the terminator
+  and returns empty text for invalid indices.\r\n  `lineCount` includes the final,
+  possibly empty line. `lines` omits that empty\r\n  trailing line and returns `[]`
+  for an empty rope.\r\n\r\nFor multiple coordinates, reuse `metricsAtPosition`, or\r\n`metricsAtLineAndPosition`
+  for both line-start and position metrics. Subtract\r\ntheir `bytes`, `chars`, or
+  `utf16Units` fields to get columns.\r\n\r\n## Reading and writing\r\n\r\n- `chunkAt`
+  returns a zero-copy view of the remaining chunk at an offset.\r\n- `foldlChunks'`
+  / `foldrChunks` traverse chunks; `toChunks` / `toLazyText`\r\n  share their buffers.
+  `toText` copies unless the rope fits in one chunk.\r\n- `hPutUtf8` / `writeFileUtf8`
+  stream UTF-8, preserving bytes and line endings\r\n  regardless of handle encoding
+  or newline translation.\r\n\r\n## Custom measures\r\n\r\n`Data.Text.NanoRope.Measured`
+  provides `Rope m` with cached monoidal summaries.\r\nImplement `Measure.measureChunk`,
+  then use `measure` to read the summary or\r\n`splitWhere` to search by it. Measures
+  must obey:\r\n\r\n```haskell\r\nmeasureChunk (a <> b) == measureChunk a <> measureChunk
+  b\r\nmeasureChunk mempty   == mempty\r\n```\r\n\r\nSearch predicates must stay true
+  once true for a growing prefix. Pairs and\r\ntriples of measures are supported.
+  `measured` / `unmeasured` in the plain\r\nmodule rebuild annotations while sharing
+  text buffers.\r\n\r\n## Performance\r\n\r\nFor `n` document bytes and `k` inserted
+  or returned bytes:\r\n\r\n| Operation | Cost |\r\n| --- | --- |\r\n| `null`, `length`,
+  `metrics`, `lineCount`; settled `measure` | `O(1)` |\r\n| Tree edits, slices, lookups,
+  coordinate conversions, searches | `O(log n)` |\r\n| `insert`, `replace`, `getLine`,
+  `sliceText` | `O(log n + k)` |\r\n| Construction, flattening, chunk traversal, UTF-8
+  output | `O(n)` |\r\n\r\nBounds assume constant-time measure combination and search
+  predicates, and\r\nlinear-time chunk measurement. Consecutive insertions can use
+  a bounded\r\nbuffer; tree reads flush it, while `length` and `metrics` do not.\r\n\r\nScans
+  use SSE2/AVX2 on supported x86-64 systems, portable C elsewhere, and\r\nHaskell
+  for short scans. Build with `-f -simd` for Haskell-only scans.\r\n\r\n### Benchmarks\r\n\r\nGHC
+  9.14.1, about 4 MB / 100,000 lines of generated source. A fresh rope retains\r\n4.55
+  MB for 4.03 MB of text; after 10,000 random inserts, 4.60 MB. Retaining\r\nolder
+  versions uses additional memory. Construction and flattening usually\r\ncopy the
+  text.\r\n\r\n![Timings, allocation, and live heap: nano-rope, text-rope, yi-rope,
+  core-text](bench/results.svg)\r\n\r\n[Raw results](bench/results.csv) · [Benchmark
+  source](bench/Main.hs) ·\r\n[Language-server workloads](bench/Lsp.hs) (edits, completion,
+  tokens, positions).\r\nResults vary with hardware, compiler, and document shape.\r\n\r\n##
+  Development\r\n\r\n```sh\r\ncabal test\r\ncabal test -f -simd\r\ncabal haddock\r\ncabal
+  bench\r\n```\r\n\r\nRegenerate the comparison chart and CSV:\r\n\r\n```sh\r\ncabal
+  bench -f compare-text-rope -f compare-yi-rope -f compare-core-text --benchmark-options=\"--chart
+  bench/results.svg\"\r\n```\r\n\r\nAdd `--redraw` inside `--benchmark-options` to
+  reuse CSV timings and allocations;\r\nlive heap is measured again.\r\n"
+description-type: markdown
+hash: 6ebf44108d596d536de0c5fdbab7e2dfc7b91f534a69772e944eba79e8466b92
+homepage: ''
+latest: 0.1.0.0
+license-name: MIT
+maintainer: zacharyachurchill@gmail.com
+synopsis: B-tree text rope with flat chunks, multi-unit indexing and custom measures
+test-bench-deps:
+  QuickCheck: '>=2.14 && <2.19'
+  base: '>=4.17 && <4.23'
+  bytestring: '>=0.11 && <0.13'
+  deepseq: '>=1.4 && <1.6'
+  directory: '>=1.3 && <1.4'
+  nano-rope: '>=0'
+  primitive: '>=0.9 && <0.10'
+  quickcheck-classes-base: '>=0.6.2 && <0.7'
+  tasty: '>=1.4 && <1.6'
+  tasty-bench: '>=0.3 && <0.6'
+  tasty-quickcheck: '>=0.10 && <0.12'
+  text: '>=2.0 && <2.2'
