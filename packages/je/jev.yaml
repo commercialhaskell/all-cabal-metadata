@@ -1,0 +1,295 @@
+all-versions:
+- 0.1.0.0
+author: Johan Yngman
+basic-deps:
+  aeson: '>=2.2 && <2.3'
+  base: '>=4.20 && <4.21'
+  bytestring: '>=0.12 && <0.13'
+  containers: '>=0.7 && <0.8'
+  http-client: '>=0.7.18 && <0.8'
+  http-client-tls: '>=0.3.6 && <0.4'
+  http-types: '>=0.12.4 && <0.13'
+  jev: '>=0'
+  text: '>=2.1 && <2.2'
+changelog: |
+  # Changelog
+
+  ## 0.1.0.0
+
+  - Enforce `timeoutMicros` across the complete HTTP operation, including reading
+    the response body. Validation and JSON decoding remain outside the deadline.
+  - Add structured transport failures. `TransportError Text` becomes
+    `TransportError TransportFailure`; total deadline expiry is `DeadlineExceeded`.
+  - Change `HttpError Int body` to `HttpError ResponseMetadata body`. Read the
+    status from `metadata.statusCode`; headers and request IDs are retained.
+  - Add `ResponseDecodeError ResponseMetadata Text` for HTTP decoding failures.
+    `DecodeError Text` is used by the pure fixture decoder.
+  - Reject contradictory distributions and scores using documented rounding
+    tolerances, and require legends to cover returned probability indices.
+  - Add pure question validation, request inspection, and fixture decoding.
+  - Add optional OpenRouter routing and observability settings through
+    `decideWith`, `decideJSONWith`, and `prepareRequestWith`.
+  - Add `Functor` instances for value-carrying public data types.
+  - Document public API contracts and consumer installation; add package bounds,
+    license text, and isolated source-distribution verification.
+  - Move Nix tooling overrides to `cabal.project.nix`; ordinary Cabal builds now
+    use a minimal project file.
+changelog-type: markdown
+description: |
+  # jev
+
+  A small Haskell client for [TypeSafe Jev](https://docs.typesafe.ai/introduction), with direct TypeSafe and OpenRouter support. Define typed questions, send a prompt, and pattern match on your own values. Choice, Score, and Noul can share one request using ordinary `Applicative` composition.
+
+  Textual inputs and metadata use strict `Text`. JSON encoding and response decoding stay inside the library. Responses retain probabilities, confidence where available, model information, and usage. `requestId` uses the JSON `id` when supplied by a gateway, otherwise the `x-typesafe-request-id` response header.
+
+  ## Add Jev to an application
+
+  The supported and tested compiler is **GHC 9.10.1** (`base-4.20`). Dependency
+  bounds currently target that tested environment; other compiler versions have
+  not been verified. You can use Cabal directly; Nix is optional for consumers.
+
+  To consume a local checkout, place it beside your application and use this
+  `cabal.project` in the application directory:
+
+  ```cabal
+  packages: . ../jev
+  ```
+
+  For a Git dependency, instead add a `source-repository-package` stanza pointing
+  at `https://github.com/realbogart/jev.git` and pin `tag` to a full commit hash you
+  have reviewed. A local checkout includes your uncommitted changes; a Git pin does not.
+
+  A minimal application's `.cabal` file can be:
+
+  ```cabal
+  cabal-version: 3.4
+  name: jev-demo
+  version: 0.1.0.0
+  build-type: Simple
+
+  executable jev-demo
+      main-is: Main.hs
+      build-depends: base >= 4.20 && < 4.21, text >= 2.1 && < 2.2, jev == 0.1.0.0
+      default-language: GHC2021
+      default-extensions: OverloadedStrings, OverloadedRecordDot
+  ```
+
+  Copy [examples/Choice.hs](examples/Choice.hs) to `Main.hs`, set `JEV_API_KEY`, and
+  run `cabal run jev-demo`. Add `aeson` to your application's dependencies if you
+  use the structured JSON helpers. The postpositive `qualified` imports in the
+  examples are enabled by `GHC2021` (or explicitly by `ImportQualifiedPost`).
+
+  ## A single Choice
+
+  Enable `OverloadedStrings` and `OverloadedRecordDot` in your application. Define an explicit mapping between your constructors and the labels and descriptions Jev sees:
+
+  ```haskell
+  import Jev
+  import Data.Text qualified as Text
+  import Data.Text.IO qualified as Text
+
+  data Team = Billing | Technical
+
+  route :: Question (Choice Team)
+  route =
+    choice "Which team should handle this?"
+      [ Option Billing "billing" (Just "Payments and invoices"),
+        Option Technical "technical" (Just "Bugs and outages")
+      ]
+  ```
+
+  Given a `Text` API key, reuse a client across requests:
+
+  ```haskell
+  withClient (defaultConfig TypeSafe key) $ \client -> do
+    result <- decide client "I was charged twice." route
+    case result of
+      Left err -> Text.putStrLn (Text.pack (show err))
+      Right response -> case response.answers.choice of
+        Billing -> Text.putStrLn "Send to billing"
+        Technical -> Text.putStrLn "Send to technical support"
+  ```
+
+  The complete [Choice example](examples/Choice.hs) loads `JEV_API_KEY` and handles both constructors:
+
+  ```bash
+  cabal run jev-choice
+  ```
+
+  ## Choice, Score, and Noul in one call
+
+  Use a record constructor with `<$>` and `<*>` to describe the result:
+
+  ```haskell
+  data Triage = Triage
+    { team :: Choice Team,
+      urgency :: Score,
+      human :: Noul
+    }
+
+  triage :: Question Triage
+  triage =
+    Triage
+      <$> route
+      <*> score "How urgent is this?" ["Routine", "Handle today", "Handle immediately"]
+      <*> noul "Does this need a human?"
+  ```
+
+  Run `decide client prompt triage` to receive `Either JevError (Response Triage)` in one HTTPS request. `response.answers.team.choice` is a `Team`; `response.answers.urgency.score` is a fractional value on the rubric's zero-based scale; `response.answers.human.probability` is the probability of yes. Choose thresholds in application code. Noul is not a Boolean, and Score is not automatically normalized to 0–1.
+
+  The complete [Triage example](examples/Triage.hs) uses OpenRouter, retains routing confidence, reports the score, and escalates when the Noul probability is at least `0.8`:
+
+  ```bash
+  cabal run jev-triage
+  ```
+
+  Set `OPENROUTER_API_KEY` before running it. Both examples make real, billable requests when executed; building and testing do not.
+
+  ## Configuration and lifecycle
+
+  `defaultConfig TypeSafe key` uses `https://api.typesafe.ai/v1/systemone` and `jev-latest`. `defaultConfig OpenRouter key` uses `https://openrouter.ai/api/alpha/decisions` and `typesafe/jev-1.13`. The [OpenRouter Decisions API](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-questions-and-answers-request) is an alpha endpoint.
+
+  Override `model`, `endpoint` (a complete URL), or `timeoutMicros` with record updates:
+
+  ```haskell
+  config :: Text.Text -> Config
+  config key = (defaultConfig TypeSafe key) {timeoutMicros = 60 * 1000000}
+  ```
+
+  The default deadline is 30 seconds for the entire HTTP operation, including
+  connection setup, request transmission, and reading the complete response body.
+  Expiration returns `TransportError DeadlineExceeded`. Pure input validation and
+  response decoding are outside this deadline. A custom manager may impose its
+  own shorter limits. Keys are explicit: the library does not read the environment,
+  and `Config` has no `Show` instance.
+
+  Records expose fields for record-dot syntax, record updates, and pattern matching.
+  They do not generate ordinary selector functions: use `response.answers` or
+  `Response {answers = value}`, rather than `answers response`.
+
+  `newClient` creates a reusable TLS connection manager; `withClient` scopes its use. `closeClient` releases the client's manager reference and prevents new requests through that client. In-flight requests can finish. The HTTP library reclaims connections automatically after the manager becomes unreachable. Closing is idempotent.
+
+  For an existing connection pool, use `clientWithManager config manager`. The caller retains ownership, and `closeClient` does nothing to a borrowed manager. Its manager settings also control any transport-level retries. Library-owned managers disable retries; application-level retries, caching, and logging are left to callers.
+
+  OpenRouter routing and observability settings are optional per request:
+
+  ```haskell
+  -- Import Data.Aeson (object, (.=)) for this example.
+  routerOptions :: RequestOptions
+  routerOptions = defaultRequestOptions
+    { sessionId = Just "support-session-42",
+      providerRouting = Just (object ["allow_fallbacks" .= False])
+    }
+  -- decideWith client routerOptions "I was charged twice." route
+  ```
+
+  `decideWith` and `decideJSONWith` also accept `trace` objects and a `user`
+  identifier. Session and user identifiers are limited to 256 characters. Nonempty
+  options fail locally on TypeSafe; nested routing and trace fields are checked by
+  OpenRouter. Defaults send no extra fields.
+
+  ## Structured inputs and composition
+
+  `decideJSON`, `choiceJSON`, `scoreJSON`, and `noulJSON` accept Aeson values for structured state, instructions, and criteria. State and instructions support strings, objects, and arrays. Use `JsonOption` for structured Choice descriptions; `Nothing` or `Just Null` encodes an undescribed option as JSON `null`. Use `noulWithCriteria` or `noulJSON` with `NoulCriteria` to describe both yes and no. With direct TypeSafe, the JSON helpers also accept `Null` instructions and Noul outcome descriptions. OpenRouter requires non-null instructions and descriptions for both supplied Noul outcomes; incompatible values fail locally. Score levels and state must be non-null on both providers.
+
+  `Question` supports `fmap`, applicative composition, and `traverse`. Internal question IDs are assigned automatically. For example, `traverse noul prompts` describes one request returning `[Noul]`. There is no `Monad` instance: questions in one request cannot depend on earlier answers. Make another `decide` call for dependent decisions.
+
+  Question construction is pure; validation happens before any HTTP request. An entirely `pure` question or empty traversal contains no questions and is rejected. Choice accepts 1–255 options with unique wire labels; Score accepts 2–10 levels. No typeclass instances are required for Choice domain values.
+
+  Results expose constructors for pattern matching. Choice distributions pair domain values with probabilities in the supplied option order. Score distributions and legends use `IntMap`; supplied sparse distributions are preserved. The decoder checks finite probabilities in [0,1], distribution sums within `0.001` of one, a maximal selected Choice probability within `0.001`, and a Score within `0.001 * numberOfLevels` of its probability-weighted value. Legends must cover every returned probability index. Values are never renormalized or filled in. Confidence is retained as a separate provider measure in [0,1], not recomputed from the distribution. Public constructors allow manually created values that bypass these checks.
+
+  `Response`, `Choice`, `Option`, `JsonOption`, and `NoulCriteria` have `Functor`
+  instances. Mapping a `Choice` transforms both the selection and the values in its
+  distribution; mapping a `Response` changes only its answers.
+
+  ## Validation and testing without HTTP
+
+  `validateQuestion TypeSafe triage` checks question structure without a client or
+  API key. Failures identify the question's zero-based ID and primitive, for example
+  `q1 (score): Score requires 2 to 10 levels`.
+
+  `prepareRequest provider model state question` additionally checks the model and
+  state, and returns an abstract `PreparedRequest a`. `prepareRequestWith` also
+  accepts per-request options. Use `requestBody` to inspect the exact JSON bytes,
+  and `decodeResponse` to test stored response fixtures against the original typed
+  question. Neither operation makes a network request or requires credentials:
+
+  ```haskell
+  -- Import Data.Aeson (Value (String)) and qualified Data.ByteString.Lazy as LBS.
+  decodeRouteFixture :: LBS.ByteString -> Either JevError (Response (Choice Team))
+  decodeRouteFixture fixture = do
+    prepared <- prepareRequest TypeSafe "jev-latest" (String "Test state") route
+    decodeResponse prepared fixture
+  ```
+
+  The fixture decoder does not check HTTP status or attach header metadata. Request
+  bodies contain no bearer token, but can still contain sensitive application data.
+
+  ## Handling failures
+
+  Failures distinguish validation, transport, HTTP status, and decoding:
+
+  - `ValidationError message`: no request was made.
+  - `TransportError reason`: a structured `TransportFailure`, such as
+    `DeadlineExceeded`, `ConnectionFailed`, or `InvalidResponse`. Categories contain
+    no request contents or credentials. A category does not guarantee retry safety;
+    a timed-out request may already have been processed.
+  - `HttpError metadata body`: a non-2xx response. `metadata.statusCode`,
+    `metadata.headers`, and `metadata.requestId` retain diagnostic context.
+    `lookup "Retry-After" metadata.headers` retrieves server retry guidance when present.
+  - `ResponseDecodeError metadata message`: a 2xx response could not be decoded;
+    the same metadata is retained, including the body ID when readable or header ID.
+  - `DecodeError message`: decoding a fixture through `decodeResponse` failed.
+
+  Asynchronous cancellation propagates normally. Exceptions from custom manager
+  hooks or user functions mapped over questions are not generally converted to
+  `JevError`. Server response headers and bodies can contain sensitive information;
+  choose what to retain when logging. See [CHANGELOG.md](CHANGELOG.md) for changes
+  to error constructor arguments.
+
+  ## Development
+
+  Use the repository's Nix development shell, then run:
+
+  ```bash
+  ./scripts/format.sh
+  ./scripts/verify.sh
+  ```
+
+  Verification checks package metadata, compiles the library and both examples,
+  runs fixture and local HTTP server tests, and builds and tests an unpacked source
+  distribution using a fresh, minimal Cabal project. Tests require no API credentials.
+  `cabal haddock lib:jev` generates API documentation. The default Nix package builds
+  the library. Nix development-tool overrides live in `cabal.project.nix`; ordinary
+  Cabal consumers use the minimal `cabal.project` without those overrides.
+
+  `Jev` is the convenient public import. `Jev.Types`, `Jev.Question`, and `Jev.Client` separate data, question construction, and transport. The internal protocol module owns JSON encoding and decoding.
+
+  ## API compatibility notes
+
+  Checked against the official [HTTP reference](https://docs.typesafe.ai/api), [question schemas](https://docs.typesafe.ai/sdk/python/api/types/questions), and [response schemas](https://docs.typesafe.ai/sdk/python/api/types/responses), with targeted live checks on both providers.
+
+  The [advanced structure guide](https://docs.typesafe.ai/primitives/advanced) lists null Score levels, but the HTTP reference, Python schema, and both live endpoints reject them. The library follows the confirmed endpoint behavior. Score legends can contain objects and arrays as well as text, so their values remain Aeson `Value`.
+
+  For Jev 1.13, the [model documentation](https://docs.typesafe.ai/models) specifies 64k tokens for the complete request and 32k for state plus the longest question. These limits are enforced by the provider, not estimated locally. Pin `config.model` to a version when your thresholds depend on that version's behavior; `jev-latest` can change.
+
+  TypeSafe documents HTTP 401 for authentication failures, 422 for validation failures, 429 for rate limits, and 529 for overload. The library preserves their status and response body. Callers should use exponential backoff for 429/529. Automatic retries and the model-listing endpoint are outside this library's decision API. The examples intentionally use `JEV_API_KEY`; TypeSafe's own SDK examples use `TYPESAFE_API_KEY`.
+description-type: markdown
+hash: 42361eb88b26cc0776fc67545a12b45c9dacc87ed534067f409e58daa10417a1
+homepage: https://github.com/realbogart/jev
+latest: 0.1.0.0
+license-name: MIT
+maintainer: johan.yngman@gmail.com
+synopsis: Typed decisions with Jev through TypeSafe and OpenRouter
+test-bench-deps:
+  aeson: '>=2.2 && <2.3'
+  base: '>=4.20 && <4.21'
+  bytestring: '>=0.12 && <0.13'
+  containers: '>=0.7 && <0.8'
+  hspec: '>=2.11 && <2.12'
+  http-client: '>=0.7.18 && <0.8'
+  http-types: '>=0.12.4 && <0.13'
+  jev: '>=0'
+  text: '>=2.1 && <2.2'
+  wai: '>=3.2 && <3.3'
+  warp: '>=3.4 && <3.5'
