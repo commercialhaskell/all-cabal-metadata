@@ -1,6 +1,7 @@
 all-versions:
 - 1.0.0.0
 - 1.1.0.0
+- 1.2.0.0
 author: Blue Rose
 basic-deps:
   aeson: '>=2.2 && <2.4'
@@ -32,6 +33,113 @@ changelog: |
 
   The serialization format carries its own version tag, independent of the package
   version; any change to it is recorded here explicitly.
+
+  ## 1.2.0.0 - 2026-09-23
+
+  * Breaking: remove `splitStepHalf` from `Moonlight.Planar.Curve`. Use
+    `splitStep unitHalf`, or `splitStep` at any exact parameter; there is no
+    compatibility alias.
+  * Add `splitStep`, exact de Casteljau subdivision at an arbitrary
+    `UnitInterval` for lines, quadratics, cubics and positive-weight rational
+    quadratics. Each child is reparameterized over its own unit interval, and the
+    right child is rebased at the split point.
+  * Add `ParameterSpan` (an ordered, checked pair of unit parameters, refused
+    with `ReversedParameterSpan`) and `restrictStep`, which reparameterizes a
+    located step to the span through polar forms and relocates it to the source
+    point. Equal endpoints yield a stationary step.
+  * Add `StepJet` and `jetStep`: the value and the first and second derivatives
+    with respect to the step's own parameter. The rational quadratic uses the
+    homogeneous quotient rule with a positive weight witness. `startJet` and
+    `endJet` remain as closed-form endpoint specializations.
+  * Add `Moonlight.Planar.Curve.Measure`: certified Euclidean arc length of
+    lines, quadratics, cubics and positive-weight rational quadratics as an
+    immutable `MeasuredTrail` that retains its source subpath, accepted spans and
+    cumulative rational enclosures.
+    * One chord/control-polygon enclosure kernel serves all four shapes.
+    * A global error allocation keeps the total width within the policy
+      tolerance.
+    * `measurePolicy` is total over a tolerance, a `RadicalPrecision` and an
+      admitted `SubdivisionBudget` (depth, leaves, exact bit width), which
+      `subdivisionBudget` validates. The bit budget covers source values,
+      retained values and query requests. An exhausted budget refuses as
+      `MeasureBudgetExhausted` carrying the shared `BudgetObligation`.
+    * `pointAtLength` and `pointAtFraction` answer inverse queries as an
+      `ArcSample`: a site on its source step with a certified parameter bracket
+      and a residual within tolerance.
+    * A `TrailSite` is an opaque located position on one step of its source,
+      with its step index, `UnitInterval` parameter, exact point, join side and
+      jet. `sampleSite` reads the site of an `ArcSample`. The sample itself adds
+      only the bracket and the residual.
+    * Span and sample parameters, and those carried by `SpanRefused`, are
+      `UnitInterval` values admitted once and never rechecked.
+    * A distance beyond the certified upper length is refused, and so is one
+      between the lower and upper lengths of an inexact total. Neither is
+      clamped.
+    * Exhausted budgets refuse with the source step, the bracket and the
+      obligation.
+  * Add `Moonlight.Planar.Curve.Frame`: measured tangent frames for
+    path-directed placement.
+    * `regularFrame` reads a `FrameSite`, either a sampled `ArcSample` or an
+      exact `TrailSite` from `exactTrailSite`, through one jet and
+      normalization path.
+    * The first column is the tangent and the second is its left normal
+      `(-t_y, t_x)`. The frame carries its certified scale bound
+      (`measuredFrameScaleSquared`).
+    * A stationary site, a corner (including a closed seam), an out-of-range
+      step or an unresolved normalization is refused. No tangent is invented.
+    * `fractionRun` and `sampleRun` place an evenly spaced run of arc fractions.
+      An empty run, non-positive spacing and a closed seam repeated at both ends
+      are refused.
+  * Breaking: `Moonlight.Planar.Curve.Region.lowerSimpleRegion` now takes a
+    `SubdivisionBudget` and returns `CurveTopologyEvidence` with the region and
+    lowered paths. It certifies that the region's components, holes and nesting
+    are the curves' own, within a stated domain:
+    * each contour subdivides within budget into monotone pieces;
+    * each joint is wedge-separated (a cusp refuses);
+    * non-adjacent pieces are hull-separated or certified not to cross;
+    * the actual lowered loops nest exactly as the curves do.
+
+    Outside that domain it refuses with `CurveTopologyRefused`, a new
+    `CurveRegionError` constructor. Its obstructions name the contour spans and
+    keep three kinds of case apart:
+    * certified contacts, which carry an exact common source point;
+    * certified crossings, which carry a certificate and never a point;
+    * unresolved contacts, which carry the exhausted budget.
+
+    Every retained piece's located controls and every crossing certificate are
+    admitted against the budget's bit width. `certifySimpleRegion` certifies
+    without lowering, and
+    `certifiedPointLocation` locates a point strictly outside every certified
+    piece hull. There is no uncertified variant.
+  * Add `Moonlight.Planar.Curve.Proximity`: bounded distance and clearance
+    between two curves.
+    * `curveDistance` returns an enclosure of the distance within the policy
+      tolerance, with its live candidate span pairs. The pairs are never a claim
+      that the nearest pair is unique.
+    * `clearance` is strict: it holds when the distance exceeds the given
+      distance, so zero means disjoint.
+    * Contact is witnessed in exactly three ways:
+      * exact sites closer than the distance;
+      * an exact shared site;
+      * a certified transversal crossing, which carries no point.
+    * Distance and contact are separate: a tangency can have its distance
+      decided while its contact stays unresolved.
+    * The subdivision budget's bit width bounds every source span, retained
+      site, displacement, certificate and enclosure endpoint, and the clearance
+      threshold at entry.
+      * An oversized request refuses before any work, as
+        `ProximityRequestRefused`.
+      * More source-step pairs than the budget's leaves refuse from the step
+        counts alone, as `ProximityStepPairsRefused`, before any pair is built.
+      * A source step too wide for the budget refuses as
+        `ProximitySourceRefused`, naming the span.
+      * A failure before any enclosure exists refuses without one, as
+        `ProximityUnenclosed`.
+      * A later failure carries the last admitted enclosure and the live
+        candidates, as `ProximityRefused`.
+  * Region valuation and curve measurement share one private radical-length
+    owner. `Moonlight.Planar.Valuation`'s exports, error type and 128-bit
+    published results are unchanged.
 
   ## 1.1.0.0 - 2026-09-23
 
@@ -763,9 +871,10 @@ description: |
   are the editing interface.
 
   This is a strong foundation, not a finished illustration language. The
-  [curve-authoring status](docs/curve-authoring-status.md) records the missing
-  measurement, offset, intersection, relational, repetition, and diagnostic
-  algebras required before making a broader readiness claim.
+  [curve-authoring status](docs/curve-authoring-status.md) records what the
+  measured and certified layer provides, its capability boundary, and the missing
+  offset, intersection, relational, repetition, and diagnostic algebras required
+  before making a broader readiness claim.
 
   `Moonlight.Planar.Curve` separates relative steps from their absolute
   `Located` anchor. `curveStep` supplies a displacement and a shape made with
@@ -1017,9 +1126,9 @@ description: |
 
   [Build and validate package components locally.](docs/development.md)
 description-type: markdown
-hash: d0e2205d4a7f86ddcd03b747fd832206d0b93803caa667259e5ca5d0f487d349
+hash: 97e77e6c25ac09b4a905aa7cb4979edf5cf3833476f52f812eee0e1c5b237568
 homepage: https://github.com/PaleRoses/moonlight
-latest: 1.1.0.0
+latest: 1.2.0.0
 license-name: MIT
 maintainer: rosaliafialkova@gmail.com
 synopsis: Native hex regions, Delaunay meshes, and exact planar algebra.
