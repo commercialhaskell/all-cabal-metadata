@@ -17,6 +17,7 @@ all-versions:
 - 1.1.5
 - 2.0.0
 - 2.0.1
+- 2.1.0
 author: Vincent Hanquez <vincent@snarc.org>
 basic-deps:
   base: '>=4.13 && <5'
@@ -30,7 +31,166 @@ basic-deps:
 changelog: |
   # CHANGELOG for crypton
 
-  ## 2.0.1
+  ## 2.1.0
+
+  * perf(p256): a signed five-bit window for the variable-point scalar
+    multiplication, which is what ECDH and ECDSA signing spend their time in.
+    The scalar is recoded into 52 digits, every one of them odd, so the table
+    holds only the odd multiples P, 3P, ..., 31P and a negative digit costs a
+    negation of y, which is free.  The main loop goes from 252 doublings and 64
+    additions to 255 and 51, and -- because no digit is zero and no partial sum
+    is the infinity -- it drops the masks that stood in for infinity on every
+    iteration.  The table is built so that each pair of neighbouring odd
+    multiples comes out of one doubling and one addition that shares everything
+    but a squaring and a multiplication between X+P and X-P.  Counted exactly,
+    the field multiplications and squarings go 3477 -> 3326.  Measured on an
+    idle Intel Haswell, thirty runs each, ECDH is 158.5 -> 153.3 microseconds,
+    about 4%; on an Apple M4 under desktop load the difference did not come out
+    of the noise.  One scalar, 30, would have reached the last addition with
+    the accumulator equal to the point being added, which these formulas cannot
+    do; the recoder detects that from the scalar and the last iteration doubles
+    instead.  Suggested by Kyle Butt
+
+  * perf(gcm): GHASH takes the ciphertext from the output buffer.  A group's
+    multiplies are issued between the rounds of the group after it, and the
+    blocks were copied into six registers' worth of scratch to wait there --
+    six stores a group for bytes that had just been written to the output
+    anyway.  The multiplies read the output instead, which is what picotls's
+    fusion does.  On an Intel Haswell this is worth two to three points against
+    fusion between 400 and 1440 bytes, and it removes the queue from the
+    AES-128 path
+
+  * perf(gcm): decryption takes the fused path too, on both x86-64 and
+    AArch64.  It had been left on the generic framing, so a received packet
+    cost what a sent one did before any of this: measured at 100 bytes, three
+    times what encrypting the same packet cost on either.  It is the simpler of
+    the two -- what GHASH absorbs is the ciphertext, and the ciphertext is the
+    input, so the multiplies need not wait on the AES and nothing is carried
+    between groups.  On an Intel Haswell, 100 bytes goes 0.165 -> 0.050
+    microseconds and 1440 bytes 0.362 -> 0.290; on an Apple M4, 0.230 -> 0.077
+    and 0.396 -> 0.321.  Decrypting is now about what encrypting is rather than
+    three times it.  The tag is still compared a byte at a time over its whole
+    length whichever way the answer goes
+
+  * perf(gcm): let the one-call interface specialise.  `gcmFullEncrypt`,
+    `gcmFullDecrypt` and `gcmFullEncryptMask` take three `ByteArrayAccess`
+    arguments and were marked `NOINLINE`, which is this module's habit and is
+    right for a wrapper that is called once; these are called once a packet.
+    With no specialisation every `withByteArray` and every `length` went through
+    a dictionary, and on an Apple M4 that measured **0.15 of the 0.265
+    microseconds** a 100-byte packet cost through the Haskell interface -- more
+    than the encryption it wrapped.  Marked `INLINABLE` so the caller can
+    specialise them, 100 bytes falls to 0.128, where the same work measured in C
+    is 0.114: the Haskell layer costs 0.014 rather than 0.15
+
+  * perf(gcm): build the length block and the initial counter in registers.
+    The length block -- the two bit counts GHASH ends on -- was assembled by
+    sixteen byte stores to the stack and read back, which measured about 9 of
+    the 58 nanoseconds a 100-byte packet cost.  Reversed the way every block is
+    on its way to GHASH, that block is just the two counts as little endian
+    words with the message's in the low half, so one `_mm_set_epi64x` makes it
+    and no shuffle is needed.  The initial counter likewise: the nonce is read
+    where it lies and masked, rather than in three pieces of four bytes.  On an
+    Intel Haswell a 100-byte packet goes from 0.058 to 0.049 microseconds.  With
+    this every length measured is at 90 per cent of fusion's speed or better --
+    100 bytes 90 and 95 with the header protection mask, 200 bytes 96, 1440
+    bytes 94, 16 KiB 95 -- where the series began at 31 per cent for 100 bytes
+
+  * perf(gcm): read a short block without going through the stack.  Zeroing
+    sixteen bytes, copying the block in and loading them back is three trips to
+    memory with a store the load must wait for, and at packet lengths that was a
+    tenth of the call.  The sixteen bytes are read where they lie and what is
+    above the length masked off, which is safe everywhere except at the end of a
+    page -- and a block near the end of a page whose own bytes stop short of it
+    is read aligned, which cannot leave the page, and shuffled down.  This is
+    how picotls's fusion does it.  On an Intel Haswell a 100-byte packet goes
+    from 0.0625 to 0.058 microseconds, 79 per cent of fusion's speed against 73,
+    and with the header protection mask 83
+  * perf(gcm): the tail of a message gets what the groups already had.  The
+    six-wide pass that finishes a message was still running its rounds from a
+    loop over a count held in the key, so the compiler could not place the
+    waiting multiplies between them, and the blocks it produced went through an
+    array indexed by a loop variable, which it cannot see through -- each block
+    then reloaded its own keystream from memory.  Written out for the ten rounds
+    of AES-128, with the multiplies at slots named at compile time, and the
+    blocks taken from the registers the pass left them in.  The pass itself
+    falls from about 29 to 6 nanoseconds; on an Intel Haswell 112 bytes is 13
+    per cent faster and 400 bytes goes from 81 to 86 per cent of fusion's speed
+
+  * perf(gcm): give E(K,Y0) a lane that would otherwise sit idle, and stop
+    copying the last short block through the stack.  Six blocks are in flight
+    whatever the message length, so a message leaving a tail of four blocks or
+    fewer has lanes to spare; the block that masks the tag rides in one of them
+    instead of taking ten rounds nothing overlaps, which at 100 bytes measured
+    9.3 of 78.9 nanoseconds.  And the last short block was stored to the stack
+    and copied back, when the tag that follows it is about to overwrite the
+    bytes above it anyway -- where there are sixteen to spare, one store does.
+    On an Intel Haswell, 100 bytes goes from 60 to 69 per cent of fusion's speed
+    and 200 bytes from 68 to 82
+
+  * perf(gcm): build the counter block without leaving the vector registers,
+    and keep each power of H beside its Karatsuba term.  Both came from reading
+    what picotls's `fusion` does differently.  The counter was being stepped in
+    a general register, byte swapped there and inserted into a vector one, which
+    is a move across register files for every lane and six to a group; held
+    byte reversed in a vector register instead, `_mm_add_epi32` steps the low
+    thirty-two bits and wraps them where GCM wants, and a shuffle puts the bytes
+    back.  The powers were in two arrays 256 bytes apart, so a multiply touched
+    two cache lines for operands it always wants together; they are now
+    adjacent.  On an Intel Haswell a 1200-byte message goes from 0.311 to 0.281
+    microseconds and 1440 bytes from 79 to 90 per cent of fusion's speed.  The
+    multiplies are also now genuinely issued between the AES rounds, which the
+    comment claimed and the generated code did not do: a test before each one
+    ended the basic block the scheduler works inside, and the first group is
+    peeled so that there is nothing to test
+
+  * perf(gcm): the same for AArch64, where what costs is the framing rather
+    than a missing fast path.  `armv8_impl.c` already encrypts eight blocks at a
+    time and folds their GHASH into one reduction; what sat outside it was the
+    additional data, the tag and the counter, each reached through the branch
+    table so that the running state went back to memory between them and a
+    one-block header paid a reduction of its own.  Measured on an Apple M4, that
+    framing was 0.07 of the 0.112 microseconds a 100-byte packet cost -- more
+    than the encryption of the packet itself.  Taking the whole message in one
+    call, with the tag and the counter in registers from end to end and the
+    additional data and the length block riding in the same batches as the
+    ciphertext: a 100-byte packet 3.0x, 200 bytes 2.6x, 400 bytes 1.6x, 1200
+    bytes 1.30x, 1440 bytes 1.23x, and level from about 6 KB up.  With the QUIC
+    header protection mask, 100 bytes is 3.3x.  Unlike x86-64 there is no length
+    above which something else is faster, because there is no vendored assembly
+    on this side to hand a long message to, so every length goes this way.  Held
+    against the interface it replaces on two key sizes, seven lengths of
+    additional data, fifteen message lengths up to 16 KB, three tag lengths and
+    every sample offset that fits
+
+  * perf(gcm): a fused AES-GCM for x86-64, for messages short enough that the
+    stitched assembly will not take them.  That assembly refuses anything under
+    288 bytes, so until now a QUIC packet paid for the AES key schedule and the
+    GHASH one block at a time, through a branch table that put the 128-bit state
+    back in memory at every step: a 100-byte packet cost 0.153 us of which the
+    encryption was a small part.  This is the design Kazuho Oku sets out for
+    picotls's `fusion` -- keep AES-NI issuing every clock, six blocks in flight,
+    and fit the additional data, the tag and the QUIC header protection mask
+    into the gaps between the rounds -- written in C with intrinsics, for the
+    reason he gives: what is complicated here is the scheduling, and it has to
+    stay readable to stay correct.  On an Intel Haswell a 100-byte packet goes
+    from 0.153 to 0.082 us and a 1200-byte one from 0.373 to 0.317, and the
+    header protection mask becomes **free** wherever it can be taken: 400 bytes
+    is 0.131 with it and 0.131 without, against 0.181 and 0.177, because it
+    rides in a lane of the AES pipeline that the message length leaves idle
+    rather than taking a block of its own.  It can be taken there only when the
+    sample lies in output already written and the two key schedules are the same
+    length, which is what TLS and QUIC do; otherwise it is computed after the
+    tag, where everything it may cover exists.  Above
+    1536 bytes the assembly is faster -- by 12 per cent at 3 KB and 20 at 16 KB
+    -- so longer messages still go there and nothing about TLS-sized records
+    changes.  The powers of H are built once per key, sixteen of them, which
+    adds 512 bytes to what a key holds and no parameter to any interface: a
+    power per block of the message would fold the whole GHASH into one reduction
+    but would make that state grow with the longest message a caller might send.
+    Held against the incremental interface on every combination of three key
+    sizes, seven lengths of additional data, twelve message lengths and three
+    tag lengths
 
   * fix(cpu): stop reading Intel's SDBG bit as AMD's XOP, which crashed SHA-512
     and ChaCha20 on Broadwell and later.  The vendored assembly dispatches on a
@@ -48,6 +208,69 @@ changelog: |
     beside it are cleared as well.  Reported by @lucasdicioccio, who
     disassembled the trap
     [#202](https://github.com/kazu-yamamoto/crypton/issues/202)
+
+  * feat(aes): `encryptWithMask`, for the QUIC header protection mask.  QUIC
+    takes the sample for its header protection from the ciphertext, so the mask
+    cannot be had before the encryption -- but it can be had before coming back.
+    `newHeaderKey` builds the second key schedule once, where `quic` builds it
+    per packet, and `encryptWithMask` seals the message and writes the sixteen
+    bytes of mask, both into buffers the caller already has, so that nothing is
+    allocated for either.  On an Apple M4 the mask then costs about 0.02 us
+    against 0.09 to 0.11 asked for separately: a 1440-byte packet goes from
+    0.473 to 0.382 us and a 100-byte one from 0.343 to 0.260.  Most of that is
+    the allocations rather than the crossing -- a version returning the two as
+    bytearrays was measured at 0.419 and 0.299, so it recovered less than a
+    third of it -- and the AES block itself is under two nanoseconds
+
+  * feat(aes): `Crypto.Cipher.AES.GCM`, for many short messages under one key.
+    The interface in `Crypto.Cipher.Types` builds a state from the key *and* the
+    nonce and then walks it through appending the additional data, encrypting
+    and finalizing, copying the 320-byte state at each step.  For a stream that
+    is nothing next to the encryption; for a datagram it is most of the work.
+    Measured on an Apple M4, a 1440-byte packet with a 20-byte header took
+    1.30 us, of which 0.17 us was the encryption: the AES key schedule and the
+    table of multiples of `H` were rebuilt for every nonce although both depend
+    on the key alone, and three state copies and four foreign calls carried the
+    rest.  A `Context` now holds what the key determines and is built once, and
+    `encrypt` takes a nonce and a whole message and answers in one call, giving
+    the ciphertext with the tag after it -- the shape a packet wants.  `decrypt`
+    takes that shape back and compares the tag itself, in C, looking at every
+    byte either way.  1440 bytes: 1.30 to 0.37 us, 3.5x; 100 bytes 0.83 to 0.23;
+    a 16 KiB TLS record 2.86 to 2.20, where the saving is the setup rather than
+    the call.  A message of 4 KiB or less goes through an unsafe foreign call,
+    which is worth 0.075 us and is only right because such a call is over
+    quickly; anything longer keeps the safe one.  This computes what the general
+    interface computes, which the tests hold it to on the same vectors
+  * Breaking change: fix(chachapoly1305): take a checked key, so that
+    initializing cannot fail.  The nonce was already a checked type, built by
+    `nonce8`, `nonce12` or `nonce24`, so the key length was the only way
+    `initialize` and `initializeX` could fail -- and callers answered that with
+    `throwCryptoError`, `tls` among them, where
+    `noFail (ChaChaPoly1305.nonce12 nonce >>= ChaChaPoly1305.initialize key)`
+    re-checked a length once per record for a key fixed for the connection.
+    There is now a `Key` with `key` to build one, and
+    `initialize :: Key -> Nonce -> State` and
+    `initializeX :: Key -> XNonce -> State` are total.
+    `aeadChacha20poly1305Init` is unchanged and still reports a bad key length.
+    This also closes the last of #28: `initFromRootState` wrapped a
+    `throwCryptoError` around a `B.take 32`, and the Poly1305 key type now has a
+    home in a hidden module so the modules here that know the length can say so
+    [#193](https://github.com/kazu-yamamoto/crypton/issues/193)
+
+  * feat(hash): Skein with the digest size as a type parameter.  Skein is
+    defined for any digest size and the C here has always taken one -- the
+    length goes to `crypton_skein512_init` and `crypton_skein512_finalize`, and
+    the output is produced in counter mode for as many blocks as are asked for
+    -- but Haskell could only reach the four sizes that had a type of their own.
+    `Skein256 (bitlen :: Nat)` and `Skein512 (bitlen :: Nat)` take any, in the
+    manner `SHAKE128` and `SHAKE256` already did; `Skein512 512` is
+    `Skein512_512`, which the tests hold it to, and the named types are
+    untouched.  This also brought back the `Skein256-160` and `Skein512-160`
+    known-answer vectors, which had been commented out of the test suite for
+    want of a type to run them against.  One large digest is a good deal cheaper
+    than the same bytes from repeated small ones: 512 KiB at 947 MB/s in one
+    digest against 172 MB/s as 8192 separate `Skein512_512` ones, on an M4
+    [#56](https://github.com/kazu-yamamoto/crypton/issues/56)
 
   ## 2.0.0
 
@@ -1443,6 +1666,36 @@ description: |
   If you have no idea what you're doing, please do not use this directly.
   Instead, rely on higher level protocols or implementations.
 
+  Side channels
+  -------------
+
+  AES is where this matters most, and which implementation runs is decided at
+  runtime from what the processor has.
+
+  On x86-64 with AES-NI and carry-less multiply, and on AArch64 with the ARMv8
+  cryptographic extension, AES and GHASH are instructions rather than tables.
+  crypton's AES and AES-GCM then make no branch and no memory access that
+  depends on the key or on the data: the secrets stay in vector registers and
+  never reach one a branch can test, which the generated code is checked
+  against.  Every x86-64 part since about 2010 and every AArch64 part in
+  ordinary use has these.
+
+  Where neither is present crypton falls back to a table-driven AES, which
+  indexes a 256-byte substitution table with data derived from the key and the
+  input.  **That is not constant time**, and on a machine where an attacker can
+  observe the cache it is open to a timing attack.  The fallback exists so that
+  the library builds and runs everywhere; it is not meant for a setting where
+  that matters.
+
+  `Crypto.System.CPU.processorOptions` says which is in use.  `AESNI` in that
+  list means the instruction path, and `PCLMUL` that GHASH has its instruction
+  too; without `AESNI` it is the tables.  The list also reports `RDRAND`, which
+  is unrelated to this.
+
+      ghci> import Crypto.System.CPU
+      ghci> processorOptions
+      [AESNI,PCLMUL]
+
   Performance
   -----------
 
@@ -1451,6 +1704,17 @@ description: |
   the public key operations are one operation each; every figure is the best of
   several runs, and crypton and OpenSSL are run alternately so that neither gets
   the quieter machine.
+
+  The columns read 2.0.0 and are what 2.1.0 measures on every row but two.  The
+  only C 2.1.0 changed is AES-GCM's and P-256's, and of those only P-256 is on
+  a path these tables take: measured on the same EPYC 7763, ECDH P-256 goes
+  164.3 to 159.5 microseconds and ECDSA P-256 verification 231.1 to 226.2, so
+  those two rows are about 3% better than they read here.  ECDSA P-256 signing
+  does not move, being the base-point path.  What 2.1.0 did to AES-GCM was add
+  a one-call interface beside the one measured here -- key expanded once,
+  additional data, payload and tag together -- which is worth 3.6 times at 100
+  bytes and nothing at 16 KiB, so it does not show in a 16 KiB throughput
+  figure at all.
 
   Bulk encryption and hashing are measured through crypton's C layer, as
   `openssl speed` measures OpenSSL's.  The public key operations are measured
@@ -1581,9 +1845,9 @@ description: |
   that nothing should ask for any more -- MD5, 3DES, RC4, CBC mode -- are left
   out.
 description-type: markdown
-hash: 3a8bd84d0af9f2d3cd14c46f3560c4f8759123ffcb011fcd8ca57eb409aa5e10
+hash: 6c8f3856f2300b3539facaa13c7bb42e4b54ceef687d1381ab4b0495b0bb99ec
 homepage: https://github.com/kazu-yamamoto/crypton
-latest: 2.0.1
+latest: 2.1.0
 license-name: BSD-3-Clause
 maintainer: Kazu Yamamoto <kazu@iij.ad.jp>
 synopsis: Cryptography Primitives sink
