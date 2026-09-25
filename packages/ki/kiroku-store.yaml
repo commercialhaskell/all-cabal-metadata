@@ -12,6 +12,7 @@ all-versions:
 - 0.8.0.0
 - 0.8.0.1
 - 0.8.0.2
+- 0.9.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.1 && <2.3'
@@ -38,6 +39,52 @@ basic-deps:
   vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog
+
+  ## 0.9.0.0 — 2026-09-25
+
+  ### Breaking Changes
+
+  * Requires schema migration `0012` from kiroku-store-migrations 0.6.0.0. The
+    append statements now write the source stream's category onto each `$all`
+    junction row, so against an older schema every append fails with SQLSTATE
+    `42703` (undefined column). Conversely, once `0012` is applied, any process
+    still on kiroku-store 0.8 or older fails every append with SQLSTATE `23514`,
+    because its `$all` rows lack the category the new check constraint requires.
+    There is no rolling-deploy path: stop every appending process, apply `0012`
+    (in a maintenance window on a large store), then start the new code. Reads by
+    old code keep working on the new schema. The `kiroku-upgrade` Seihou
+    blueprint's `0.8.0.2 -> 0.9.0.0` edge walks a consuming project through it.
+
+  ### Bug Fixes
+
+  * Category reads no longer cost work proportional to the number of streams in
+    the category (BUG-2). `readCategory`, category subscriptions, and
+    consumer-group category subscriptions used a LATERAL join that probed every
+    stream of the category on each call: a caught-up poll of a 20,000-stream
+    category read 60,387 shared buffers (about 30,000 for a member of a size-2
+    group), and the figure grew with every stream ever created. Both statements
+    are now one range scan of `ix_stream_events_all_by_category` from
+    `(category, checkpoint)` that stops at the limit; the same poll reads 6
+    buffers (3 for the group member). Results and ordering are unchanged.
+
+  ### Other Changes
+
+  * Consumer-group members of a `Category` subscription now wake in live mode
+    only when their category receives an append, as ordinary category
+    subscriptions already did, instead of on every append anywhere in the
+    store. Members of an idle category do no live database work; a member whose
+    sibling owns the new event does one empty fetch. `AllStreams` group members
+    are unchanged.
+  * `Kiroku.Store.SQL` additionally exports `appendParamsEncoder`,
+    `appendResultDecoder`, `readCategoryEncoder`,
+    `readCategoryConsumerGroupEncoder`, and `recordedEventRow`, used by the
+    benchmark controls.
+  * New structural tests pin both category statements to
+    `ix_stream_events_all_by_category` without a Sort and hold a caught-up poll
+    on a 20,000-stream category to 32 buffers. The workload gate gains
+    `category-read` (the new statements against the LATERAL ones) and
+    `append-category-column` (the append cost of the new column and index), and
+    the benchmark suite gains a `category-scaling` group.
 
   ## 0.8.0.2 — 2026-09-21
 
@@ -868,9 +915,9 @@ description: |-
   provides append, read, link, lifecycle, transaction, subscription, consumer
   group, and observability primitives around immutable domain events.
 description-type: haddock
-hash: e1d4a0945dfa223bc3b3513f7aa2ad234a56a18349f689c92fe8260a0e186060
+hash: f750f400bc6ec6cb2bd3699bdd99bb00b209a414fe730e3c3bacbf68b4c8f5cd
 homepage: https://github.com/shinzui/kiroku
-latest: 0.8.0.2
+latest: 0.9.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: High-performance PostgreSQL event store

@@ -6,6 +6,7 @@ all-versions:
 - 0.3.1.0
 - 0.4.0.0
 - 0.5.0.0
+- 0.6.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.1 && <2.3'
@@ -24,6 +25,38 @@ basic-deps:
   text: '>=2.0 && <2.2'
 changelog: |
   # Changelog
+
+  ## 0.6.0.0 — 2026-09-25
+
+  ### Breaking Changes
+
+  * New forward migration `0012` adds `kiroku.stream_events.category`, the
+    source stream's category on every `$all` junction row, so category reads can
+    range-scan an index instead of probing every stream in the category (BUG-2).
+    It backfills the column on existing `$all` rows from `streams.category`,
+    adds `ck_stream_events_all_category` (`stream_id <> 0 OR category IS NOT
+    NULL`), and builds the partial index `ix_stream_events_all_by_category
+    (category, stream_version) INCLUDE (original_stream_id) WHERE stream_id =
+    0`. kiroku-store 0.9.0.0 requires it.
+  * Any code that inserts `$all` junction rows directly must now set `category`;
+    the check constraint rejects the old five-column shape with SQLSTATE `23514`.
+    That includes kiroku-store 0.8 and older, whose appends fail against a
+    migrated schema: stop old writers before applying `0012`, and start
+    kiroku-store 0.9 after it. No rolling deploy is possible across this
+    migration.
+
+  ### Other Changes
+
+  * `0012` runs in one transaction. Its backfill rewrites every `$all` row and
+    temporarily disables the `no_update_stream_events` trigger inside that
+    transaction; appends block until it commits. On a large store apply it in a
+    maintenance window and run `VACUUM (ANALYZE) kiroku.stream_events`
+    afterwards.
+  * The test-suite gains an upgrade case that applies `0012` to a store
+    populated with pre-`0012` junction rows and checks the backfill, the
+    constraint, the index definition, and the re-enabled trigger. The BUG-1
+    upgrade case now bootstraps through `0009` explicitly, so `0010` stays in its
+    pending tail.
 
   ## 0.5.0.0 — 2026-09-18
 
@@ -228,9 +261,9 @@ description: |
 
   `kiroku-store-migrations` owns Kiroku's PostgreSQL schema as one native
   `pg-migrate` component named `kiroku`. The component embeds an ordered manifest
-  and eleven SQL payloads, so applications can compose it with other libraries
+  and twelve SQL payloads, so applications can compose it with other libraries
   without copying Kiroku SQL. The first seven payloads are immutable historical
-  Codd bytes; `0008` through `0011` are native-only forward migrations.
+  Codd bytes; `0008` through `0012` are native-only forward migrations.
 
   ## Public API
 
@@ -367,7 +400,10 @@ description: |
   coordinator, an indexed active-lease predicate, and statement-level
   `DELETE`/`TRUNCATE` guards on the three event-store data tables. Migration
   `0011` converges databases that applied the withdrawn 0.3.2.x payload of `0010`
-  (see below).
+  (see below). Migration `0012` copies each stream's category onto its `$all`
+  junction rows and indexes it for category reads; it rewrites every `$all` row
+  in one transaction, so apply it in a maintenance window on a large store (see
+  `docs/user/schema-migrations.md`).
 
   ## The `kiroku.uuidv7()` generator
 
@@ -407,9 +443,9 @@ description: |
     Required before migrating such a database onto 0.4.0.0 or later; see the
     changelog.
 description-type: markdown
-hash: 150c91bc63eb97c6659b58038ea6ae1b1a796ca8c2dbf441f90d6d1568d34383
+hash: 1591ff381f8fb5420b0bfe2dbce8db775309cf55aabdcf8dadb71e6436596ef1
 homepage: https://github.com/shinzui/kiroku
-latest: 0.5.0.0
+latest: 0.6.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Schema migrations for kiroku-store
