@@ -9,12 +9,12 @@ all-versions:
 - 0.3.1.0
 - 0.4.0.0
 - 0.5.0.0
+- 0.6.0.0
 author: Olivier Chéron
 basic-deps:
   asn1-encoding: '>=0.9.6 && <0.10'
   asn1-types: '>=0.3.1 && <0.4'
   base: '>=4.9 && <5'
-  basement: '>=0'
   bytestring: '>=0'
   cryptonite: '>=0.26'
   hourglass: '>=0.2.10'
@@ -24,6 +24,30 @@ basic-deps:
   x509-validation: '>=1.5'
 changelog: |
   # Revision history for cryptostore
+
+  ## 0.6.0.0 - 2026-09-27
+
+  * _DEPRECATED:_  modules `Crypto.Store.CMS` and `Crypto.Store.KeyWrap.*` will
+    be removed in the next major release in 2027.  Goal is to reduce cryptography
+    in cryptostore, still retaining password-based encryption of private keys.
+
+  * Raise minimum bounds to crypton >= 1.1.0 when flag `use_crypton` is enabled,
+    and replace memory with ram as dependency
+
+  * Key agreement with `StdDH` is now stricter and verifies that the peer public
+    key is in a proper subgroup
+
+  * Password-based encryption/decryption is now more strict as it rejects invalid
+    Unicode passwords when the algorithm requires code points in the UCS-2 set.
+    Previously the high surrogate bits were silently ignored.
+
+  * Function `passwordToString` is added to modules `PKCS5`, `PKCS8`, `PKCS12`.
+    This is the opposite of `fromString` for type `ProtectionPassword`.
+
+  * Module `Crypto.Store.PKCS5` re-exports more types and functions from
+    `Crypto.Store.CMS`, to prepare removal of CMS
+
+  * Dependency to basement is removed and replaced by local implementations
 
   ## 0.5.0.0 - 2026-02-08
 
@@ -183,8 +207,6 @@ description: |
 
   * PKCS #12 container format (password-based only)
 
-  * Many parts of Cryptographic Message Syntax
-
   Please have a look at the examples below as well as some warnings about
   cryptographic algorithms.
 
@@ -301,7 +323,7 @@ description: |
   > privKey <- PrivKeyRSA . snd <$> generate (2048 `div` 8) 0x10001
 
   -- Put the key inside a bag
-  > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5 Crypto.Store.CMS
+  > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5
   > let keyPair = keyPairFromPrivKey privKey
   > let attrs = setFriendlyName "Some Key" []
   >     keyBag = Bag (KeyBag $ FormattedKey PKCS8Format keyPair) attrs
@@ -326,7 +348,7 @@ description: |
 
   ```haskell
   > :set -XOverloadedStrings
-  > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5 Crypto.Store.CMS
+  > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5
 
   -- Read PKCS #12 content as credential
   > Right p12 <- readP12File "/path/to/other.p12"
@@ -369,7 +391,7 @@ description: |
   > privKey <- PrivKeyRSA . snd <$> generate (2048 `div` 8) 0x10001
 
   -- Put the key inside a bag
-  > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5 Crypto.Store.CMS
+  > :m Crypto.Store.PKCS12 Crypto.Store.PKCS8 Crypto.Store.PKCS5
   > let keyPair = keyPairFromPrivKey privKey
   > let attrs = setFriendlyName "Some Key" []
   >     keyBag = Bag (KeyBag $ FormattedKey PKCS8Format keyPair) attrs
@@ -389,187 +411,6 @@ description: |
   > let iParams = AuthSchemeIntegrity authScheme
   > writeP12File "/path/to/newkey.p12" iParams "mypassword" pkcs12
   Right ()
-  ```
-
-  ## Cryptographic Message Syntax
-
-  The API to read and write CMS content is available in `Crypto.Store.CMS`.  The
-  main data type `ContentInfo` represents a CMS structure.
-
-  Implemented content types are:
-
-  * data
-  * signed data
-  * enveloped data
-  * digested data
-  * encrypted data
-  * authenticated data
-  * and authenticated-enveloped data
-
-  Notable omissions:
-
-  * streaming
-  * compressed data
-  * and S/MIME external format (only PEM is supported, i.e. the textual encoding
-    of [RFC 7468](https://tools.ietf.org/html/rfc7468))
-
-  ### Enveloped data
-
-  The following examples generate a CMS structure enveloping some data to a
-  password recipient, then decrypt the data to recover the content.
-
-  #### Generating enveloped data
-
-  ```haskell
-  > :set -XOverloadedStrings
-  > :m Crypto.Store.CMS
-
-  -- Input content info
-  > let info = DataCI "Hi, what will you need from the cryptostore?"
-
-  -- Content encryption will use AES-128-CBC
-  > ceParams <- generateCBCParams AES128
-  > ceKey <- generateKey ceParams :: IO ContentEncryptionKey
-
-  -- Encrypt the Content Encryption Key with a Password Recipient Info,
-  -- i.e. a KDF will derive the Key Encryption Key from a password
-  -- that the recipient will need to know
-  > salt <- generateSalt 16
-  > let kdf = PBKDF2 salt 200000 Nothing PBKDF2_SHA256
-  > keParams <- generateCBCParams AES128
-  > let pri = forPasswordRecipient "mypassword" kdf (PWRIKEK keParams)
-
-  -- Generate the enveloped structure for this single recipient.  Encrypted
-  -- content is kept attached in the structure.
-  > Right envelopedData <- envelopData mempty ceKey ceParams [pri] [] info
-  > let envelopedCI = toAttachedCI envelopedData
-  > writeCMSFile "/path/to/enveloped.pem" [envelopedCI]
-  ```
-
-  #### Opening the enveloped data
-
-  ```haskell
-  > :set -XOverloadedStrings
-  > :m Crypto.Store.CMS
-
-  -- Then this recipient just has to read the file and recover enveloped
-  -- content using the password
-  > [EnvelopedDataCI envelopedEncapData] <- readCMSFile "/path/to/enveloped.pem"
-  > envelopedData <- fromAttached envelopedEncapData
-  > openEnvelopedData (withRecipientPassword "mypassword") envelopedData
-  Right (DataCI "Hi, what will you need from the cryptostore?")
-  ```
-
-  ### Signed data
-
-  The following examples generate a CMS structure signing data with an RSA key
-  and certificate, then verify the signature and recover the content.
-
-  #### Signing data
-
-  ```haskell
-  > :set -XOverloadedStrings
-  > :m Crypto.Store.CMS Data.X509 Crypto.Store.X509 Crypto.Store.PKCS8
-
-  -- Input content info
-  > let info = DataCI "Some trustworthy content"
-
-  -- Read signer certificate and private key
-  > (key : _) <- readKeyFile "/path/to/privkey.pem" -- assuming single key
-  > let Right pair = recover "mypassword" key
-  > chain <- readSignedObject "/path/to/cert.pem" :: IO [SignedCertificate]
-  > let cert = CertificateChain chain
-
-  -- Signature will use RSASSA-PSS and SHA-256
-  > let sha256 = DigestAlgorithm SHA256
-  > let params = PSSParams sha256 (MGF1 sha256) 16
-
-  -- Generate the signed structure with a single signer.  Signed content is
-  -- kept attached in the structure.
-  > let signer = certSigner (RSAPSS params) pair cert (Just []) []
-  > Right signedData <- signData [signer] info
-  > let signedCI = toAttachedCI signedData
-  > writeCMSFile "/path/to/signed.pem" [signedCI]
-  ```
-
-  #### Verifying signed data
-
-  ```haskell
-  -- Read certificate authorities to be trusted for validation
-  > :m Crypto.Store.X509 Data.X509.CertificateStore
-  > store <- makeCertificateStore <$> readSignedObject "/path/to/cacert.pem"
-
-  -- Assume we will not verify the signer FQHN.  Instead the certificate could be
-  -- related to an identity from which we received the signed data.
-  > :m Data.Default.Class Data.X509 Data.X509.Validation
-  > let validateNoFQHN = validate HashSHA256 def def { checkFQHN = False }
-  > let noServiceID = (undefined, undefined)
-
-  -- Read the signed data and validate it to recover the content
-  > :m Crypto.Store.CMS Data.Default.Class
-  > [SignedDataCI signedEncapData] <- readCMSFile "/path/to/signed.pem"
-  > signedData <- fromAttached signedEncapData
-  > let doValidation _ chain = null <$> validateNoFQHN store def noServiceID chain
-  > verifySignedData (withSignerCertificate doValidation) signedData
-  Right (DataCI "Some trustworthy content")
-  ```
-
-  ### Authenticated-enveloped data
-
-  The following examples generate a CMS structure auth-enveloping some data to a
-  KEM recipient, then decrypt the data to recover the content.
-
-  #### Generating authenticated-enveloped data
-
-  ```haskell
-  > :set -XOverloadedStrings
-  > :m Crypto.Store.CMS Data.X509 Crypto.Store.X509
-
-  -- Input content info
-  > let info = DataCI "Powered by Haskell"
-
-  -- Read receipient certificate
-  > [cert] <- readSignedObject "/path/to/cert.pem" :: IO [SignedCertificate]
-
-  -- Content encryption will use AES-128-GCM, and we protect against manipulation
-  -- of algorithm identifiers as defined in RFC 9709
-  > aceParams' <- generateGCMParams AES128 16
-  > let aceParams = authDeriveEncryptionKey aceParams'
-  > aceKey <- generateKey aceParams :: IO ContentEncryptionKey
-
-  -- Encrypt the Content Encryption Key with a KEM Recipient Info,
-  -- i.e. a KDF will derive the Key Encryption Key from a shared secret produced
-  -- by a Key Encapsulation Mechanism.  We are using RSA-KEM based on KDF3 with
-  -- SHA-256 to produce a 16-byte shared secret.  Further derivation of the KEK
-  -- uses HKDF with SHA-256.  The CEK is finally wrapped with AES-Wrap-128.
-  > let kem = KeyEncapsulationRSA (KDF3 (DigestAlgorithm SHA256)) 16
-  > let kdf = HKDF (DigestAlgorithm SHA256)
-  > let kri = forKeyEncapRecipient cert kdf AES128_WRAP kem
-
-  -- Generate the auth-enveloped structure for this single recipient.  Encrypted
-  -- content is kept attached in the structure.
-  > Right authEnvData <- authEnvelopData mempty aceKey aceParams [kri] [] [] info
-  > let authEnvCI = toAttachedCI authEnvData
-  > writeCMSFile "/path/to/authEnveloped.pem" [authEnvCI]
-  ```
-
-  #### Opening the authenticated-enveloped data
-
-  ```haskell
-  > :set -XOverloadedStrings
-  > :m Crypto.Store.CMS Data.X509 Crypto.Store.X509 Crypto.Store.PKCS8
-
-  -- Read receipient certificate and private key
-  > (key : _) <- readKeyFile "/path/to/privkey.pem" -- assuming single key
-  > let Right pair = recover "mypassword" key
-  > [cert] <- readSignedObject "/path/to/cert.pem" :: IO [SignedCertificate]
-
-  -- Then this recipient just has to read the file and recover enveloped
-  -- content using the private key and certificate
-  > [AuthEnvelopedDataCI authEnvEncapData] <- readCMSFile "/path/to/authEnveloped.pem"
-  > authEnvData <- fromAttached authEnvEncapData
-  > openAuthEnvelopedData (withRecipientKeyEncap pair cert) authEnvData
-  Right (DataCI "Powered by Haskell")
   ```
 
   ## Algorithms and security
@@ -605,9 +446,9 @@ description: |
   stream where some parts have already been encoded.  Retaining the original
   BER/DER encoding is required when incorporating MACed or signed content.
 description-type: markdown
-hash: f9d686342b459d3149c27bc712690d1c31d88346016460806dfc98dfb3c7f001
+hash: 903cba3b88df259af213d7d6e9b55de6479b8c32fe173f7fc801c7f3e1bccce8
 homepage: https://codeberg.org/ocheron/cryptostore
-latest: 0.5.0.0
+latest: 0.6.0.0
 license-name: BSD-3-Clause
 maintainer: olivier.cheron@gmail.com
 synopsis: Serialization of cryptographic data types
