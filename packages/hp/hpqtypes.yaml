@@ -40,6 +40,7 @@ all-versions:
 - 1.12.0.0
 - 1.13.0.1
 - 1.14.0.0
+- 1.15.0.0
 author: Scrive AB
 basic-deps:
   aeson: '>=1.0'
@@ -61,6 +62,77 @@ basic-deps:
   uuid-types: '>=1.0.3'
   vector: '>=0.10'
 changelog: |
+  # hpqtypes-1.15.0.0 (2026-09-28)
+  * The thread that starts a DB session now owns it. If another thread uses the
+    session, the library throws `ThreadMismatchError` wrapped in `DBException`.
+    Previously, threads shared the session, including its connection and its
+    transaction. This change affects all threads that get the session from a
+    fork, e.g. the threads of `race` and `concurrently` from `lifted-async`. To
+    run queries in another thread, call `withNewSession` in that thread.
+  * Rename `withNewConnection` to `withNewSession`, because the new session does
+    not always acquire a connection immediately. Replace each use of
+    `withNewConnection` with `withNewSession`.
+  * Fix two bugs of `withNewSession` (`withNewConnection` in earlier versions)
+    in a forked thread. If the parent session ended first, the function failed
+    with the error `finalized connection`. While the parent session ran a query,
+    the function waited for the query to finish.
+  * Fix a use-after-free of the buffer that holds the connection string in
+    `connect`. If an asynchronous exception interrupted `connect`, the
+    use-after-free was possible.
+  * Execution of a `COPY` statement now throws an error that says the statement
+    is not supported. Previously the library silently reported success and left
+    the connection in copy mode until the next query.
+  * Fix transaction restart handling. A restarted transaction no longer runs
+    with asynchronous exceptions masked. An asynchronous exception, e.g. a
+    timeout, no longer triggers a restart. A restart predicate that matches
+    it makes no difference. If a transaction fails, a subsequent failure of
+    its cleanup no longer masks the original exception. Previously this hid
+    the exception from the restart predicate.
+  * Fix a bug in the on demand connection acquisition mode. If a query left
+    the connection in a state that admits no further queries, e.g. because the
+    connection died, the `ROLLBACK` that ended the automatic transaction of the
+    query failed. Its failure masked the exception thrown from the query.
+  * Fix a bug in `withSavepoint`. If the action threw and the cleanup of the
+    savepoint failed as well, e.g. because the connection died, the failure of
+    the cleanup masked the exception of the action.
+  * Fix a bug in `unsafeWithoutTransaction`. If the action threw and the `BEGIN`
+    that restores the transaction failed as well, e.g. because the connection
+    died, the failure of the `BEGIN` masked the exception of the action.
+  * Row fetching functions no longer decode all rows of the result up front
+    and retain them until the fold completes. They decode each row right
+    before the fold function consumes it. As a result, e.g. `mapDB_` over a
+    large result runs in constant additional memory.
+  * Add `FromSQL` and `ToSQL` instances for `Word16`, `Word32` and `Word64`.
+  * Add `FromSQL` and `ToSQL` instances for `Integer`, mapped to `numeric`.
+  * `JSON` and `JSONB` now serialize and deserialize the wrapped type with its
+    `ToJSON` and `FromJSON` instances. They work for any such type and support
+    `deriving via`, e.g. `deriving (PQFormat, ToSQL, FromSQL) via JSONB Config`.
+    The `aesonFromSQL` and `aesonToSQL` helpers are gone. The instances for
+    unparsed JSON text moved to the dedicated `RawJSON` and `RawJSONB` types,
+    which wrap a strict `ByteString`. The instances for lazy `ByteString` are
+    gone. The `encodeRawJSON` and `encodeRawJSONB` functions build these types
+    from any type with a `ToJSON` instance. The `decodeRawJSON` and
+    `decodeRawJSONB` functions convert back and return `Nothing` on a failure.
+    The `eitherDecodeRawJSON` and `eitherDecodeRawJSONB` functions return the
+    reason for the failure instead.
+  * Fix a bug in `changeAcquisitionModeTo`. If the commit of a transaction
+    failed during the transition from the `AcquireAndHold` to the
+    `AcquireOnDemand` mode, the library held on to an invalid connection
+    object.
+  * Fix a bug in `withCursor`. If the enclosing transaction was in the aborted
+    state, the failure of the cursor cleanup masked an exception thrown from
+    the continuation. In particular, this prevented restarts of transactions
+    run with a `RestartPredicate`.
+  * Fix a bug in `commit`, `rollback` and `unsafeWithoutTransaction`. If the
+    issued `COMMIT` failed, e.g. because of a deferred constraint violation,
+    the session stayed in the autocommit mode instead of starting a new
+    transaction.
+  * Fix a bug in `withCursor` where an asynchronous exception cancelled the
+    `CLOSE` query and left the cursor open.
+  * Fix a bug in `withSavepoint` where an asynchronous exception cancelled the
+    `ROLLBACK TO SAVEPOINT` or `RELEASE SAVEPOINT` query. The savepoint stayed in
+    place, or the transaction stayed in the aborted state.
+
   # hpqtypes-1.14.0.0 (2025-12-10)
   * Make `begin`, `commit` and `rollback` do nothing instead of throwing an error
     if the on demand connection acquisition mode is active.
@@ -242,7 +314,7 @@ changelog-type: markdown
 description: |
   # hpqtypes
 
-  [![CI](https://github.com/scrive/hpqtypes/actions/workflows/haskell-ci.yml/badge.svg?branch=master)](https://github.com/scrive/hpqtypes/actions/workflows/haskell-ci.yml)
+  [![CI](https://github.com/scrive/hpqtypes/actions/workflows/haskell-gha.yml/badge.svg?branch=master)](https://github.com/scrive/hpqtypes/actions/workflows/haskell-gha.yml)
   [![Hackage](https://img.shields.io/hackage/v/hpqtypes.svg)](https://hackage.haskell.org/package/hpqtypes)
   [![Stackage LTS](https://www.stackage.org/package/hpqtypes/badge/lts)](https://www.stackage.org/lts/package/hpqtypes)
   [![Stackage Nightly](https://www.stackage.org/package/hpqtypes/badge/nightly)](https://www.stackage.org/nightly/package/hpqtypes)
@@ -255,9 +327,9 @@ description: |
 
   Examples can be found in the [examples](https://github.com/scrive/hpqtypes/tree/master/examples) directory.
 description-type: markdown
-hash: 54b481956791a6d8c13e5c62302dc2ce7cdeb9ec709f5d9ad332749ee5050ea4
+hash: 5a68e489986ce297669b02a7425df420445f40d295ff20a57f4e16af205799f4
 homepage: https://github.com/scrive/hpqtypes
-latest: 1.14.0.0
+latest: 1.15.0.0
 license-name: BSD-3-Clause
 maintainer: Andrzej Rybczak <andrzej@rybczak.net>
 synopsis: Haskell bindings to libpqtypes
@@ -267,15 +339,17 @@ test-bench-deps:
   aeson: '>=0.6.2.0'
   base: '>=4.14 && <5'
   bytestring: '>=0.9'
+  deepseq: '>=1.4'
   exceptions: '>=0.6'
+  haskeline: '>=0.8.0.0'
   hpqtypes: '>=0'
   lifted-base: '>=0.2'
   monad-control: '>=1.0.3'
   mtl: '>=2.1'
   random: '>=1.0'
-  readline: '>=1.0.3.0'
   resource-pool: '>=0.4'
   scientific: '>=0'
+  tasty-bench: '>=0.3'
   test-framework: '>=0.8'
   test-framework-hunit: '>=0.3'
   text: '>=0.11'
