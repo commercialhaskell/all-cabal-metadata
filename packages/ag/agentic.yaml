@@ -1,5 +1,6 @@
 all-versions:
 - 0.2.0.0
+- 0.2.0.1
 author: Tom Wells
 basic-deps:
   base: '>=4.18 && <5'
@@ -7,19 +8,533 @@ basic-deps:
 changelog: |
   # Changelog for agentic
 
+  ## 0.2.0.1 - 2026-10-01
+
+  * The README now appears on the Hackage package page.
+
   ## 0.2.0.0 - 2026-10-01
 
   First release of the v2 design.
 changelog-type: markdown
-description: 'Typed agentic workflows built from Arrow combinators. A flow is a description:
-  you can describe it as a tree, Mermaid or Graphviz before running anything, then
-  interpret it against System One (Jev) and System Two (an LLM) providers. This is
-  the core: flows, contracts, questions, the runtime and the interpreter. It depends
-  only on base and text.'
-description-type: haddock
-hash: f10ca349218c392f23b7f9000519ce6fa3b47111417437c88540818e1b9b2bf7
+description: |
+  # haskell-agentic
+
+  [![Hackage](https://img.shields.io/hackage/v/agentic.svg)](https://hackage.haskell.org/package/agentic)
+  [![CI](https://github.com/drshade/haskell-agentic/actions/workflows/haskell-ci.yml/badge.svg)](https://github.com/drshade/haskell-agentic/actions/workflows/haskell-ci.yml)
+
+  I wrote the first version of this a while back, when the best tool we had for
+  getting structured data out of an LLM was "pls respond in JSON". It worked -
+  sort of. The model providers have since caught up (strict structured outputs
+  just work now), so v2 throws away the clever-but-fragile bits and keeps the idea
+  I still think is right: an agentic workflow should be a typed value you can
+  compose, look at, and only then run.
+
+  So this is a small Haskell library for exactly that. Typed steps, mixing LLMs
+  (Claude, OpenAI) with [Jev](https://docs.typesafe.ai) for fast, calibrated
+  judgements - and you can draw the whole flow before you spend a single token.
+
+  ## Packages
+
+  It's split into a handful of packages, so the core stays tiny and you only pull
+  in the providers you actually use:
+
+  | Package | What it's for |
+  |---|---|
+  | `agentic` | flows, contracts, questions, the runtime and the interpreter (depends only on `base` and `text`) |
+  | `agentic-jev` | Jev as System One |
+  | `agentic-anthropic` | Claude as System Two (or System One) |
+  | `agentic-openai` | OpenAI as System Two (or System One) |
+  | `agentic-io` | concurrency, recording and replay, and `.env` loading |
+  | `agentic-aeson` | shared by the providers: JSON conversions and strict JSON Schema |
+  | `examples` | the examples in this README (not published) |
+
+  All the examples below live in `examples/` and run against the real models -
+  `cabal run dino`, `cabal run tictactoe`, `cabal run review` and
+  `cabal run kitchensink`. Copy `.env.example` to `.env` and fill in your keys
+  first.
+
+  ## The big idea
+
+  A workflow is an `Agentic m i o` - a typed description of how to get from an `i`
+  to an `o`, running in some effect `m`. I call these flows. You build them out of
+  steps and click them together with the normal `Arrow` combinators (`>>>`, `&&&`,
+  `|||`), sort of like lego. Nothing runs until you hand the flow to an
+  interpreter.
+
+  There are four kinds of step:
+
+  | Step | What it does | Returns |
+  |---|---|---|
+  | `draft` | an LLM writes a value, optionally using tools along the way | any `Contract o` |
+  | `judge` | Jev answers typed questions about the input | answers with calibrated probabilities |
+  | `act` | plain code, with any effect `m` | whatever it returns |
+  | `arr` | a pure function - glue between steps | whatever it returns |
+
+  Because a flow is just data, you can `describe` it (print it, or draw it) before
+  you spend a single token. And because the interpreter is separate, the same flow
+  runs against real providers, a mock, or a recording. Same code. No changes.
+
+  Under the hood there are two types - `Step` for the leaves, which do the actual
+  work, and `Agentic` for the structure, which wires them together:
+
+  ```haskell
+  data Step m i o where
+    Pass  ::                                                        Step m i i  -- returnA
+    Wrap  :: (i -> o)                                            -> Step m i o  -- Left, Right
+    Arr   :: (i -> o)                                            -> Step m i o
+    Act   :: (i -> m o)                                          -> Step m i o
+    Draft :: Codec i -> Codec o -> Instruction -> [Tool m]       -> Step m i o
+    Judge :: Codec i -> Questions o                              -> Step m i o
+
+  data Agentic m i o where
+    Step   :: Step m i o                     -> Agentic m i o
+    Seq    :: Agentic m a b -> Agentic m b c -> Agentic m a c        -- >>>
+    Fanout :: Agentic m a b -> Agentic m a c -> Agentic m a (b, c)   -- &&&
+    Split  :: Agentic m a b -> Agentic m c d -> Agentic m (a, c) (b, d)  -- ***
+    First  :: Agentic m a b                  -> Agentic m (a, c) (b, c)
+    Choose :: Agentic m a c -> Agentic m b c -> Agentic m (Either a b) c  -- |||
+    Each   :: Agentic m a b                  -> Agentic m [a] [b]
+    Repeat :: (a -> Bool) -> Agentic m a a   -> Agentic m a a        -- repeatUntil
+    Noted  :: Note -> Agentic m i o          -> Agentic m i o        -- named, note
+  ```
+
+  The `Arrow` and `ArrowChoice` instances build these constructors directly,
+  otherwise `describe` would see a tangle of `arr swap` instead of "these run side
+  by side".
+
+  There's deliberately no `ArrowApply` and no `Monad`. I know, I know. But either
+  one would let a flow pick its next step from a runtime value, and then you
+  couldn't describe it without running it - which kinda defeats the point.
+
+  ## Jokes
+
+  Let's start with the obvious one:
+
+  ```haskell
+  data Joke = Joke { genre :: Text, setup :: Text, punchline :: Text }
+    deriving (Generic, Show, Contract)
+
+  ghci> run (draft @Joke "a joke please") ()
+  Joke {genre = "Dad joke", setup = "Why did the scarecrow win an award?", punchline = "Because he was outstanding in his field."}
+  ```
+
+  The step's input becomes the model's context, so you never have to inject it
+  yourself:
+
+  ```haskell
+  data BetterJoke
+    = DadJoke    { setup :: Text, punchline :: Text }
+    | OneLiner   { line :: Text }
+    | KnockKnock { whosThere :: Text, punchline :: Text }
+    deriving (Generic, Show, Contract)
+
+  ghci> run (draft @BetterJoke "convert this joke") (Joke "knock-knock" "Knock knock. Who's there? Boo." "Don't cry, it's only a joke!")
+  KnockKnock {whosThere = "Boo", punchline = "Don't cry, it's only a joke!"}
+  ```
+
+  (`run` is shorthand for `interpret` with a runtime built from your environment -
+  more on that in *Actually running stuff*.)
+
+  ## Contracts (or: the types are the prompt)
+
+  Descriptions make a MASSIVE difference to output quality, so you'll usually
+  write a contract out rather than derive it:
+
+  ```haskell
+  instance Contract Joke where
+    contract = record "A joke, split into its parts" $ Joke
+      <$> required "genre"     "The style of joke, e.g. pun, dad joke"  genre
+      <*> required "setup"     "The setup line"                         setup
+      <*> required "punchline" "The line that lands it; no explanation" punchline
+
+  instance Contract BetterJoke where
+    contract = sumOf "A joke in one of several shapes"
+      [ constructor "DadJoke" "A setup and a groan-worthy punchline" isDadJoke $
+          DadJoke <$> required "setup" "" setup <*> required "punchline" "" punchline
+      , constructor "OneLiner" "A single line" isOneLiner $
+          OneLiner <$> required "line" "" line
+      , constructor "KnockKnock" "The classic call-and-response" isKnockKnock $
+          KnockKnock <$> required "whosThere" "" whosThere <*> required "punchline" "" punchline ]
+  ```
+
+  (Or derive it and add descriptions after: `genericContract & field "punchline" "..."`.)
+
+  Contracts compile to the providers' native structured outputs and strict tool
+  schemas, not to prompt text, so a reply that doesn't match the schema basically
+  can't happen. This was always the weakest part of v0 - it asked the model nicely
+  for the right shape and hoped for the best. Checks the schemas can't express,
+  like `between 1 10`, are checked locally, and a failed one goes back to the
+  model to try again.
+
+  This is the core design assumption: the types ARE the prompt. The state's types
+  are part of what the model reads, and field names carry meaning. A meeting note
+  wrapped in a record with `setup` and `punchline` fields looks like a joke before
+  the model reads a word. So give each step the state it should judge, and no more.
+
+  And describe an enumeration once - Claude and Jev both see the same wording (see
+  `Options` below).
+
+  ## Is it actually funny?
+
+  An LLM is great at writing. Jev is great at judging - quickly, and with a
+  probability you can actually put a threshold on.
+
+  ```haskell
+  funny :: Questions YesNo
+  funny = yesNo "Would a 10-year-old laugh at this joke?"
+
+  ghci> run (draft @[Joke] "ten jokes please" >>> keep 0.7 funny) ()
+  [Joke {...}, Joke {...}, Joke {...}]
+  ```
+
+  `keep 0.7` keeps the items Jev says yes to with at least that probability. `gate`
+  does the same for one value, sending it `Right` if it passes and `Left` if not:
+
+  ```haskell
+  kidFriendly :: Agentic m Joke Joke
+  kidFriendly = gate 0.9 (yesNo "Is this joke suitable for a 10-year-old?")
+            >>> (draft "rewrite this joke for a 10-year-old" ||| returnA)
+  ```
+
+  Jev also has `choice` and `score`, over an `Options` type:
+
+  ```haskell
+  data Groan = Mild | Solid | Unbearable deriving (Generic, Show)
+
+  instance Options Groan where
+    options = described "How much the audience groans"
+      [ option Mild       "A polite smile; most people didn't notice"
+      , option Solid      "An audible groan from most of the room"
+      , option Unbearable "People get up and leave" ]
+
+  deriving via Enumeration Groan instance Contract Groan
+
+  groan :: Questions (Score Groan)
+  groan = score "How much will the audience groan?"
+  ```
+
+  For a `score`, the options are levels, lowest first. And questions about the
+  same input compose applicatively into ONE request:
+
+  ```haskell
+  review :: Agentic m Joke Review
+  review = judge (Review <$> funny <*> groan)
+  ```
+
+  ## Give it some tools
+
+  Hand a `draft` some tools and it becomes an agent. The model calls them as often
+  as it likes, and the step finishes when it responds with the output type.
+
+  ```haskell
+  research :: Agentic IO Text Dino
+  research = draftWith [fossilSearch, reliable] "Research this dinosaur. Cite a source for every claim."
+
+  fossilSearch :: Tool IO
+  fossilSearch = tool "search" "Search the fossil database" (act searchFossils)
+
+  reliable :: Tool IO
+  reliable = tool "is_reliable" "Is this source trustworthy?" (judge (yesNo "Is this a reliable scientific source?"))
+  ```
+
+  A tool's body is just another `Agentic` - an effect, a Jev judgement, a pipeline,
+  or a whole other agent. There's no separate tool system, so anything fancier
+  (asking a human before a destructive tool, say) you build out of the same pieces:
+
+  ```haskell
+  deleteRecord :: Tool IO
+  deleteRecord = tool "delete" "Delete a fossil record" (act confirmWithHuman >>> act deleteIfApproved)
+  ```
+
+  ### How the loop works
+
+  The core runs the loop and a provider only ever takes one turn, so it behaves
+  the same against a real provider, a mock or a replay. A few things worth
+  knowing:
+
+  - There's no turn limit - the model decides when it's done. Want a cap? Wrap the
+    runtime (`capped 20`).
+  - A bad tool call (unknown name, input that doesn't decode) goes back to the
+    model. But a failure *inside* a tool's body escapes the step, like any other
+    error in `m` - if you want the model to see it, put it in the tool's output
+    type (`Either NotFound Fossil`).
+  - A `draftWith` inside a tool is a sub-agent with its own conversation.
+  - The conversation stays inside the step. Only the typed result moves on.
+
+  ## Example: The dino project
+
+  A grade 5 project - and a flow that mixes both kinds of model. Claude suggests
+  ten prehistoric creatures. Jev sorts the dinosaurs from the rest (pterosaurs and
+  plesiosaurs are the classic "not actually dinosaurs" - sorry kids). Code keeps
+  the clear dinosaurs. Claude draws each one and makes its trump card, then makes a
+  poster with a corner for the creatures that weren't dinosaurs.
+
+  ```haskell
+  dinoProject :: Agentic IO () Poster
+  dinoProject =
+    draft @[Creature] "Name 10 prehistoric creatures a grade 5 class might have heard of. Include a mix of kinds, not only dinosaurs."
+      >>> each classify
+      >>> arr (partition (clearly Dinosaur 0.8)) `named` "split off the clear dinosaurs (≥ 0.8)"
+      >>> (each (arr fst >>> exhibit) *** arr (map notADinosaur) `named` "note what the others were")
+      >>> arr (uncurry Exhibit)
+      >>> draft @Poster "Create a poster of these dinosaurs for a grade 5 class. Add a corner about the creatures that weren't dinosaurs, and what they were."
+
+  -- Jev decides what kind of animal each creature was.
+  classify :: Agentic IO Creature (Creature, Choice Kind)
+  classify = returnA &&& judge (choice "What kind of animal was this creature?")
+
+  exhibit :: Agentic IO Creature Entry
+  exhibit =
+    (returnA &&& draft @DinoPic "Draw an ascii picture of this dinosaur, 10 lines high"
+             &&& draft @TrumpCard "Make a trump card for this dinosaur")
+      `named` "exhibit"
+      >>> arr (\(c, (p, t)) -> Entry c p t)
+  ```
+
+  The trump card's stats use a `Stat` contract that checks 1 to 10, so every card
+  uses the same scale. And the poster is drafted from a named `Exhibit` record
+  rather than a tuple, so Claude sees `dinosaurs` and `notDinosaurs` instead of
+  `_1` and `_2`. The whole thing is in `examples/Dino.hs`.
+
+  You could also write `exhibit` with `proc` notation, since `Agentic` is an
+  `Arrow`:
+
+  ```haskell
+  exhibit :: Agentic IO Creature Entry
+  exhibit = proc creature -> do
+    pic   <- draft @DinoPic "Draw an ascii picture of this dinosaur, 10 lines high" -< creature
+    stats <- draft @TrumpCard "Make a trump card for this dinosaur" -< creature
+    returnA -< Entry creature pic stats
+  ```
+
+  It reads nicely, but GHC turns `proc` into a chain of `first`s, never `&&&`. So
+  the picture and the trump card run one after the other instead of side by side,
+  and `describe` shows GHC's plumbing rather than the shape of the flow:
+
+  ```
+  both halves
+  ├─ first → draft @DinoPic  "Draw an ascii picture of this dinosaur, 10 lines high"
+  └─ second → pass
+  both halves
+  ├─ first → draft @TrumpCard  "Make a trump card for this dinosaur"
+  └─ second → pass
+  ```
+
+  So for steps that don't depend on each other, stick with `&&&`.
+
+  ### Describe it before you run it
+
+  ```
+  ghci> describe dinoProject
+  draft @[Creature]  "Name 10 prehistoric creatures a grade 5 class might have heard of. Include a mix of kinds, not only dinosaurs."
+  each
+  └─ judge  choice of 7 "What kind of animal was this creature?"  (keeping its input)
+  arr  split off the clear dinosaurs (≥ 0.8)
+  both halves
+  ├─ first → each
+  │  └─ exhibit  together  (keeping its input)
+  │     ├─ draft @DinoPic  "Draw an ascii picture of this dinosaur, 10 lines high"
+  │     └─ draft @TrumpCard  "Make a trump card for this dinosaur"
+  └─ second → arr  note what the others were
+  draft @Poster  "Create a poster of these dinosaurs for a grade 5 class. Add a corner about the creatures that weren't dinosaurs, and what they were."
+  ```
+
+  `mermaid` and `dot` draw the same flow as a diagram of how the data moves
+  (GitHub draws Mermaid inline, and Graphviz renders `dot` offline). Here's the
+  dino project:
+
+  ```mermaid
+  flowchart TD
+    input(["input"])
+    n0["draft @[Creature]<br/>#quot;Name 10 prehistoric creatures a grade 5 class might have heard of. Include a mix of kinds, not only dinosaurs.#quot;"]
+    subgraph n1["each"]
+      n2["judge<br/>choice of 7 #quot;What kind of animal was this creature?#quot;"]
+    end
+    n3["arr<br/>split off the clear dinosaurs (≥ 0.8)"]
+    subgraph n4["each"]
+      subgraph n5["exhibit"]
+        n6["draft @DinoPic<br/>#quot;Draw an ascii picture of this dinosaur, 10 lines high#quot;"]
+        n7["draft @TrumpCard<br/>#quot;Make a trump card for this dinosaur#quot;"]
+      end
+    end
+    n8["arr<br/>note what the others were"]
+    n9["draft @Poster<br/>#quot;Create a poster of these dinosaurs for a grade 5 class. Add a corner about the creatures that weren't dinosaurs, and what they were.#quot;"]
+    output(["output"])
+    input --> n0
+    n0 --> n2
+    n0 --> n3
+    n2 --> n3
+    n3 -->|first| n6
+    n3 -->|first| n7
+    n3 -->|second| n8
+    n3 -->|first| n9
+    n6 --> n9
+    n7 --> n9
+    n8 --> n9
+    n9 --> output
+  ```
+
+  `describe` returns a plain `Description` you can walk yourself, and `toValue`
+  turns it into JSON for UIs and other agents. The tree hides unnamed glue between
+  steps, but never a branch.
+
+  ### Naming things
+
+  An `arr` or an `act` is opaque to `describe`, so you name it. `named` binds as
+  tightly as function application, so it names exactly the expression before it:
+
+  ```haskell
+      >>> arr (partition (clearly Dinosaur 0.8)) `named` "split off the clear dinosaurs (≥ 0.8)"
+  ```
+
+  Without it, the one step that decides which creatures make the poster would be
+  invisible. Bracket a bigger sub-flow to name all of it, and use `note` to add a
+  description too. Names also tag every trace event, so they stay useful well
+  after the flow is written. My rule of thumb: an instruction is written for the
+  model, and a name is written for whoever's watching.
+
+  ## Example: Tic-tac-toe
+
+  The model plays both sides. Given the game so far it plays the next move, and
+  `repeatUntil` goes round again until the model says the game is over.
+
+  ```haskell
+  data Square = Blank | X | O
+  data Row = Row {left :: Square, centre :: Square, right :: Square}
+  data Board = Board {top :: Row, middle :: Row, bottom :: Row}
+  data State = Playing | Ended
+  data Game = Game {board :: Board, state :: State}   -- all deriving (Generic, Show, Contract)
+
+  nextMove :: Agentic IO Game Game
+  nextMove = draft @Game "Play the next move!"
+
+  game :: Agentic IO Game Game
+  game = repeatUntil ((== Ended) . state) (nextMove >>> act printBoard `named` "print the board") `named` "play until the game ends"
+  ```
+
+  Notice the instruction doesn't explain the rules. It doesn't need to! The types
+  say there's a 3×3 board of `Blank`, `X` and `O`, and a game that's either
+  `Playing` or `Ended` - the model knows the rest. `describe` shows the loop:
+
+  ```
+  play until the game ends  repeatUntil
+  ├─ draft @Game  "Play the next move!"
+  └─ act  print the board
+  ```
+
+  `repeatUntil` is the only loop in the language, and it checks its condition
+  before each round. `cabal run tictactoe` plays a game on OpenAI, where the dino
+  project runs on Claude - same flow code either way.
+
+  ## Example: The kitchen sink
+
+  Want to see everything at once? `examples/KitchenSink.hs` is a day of support
+  email at an online bookshop. Claude writes the day's inbox. Jev drops the spam
+  (`keep`) and triages each email with three questions in one request - a `choice`
+  of topic, a `score` of urgency, and a `yesNo` "is the customer angry?" - and a
+  named policy (`note`, `arr`) turns that into a ticket. Urgent and routine tickets
+  are handled side by side (`***`). Refunds go to an agent with two tools, an
+  order lookup (`act`) and a refund-policy check (`judge`), and everything else
+  gets a plain reply (`|||`). Each reply is polished until Jev rates it polite
+  (`repeatUntil`) while a log line is written alongside it (`&&&`), then sent
+  (`act`), and urgent tickets also page the on-call team. Claude ends the day with
+  a report.
+
+  The runtime runs independent work at the same time (`concurrently`) and records
+  every model call (`withStore`), so a second run replays the first. (Claude's
+  first drafts are usually polite enough already, so the polish loop tends to
+  hand them straight back.)
+
+  ## Actually running stuff
+
+  A runtime has two roles to fill. System One answers `judge` steps - fast, typed
+  judgements with probabilities. System Two answers `draft` steps - an LLM taking
+  turns. You pick one provider for each:
+
+  ```haskell
+  main :: IO ()
+  main = do
+    rt <- pure runtime
+      >>= withSystemOne jev
+      >>= withSystemTwo (anthropic & model "claude-opus-5-5")
+      <&> concurrently . observing logEvent
+    poster <- interpret rt dinoProject ()
+    print poster
+  ```
+
+  Each provider has a default config you tweak with setters, like
+  `anthropic & model "claude-sonnet-5-5" & effort Low`. Keys come from the
+  environment (`JEV_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), or from a
+  `.env` file via `loadDotEnv`.
+
+  Jev only does System One, so `withSystemTwo jev` is a type error (nice!). The LLM
+  providers can fill both roles - this runs everything on OpenAI, no Jev token
+  needed:
+
+  ```haskell
+  rt <- pure runtime
+    >>= withSystemOne (openai & model "gpt-6-astra")
+    >>= withSystemTwo (openai & model "gpt-6-astra")
+  ```
+
+  Fair warning though: an LLM answering as System One gives you probabilities, but
+  they aren't calibrated the way Jev's are, so a `gate 0.9` means a lot less.
+
+  ### What about prompts? And sessions?
+
+  A system prompt for every `draft` is a setting
+  (`anthropic & system "You write for primary school children."`).
+
+  The library never tells the model how to format its reply - the providers'
+  strict structured outputs take care of that. What the model gets is meaning: the
+  instruction, the state, and your contracts' descriptions.
+
+  And there are no sessions to manage. Anything a later step needs goes through
+  the types. Memory across runs is yours to own - put it in the flow's types, or
+  behind tools that read and write a store.
+
+  ### Record once, replay for free
+
+  `withStore` records every model call to a file and replays it later:
+
+  ```haskell
+  rt <- pure runtime
+    >>= withSystemOne jev
+    >>= withSystemTwo anthropic
+    >>= withStore ReplayOrRecord "dino.jsonl"
+  ```
+
+  Each answer is keyed by its whole request, so it's replayed only when the model
+  would be asked exactly the same thing. Three modes:
+
+  - `Record` calls the models and writes a fresh file.
+  - `Replay` answers only from the file (great for tests that are real but free).
+  - `ReplayOrRecord` replays what it has and records the rest - perfect while
+    you're working on the end of a long flow.
+
+  Only model calls are stored though - `act` steps and tool bodies run for real.
+
+  For tests, swap in scripted providers from `Agentic.Scripted` - same flow, no
+  network:
+
+  ```haskell
+  testRuntime :: IO (Runtime IO)
+  testRuntime = do
+    two <- scripted [respond joke]
+    pure runtime { systemOne = alwaysYes 0.95, systemTwo = two }
+  ```
+
+  ## History
+
+  v0 - the Kleisli-arrow prototype that used Dhall as its output format (bless
+  it) - is tagged `v0-prototype`.
+
+  Anything I've missed, or something you'd build differently? Issues and PRs very
+  welcome!
+description-type: markdown
+hash: 43d0e8cee092436e4f4db4fb0c688a6787559f0de4ef1c7131fd5f9c86d99c27
 homepage: https://github.com/drshade/haskell-agentic
-latest: 0.2.0.0
+latest: 0.2.0.1
 license-name: BSD-2-Clause
 maintainer: drshade@gmail.com
 synopsis: Composable, inspectable agentic workflows mixing LLMs and Jev
