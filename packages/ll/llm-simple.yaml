@@ -2,6 +2,7 @@ all-versions:
 - 0.1.0.1
 - 0.1.0.2
 - 0.1.1.0
+- 0.2.0.0
 author: Daniel van den Eijkel
 basic-deps:
   aeson: '>=2.0 && <2.3'
@@ -37,6 +38,75 @@ changelog: |
   and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   ## [Unreleased]
+
+  ## [0.2.0.0] - 2026-10-06
+
+  ### Changed
+
+  - **Breaking:** conversation turns use ordered content parts.
+    `UserMessage` / `AssistantMessage` hold `[ContentPart]`; `UserTurn` is a
+    bidirectional pattern synonym for a single text part. Replace
+    `AssistantTurn text reasoning calls` with `assistantTurn` (canonical order)
+    or `AssistantMessage respContent` for authoritative replay.
+  - **Breaking:** `ChatResponse.respContent` is now `[ContentPart]` (authoritative).
+    `respText` / `respReasoning` remain convenience projections.
+  - **Breaking:** `ToolCall.tcProviderMeta` is `Maybe ProviderOpaque` (tagged
+    provider + optional model + opaque payload), not bare `Value`.
+  - **Breaking:** removed `ContentBlock`; use `ContentPart` / `PartBody`.
+  - **Breaking:** `Turn` / `ToolCall` JSON shapes changed (role/content based).
+    Persisted histories must be migrated; old and new shapes are not mixed.
+  - Claude adapter: thinking request mapping (`thinking.type=enabled` +
+    `budget_tokens` from catalog effort), ordered thinking/text/tool_use parse
+    and stream, signed-block replay around tool rounds. Temperature is omitted
+    when thinking is enabled (Anthropic incompatibility).
+  - Gemini adapter: catalog thinking maps to `thinkingConfig`; tool-call thought
+    signatures use `ProviderOpaque` and still replay only for a matching model.
+  - OpenAI / DeepSeek / Ollama adapters encode and parse ordered parts; DeepSeek
+    reasoning continues via `reasoning_content` on ordered `ThinkingPart`s.
+  - Foreign opaque thinking / tool metadata is stripped at encode time on
+    provider fallback (history unchanged).
+  - **Breaking:** `ModelConfig` gains `mcCapabilities` (`ModelCapabilities`).
+    Manual record construction must set it (use `defaultModelCapabilities`).
+  - Example catalog: `capabilities` on vision/thinking models; removed
+    `temperature` from `haiku_4_5` (Claude thinking temperature footgun).
+
+  - **Breaking:** `Usage` adds `usageCacheReadTokens` / `usageCacheCreationTokens`.
+    `usageInputTokens` is total input including cache read/write tokens (providers
+    normalize wire semantics so totals are not double-counted). Prefer `mkUsage`.
+  - **Breaking:** `PricingInfo` adds optional `pricePerMillionCacheRead` /
+    `pricePerMillionCacheWrite`; absent rates fall back to the ordinary input rate.
+    Prefer `defaultPricingInfo` for catalogs without cache rates.
+  - Cost estimation: ordinary input × input rate + cache read × cache-read rate +
+    cache creation × cache-write rate + output × output rate.
+  - **Breaking:** `ContentPart` gains `partCacheHint :: Maybe CacheHint`. Manual
+    construction and pattern matches must account for the new field; prefer
+    `textPart` / `cacheEphemeral`. `UserTurn` still matches only a single
+    unannotated text part.
+
+  ### Added
+
+  - Image input: `ImageSource`, `ImagePart`, `imageUrlPart`, `imageBase64Part` /
+    `mkImageBase64` with MIME and base64 validation. Encoded for Claude, Gemini,
+    and OpenAI Chat Completions (DeepSeek/Ollama reuse the OpenAI shape when
+    `capabilities.vision` is declared).
+  - Catalog `capabilities` object (`thinking`, `vision`, `promptCaching`; missing
+    flags default to `false`). Carried on `ModelCatalogItem` / `ModelConfig`.
+  - Fallback candidates are validated before I/O: images require `vision`;
+    enabled thinking requires `thinking`. Unsupported capability yields
+    `UnsupportedCapability` and continues the fallback chain.
+  - `ProviderOpaque`, `ThinkingContent`, `ContentPart`, `PartBody`, `textPart`,
+    `thinkingPart`, `toolCallPart`, `mkChatResponse`, `projectText`,
+    `projectReasoning`, `turnToolCalls`, `validateTurn`, `stripForeignOpaque`.
+  - Claude thinking fixture and unit tests for ordered replay / foreign opaque
+    omission; Gemini signature matching tests.
+  - Image request-shape tests (Claude/Gemini/OpenAI) and vision fallback tests.
+  - `mkUsage`, `defaultPricingInfo`, `usageOrdinaryInputTokens`; provider parsers
+    report cache read/creation counters (Claude, OpenAI, DeepSeek, Gemini).
+  - Optional Claude prompt-cache breakpoints: `CacheHint` / `CacheEphemeral` on
+    `ContentPart.partCacheHint`, helpers `withCacheHint` / `cacheEphemeral`.
+    Claude emits wire `cache_control: {type: ephemeral}` (default TTL) on marked
+    parts without reordering; other providers ignore hints and leave content
+    unchanged. Hints round-trip in conversation JSON and survive agent tool rounds.
 
   ## [0.1.1.0] - 2026-08-23
 
@@ -120,6 +190,7 @@ changelog: |
   [0.1.0.2]: https://github.com/aische/llm-simple/compare/v0.1.0.1...v0.1.0.2
   [0.1.0.1]: https://github.com/aische/llm-simple/compare/v0.1.0.0...v0.1.0.1
   [0.1.0.0]: https://github.com/aische/llm-simple/releases/tag/v0.1.0.0
+  [0.2.0.0]: https://github.com/aische/llm-simple/compare/v0.1.1.0...v0.2.0.0
 changelog-type: markdown
 description: |
   # llm-simple
@@ -128,7 +199,7 @@ description: |
 
   The API stays small on purpose: JSON model and provider catalogs, bundled filesystem tools, and a straight line from `loadModelOrThrow` to `generateText`. Under that surface you still get multi-provider gateways, fallbacks, streaming, structured output, and sandboxed workspace tools — enough to prototype and compare ideas without assembling the pieces yourself.
 
-  **Status:** early 0.1.x release. APIs may change.
+  **Status:** early 0.2.x release. APIs may change.
 
   ## Features
 
@@ -185,7 +256,7 @@ description: |
   | `modelConfigName` | Name used in code to look up this config                                 |
   | `providerName`    | Provider key defined in `providers.json`                                   |
   | `modelName`       | Provider-specific model identifier                                       |
-  | `pricing`         | `pricePerMillionInput` / `pricePerMillionOutput` for usage cost tracking |
+  | `pricing`         | `pricePerMillionInput` / `pricePerMillionOutput` for usage cost tracking; optional `pricePerMillionCacheRead` / `pricePerMillionCacheWrite` (fall back to input rate) |
   | `maxTokens`       | Max tokens per request                                                   |
   | `temperature`     | Sampling temperature (optional)                                          |
   | `requestTimeout`  | Request timeout in ms (optional)                                         |
@@ -193,8 +264,49 @@ description: |
   | `retryCount`      | Number of retries on failure                                             |
   | `jitterBackoff`   | Backoff jitter in ms between retries                                     |
   | `thinking`        | Extended thinking effort level (optional, provider-dependent)            |
+  | `capabilities`    | Optional object: `thinking`, `vision`, `promptCaching` (default `false`) |
 
   A provider is only available if its API key is set (except Ollama, which is always available).
+
+  Capability flags are declarations used before each fallback candidate is
+  called: image parts require `vision`; enabled thinking requires `thinking`.
+  Unsupported candidates fail with `UnsupportedCapability` and the next
+  fallback is tried. Cache hints may be ignored by providers that do not
+  support prompt caching (they do not change prompt semantics).
+
+  ### Image input
+
+  User messages may mix text and images:
+
+  ```haskell
+  import LLM (imageUrlPart, imageBase64Part, textPart, UserMessage)
+
+  let Right png = imageBase64Part "image/png" "<base64>"
+      msg = UserMessage [imageUrlPart "https://example.com/photo.jpg", png, textPart "describe"]
+  ```
+
+  `imageBase64Part` validates MIME type (`image/jpeg|png|gif|webp|heic|heif`)
+  and base64 payload locally. Use a model with `"capabilities": {"vision": true}`.
+
+  ### Prompt cache breakpoints
+
+  Mark stable content with `cacheEphemeral` (or `withCacheHint CacheEphemeral`).
+  Claude serializes that as `cache_control: {"type":"ephemeral"}` on the content
+  block (provider default TTL). Other providers omit the marker and send the same
+  content. Hints persist in conversation JSON and through agent tool rounds.
+
+  ```haskell
+  import LLM (cacheEphemeral, textPart, UserMessage)
+
+  let msg =
+        UserMessage
+          [ cacheEphemeral (textPart "large stable context…"),
+            textPart "question about the context"
+          ]
+  ```
+
+  `UserTurn "text"` still matches only a single unannotated text part; use
+  `UserMessage` when parts carry cache hints.
 
   ### Provider catalog
 
@@ -251,7 +363,7 @@ description: |
   import Control.Exception (SomeException, catch)
   import Heptapod (generate)
   import LLM.Agent (Agent (..), RuntimeArgs (..), generateText, noEventObserver)
-  import LLM.Core (Turn (UserTurn))
+  import LLM.Core (pattern UserTurn)
   import LLM.Generate (ModelWithFallbacks (..), Hooks (..), llmHooks, noHooks)
   import LLM.Load (fsTools, loadModelsOrThrow)
 
@@ -372,9 +484,9 @@ description: |
 
   BSD-3-Clause. See [LICENSE](LICENSE).
 description-type: markdown
-hash: c5b2c1b8871b6d5131520657db01afe9e5760a5bd016a737c340d12fb8f8fc9e
+hash: f9fc2e0cc84ebed4eb2ae36fdfe0b9de6a8f8d5ca824e5eb51a40176e683bf46
 homepage: https://github.com/aische/llm-simple#readme
-latest: 0.1.1.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: 1515314+aische@users.noreply.github.com
 synopsis: Multi-provider LLM library with agent tool loops and filesystem tools
@@ -392,5 +504,7 @@ test-bench-deps:
   llm-simple: '>=0'
   mtl: '>=2.3 && <2.4'
   retry: '>=0.9 && <0.10'
+  scientific: '>=0.3 && <0.4'
   temporary: '>=1.3 && <1.4'
   text: '>=1.2 && <2.2'
+  vector: '>=0.13 && <0.14'
