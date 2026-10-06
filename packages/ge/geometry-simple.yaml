@@ -1,0 +1,208 @@
+all-versions:
+- 0.1.0.0
+author: Matthias Pall Gissurarson
+basic-deps:
+  base: '>=4.18 && <5'
+  binary: '>=0.8.4 && <0.9'
+  bytestring: '>=0.11.2 && <0.13'
+  containers: '>=0.6 && <0.9'
+  deepseq: '>=1.4.8 && <1.6'
+  text: '>=2.0 && <2.2'
+  transformers: '>=0.6 && <0.7'
+  vector: '>=0.13 && <0.14'
+changelog: |
+  # 0.1.0.0
+
+  Initial release.
+
+  - Seven Simple Features geometry families with XY, XYZ, XYM, and XYZM layouts.
+    Points, coordinate sequences, and polygon rings retain their own layouts.
+    Coordinates and multipoints use unboxed storage.
+  - ISO WKB and WKT codecs with construction checks and exact finite-coordinate
+    round trips.
+  - Coordinate and point accessors, measurements, envelopes, and convex hulls.
+    Indices start at zero. Point observers preserve stored ordinates and layouts.
+  - Pure Haskell topology checks, spatial predicates, DE-9IM relations, distance,
+    overlays, and round buffers. Overlays and buffers return
+    `Either TopologyException Geometry`. They use bounded snapping when output
+    rounding changes topology; exhausted retries return `Left PrecisionFailure`.
+    Unrepresentable buffer offsets return `Left CoordinateOverflow`.
+    The retry schedule follows GEOS 3.13.1, without its self-union and
+    precision-grid attempts, so results and precision failures can differ. See the [overlay precision policy](https://github.com/Tritlo/geometry-simple/blob/main/docs/GEOS-DIFFERENCES.md#overlay-precision).
+  - Constructed planar results use XY. Polygon exteriors run counterclockwise
+    and holes clockwise. Hull vertices use a deterministic XY order.
+  - Measured-location queries with linear interpolation along segments.
+changelog-type: markdown
+description: |
+  # geometry-simple
+
+  A pure Haskell library for the seven core Simple Features geometry families:
+  points, line strings, polygons, their three multi-geometry forms, and geometry
+  collections. It provides ISO WKB and WKT codecs, planar measurements, spatial
+  predicates, overlays, buffers, and measured-location queries.
+
+  Coordinates use unboxed vectors. The library has no database or native-library
+  dependency. DuckDB interchange through WKB or WKT requires a
+  [common coordinate layout](https://duckdb.org/docs/current/sql/data_types/geometry)
+  across all members.
+
+  ## Example
+
+  ```haskell
+  import Data.Geometry
+  import Data.Geometry.WKB (decodeWKB, encodeWKB)
+  import Data.Geometry.WKT (decodeWKT, encodeWKT)
+  import qualified Data.Geometry.SimpleFeatures as SF
+  import qualified Data.Vector.Unboxed as U
+
+  line = LineString (CoordinatesXY (U.fromList [XY 0 0, XY 2 2]))
+  point = PointGeometry (PointXY (XY 1 1))
+
+  intersectsLine = SF.intersects line point
+  firstX = SF.startPoint line >>= SF.pointX
+  binaryRoundTrip = encodeWKB line >>= decodeWKB
+  textRoundTrip = encodeWKT line >>= decodeWKT
+  ```
+
+  Add `geometry-simple` and `vector` to your component's `build-depends`:
+
+  ```cabal
+  build-depends:
+    geometry-simple >=0.1 && <0.2,
+    vector >=0.13 && <0.14,
+  ```
+
+  WKB uses `ByteString` from `bytestring`. WKT uses `Text` from `text`.
+
+  ## Geometry values
+
+  Each `Point` and `Coordinates` value has an XY, XYZ, XYM, or XYZM layout.
+  Empty points and coordinate sequences retain their layout, such as
+  `EmptyPoint DimXYZ`. Empty multi-geometries and empty collections have no
+  layout of their own. Writers give them their containing collection's layout,
+  or XY when no containing layout is available.
+  `PolygonRings` stores an exterior ring and a boxed vector of interior rings.
+  Each ring has its own layout. Collection members can have different layouts.
+
+  Coordinate sequences and multipoints use unboxed storage. Multilines,
+  multipolygons, and geometry collections use boxed vectors for their members.
+  Vector slices share their source buffers; use `U.force` to copy a slice.
+
+  `withPoint` and `withCoordinates` apply an operation without matching every
+  coordinate constructor. The `pointX`, `pointY`, `pointZ`, and `pointM` accessors
+  return `Nothing` for an empty point or an absent ordinate. Stored NaN ordinates
+  remain present. The `x`, `y`, `z`, and `m` functions operate on coordinate values.
+
+  The constructors do not validate geometry. Codecs check line lengths, ring
+  closure, and empty shells. Use `SF.isValid` to check polygon topology.
+  The derived `Eq` compares storage; `SF.equals` compares XY point sets.
+  As with `Double`, positive and negative zero compare equal under `Eq`.
+
+  CRS and SRID metadata belongs to the caller. `Data.Geometry.Internal` exposes
+  implementation details and can change without following the package versioning
+  policy.
+
+  ## Operations
+
+  | Group | Functions in `Data.Geometry.SimpleFeatures` |
+  | --- | --- |
+  | Properties | `geometryType`, `dimension`, `coordinateDimension`, `spatialDimension`, `is3D`, `isMeasured`, `isEmpty` |
+  | Ordinates | `x`, `y`, `z`, `m`, `pointX`, `pointY`, `pointZ`, `pointM` |
+  | Members | `numGeometries`, `geometryN` |
+  | Line points | `numPoints`, `pointN`, `startPoint`, `endPoint`, `isClosed` |
+  | Rings | `exteriorRing`, `numInteriorRings`, `interiorRingN` |
+  | Measurements | `envelope`, `area`, `geometryLength`, `curveLength`, `perimeter`, `centroid`, `convexHull` |
+  | Topology | `boundary`, `isSimple`, `isRing`, `isValid`, `pointOnSurface` |
+  | Relations | `relate`, `relatePattern`, `equals`, `disjoint`, `intersects`, `touches`, `crosses`, `within`, `contains`, `overlaps`, `covers`, `coveredBy` |
+  | Construction | `distance`, `intersection`, `union`, `difference`, `symmetricDifference`, `buffer`, `bufferWithSegments` |
+  | Measures | `locateAlong`, `locateBetween` |
+
+  Indices start at zero. Member counts include empty members. Accessors return
+  `Nothing` for an index out of range or an unsupported geometry family.
+  A geometry that is not a collection is its own sole member.
+
+  Planar calculations require finite X and Y. Polygon measurements and binary
+  spatial operations require valid topology. Lengths use coordinate units; areas
+  use square units. Longitude and latitude inputs therefore give planar lengths
+  in degrees. These are not geodesic calculations.
+
+  Constructed planar results use XY coordinates. Polygon exteriors run
+  counterclockwise and holes clockwise. Accessors preserve stored Z/M; measured
+  queries use M and interpolate Z when present. These rules follow the map
+  geometry model in OGC Simple Feature Access 1.2.1, section 6.1.2.5.
+
+  `intersects` and `disjoint` reject separated envelopes and stop at the first
+  contact. Point containment uses direct point-location tests. Full relation
+  matrices, overlays, and validity checks use exact spatial indexes. Point-location
+  queries reuse ring indexes and aggregated winding counts. These indexes can
+  still take quadratic time when many segment bounds overlap, even for disjoint
+  shapes such as slanted interleaved combs. Many intersections also increase the
+  cost of exact rational arithmetic. Measure the shapes and sizes used by your
+  application.
+  For large indexed workloads, use a native library such as
+  [`geos`](https://hackage.haskell.org/package/geos).
+
+  Overlays and buffers return `Either SF.TopologyException Geometry` and validate
+  rounded output. If rounding changes topology, they retry with bounded snapping;
+  thin regions can collapse. Exhausted precision retries return
+  `Left SF.PrecisionFailure`. See the
+  [precision policy](https://github.com/Tritlo/geometry-simple/blob/main/docs/GEOS-DIFFERENCES.md#overlay-precision).
+
+  ```haskell
+  clippedArea :: Geometry -> Geometry -> Either SF.TopologyException Double
+  clippedArea a b = SF.area <$> SF.intersection a b
+  ```
+
+  See [Simple Features and GEOS](https://github.com/Tritlo/geometry-simple/blob/main/docs/GEOS-DIFFERENCES.md) for numerical limits,
+  empty-value rules, format conversions, and deliberate differences from GEOS.
+  The package implements the seven-family core; it does not claim full OGC SFA
+  conformance or implement SQL, CRS metadata, Triangle, TIN, or PolyhedralSurface.
+
+  ## Codecs
+
+  `encodeWKB` writes little-endian ISO WKB. `decodeWKB` accepts either byte order,
+  including mixed byte orders in collections. The WKT decoder accepts explicit
+  or inferred coordinate layouts, lowercase keywords, and scientific notation.
+  All four codec functions return `Either String` and reject invalid construction.
+  The decoders also reject trailing input.
+
+  Finite ordinates retain their exact bits through WKB and through text produced
+  by `encodeWKT`, including negative zero and subnormals. Writers can promote
+  layouts where a format requires one layout, such as WKT multi-geometries and
+  WKB polygon rings. Missing Z/M values become NaN. A structural round trip is
+  therefore not guaranteed for every mixed-layout value.
+
+  WKT collections use a parent dimension tag when their members share one output
+  layout. Mixed-layout collections omit it and retain child tags. That form is
+  an extension accepted by this library and GEOS; DuckDB rejects it.
+
+  ## Development
+
+  Tests, benchmarks, the Shapely driver, and standard-derived fixtures live in
+  `dev/`. They are excluded from the published library archive. A repository
+  checkout can run them with:
+
+  ```sh
+  cabal build all
+  cabal test all --test-show-details=direct
+  ```
+
+  CI compares results with Shapely/GEOS and runs independent properties and OGC
+  examples. It covers GHC 9.6.7 through 9.14.1 on Linux and GHC 9.14.1 on macOS.
+  See [CONTRIBUTING.md](https://github.com/Tritlo/geometry-simple/blob/main/CONTRIBUTING.md)
+  for the pinned Nix environment, benchmarks, and release checks.
+
+  ## License
+
+  The published library is MIT licensed. See
+  [LICENSE](https://github.com/Tritlo/geometry-simple/blob/main/LICENSE).
+  Standard-derived development fixtures retain their separate OGC notices in
+  `dev/` and are not part of the release package.
+description-type: markdown
+hash: efdd232426888d2e82bf6ef3d716807b7a45104079e311d3a1dc181024fc406a
+homepage: https://github.com/Tritlo/geometry-simple
+latest: 0.1.0.0
+license-name: MIT
+maintainer: mpg@mpg.is
+synopsis: Simple Features geometries, codecs, and pure planar operations
+test-bench-deps: {}
