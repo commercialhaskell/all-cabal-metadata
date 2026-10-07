@@ -12,19 +12,90 @@ all-versions:
 - 0.1.5.1
 - 0.1.5.2
 - 0.2.0.0
+- 0.3.0.0
 author: Matthias Pall Gissurarson
 basic-deps:
   array: '>=0.5 && <0.6'
   base: '>=4.14 && <5'
   bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.9'
-  duckdb-ffi: '>=1.5.3.0 && <1.6'
+  duckdb-ffi: '>=1.5.6.0 && <1.6'
+  geometry-simple: '>=0.1.1.0 && <0.2'
   text: '>=2.0 && <2.2'
   time: '>=1.12 && <1.16'
   transformers: '>=0.6 && <0.7'
   uuid: '>=1.3 && <1.4'
 changelog: |
   # Changelog
+
+  ## 0.3.0.0
+
+  - Use native DuckDB 1.5.6 by default. Keep native support for DuckDB >= 1.5.3
+    and < 1.6. Test native versions 1.5.3 through 1.5.6.
+  - Require `duckdb-ffi >= 1.5.6.0` for the updated native bindings.
+  - Decode VARIANT results to the `FieldValue` of the stored value, so existing
+    `FromField` instances read them. Objects decode to `FieldStruct` values with
+    VARIANT fields, in entry order. The decoder checks DuckDB's private 1.5
+    format and payload bounds, and rejects cyclic child references. It has no
+    depth limit for acyclic values.
+  - Add `Variant`, a `FieldValue` that binds as a VARIANT, and `variantObject`,
+    which builds an object payload. Scalars keep their native type. Object
+    parameters reject duplicate, empty, and NUL-containing keys because the
+    native constructors cannot represent all of these names.
+    `Variant` has no `ToDuckValue` instance, and `logicalTypeFromRep` raises an
+    error for VARIANT.
+  - A VARIANT timestamp payload outside the microsecond range binds as a
+    millisecond or second timestamp, so it keeps its value.
+  - Read the VARIANT type and GEOMETRY types for a list of CRS definitions,
+    because the C API cannot create them. A connection reads them with one
+    query on a separate connection, the first time a parameter needs one.
+    Parameters use these types. Add `ConnectionOptions`, `openWithOptions`, and
+    `withConnectionWithOptions` to set the CRS list, which defaults to
+    `OGC:CRS84`.
+  - Array parameters use the element's `ToField` instance. Elements require
+    `ToField` and `DuckDBColumnType`. Add a `ToDuckValue` instance for arrays
+    whose elements have `ToDuckValue`. It does not need a connection.
+  - Array parameters of STRUCT values, UNION values, generic records, and
+    arrays bind. They take the element type of the first element that is not
+    NULL. The other non-NULL elements must have the same type, including field
+    names, decimal precision and scale, and nested types. Different types raise
+    an error, so DuckDB cannot cast away fields or round values. An empty or
+    all-NULL array of these elements raises an error. Scalar elements keep the
+    type of their column type name.
+  - A GEOMETRY payload decodes to `FieldGeometry` with raw WKB. Import those
+    bytes with `ST_GeomFromWKB(?)::VARIANT`.
+  - Add parameter and result instances for `Data.Geometry.Geometry` from
+    `geometry-simple`. It provides decoded shapes, unboxed coordinate vectors,
+    and runtime coordinate layouts. This type does not store CRS metadata.
+    `RawGeometry` retains WKB and CRS without decoding coordinates. Existing
+    `ByteString` results still return WKB. Empty points remain distinct from SQL NULL.
+  - Use `geometry-simple >= 0.1.1.0` for pure geometry types and codecs.
+    Structured parameters use its WKT writer and DuckDB's native cast.
+    `RawGeometry` has no parameter instance. Import its WKB with
+    `ST_GeomFromWKB` and apply its CRS with `ST_SetCRS`. This preserves mixed
+    layouts, dimensional empties, and native NaN payloads without WKT conversion.
+  - Add `FieldGeometry` and `LogicalTypeGeometry` to the public value and type
+    representations. Update exhaustive matches when upgrading.
+    Nested result decoding retains raw WKB and CRS. Generic parameters with
+    non-NULL `FieldGeometry` values raise an error instead of converting their
+    bytes through WKT. Construct those nested values with explicit SQL import.
+  - Keep CRS metadata in this package. The standalone shape has no CRS.
+    Both forms own their memory and remain usable after the connection closes.
+    CRS text can hold an identifier, a custom name, or a full WKT2/PROJJSON
+    definition.
+  - Composite parameters keep GEOMETRY CRS metadata for the CRS definitions
+    that the connection read. Other CRS definitions bind without a CRS, and
+    `logicalTypeFromRep` creates `GEOMETRY` with no CRS. Insert the value into a
+    column with a CRS, or cast it in SQL, to apply the CRS.
+  - Read STRUCT and UNION type metadata once for each result vector instead of
+    once for each row. Prepare their direct child readers at the same time.
+    A local benchmark with a CRS-tagged GEOMETRY field ran about ten times faster.
+    LIST, ARRAY, and MAP decoders can still read child metadata for each parent row.
+  - `Database.DuckDB.Simple.Internal` changes. `StatementStreamChunk` keeps one
+    reader for each column in `statementStreamChunkReaders`, and
+    `StatementStreamChunkVector` is removed. The module also exports
+    `withTypeCache`, `fetchPrepareError`, `duckDBTypeFromName`, and
+    `duckDBTypeToName`.
 
   ## 0.2.0.0
 
@@ -391,16 +462,28 @@ description: |
   storeArray :: Connection -> IO [Array Int Int]
   storeArray conn = do
     _ <- execute_ conn "CREATE TABLE arrays (vals INTEGER[3])"
-    let arr = listArray (0, 2) [1, 2, 3]
+    let arr = listArray (0, 2) [1, 2, 3] :: Array Int Int
     _ <- execute conn "INSERT INTO arrays VALUES (?)" (Only arr)
     fmap fromOnly <$> query_ conn "SELECT vals FROM arrays"
 
   storeList :: Connection -> IO [[Int]]
   storeList conn = do
     _ <- execute_ conn "CREATE TABLE lists (vals INTEGER[])"
-    _ <- execute conn "INSERT INTO lists VALUES (?)" (Only [1, 2, 3])
+    let arr = listArray (0, 2) [1, 2, 3] :: Array Int Int
+    _ <- execute conn "INSERT INTO lists VALUES (?)" (Only arr)
     fmap fromOnly <$> query_ conn "SELECT vals FROM lists"
   ```
+
+  A Haskell list reads a LIST result. Lists have no parameter instance, so bind
+  an `Array`. DuckDB casts the array to the LIST column type.
+
+  An array parameter with scalar elements takes its element type from the
+  column type name of the element, so an empty array keeps its type. An array
+  of STRUCT values, UNION values, generic records, or arrays takes the type of
+  its first element that is not NULL. All other non-NULL elements must have the
+  same type, including field names, decimal precision and scale, and nested
+  types. Different types raise an error before DuckDB can cast away fields or
+  round values. An empty or all-NULL array of such elements raises an error.
 
   ### Infinite dates and timestamps
 
@@ -445,6 +528,7 @@ description: |
     [(s, u)] <- query_ conn
       "SELECT {'a': 1, 'b': 2}, \
       \CAST(union_value(x := 42) AS UNION(x INT, y VARCHAR))"
+      :: IO [(StructValue FieldValue, UnionValue FieldValue)]
     _ <- execute conn "INSERT INTO composite VALUES (?, ?)" (s, u)
     query_ conn "SELECT s, u FROM composite"
   ```
@@ -506,7 +590,8 @@ description: |
   `Statement` to pull rows one at a time and decide when to stop.
 
   Cursors support the same column types as eager queries, including STRUCT
-  and UNION values with nested collections and NULLs.
+  and UNION values with nested collections and NULLs. VARIANT and GEOMETRY
+  work with eager queries, cursors, and folds.
 
   #### Optional native streaming
 
@@ -573,6 +658,167 @@ description: |
   result size. The older Arrow query and scan bindings remain available through
   `Database.DuckDB.FFI.Deprecated` and emit deprecation warnings.
 
+  ### VARIANT
+
+  A VARIANT result decodes to the `FieldValue` of the stored value, with its
+  native type. The usual `FromField` instances read VARIANT columns, for example
+  as `Int64`, `Text`, `[a]`, or a generic record. Arrays decode to `FieldList`.
+  Objects decode to `FieldStruct` values whose fields have the VARIANT type, in
+  entry order. `variantObject` builds such a payload from a list of entries.
+  SQL NULL decodes to `FieldNull`.
+
+  `Variant` from `Database.DuckDB.Simple.Variant` wraps a `FieldValue`. Its
+  `FromField` instance reads any column. Its `ToField` instance binds the
+  payload as a VARIANT, so `SELECT ?` returns a VARIANT:
+
+  ```haskell
+  query conn "SELECT ?" (Only (Variant (FieldList [FieldInt8 1, FieldText "two"])))
+  ```
+
+  A scalar payload keeps its native type, such as `TINYINT` or `DECIMAL(4,2)`.
+  Time and timestamp payloads bind as microsecond types, or as nanosecond types
+  when they have sub-microsecond digits. So a `TIMESTAMP_S` result binds back as
+  a `TIMESTAMP` when its value fits. Wider timestamp values use milliseconds or
+  seconds without losing digits. Lists, arrays, and STRUCT fields bind as
+  VARIANT values. MAP and ENUM payloads raise an error. Object parameters reject
+  duplicate keys, empty keys, and keys that contain NUL. You can also bind a
+  plain value and cast it in SQL, as in `?::VARIANT`.
+
+  The C API cannot create a usable VARIANT type
+  ([#27](https://github.com/Tritlo/duckdb-haskell/issues/27)). Each connection
+  reads the VARIANT type the first time a parameter needs it, and its
+  parameters use that type. The connection reads the type with a query on a
+  separate connection. So the query does not run in your transaction, and it
+  does not end a streaming result.
+  `Variant` has no `ToDuckValue` instance, and `logicalTypeFromRep` raises an
+  error for VARIANT, because neither has a connection.
+
+  A GEOMETRY payload decodes to `FieldGeometry` with raw WKB and no CRS. Import
+  these bytes with `ST_GeomFromWKB(?)::VARIANT`. A `Variant` parameter that
+  contains `FieldGeometry` raises an error, also inside arrays and objects. A
+  TIMETZ payload with an offset in seconds raises an error, as a TIMETZ column
+  does. Results can contain empty or NUL object keys. Text and blob payloads can
+  contain NUL.
+
+  DuckDB 1.5 has no C API for reading VARIANT values. The decoder checks the
+  native version and physical schema before it reads the internal representation.
+  It checks payload bounds and rejects unknown tags. This format dependency is
+  limited to the supported DuckDB 1.5 line.
+
+  Persistent VARIANT columns require storage format `v1.5.0` or later. For a new
+  database, pass `[("storage_compatibility_version", "v1.5.0")]` to
+  `openWithConfig` or `withConnectionWithConfig`. The library does not change an
+  existing database's storage compatibility setting.
+
+  ### GEOMETRY
+
+  Use `Geometry` from `Data.Geometry` for decoded shapes. The `geometry-simple`
+  package supplies the type and unboxed coordinate vectors. `duckdb-simple`
+  supplies its parameter and result instances:
+
+  ```haskell
+  import qualified Data.Geometry as G
+  import qualified Data.Vector.Unboxed as U
+  import Database.DuckDB.Simple
+
+  let line = G.LineString (G.CoordinatesXY (U.fromList [G.XY 0 0, G.XY 1 2, G.XY 3 4]))
+  rows <- query conn "SELECT ?" (Only line) :: IO [Only G.Geometry]
+  ```
+
+  Points and coordinate sequences store their XY, XYZ, XYM, or XYZM layout.
+  `G.EmptyPoint G.DimXYZ` is an empty XYZ point. Use `Maybe G.Geometry` for SQL NULL.
+  Use `decodeWKT` from `Data.Geometry.WKT` to parse text without a database.
+
+  `G.Geometry` has no CRS metadata. Reading it returns the coordinates without
+  their CRS label. Binding it creates a `GEOMETRY` with no CRS. To attach a label,
+  use `ST_SetCRS(?, ?)` with a shape and CRS text. This does not transform coordinates.
+
+  Use `RawGeometry` from `Database.DuckDB.Simple.Geometry` to read WKB and CRS
+  without decoding coordinates. Its `rawGeometryWKB` and `rawGeometryCRS` fields
+  own their data. They remain usable after the connection closes. Existing
+  `ByteString` result decoding also returns WKB.
+
+  `RawGeometry` has no `ToField` instance. Import its bytes explicitly:
+
+  ```haskell
+  import Database.DuckDB.Simple.Geometry
+
+  [Only raw] <- query_ conn "SELECT 'POINT Z (1 2 3)'::GEOMETRY('OGC:CRS84')"
+  rows <- (case rawGeometryCRS raw of
+      Nothing -> query conn
+          "SELECT system.main.ST_GeomFromWKB(?)"
+          (Only (rawGeometryWKB raw))
+      Just crs -> query conn
+          "SELECT system.main.ST_SetCRS(system.main.ST_GeomFromWKB(?), ?)"
+          (rawGeometryWKB raw, crs)
+      ) :: IO [Only RawGeometry]
+  ```
+
+  Use `Nothing` for no CRS and omit `ST_SetCRS` in that case. Passing SQL NULL
+  to `ST_SetCRS` returns a NULL geometry. CRS text can contain `OGC:CRS84`,
+  a custom name, or a full WKT2/PROJJSON definition. DuckDB can reduce a known
+  CRS definition to its registered identifier. It can also normalize WKB byte
+  order. The qualified function names select DuckDB's built-ins even if a user
+  macro has the same name.
+
+  `fromRawGeometry` decodes the shape and drops CRS metadata. `toRawGeometry`
+  encodes a shape with no CRS. These helpers follow the geometry-simple contracts.
+  NaN in both WKB point X and Y denotes an empty point. Empty multi-geometries
+  and collections have no stored layout tag in the decoded representation.
+  Keep the raw bytes when these details must survive.
+
+  Structured parameters use `encodeWKT` and DuckDB's native cast. DuckDB 1.5
+  has no WKB value constructor in its C API. The WKT writer combines layouts
+  in multi-geometries and polygon rings. It fills absent Z or M with NaN.
+  DuckDB's WKT parser limits nesting to 16 levels and rejects empty polygon rings
+  and mixed collection layouts. Explicit WKB import preserves mixed member
+  layouts and native NaN payload bits that WKT cannot retain.
+
+  `FieldGeometry` contains a raw result. Generic STRUCT and UNION parameters
+  that contain non-NULL raw geometry raise an error. Construct those values in
+  SQL with explicit WKB import. Their result decoding retains WKB and CRS,
+  including inside LIST, ARRAY, MAP, STRUCT, and UNION values.
+
+  `LogicalTypeGeometry` describes CRS metadata. The C API cannot create a
+  GEOMETRY type with a CRS. So each connection reads a GEOMETRY type for each
+  CRS in a list, together with the VARIANT type, the first time a parameter
+  needs one of them. The default list holds
+  `OGC:CRS84`. Composite parameters use these types, so typed NULLs, empty
+  collections, and inactive UNION members keep their CRS. Set the list in
+  `ConnectionOptions`:
+
+  ```haskell
+  let options = defaultConnectionOptions{connectionGeometryCRS = ["OGC:CRS84", "EPSG:3857"]}
+  withConnectionWithOptions "shapes.duckdb" options \conn -> ...
+  ```
+
+  A list entry can be an identifier, a custom name, or a full WKT2 or PROJJSON
+  definition. A composite parameter with a CRS that is not in the list binds its
+  geometry members without a CRS. `logicalTypeFromRep` has no connection, so it
+  creates `GEOMETRY` without a CRS. To apply a CRS in these cases, insert the
+  value into a column with that CRS, or cast it in SQL:
+
+  ```haskell
+  query conn "SELECT ?::UNION(number BIGINT, shape GEOMETRY('OGC:CRS84'))" (Only value)
+  ```
+
+  The CRS in a cast must be a constant. DuckDB rejects a parameter as a type
+  modifier, so `?::GEOMETRY(?)` is not valid. To use a CRS that is known only at
+  run time, write it into the query text as a SQL string literal, and double each
+  single quote. A cast accepts a CRS that DuckDB recognizes, such as `OGC:CRS84`,
+  or a full WKT2 or PROJJSON definition. Unless an extension recognizes it,
+  DuckDB rejects other identifiers, such as `EPSG:4326`, and custom names.
+  `ST_SetCRS` also accepts custom names, but it returns `GEOMETRY` with no CRS
+  for a NULL input.
+
+  A bound composite without a CRS also changes the type of expressions that
+  combine it with CRS data. `UNION ALL` and `COALESCE` of `GEOMETRY` and
+  `GEOMETRY('OGC:CRS84')` give `GEOMETRY` with no CRS for all rows. Cast the
+  parameter before you combine it with other values.
+
+  See [geometry-simple](https://github.com/Tritlo/geometry-simple) for the seven
+  supported families, construction checks, and codec normalization rules.
+
   ### Feature Coverage
 
   - Connections, prepared statements, positional/named parameter binding.
@@ -583,7 +829,7 @@ description: |
     decimals (with width/scale), intervals, precise and timezone-aware temporals,
     enums, bit strings, blobs, bignums, and UUIDs.
   - Composite types: STRUCTs, UNIONs, LISTs, fixed-length ARRAYs, and MAPs with
-    full encoding/decoding support.
+    typed parameters and results.
   - Generic encoding/decoding: automatic STRUCT/UNION mapping for Haskell ADTs via
     GHC generics and the `ViaDuckDB` deriving-via helper.
   - Row decoding via `FromField`/`FromRow`, with generic deriving for product types.
@@ -629,9 +875,9 @@ description: |
   cabal test duckdb-simple-test --test-show-details=direct
   ```
 description-type: markdown
-hash: 3a00e8beff60eab5b5d3603a3a786dff74de5797a72c6a06130967e7df1eb329
+hash: 1eb361e2ceee2d6c2a67277c6f50cc9569feede623c8c174e4a64afa176261a9
 homepage: https://github.com/Tritlo/duckdb-haskell
-latest: 0.2.0.0
+latest: 0.3.0.0
 license-name: MPL-2.0
 maintainer: mpg@mpg.is
 synopsis: High-level DuckDB interface inspired by sqlite-simple and postgresql-simple
@@ -639,17 +885,20 @@ test-bench-deps:
   QuickCheck: '>=2.14 && <2.18'
   array: '>=0.5 && <0.6'
   base: '>=4.14 && <5'
-  bytestring: '>=0'
+  bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.9'
   dataframe-arrow-bridge: '>=1.0 && <1.1'
   dataframe-core: '>=2.5 && <2.6'
   directory: '>=1.3 && <1.4'
-  duckdb-ffi: '>=1.5.3.0 && <1.6'
+  duckdb-ffi: '>=1.5.6.0 && <1.6'
   duckdb-simple: '>=0'
+  geometry-simple: '>=0.1.1.0 && <0.2'
   tasty: '>=1.4 && <1.6'
   tasty-expected-failure: '>=0.12 && <0.13'
   tasty-hunit: '>=0.10 && <0.12'
   tasty-quickcheck: '>=0.10 && <0.12'
-  text: '>=0'
-  time: '>=0'
+  text: '>=2.0 && <2.2'
+  time: '>=1.12 && <1.16'
+  transformers: '>=0.6 && <0.7'
   uuid: '>=1.3 && <1.4'
+  vector: '>=0.13 && <0.14'
