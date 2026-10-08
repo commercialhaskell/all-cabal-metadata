@@ -16,20 +16,22 @@ all-versions:
 - 0.4.0.0
 - 0.5.0.0
 - 0.6.0.0
+- 0.8.0.0
 author: Devon Tomlin
 basic-deps:
   array: '>=0.5 && <0.6'
-  base: '>=4.16 && <5'
+  base: '>=4.22 && <5'
   bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.9'
   crypton: '>=1.1 && <2'
   directory: '>=1.3 && <1.4'
+  filelock: '>=0.1.1 && <0.2'
   filepath: '>=1.4 && <1.6'
   http-client: '>=0.7 && <0.8'
   http-client-tls: '>=0.3 && <0.5'
   http-types: '>=0.12 && <0.13'
   mtl: '>=2.2 && <2.4'
-  nova-cache: '>=0.4.2 && <0.5'
+  nova-cache: '>=0.11.1.1 && <0.12'
   nova-nix: '>=0'
   process: '>=1.6 && <1.7'
   ram: '>=0.20 && <1'
@@ -41,6 +43,108 @@ basic-deps:
   zstd: '>=0.1 && <0.2'
 changelog: |
   # Changelog
+
+  ## 0.8.0.0 - 2026-10-08
+
+  0.7.0.0 was published on GitHub but not uploaded to Hackage, so on Hackage this release follows 0.6.0.0. Library users upgrading from 0.6.0.0 should read the 0.7.0.0 entries below as well.
+
+  ### Library API
+
+  Breaking changes for code that uses nova-nix as a library:
+
+  - **`Nix.Eval.Types.MonadEval` has five new methods with no defaults:** `adoptStorePath`, `lookupFetchCache`, `onEvalError`, `setExecutableFile` and `writeFetchCache`. Every instance defined outside this package needs them.
+  - **`Nix.Builder.BuildConfig` has a new strict field,** `bcExecWrappers :: Map Text FilePath`.
+  - **`BuildConfig` drops `bcBashPath` and `bcSandbox`, which nothing read.** Both were defined and defaulted, and no code consulted either one: the Windows stdenv takes bash from the MSYS2 seed, and no platform implements build sandboxing. A field that reads like a switch while switching nothing suggests isolation that does not exist, so it goes until there is a mechanism for it to gate (#25). Library code that set either field stops compiling and loses no behavior. (#209)
+  - **`Nix.Substituter.CacheConfig` replaces `ccPublicKey :: Text` with `ccPublicKeys :: [Text]`,** since a narinfo is now accepted when any trusted key verifies it.
+  - **The store-write cache records how each path was written.** `Nix.Eval.IO.EvalState`'s `esStoreWriteCache` maps each key to `([StorePath], StoreWriteMode)`, and `Nix.Store.materializeEvalStoreWrites` takes the same shape.
+  - **`Nix.Eval.StringInterp.coerceToString` takes a `CoercePath m` argument** that decides how a path is coerced at each call site.
+  - **`Nix.Expr.Types.Expr` has a new constructor, `EPathStr`, and `Nix.Parser.Lexer.Token` has `TokPathInterpStart`, `TokPathLit` and `TokPathEnd`,** so exhaustive matches over either need new cases.
+
+  ### CLI
+
+  - **`build` selects an attribute, or takes an expression, not only a file.** `nova-nix build FILE.nix -A a.b.c` follows a dotted attribute path into the file's value, and `nova-nix build --expr 'EXPR'` builds with no file at all. A build previously took one file whose value had to be a derivation itself, so a package set could only be built by carrying a pointer file per package, which is the arrangement the nixpkgs by-name layout exists to remove. A component may be double-quoted to carry a literal dot (`-A 'foo."bar.baz"'`), matching upstream's tokenizer including the behaviours that read as accidents: quotes concatenate rather than delimit, so `foo"bar"` is the single name `foobar`, and a trailing dot is dropped rather than becoming an empty component. Three upstream behaviours are deliberately absent. A numeric component indexes a list upstream and is an ordinary attribute name here, because nothing this selects over is a list and upstream's integer-or-name test defers to a C++ numeric parse whose accepted spellings have not been checked against a running Nix. A near-miss attribute name gets no `Did you mean` line, which upstream renders from a Levenshtein search this evaluator has no suggestion channel to carry; the message itself is upstream's, only without that second line. Every selection message matched upstream byte for byte when diffed against `nix-instantiate` 2.33.2. And `-A` is not repeatable: upstream accumulates a derivation per occurrence, while a build here realizes one, so a second `-A` is an error rather than a silent last-one-wins. (#174)
+  - **`--exec-wrapper SYSTEM=PATH` builds a derivation whose system this machine cannot execute, through a named launcher.** `--exec-wrapper x86_64-windows=/path/to/wine` builds an `x86_64-windows` derivation on Linux through Wine. `SYSTEM` is the derivation's own `system` string, spelled exactly as a `.drv` spells it. The launcher is prepended to the builder at the spawn boundary and never enters the derivation, so the store paths a wine-hosted build produces are the same ones a Windows host produces. A derivation for the host's own platform is spawned directly whatever is configured; a derivation for any other system with no launcher named for it is refused before the builder runs, rather than spawned natively and left to fail in the loader. The option is accepted before or after `build`'s target, and repeated options accumulate across both positions with the same duplicate-system and launcher checks. (#171, #201)
+  - **`eval` accepts `--store` after the subcommand.** The eval sub-parser rejected `--store` where `build`, `push` and `store delete` accepted it, even though eval-side reads follow the selected store identically. (#193)
+  - **Substituters and trusted public keys can be configured in nix.conf and NIX_CONFIG, not only as flags.** A machine can now say once, in `nix/nix.conf` under `$XDG_CONFIG_HOME` (by default `~/.config`, or `%APPDATA%` on Windows) or in the NIX_CONFIG environment variable, which binary caches to substitute from and which public keys to trust, instead of repeating `--substituter` and `--trusted-key` on every invocation. The format matches upstream's: name = value lines, a # comment truncates the rest of the line, list values split on whitespace, the binary-caches and binary-cache-public-keys aliases are honored, and an extra- prefix appends to a list rather than replacing it. Sources are resolved in upstream's precedence order, the user file, then NIX_CONFIG, then the command line, with the command line winning; a plain assignment in a higher source replaces the accumulated value and an extra- widens it, which is the load-bearing rule for trusted-public-keys since a mishandled precedence would silently widen what the machine trusts. The trusted-key set is now flat as upstream models it: a narinfo is accepted when its signature verifies under any trusted key, and a malformed key anywhere in the set is a loud error rather than a silently skipped one. The include/!include directives and the /etc/nix and XDG_CONFIG_DIRS sources are tracked separately in #199. (#200)
+
+  ### Evaluation
+
+  - **Path literals accept string interpolation (`./${v}/x`), which the nixpkgs 26.05 tree uses 89 times across 54 files.** The lexer had no representation for an interpolated path, so both ./${v}/x and /tmp/${v}/y were parse errors. The lexer now carries a path mode alongside the string modes, mirroring upstream's INPATH machinery: the head piece opens the literal, chunks and interpolations follow, and a synthesized end token closes at the first non-path character. Every semantic rule is pinned to nix-instantiate 2.33.2's observed behavior: the result is a path; pieces concatenate with no separator (mid-segment and back-to-back interpolation included) and the whole canonicalizes textually, so a dot-dot arriving at runtime collapses; a path segment coerces without a store copy, unlike string interpolation, and a string carrying store-path context is refused ("cannot be appended to a path"); and a trailing slash is a parse error ("path has a trailing slash"), now for plain path literals too, matching upstream's grammar. A search path followed by /${v} stays two expressions, as upstream parses it. The head piece is absolutized in the same pre-eval pass as plain literals, so closure capture across import keeps working. (#189)
+  - **An attrset coerced through outPath now copies to the store and carries context, matching upstream byte for byte.** The coercion engine handled paths with a fixed context-free case, so a path reached through an attrset's outPath (or a __toString result) rendered as raw filesystem text with no store copy and no string context, wherever the attrset stood in for the path: src = builtins.fetchGit { ... } produced empty inputSrcs and a drvPath diverging from real Nix 2.33.2 while the .outPath spelling worked, a user { outPath = ./dir; } leaked the raw path into the build environment, and the same drop reached interpolation, the + operator, and builtins.toJSON. The path behavior is now a parameter the attrset recursion carries, so every coercion site states its mode: interpolation, derivation fields, +, and toJSON copy to the store; builtins.toString stays verbatim. Verified against nix-instantiate 2.33.2: the attrset form's drvPath now matches upstream exactly. (#187)
+  - **A syntax error inside a lambda is reported where it happened, not as an attr-set complaint at the top of the file.** The parser decided lambda-versus-attr-set (and lambda-versus-expression) by backtracking, and a failed try discarded its error entirely, so a real failure at line 410 of a nixpkgs file surfaced as "expected '=' but got ','" at line 2, column 6: the valid comma in the file's opening formals. Two changes close it. A parsed lambda header now commits: "ident :", "ident @", and "{ formals } :" never begin anything else, so a body failure propagates from its own position instead of rewinding, which also covers the case where the other reading succeeds on a prefix (the empty attr set in "{ }: body") and the old parser complained at the stray colon. And when no reading parses at all, the error from the branch that got furthest into the input is the one reported, with end-of-input ranking past every positioned failure; upstream's LR parser never backtracks and always errors at the true site, and this is the closest a backtracking parser comes. (#181)
+  - **`builtins.fetchGit` remembers a pinned revision.** A fetch of a pinned `rev` is now recorded under the user's cache directory and reused while the tree it names is still in the store, since re-cloning it on every evaluation is pure waste and fatal whenever the far end is down. A bare `ref` is never cached, since it means "whatever this branch points at now". Everything that decides what comes back is in the key, `shallow` included: it does not change the tree, but it does change `revCount`, which can reach a derivation's environment. A hit re-records the store write the fetch would have made, so the path it hands back is registered before any derivation naming it is built. (#172)
+  - **`builtins.fetchGit` with `shallow = true` reports revCount 0 and can check out a pinned rev.** A shallow fetch counted the truncated history, so revCount was always 1 regardless of the real depth, a wrong number that can reach a derivation's environment. Upstream reports 0 under shallow (its fetcher skips computing the attribute and evaluation fills the default; observed from nix-instantiate 2.33.2, whose shallow result keeps all eight attributes with revCount = 0), and nova-nix now records and reports the same 0 without running rev-list at all. A pinned rev also becomes the fetch refspec itself, matching upstream's construction: a depth-1 fetch of a branch tip cannot contain any other revision, so asking the remote for the SHA is what lets shallow and rev compose, and what finds a rev not on the fetched ref. A server may refuse a SHA it does not advertise; that failure surfaces as git's own fetch error, the same surface upstream has. (#184)
+  - **`builtins.fetchGit` honors allRefs, verifies a declared narHash, refuses unsupported attributes, and cleans up after a failed fetch.** allRefs = true fetches every remote ref (upstream's refs/*:refs/* refspec), the caller's way to a pinned rev the remote refuses as a direct SHA want; the scratch clone has a worktree, unlike upstream's bare cache repo, so the fetch passes --update-head-ok, which is safe because an explicit checkout always follows. A declared narHash is verified against the fetched tree on the cache-hit and fresh paths alike, and a mismatch is an error in upstream's orientation (expected is what the fetch produced, got is the declared pin), never a silent recompute; upstream matched from nix-instantiate 2.33.2. An attribute outside the supported set (url, name, ref, rev, submodules, shallow, allRefs, narHash) is refused instead of silently dropped, which is exactly how the unhonored pins stayed invisible. A failing fetch no longer leaks its scratch clone: every throwing step runs under a new onEvalError cleanup primitive, the error half of a bracket. (#188)
+  - **`builtins.placeholder` is substituted at build time.** `builtins.placeholder "out"` evaluates to a sentinel, since an input-addressed derivation's output path is a hash of the derivation itself and the expression cannot name a path it hasn't produced yet. The sentinel now gets replaced in a derivation's `args` and in its environment, names as well as values, at the spawn boundary, with the same per-output path `$out` already carries, so argument-passing and environment-passing builders agree on where to write. Upstream rewrites the whole `name=value` string rather than the value alone, so a placeholder in a dynamic attribute name is substituted too. This is what lets a builder that takes its destination as an argument rather than reading the environment (stage0's `hex0 input output`) be driven directly. The builder path itself is left alone: a placeholder there would name a program that does not exist yet. (#126)
+
+  ### Store
+
+  - **Eval-time store writes are verified at both ends: writers rewrite a mismatched leftover, and registration refuses content that does not reproduce its path.** Every eval-side writer skipped its write when the destination existed (and the fetchurl writer wrote unconditionally, crashing on a sealed leftover), so a file truncated by an interrupted earlier run was adopted as-is, registered valid under the hash of the content it should have had, sealed read-only so nothing could repair it, and then consumed by builds. Writers now adopt an existing destination only when its bytes are the intended bytes (raw comparison for toFile and fetchurl, recursive NAR digest for source copies and builtins.path) and otherwise clear and rewrite, which is where the bytes exist to rewrite with, matching upstream's delete-then-rewrite in addTextToStore. Registration independently re-derives each recorded path from its on-disk content under the scheme that named it (the write cache now carries text, recursive, or flat alongside the references) and refuses loudly on a mismatch rather than sealing a hash the bytes do not have. (#182)
+  - **The eval-side materializers join the per-path lock protocol.** materializeEvalSources ran its check-then-act with no lock: two processes materializing the same source path raced the validity check, and the loser's clear-and-recopy deleted the tree the winner had just registered. Both materializers now run each path's adopt or prepare under the same cross-process path lock the builder and substituter hold, with validity re-checked once the lock is held, so a peer mid-producing a path is waited out rather than raced. The store-write materializer's batched registration stays outside the lock deliberately: registration is an upsert over content both holders verified reproduces the same path. (#192)
+  - **A concurrent invocation waits for the store database instead of dying on ErrorBusy.** SQLite's default busy timeout is zero, so while one process held a write transaction (a registration mid-commit), a second nova-nix crashed in under a tenth of a second with an uncaught SQLError instead of waiting its turn, which at build volume means any concurrent pair of builds or substitutions could kill one side. The connection now sets the one-hour busy timeout upstream configures at open (sqlite3_busy_timeout, sqlite.cc at 2.28.7; the pragma reaches the same API), so concurrent invocations queue on the database exactly as upstream's do. (#180)
+  - **The executable bit survives on Windows.** A NAR records whether each regular file is executable, and a store path's identity is the hash of that. Windows has no such bit: `getPermissions` answers from the file's extension there, so a checked-out `configure` serialised as non-executable and a tracked `foo.exe` as executable, whatever either one was, and the substituter's unpacked tree then failed to reproduce the declared hash, so any cached path holding a mis-extensioned executable was downloaded, rejected, and deleted. The bit now lives in an NTFS alternate data stream whose presence is the bit. `builtins.fetchGit` sets the marks from git's index before `.git` is stripped. On Unix nothing changes. (#128)
+  - **Windows NAR hashing streams instead of materializing the tree in memory.** The executable bit lives in an alternate data stream that nova-cache's own walk could not see, so on Windows narHashOfPath serialised the whole tree in memory and rewrote the flags afterwards. nova-cache 0.11.1 added the exec-bit resolver hook for exactly this: the walk now asks the ADS source of truth per regular file, with the on-disk case-hack-suffixed name, so hashing streams in chunks on every platform and the post-hoc flag-rewrite walk is gone. (#191)
+
+  ### Builder
+
+  - **A build writes into its output path, not into a temp directory it is moved out of.** `$out` is now the final store path, as upstream's is. Building somewhere else and moving afterwards looks equivalent and is not: anything that records where it was built (a compiler driver, a libtool archive) recorded the temp path, which is deleted the moment the build ends, leaving a store path that isn't self-contained and that the reference scanner can note but not repair. A stale tree from an interrupted run is cleared before the builder starts rather than at registration, and a failed build takes its partial output back out of the store, an interrupted one included. (#130)
+  - **A partial rebuild no longer hands the builder an output that is already valid.** A multi-output derivation with one output deleted still runs one builder, which writes every output; a registered path's `NarHash` describes bytes that must not change, and it is sealed read-only besides. Such an output gets a scratch path for the duration of the build, discarded afterwards, exactly as upstream's `makeFallbackPath` does. Where upstream then rewrites the scratch path back out of the produced outputs' contents, this refuses instead: an output that recorded a scratch path fails the build and names it. That divergence is deliberate, because a dangling reference becomes a loud failure rather than a registered lie, and it is the only part of upstream's hash-rewriting machinery not reproduced here. (#130)
+  - **Builders run in a scrubbed environment: the ambient environment no longer flows into builds.** The child process previously inherited every host variable not overridden by the build environment, so a builder consulting an undeclared variable embedded machine-specific data in its output, undermining the reproducibility SOURCE_DATE_EPOCH exists to pin. Upstream builds in a cleared environment (initEnv begins with env.clear() and the child is exec'd with exactly that block), and nova-nix now matches: on Unix nothing ambient passes through, and on Windows, where a process block cannot be empty, exactly SystemRoot, SystemDrive, and windir pass through (SystemRoot is a hard execution requirement, verified on a clean Windows 11 machine, where the CLR's crypto provider fails to load without it), COMSPEC is synthesized from SystemRoot, and PATHEXT is pinned to .COM;.EXE;.BAT;.CMD instead of inheriting the host's resolution rules. All four temp-directory names (TMPDIR, TEMPDIR, TMP, TEMP) now point at the build directory, matching upstream's single assignment of all four; scrubbing without repointing them would send Windows temp files to the Windows directory itself. (#186)
+  - **A fixed-output derivation's impureEnvVars reach the scrubbed build environment.** Upstream's carve-out for fetchers that need proxies: the variables the derivation's impureEnvVars attribute lists are copied from the ambient environment into the child, gated on the derivation being fixed-output (upstream gates on the type being non-sandboxed, which for nova-nix is exactly the fixed-output case). A listed variable absent from the ambient environment is set to the empty string, not omitted, and the carve-out is written last so it wins even over the derivation's own values, both matching upstream's initEnv. Every other derivation still sees only the scrubbed allowlist. (#190)
+  - **On Windows a build's process tree runs in a Win32 job object, so an interrupt or a builder exit no longer orphans grandchildren.** The builder was spawned without process-tree containment, so terminateProcess reached only the direct child: on Ctrl-C or a nonzero builder exit, a builder's whole grandchild tree (bash to make to cc, or anything cmd.exe spawned) was orphaned and kept running. The build spawn now sets use_process_jobs, wrapping the tree in a job with kill-on-job-close, so terminateProcess becomes TerminateJobObject and reaps the whole tree and waitForProcess waits for all of it. This is Windows only; POSIX builds are unchanged, and there is still no build timeout. It is phase one of build sandboxing (process containment); filesystem and privilege isolation and resource limits remain tracked in #194 and #195. (#196)
+
+  ### Substitution
+
+  - **Substituting a store path whose symlinks have multi-component targets now works on Windows.** A symlink target like bin/tool was stored by Windows as a reparse point with backslashes, so re-serialising the unpacked tree read it back as bin\tool, the NAR hash no longer matched the signed narinfo, and the on-disk recheck failed the substitution systematically (a hard failure, never silent corruption). nova-cache 0.11.1.1 normalises a symlink target's separators to the POSIX spelling at the NAR boundary on Windows. (#198)
+
+  ### Windows packages
+
+  - **`pkgs/windows` follows the nixpkgs layout, and the package set is a fixpoint.** Packages moved to `by-name/<shard>/<pname>/package.nix` (shard = the pname's first two characters), the stdenv machinery to `stdenv/`, and the sha256-pinned MSYS2 seeds to `bootstrap/`. `pkgs/windows/lib.nix` adds `callPackageWith`, modelled on nixpkgs' `lib.customisation.callPackageWith`, and `default.nix` discovers `by-name` with `builtins.readDir` and calls each `package.nix` through it. A package now declares its dependencies as formal parameters (`{ stdenv, zlib }: ...`) and callPackage supplies them from the set, instead of each recipe reaching across the tree with a relative import; adding a package is adding a directory. The walk reads the entry type `readDir` returns, so a stray file in `by-name` is passed over rather than opened as a directory. No recipe changed beyond its dependency plumbing, but every one of them moved, so all six drvPaths change and nothing already built is reused. `pkgs/windows/hello.nix` now builds the by-name GNU Hello through the stdenv, so its executable is at `bin\hello.exe`, where `make install` puts it, rather than at the output root. (#127)
+  - **Windows source fetches retry ordered mirrors and verify every download.** `pkgs/windows/fetchurl.nix` accepts a non-empty `urls` list for flat fixed-output downloads. HTTP errors, incomplete responses, and hash mismatches advance to the next URL; only verified bytes enter the store. Cancellation stops the build and releases its output lock without trying another mirror. Hello, sed, and zlib use multiple pinned source locations. Their source and package output paths stay unchanged, while their derivation paths change to describe the new inputs. The bundled upstream `fetchurl.nix` remains unchanged, and single-URL calls retain its interface. (#203)
+
+  ### Dependencies
+
+  - **nova-cache moves to `>= 0.11.1.1 && < 0.12`, with the xz binding pinned to its bundled sources.** The 0.11.1 releases carry four things this project consumes. The per-file executable-bit resolver (`SerialiseOptions`, `withNarSourceOpts`) is the seam the Windows alternate-data-stream executable model plugs into, streaming verifier included. The POSIX default executable answer now reads the file's own owner-execute bit as upstream's dump does, where it previously asked `access(2)` what the calling process could do, so NAR bytes stop depending on who serialised (root, ACLs, and foreign-owned files were the divergence). A symlink target's separators are normalised on Windows. And the xz codec's binding moved off the Hackage-deprecated `lzma-static` onto its successor `xz`, which prefers a pkg-config-found system liblzma; the new `constraints: xz -system-xz` line pins the bundled sources so every build links the same C regardless of the host. (#177, #191, #198)
+
+  ## 0.7.0.0 - 2026-08-22
+
+  - **A copied nova-nix finds its own bundled expressions.** The `<nix/*>` search path came from Cabal's `getDataDir`, which bakes an absolute path in at configure time naming the machine that did the build. That is right for a local `cabal install` and wrong for every copied or downloaded binary: `import <nix/fetchurl.nix>` resolved to a directory that does not exist on the host running it, and the Windows package recipes all open with that line. The data dir now comes from `NIX_DATA_DIR` when set (upstream's own variable name), otherwise from `share/nova-nix` beside the executable's own `bin` directory, which is the layout a release archive ships and needs nothing configured, and otherwise from Cabal as before, so a local install is unchanged. The build matrix now checks both fallbacks against a relocated copy with Cabal's own override pointed at nothing, so a pass cannot come from the baked path.
+  - **Tags publish downloadable binaries, not only a Hackage sdist.** Seventeen tags had produced zero GitHub releases, because the publish workflow only ever uploaded an sdist, so the only way to get nova-nix was to build it. Each tag now also attaches a per-platform archive for Linux, macOS and Windows, carrying `bin/` beside `share/` and `pkgs/`, so an unpacked copy resolves `<nix/*>` and builds with no toolchain and nothing to configure, plus a `SHA256SUMS` file generated over the exact uploaded bytes. The recipes ride along because they are what there is to build: every path in `pkgs/` is either relative to itself or the `<nix/*>` entry `share/` already provides, so the command the README opens with runs against the unpacked copy rather than needing the repository cloned beside it. Every archive is smoke-tested before it is attached, and the release is created as a draft and only published once all four assets are present, since `releases/latest/download` is a public URL that must not exist while empty. (#12)
+
+    Two gaps the first cut left open. The smoke test ran on the machine that built the binary, where a full GHC toolchain sits on `PATH`, so it could not tell a self-contained executable from one quietly finding its DLLs next door; the Windows archive is now run again with `PATH` cut to the system directories, which is the download's actual situation, so a dependency that starts linking zlib, zstd or libgcc dynamically fails the release instead of the first person to unpack the zip. And the Hackage upload waited only on the checks, not on the archives, so a tag whose binaries failed to build would still have taken the one step of a release that cannot be undone: a Hackage version is immutable. It waits on the packaging job now.
+  - **`nova-nix --version` and `--help` answer, and `--help` answers on stdout.** A downloaded binary could not say what it was. The CLI had no version handling at all, so a bug report from a machine with no toolchain had no way to name the build it came from, which is most of what a release exists to enable. `--help` did not work either, failing with `unknown argument: --help`: usage came only from a bare invocation, on stderr, exiting non-zero. Both are flags now, answered before the rest of the line is parsed, so `--version` reports the build even when the command after it is one this build does not have. The two spellings of usage keep their difference for the reason they have one: a bare invocation is a usage error and stays on stderr with a non-zero status, while `--help` is a request that succeeded and goes to stdout exiting zero, so it pipes without redirecting stderr. The version is Cabal's, the one the publish workflow's tag guard already checks a tag against, and the archive smoke test now asserts the binary agrees with it before the release is attached: the guard reads a source tree, this reads the executable actually built from it.
+  - **`--store` is honored on evaluation's reads, not only its writes.** The store directory reached the five eval-time write sites and none of the eleven read sites, which resolved through the platform default, so a redirected store was written to and then read from somewhere else: `builtins.readFile (builtins.toFile "a" "hi")` wrote the file into the chosen store and then failed to find it under `/nix/store`. `builtins.path`, `filterSource`, `fetchGit` followed by `import`, and every other eval-time read had the same split. Before the store directory reached evaluation at all both sides ignored the flag and were at least consistent with each other, so this was newly broken rather than long-standing. The resolver takes the store directory it should read from instead of assuming the platform one, and evaluation passes the store it was given.
+
+    No test caught it because the integration harness built its evaluator with the platform store while handing the build a different one, so the two halves were never asked to agree. The harness now uses one store for both. (#145)
+  - **Every store object evaluation writes is registered, not only `builtins.toFile`'s.** `writeToStore` recorded its writes for the build driver to register; `copyPathToStore`, `addSourceNar` and `addFixedOutputFile` recorded nothing, so a path from `builtins.path`, `filterSource`, `builtins.fetchurl`, or `builtins.fetchGit` reached `drvInputSrcs` with no registration row and the build died with `registerPaths: ... references unregistered path`. That made `builtins.fetchGit`'s `outPath` unusable as a derivation input, which is the reason it computes one. Recording now happens in one place every eval-time writer goes through, rather than being repeated per builtin and forgotten in three of four.
+  - **The release workflow's artifact actions match the rest of CI.** `publish.yml` pinned `actions/upload-artifact@v4` and `actions/download-artifact@v4` while `ci.yml` was already on v7, so the workflow that produces every release asset was two and four majors behind the one that builds them. Both move to the current majors (upload v7, download v8), whose inputs the workflow already uses.
+  - **CI lints its own workflows.** Haskell, C and source encoding were all covered while `.github/workflows/` itself was validated only by GitHub agreeing to parse it after a push. `actionlint` now checks `uses:` references, `${{ }}` expressions, matrix references and job dependencies, and runs shellcheck over every `run:` block, pinned to a version rather than floating so a lint release cannot turn an unrelated pull request red.
+  - **A build holds its outputs' path locks, so two builds of one derivation cannot interleave.** Per-path locks made delete, materialize and register a single critical section, and the build path never joined it, while `computeBuildDir` hands both processes the same build directory. Two concurrent builds of one derivation therefore wrote into one tree and registered the result as valid: reproduced with a builder appending a line per second, where the registered output held eight interleaved lines instead of six and nothing reported an error. A build now takes every output's lock before it starts and holds them until registration commits, and re-checks validity once they are granted so a derivation another process finished while we waited is adopted rather than rebuilt over. Outputs are locked in store-path order so two processes racing a multi-output derivation request them in the same sequence, and a build holds locks for its own outputs only, so there is no cycle to deadlock on.
+  - **`builtins.fetchGit` validates `ref` and `rev` before they reach git, closing an eval-time command execution.** Both attributes were spliced straight into git's argument vector with no separator and no shape check, and git parses options after the remote name, so a `ref` of `--upload-pack=<cmd>` named the command git runs as the transport. With a local or `file://` url (both accepted, and the local transport is enabled in the clone's own config) git ran that command through a shell, so evaluating an untrusted expression executed it and the evaluation still succeeded with an ordinary attrset. `ref` is now checked against upstream's `refRegexS` and `rev` against its `revRegexS`, the same shapes upstream enforces before either value reaches git, and `--` separates the positional arguments in `git fetch`. Rejecting an abbreviated `rev` is upstream parity in its own right: a revision that still resolves through git's DWIM rules is not pinned. (#143)
+  - **The Windows stdenv builds again: no drive letter in derivation text.** `mkDerivation` passed its setup script as `/cygdrive/c${setup}`, a hardcoded drive glued in front of a canonical store path. Once the builder began rendering `/nix/store` to the machine's real store directory at the spawn boundary, the two composed into `/cygdrive/cC:\nix\store/...-setup.sh` and every `mkDerivation` package failed before the builder's first line. The same rewrite reaches environment values, so `setup.sh`'s mapping (which matched on the canonical spelling) stopped firing and put a drive-lettered path into a colon-separated `PATH`, splitting the entry in two. Derivation text is now canonical throughout, which is what its hash is computed over and the only spelling that is correct on a store that is not on C:. `setup.sh` maps native paths to the two forms its consumers need, MSYS2 `/cygdrive/<drive>` for bash and mixed `C:/` for the native mingw tools, in pure parameter expansion, so it no longer shells out to `cygpath` (which the seed's package set does not provide) and no longer infers a drive from `$NIX_STORE`. The Windows E2E job now builds GNU hello through the real stdenv: the existing job drives `cmd.exe` directly and never loaded `stdenv.nix`, which is why this went unnoticed. (#144)
+
+  - **`--store` reaches evaluation, not only the builder.** Evaluation resolved every store read and write through the platform default (`C:\nix\store` on Windows, `/nix/store` elsewhere) while the builder honored the flag, so a non-default store left evaluation writing to one directory and the build reading from another. The store directory is now carried in the evaluation state and every eval-time store path resolves through it. A derivation's own strings are rendered at the spawn boundary for the same reason: the builder path, its arguments and its environment values all carry the canonical `/nix/store` spelling that hashes depend on, and that text is mapped to the configured directory only as the process is spawned. On Windows this is what lets a store-path builder be executed at all, since a bare `/`-rooted path there resolves against the current drive rather than the store's.
+  - **`builtins.fetchGit` fetches a pinned revision, not just a branch tip** - `rev`, `ref`, `submodules` and `shallow` are all now read from the argument set, `git fetch`/`checkout` replace the old unconditional `--depth 1` clone, and the result is the same attrset upstream's returns: `outPath`, `rev`, `shortRev`, `revCount`, `narHash`, `lastModified`, `lastModifiedDate` and `submodules`, all read from the clone before its (and every submodule's) `.git` metadata is stripped and it is copied to the store. Checked against a real Nix on the same two repositories: identical `outPath`, `narHash`, and every other field, submodule fetches included.
+  - **Substitution accepts bzip2, so historical cache paths and narinfos with no Compression field at all can be fetched.** cache.nixos.org narinfos written before the xz switch declare `Compression: bzip2`, and upstream C++ Nix reads an absent or empty Compression field as bzip2, so those paths could only ever fail here: the register named the codec in its rejection but no decoder stood behind the name. Both decompression paths - streaming and the strict oracle - now dispatch it through nova-cache 0.11's bzip2 sublibrary, bounded by the declared NarSize exactly as xz and zstd are, with stream errors retried and output past the bound refused as the served object misdeclaring; there is no decoder-memory knob to set, because bzip2 carries no attacker-chosen dictionary size and its decoder state is a small constant of the format. The empty spelling now decodes rather than rejects, completing the upstream parity the register was written for. The bound rises to nova-cache >= 0.11 && < 0.12 with the bzip2 sublibrary added to the library's set, and the pinned index-state advances past the release. 0.11 also tightens the zstd codec, which the suite now pins: a truncated frame and trailing bytes after the last frame refuse with a stream error instead of yielding a short output, so truncation is caught at the codec rather than left to the NAR grammar above it. (#115)
+  - **Cancellation is never spent as retry budget nor as cache fallthrough.** The retry classifier already re-threw asynchronous exceptions, but the per-cache catch-all one frame up converted every exception into a substitution error, so a Ctrl-C or timeout arriving mid-download was swallowed, the cache scan continued, and the build fell through to building locally instead of aborting. The sync/async split now lives in one shared helper used by the retry classifier, the per-cache attempt, and the builder's top-level catch-all: only synchronous exceptions convert into recoverable failures, and an interrupt propagates out of the whole operation.
+  - **Per-store-path locks close the substitution race.** The streaming substituter deleted the destination before the first byte downloaded, with no lock and no validity re-check anywhere, so two processes sharing a store could interleave delete, materialize, and register into a valid database row pointing at deleted or torn bytes. Substitution now takes an exclusive lock on upstream's "\<store-path\>.lock" file - a raw write-access descriptor locked through filelock (flock on POSIX, LockFileEx on Windows; CC0-licensed, so nothing encumbers the Apache-2.0 distribution), because base's Handle-based locks cannot express this lock - before touching the destination, re-checks validity under the lock and adopts another process's finished path instead of deleting and redoing it (waiting on a busy lock is announced, as upstream does), and holds the lock across download, materialization, the on-disk recheck, and the caller's registration transaction, releasing it on every exit path. The protocol is upstream C++ Nix's pathlocks mechanism (src/libstore/pathlocks.cc and the substitution path in local-store.cc) exactly. One deliberate divergence, documented in Nix.Store.Lock: lock files persist instead of being marked and deleted, which removes upstream's deleted-lock-file hazard outright and needs no separate Windows path.
+
+  - **store delete joins the per-path lock protocol, and lock files are not delete targets.** The delete command ran its unregister-and-remove sequence with no lock, so a delete racing another process's substitution of the same path could remove the freshly materialized tree between the substituter's on-disk recheck and its registration commit - the exact valid-row-pointing-at-deleted-bytes race the locks close, reopened through the other door. Deletion now holds the target's path lock across the whole sequence, blocking (with the announced wait) while a substituter holds it, as upstream's deletePath does. A target naming a lock file is refused with the reason: lock files are never deleted here by design, and removing one would reopen the deleted-lock-file hazard that design removes. Names like flake.lock are legal store-path names, so the refusal consults the registration rows: only an unregistered file whose suffix-stripped name is a well-formed store basename reads as a lock file, and a registered object of the same shape deletes normally.
+
+  - **zstd, both directions: substitution accepts it, push can produce it.** The modern caches (Cachix, attic, FlakeHub) serve NARs zstd-compressed; both decompression paths - streaming and the strict oracle - now speak it through nova-cache 0.10's zstandard sublibrary, bounded by the declared NarSize like xz (the strict decompressor's resolved function moves into IO: the zstd binding's decoder is IO-native, and the shape follows the codecs). Push gains --compression none|zstd, a property of the destination cache as upstream models it - none stays the default so existing cache content stays uniform - with the compressed object named by its own file hash and the narinfo's file fields describing it. The bound rises to nova-cache 0.10 with the zstandard sublibrary and the pinned index-state advances past the release. (#111)
+  - **Substitution failures carry a retry class, and every failure path cleans up.** Exceptions thrown mid-stream - a dropped connection, a full disk - previously escaped both the retry budget and the partial-tree cleanup, so the single most common transient failure never retried and could orphan an unverified tree at the store path. Every attempt now converts synchronous exceptions into the pipeline's failure channel (asynchronous cancellation re-throws untouched) and removes the tree on every exit. Failures classify explicitly, matching upstream's transfer layer: transport errors, torn transfers, and truncation retry with backoff; a completed transfer that verifies wrong, a body past its ceiling, or a 4xx fails at once, since retrying a deterministic failure only delays the local-build fallback.
+  - **The NAR download cap derives from the signed NarSize.** The compressed-body cap was keyed to the narinfo's FileSize, which the Ed25519 fingerprint does not cover, so a rewritten FileSize on a validly-signed narinfo could buy an unbounded download. The cap is now a ceiling computed from the signed NarSize plus a small framing-overhead margin, and the unsigned FileSize may only lower it, never raise it. Caches that omit FileSize (on-the-fly compressors) gain the same margin, so incompressible NARs whose compressed body slightly exceeds NarSize substitute where they previously aborted.
+  - **An empty Compression field means bzip2, never identity.** Upstream decodes an absent or empty Compression as bzip2, the field's historical default, and nova-cache's parser matches that coercion; treating the empty string as identity diverged from it. The compression vocabulary now lives in one register (Nix.Compression) parsed once at the narinfo boundary, so the streaming and strict dispatch cannot drift.
+  - **Substitution streams: download, decompress, hash, parse, and unpack in one bounded pass.** The substituter realized every NAR in memory before touching disk - an RSS spike the size of the path being fetched, documented in place since the first cut. The pipeline now drives nova-cache's streaming pieces end to end: the HTTP body feeds the bounded xz source, the incremental hash, the chunk-fed NAR parser, and a new streaming store sink that materializes events as they arrive, so memory is bounded by decoder buffers and the parser's structural-string cap, never by archive or file size. Disk writes therefore begin before the hash can be known - upstream's ordering exactly - and any failure or mismatch removes the tree it wrote; the on-disk recheck streams too. One divergence, documented at the sink: sibling names colliding on a folding filesystem always take upstream's case-hack renaming, never the NTFS true-name path, which can only be enabled on an empty directory the stream cannot pre-scan. (#107)
+  - **Substitution from cache.nixos.org works: xz NARs decompress.** The default cache serves every NAR xz-compressed, and decompressorFor rejected the value up front, so the shipped configuration could never substitute a single path. nova-cache 0.9's bounded decoder is wired in via its public nova-cache:xz sublibrary - an ordinary solver-visible dependency, no flags on either side; the bound rises to >= 0.9 && < 0.10 and the pinned index-state advances past the release - with output capped at the narinfo's signed NarSize and decoder memory at nova-cache's default, so a hostile stream expands to nothing the narinfo did not promise. Unsupported compression values still reject before any download is paid for. Verified against production data: recorded cache.nixos.org narinfos parse, validate, and signature-verify offline in the suite, and a real path substitutes end to end from the live cache. (#27)
+  - **nova-cache 0.8.0.0.** The bound rises to >= 0.8 && < 0.9 and the pinned index-state advances past the release. NAR parsing now rejects the full Windows reserved-device set at the parse boundary - COM0/LPT0, space-padded device stems ("NUL .txt"), and the superscript-digit forms - the same names materialization already refused, so the refusal moves earlier and the two guards agree. 0.8 also brings the streaming NAR interface and the NarSize-bounded xz decoder that foreign-cache substitution builds on next.
+  - **builtin:unpack resolves srcs through the store dir.** The srcs env value carries eval's canonical /nix/store spelling; unpack opened it verbatim, and on Windows a bare /-rooted path resolves against the current drive - the build worked only when the process happened to run from C:. Found by the e2e job's first flights (#100) on GitHub's D:-workspace runners. Each srcs entry now parses as a store path and renders through the configured store dir (the identity on Unix), a non-store-path entry fails loudly, and the e2e job no longer pins its working directory. (#101)
+  - **Toolchain: GHC 9.14.1 (the first GHC LTS release)** - CI, the release pipeline, and the README badge move from GHC 9.8.4 to 9.14.1. GHC 9.14 opens GHC's new LTS scheme (a minimum of two years of bugfix releases), and under that scheme every earlier series stops receiving fixes, so no version in between had a future. Dependency bounds already admitted the newer compiler and the full set resolves on it. The project targets the LTS alone: base >= 4.22, and foldl' comes from the Prelude, so its eleven redundant Data.List imports are gone. The deprecated pattern namespace specifier stays for now - hlint cannot yet parse the data replacement GHC suggests - with its deprecation warning muted in the cabal file until hlint learns the new spelling.
+  - **`builtins.toFile` writes are registered before a build that names them.** `writeToStore` computed a content-addressed path and wrote the bytes during evaluation, but nothing registered it, so a derivation naming a `toFile` output as an input died with `registerPaths: ... references unregistered path ...`. The write is recorded in eval state and registered in one batch by the build driver, before building - the same treatment `materializeEvalSources` already gives path literals eval coerces into the store, batched so a text path referencing another resolves. The write is idempotent too: the path is the hash of the bytes, so a file already there already holds them, and skipping the rewrite avoids a permission error on a second evaluation once registration makes the path read-only.
+  - **A path literal resolves against the file it is written in, not the file being evaluated when it is forced.** Relative path literals were rewritten to absolute ones only for `import`ed and `scopedImport`ed files; the top-level file and `--expr` were left to resolve at force time against whatever directory the evaluator happened to be in. Those differ whenever a literal outlives the scope it was written in, and `builtins.scopedImport { q = ./data.txt; } ./sub/useq.nix` is the short way to see it: `q` is forced during `sub/useq.nix`'s evaluation, so `./data.txt` named `sub/data.txt`, and `builtins.readFile` on it returned the wrong file's contents into whatever consumed them. Resolution is now part of parsing, which is where upstream does it (`absPath(path, state->basePath...)` in the `PATH` production through 2.24, `CanonPath(literal, state->basePath.path).abs()` in 2.35, unchanged in between), so `parseNix` takes the directory to resolve against and no caller can skip the step. A second bug fell out of widening it: `~/x` was treated as relative and joined to the importing file's directory, burying the tilde mid-path where nothing expands it, so `~/x` inside an imported file resolved to `<dir>/~/x`. Home-relative literals are now left for the evaluator, which expands them against `HOME`.
+  - **A value that needs no evaluation is shown, not reported as a thunk.** Printing an unforced list or attr set showed `<thunk>` for entries that were already values: `[ "a" "b" ]` came back as `[ <thunk> <thunk> ]` where upstream prints the strings, `[ ./x ]` and `[ [ ] ]` the same, and every attr set value regardless of what it was, so `{ a = 1; }` reported a thunk over the literal `1`. The cause was that the decision was made on how a value is represented at runtime (an integer fits an immediate slot, a string does not) rather than on what the expression is, which is what upstream asks: `maybeThunk` is overridden by `ExprInt`, `ExprFloat`, `ExprString` and `ExprPath` to hand back a value already built, and both `ExprList::eval` and the non-recursive branch of `ExprAttrs::eval` go through it. String and URI literals, path literals, and the empty list join the integers and booleans that were already answered directly, and a non-recursive attr set resolves its values the same way; recursive sets and `let` still defer, because the frame their variables point into is still being tied. Path literals can only be answered here because parsing now resolves them, so what reaches the evaluator is already absolute; a `~/` literal still defers, since expanding it reads the environment. Checked against a real `nix-instantiate` 2.24.9 in CI rather than against a reading of its source, and the same overrides are byte-identical in 2.35.2.
+
+    Empty containers print as `[ ]` and `{ }` rather than with the two spaces a join of no elements left between the brackets.
 
   ## 0.6.0.0 - 2026-06-12
 
@@ -305,163 +409,216 @@ changelog: |
   - Platform-aware environment setup (HOME vs USERPROFILE, Unix vs Windows PATH)
 changelog-type: markdown
 description: |
-  <div align="center">
-  <h1>nova-nix</h1>
-  <p><strong>A Windows-native Nix, from scratch.</strong></p>
-  <p>Parser, lazy evaluator, content-addressed store, derivation builder, and binary-cache substituter - in Haskell and C99. Runs natively on Windows, macOS, and Linux. No WSL, no Cygwin.</p>
+  # nova-nix
 
   [![CI](https://github.com/Novavero-AI/nova-nix/actions/workflows/ci.yml/badge.svg)](https://github.com/Novavero-AI/nova-nix/actions/workflows/ci.yml)
   [![Hackage](https://img.shields.io/hackage/v/nova-nix.svg)](https://hackage.haskell.org/package/nova-nix)
-  ![GHC](https://img.shields.io/badge/GHC-9.8-purple)
-  ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+  [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-  </div>
+  nova-nix is an implementation of [Nix](https://nixos.org) for Windows, written
+  in Haskell with a C99 data layer. It also builds and runs on macOS and Linux.
+  It has its own parser, evaluator, store, builder and binary-cache substituter,
+  and does not need an existing Nix installation.
 
-  ---
+  nova-nix is experimental. Read [Limitations](#limitations) before relying on
+  it.
 
   ## Status
 
-  nova-nix builds natively on Windows. The toolchain is itself a store path (fetched, hash-verified, and unpacked through derivations), and the builder runs it directly:
+  - **Evaluation matches upstream Nix on the cases CI checks.** On a pinned
+    nixpkgs 24.11 revision, `hello.drvPath` and a dependent derivation evaluate
+    to the same store paths as Nix 2.24.9, and 23 smaller evaluation cases
+    produce the same output. CI runs this comparison on every change. A matching
+    `drvPath` means the whole build-time closure behind it matches too. How much
+    of the rest of nixpkgs evaluates has not been measured yet ([#29]).
+  - **Windows builds run natively.** CI builds GNU Hello on a Windows runner
+    through a stage-1 stdenv. Its toolchain is 17 MinGW-w64 packages and 22
+    MSYS2 packages, each fetched as a fixed-output derivation pinned by SHA-256
+    and unpacked into the store. sed, zlib and a small library-linking example
+    also have recipes, but CI does not build them. Replacing these binary seeds
+    with a toolchain built from source is tracked in [#26].
+  - **Binary caches work in both directions.** `nova-nix push` uploads a
+    closure, and `build --substituter` downloads signed NARs instead of
+    building. CI checks the round trip on Linux against a local nova-cache
+    server.
 
-  ```console
-  $ nova-nix build pkgs\windows\hello.nix
-    [build]  mingw-w64-x86_64-gcc-16.1.0-5-any.pkg.tar.zst
-    ...      (17 fixed-output fetches, one per MSYS2 package)
-    [build]  mingw-w64-seed
-    [build]  hello
-  C:\nix\store\zr07i99kqnv48q29n706qxar7h1gfins-hello
+  ### Limitations
 
-  $ C:\nix\store\zr07i99kqnv48q29n706qxar7h1gfins-hello\hello.exe
-  Hello from the first native Windows Nix build.
+  - No flakes, no `nix-shell` or `nix develop`, and no daemon or multi-user mode.
+  - No garbage collection yet ([#24]). `nova-nix store delete` removes
+    individual paths.
+  - On Windows a build's process tree runs in a job object, so stopping a build
+    stops everything it started. There is no filesystem or network isolation
+    yet ([#25]).
+  - nova-nix itself needs neither WSL nor Cygwin, but the current Windows stdenv
+    runs its build scripts with MSYS2's bash.
+  - Store paths that contain symlinks need Windows Developer Mode or an elevated
+    shell. nova-nix creates native symlinks and fails rather than falling back
+    to a copy.
+
+  ## Install
+
+  Each [release](https://github.com/Novavero-AI/nova-nix/releases/latest) has an
+  archive per platform:
+
+  | Platform | Archive |
+  | --- | --- |
+  | Linux x86_64 | [`nova-nix-linux-x64.tar.gz`](https://github.com/Novavero-AI/nova-nix/releases/latest/download/nova-nix-linux-x64.tar.gz) |
+  | macOS arm64 | [`nova-nix-macos-arm64.tar.gz`](https://github.com/Novavero-AI/nova-nix/releases/latest/download/nova-nix-macos-arm64.tar.gz) |
+  | Windows x86_64 | [`nova-nix-windows-x64.zip`](https://github.com/Novavero-AI/nova-nix/releases/latest/download/nova-nix-windows-x64.zip) |
+
+  Each archive unpacks to a single directory holding `bin/`, `share/nova-nix/`
+  and `pkgs/`. `share/nova-nix/` provides the `<nix/*>` search path, so the
+  binary works wherever the directory is unpacked, and `pkgs/` holds the package
+  recipes. Check the download against the `SHA256SUMS` file attached to the same
+  release.
+
+  In a GitHub Actions workflow:
+
+  ```yaml
+  - uses: Novavero-AI/install-nova-nix@v1
+  - run: nova-nix eval --expr '1 + 2'
   ```
 
-  The seed (`pkgs/windows/seed.nix`) is stage 0 of a native Windows stdenv: the sha256-pinned runtime closure of MinGW-w64 GCC, merged into one toolchain root by in-process fetch and unpack builtins.
-
-  It also evaluates real nixpkgs. `import <nixpkgs> {}` resolves the top-level package set (~23,000 attributes) to weak head normal form, and a package evaluates through the stdenv bootstrap down to a derivation:
-
-  ```console
-  $ NIX_PATH=nixpkgs=/path/to/nixpkgs \
-      nova-nix eval --expr '(import <nixpkgs> { system = "x86_64-linux"; }).hello.drvPath'
-  "/nix/store/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv"
-  ```
-
-  That `drvPath`, and the 253-derivation closure behind it, byte-matches upstream `nix-instantiate` - verified in CI on the same nixpkgs tree. It targets the Nix 2.24 language.
-
-  ## Quickstart
-
-  ```bash
-  git clone https://github.com/Novavero-AI/nova-nix.git
-  cd nova-nix
-  cabal build
-  ```
+  ## Usage
 
   ```console
   $ nova-nix eval --expr '1 + 2'
   3
-
-  $ nova-nix eval --expr 'builtins.map (x: x * x) [ 1 2 3 4 5 ]'
+  $ nova-nix eval --strict --expr 'builtins.map (x: x * x) [ 1 2 3 4 5 ]'
   [ 1 4 9 16 25 ]
-
-  $ nova-nix eval FILE.nix                       # evaluate a file
-  $ nova-nix build FILE.nix                       # build a derivation
-  $ nova-nix push --cache URL --key-file KEY --all # publish the store to a cache
-  $ nova-nix --nix-path nixpkgs=/path eval FILE.nix
   ```
-
-  ## Binary cache
-
-  Built outputs are content-addressed, so they can be served and substituted like any Nix store path. `nova-nix push` uploads a path and its closure to a cache (NAR before narinfo, skipping what the cache already has, signed server-side); `build --substituter` pulls from one before compiling.
 
   ```console
-  $ nova-nix build pkgs\windows\hello.nix \
-      --store C:\scratch\store \
-      --substituter https://cache.novavero.ai \
-      --trusted-key cache.novavero.ai-1:9gQ7tLWMM+2tdC9H5sKMJltDIPfD7X2GWlZe8Aa8hHQ=
-    [subst]  mingw-w64-x86_64-gcc-16.1.0-5-any.pkg.tar.zst
-    ...      (signed download instead of a rebuild)
-    [subst]  hello
+  $ nova-nix eval FILE.nix                          # evaluate a file
+  $ nova-nix build FILE.nix -A ATTR                 # build an attribute of it
+  $ nova-nix build FILE.nix --substituter URL --trusted-key KEY  # try a cache first
+  $ nova-nix push --cache URL --key-file KEY --all  # upload the store to a cache
+  $ nova-nix --help
   ```
 
-  A public instance runs at `cache.novavero.ai`, seeded with the MinGW-w64 toolchain and the `hello` build.
+  Evaluating a package from nixpkgs, on the 24.11 revision CI pins:
+
+  ```console
+  $ NIX_PATH=nixpkgs=/path/to/nixpkgs nova-nix eval --expr \
+      '(import <nixpkgs> { system = "x86_64-linux"; config = {}; overlays = []; }).hello.drvPath'
+  "/nix/store/gciipqhqkdlqqn803zd4a389v86ran45-hello-2.12.1.drv"
+  ```
+
+  Building GNU Hello on Windows, from the unpacked release directory:
+
+  ```console
+  > bin\nova-nix build pkgs\windows\hello.nix
+  ...
+  C:\nix\store\<hash>-hello
+  > C:\nix\store\<hash>-hello\bin\hello.exe
+  Hello, world!
+  ```
+
+  The first build fetches 40 pinned archives (the 39 toolchain packages and the
+  Hello source), then builds the MSYS2 seed, the MinGW-w64 seed and Hello.
 
   ## How it works
 
-  Six layers - Haskell for logic, C99 for data:
+  - **Parser** (`Nix.Parser`): a hand-written recursive-descent parser for the
+    Nix 2.24 language.
+  - **Evaluator** (`Nix.Eval`): the AST compiles to a small bytecode that a lazy
+    evaluator runs, memoizing thunks and detecting infinite recursion. The
+    evaluator is generic over `MonadEval`, with a pure instance for tests and an
+    IO instance for real evaluation. `derivation` is a lazy wrapper over the
+    strict `derivationStrict` primop, as in upstream's
+    `src/libexpr/primops/derivation.nix`, so referring to a package does not
+    force its build closure.
+  - **Data layer** (`cbits/`): attribute sets, lists, thunks, environments,
+    symbols, context strings, lambdas and bytecode are C99 structures outside
+    the GHC heap, freed together when an evaluation session ends. Haskell calls
+    into C, and C never calls back.
+  - **Store** (`Nix.Store`): a content-addressed store at `/nix/store`, or
+    `C:\nix\store` on Windows, with SQLite metadata, reference scanning and
+    per-path locks that follow upstream's protocol.
+  - **Builder** (`Nix.Builder`): orders derivations by their dependencies, tries
+    substitution first, and runs each builder in a scrubbed environment.
+  - **Substituter** (`Nix.Substituter`): the HTTP binary-cache protocol, with
+    Ed25519 signature checks and xz, zstd and bzip2 decompression, built on
+    [nova-cache](https://github.com/Novavero-AI/nova-cache).
 
-  1. **Parser** (`Nix.Parser`, `Nix.Expr`) - hand-rolled recursive descent; the full Nix grammar to a 19-constructor AST.
-  2. **Evaluator** (`Nix.Eval`) - the AST compiles to a flat 24-opcode bytecode that a lazy, thunk-memoizing evaluator runs. Recursive `let`/`rec` are knot-tied; reference cycles are caught by blackhole detection. The evaluator is polymorphic over its effect via `MonadEval`: `PureEval` for tests, `EvalIO` for the real thing.
-  3. **Data layer** (`cbits/nn_*.c`) - nine arena-allocated C99 modules (interned symbols, sorted attrsets, thunks, environments, lists, context strings, bytecode, lambdas) hold evaluation data off the GHC heap. Haskell calls C to create and query it; C never calls back.
-  4. **Store** (`Nix.Store`) - content-addressed `/nix/store` (`C:\nix\store` on Windows) with SQLite metadata and reference scanning.
-  5. **Builder** (`Nix.Builder`) - dependency graph, topological sort, and binary-cache substitution before local builds.
-  6. **Substituter** (`Nix.Substituter`) - the HTTP binary-cache protocol: narinfo parsing, Ed25519 verification, NAR download and unpack. Built on [nova-cache](https://github.com/Novavero-AI/nova-cache).
+  On Windows, derivations keep the canonical `/nix/store` spelling that hashes
+  are computed over, and it is mapped to the real store directory only when a
+  builder is started. NTFS has no executable bit, so nova-nix keeps it in an
+  alternate data stream. A store path therefore serializes to the same NAR, with
+  the same hash, as it does on other platforms.
 
-  Two decisions shape the rest. **Haskell owns evaluation, C owns data layout** - bulk eval state lives off the GHC heap, so large evaluations don't thrash the collector. And **`derivation` is a lazy wrapper over the eager `derivationStrict` primop** (as in Nix's `corepkgs/derivation.nix`), so referencing a package never forces its build closure.
-
-  ## Windows-native
-
-  | Unix assumption | How nova-nix handles it |
-  |---|---|
-  | `/nix/store` | `C:\nix\store` - every path is parameterized, never hardcoded |
-  | `fork`/`exec` | `CreateProcess` via `System.Process` |
-  | Symlinks | Developer-mode symlinks, with junction / copy fallback |
-  | 260-char path limit | `\\?\` extended-length prefixes |
-  | A system `bash` | the builder ships `bash.exe` in the store (MSYS2) |
-
-  ## Roadmap
-
-  **Done** - parser, lazy bytecode evaluator, the Nix `builtins` set, the C99 data layer, content-addressed store, derivation builder, binary-cache substituter and `push`, `import <nixpkgs> {}` evaluation, derivation-hash parity with upstream Nix (`hello`'s 253-derivation closure byte-matches `nix-instantiate`), and native Windows builds from a store-pinned MinGW-w64 toolchain (stage 0), published to and substituted from a binary cache.
-
-  **In progress** - an experimental stage-1 stdenv: a store-pinned MSYS2 userland seed and a lean `setup.sh` + `mkDerivation`, so a package builds from just `{ name; src; }`. It wires inter-package dependencies (`buildInputs`), routes compilation through a `gcc` wrapper (hermetic flags, deterministic links), and bundles non-system DLLs so outputs run standalone. Proven by building GNU hello, GNU sed, and zlib from source, and by linking a program against a library built the same way.
-
-  **Next**
-
-  - Grow the native package set - more real-world libraries and programs built from source through the stdenv.
-  - Parity across more of nixpkgs - extend the byte-match check beyond `hello`'s closure.
-  - Cache - serve large NARs from object storage, and compress them.
-
-  ## Library usage
+  ## Library
 
   ```haskell
-  import Nix.Parser (parseNix)
-  import Nix.Eval (PureEval (..), eval)
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import Control.Exception (bracket_)
   import Nix.Builtins (builtinEnv)
+  import Nix.Eval (eval, runPureEval)
+  import Nix.Eval.Arena (arenaDestroy, arenaInit)
+  import Nix.Parser (parseNix)
 
   main :: IO ()
-  main = case parseNix "<expr>" "let x = 5; in x * 2 + 1" of
-    Left err   -> print err
-    Right expr -> print (runPureEval (eval (builtinEnv 0 []) expr))  -- Right (VInt 11)
+  main = bracket_ arenaInit arenaDestroy $
+    -- The first argument is what relative path literals resolve against.
+    case parseNix "/tmp" "<expr>" "let x = 5; in x * 2 + 1" of
+      Left err -> print err
+      Right expr -> print (runPureEval (eval (builtinEnv 0 []) expr))
   ```
 
-  The evaluator is polymorphic over `MonadEval`: `PureEval` for deterministic tests, `EvalIO` for filesystem access.
+  This prints `Right (VInt 11)`. Evaluation needs the C data layer, so it must
+  run between `arenaInit` and `arenaDestroy`.
 
-  ## Build & test
+  ## Building from source
+
+  Tested with GHC 9.14.1. CI uses the latest cabal-install release. You only
+  need this to work on nova-nix itself, not to use a release.
 
   ```bash
+  git clone https://github.com/Novavero-AI/nova-nix.git
+  cd nova-nix
+  cabal update
   cabal build
   cabal test
   ```
 
-  Requires GHC 9.8+ and cabal-install 3.10+.
+  ## Contributing
 
-  ---
+  See [CONTRIBUTING.md](CONTRIBUTING.md). Planned work is on the
+  [Nova roadmap](https://github.com/orgs/Novavero-AI/projects/1) project. Please
+  report security issues privately through
+  [GitHub's vulnerability reporting](https://github.com/Novavero-AI/nova-nix/security/advisories/new)
+  rather than in a public issue.
 
-  <p align="center"><sub>Apache-2.0 - <a href="https://github.com/Novavero-AI">Novavero AI Inc.</a></sub></p>
+  ## License
+
+  Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+  [#24]: https://github.com/Novavero-AI/nova-nix/issues/24
+  [#25]: https://github.com/Novavero-AI/nova-nix/issues/25
+  [#26]: https://github.com/Novavero-AI/nova-nix/issues/26
+  [#29]: https://github.com/Novavero-AI/nova-nix/issues/29
 description-type: markdown
-hash: 6ec1d87139e21c4919a5272a76ebc1001a128236d68c12b56e0b9eecdf946391
+hash: 6b2526a2ff9899eccb4fc31765ac1c03d4c2c686104023635fdfdea56739b0c0
 homepage: https://github.com/Novavero-AI/nova-nix
-latest: 0.6.0.0
+latest: 0.8.0.0
 license-name: Apache-2.0
 maintainer: devon.tomlin@novavero.ai
 synopsis: Windows-native Nix implementation in Haskell and C99
 test-bench-deps:
-  base: '>=4.16 && <5'
+  async: '>=2.2 && <2.3'
+  base: '>=4.22 && <5'
   bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.9'
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
-  nova-cache: '>=0.4.2 && <0.5'
+  http-client: '>=0.7 && <0.8'
+  network: '>=3.2 && <3.3'
+  nova-cache: '>=0.11.1.1 && <0.12'
   nova-nix: '>=0'
   process: '>=1.6 && <1.7'
+  sqlite-simple: '>=0.4 && <0.5'
   tar: '>=0.7.1 && <0.8'
   text: '>=2.0 && <2.2'
   zstd: '>=0.1 && <0.2'
