@@ -1,8 +1,9 @@
 all-versions:
 - 0.3.0.0
+- 0.4.0.0
 author: Lucas DiCioccio
 basic-deps:
-  aeson: '>=2.1 && <2.4'
+  aeson: '>=2.2.1 && <2.4'
   base: '>=4.19 && <4.22'
   containers: '>=0.6 && <0.9'
   megaparsec: '>=9.5 && <9.9'
@@ -11,6 +12,95 @@ basic-deps:
   vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog
+
+  ## 0.4.0.0
+
+  **Breaking: integers and floats are two number types** (`../specs/decisions.md`
+  \S18, `../specs/reference.md` \S3). A literal or a JSON number with neither a
+  fraction nor an exponent is an integer; one with either is a float. Nothing
+  converts between them: `eq(1, 1.0)` is `false`, `lt`/`lte`/`gt`/`gte` over an
+  integer and a float are a `TypeMismatch`, and `has`/`lookup` take an integer
+  index. The integer range is the signed 64-bit one; an integer literal outside
+  it is a parse error and a context integer outside it a `TypeMismatch`. A
+  float is written with a fraction or an exponent everywhere, so `str(1.0)` is
+  `1.0` where it was `1`. The arithmetic builtins are not part of this.
+
+  New `Tramaj.Json`: a JSON value with `JInt` and `JFloat`, `jsonParser` (which
+  types a number by its text) and `stringify`. `evalProgram`, `runProgram`,
+  `Output`, `Node`, `NodeAttribute`, `Annotations`, `nodeToJson`,
+  `nodeFromJson`, `nodeAttributeToJson` and `mapActions` use it where they used
+  `Data.Aeson.Value`, which holds one number type; `fromAeson` and `toAeson`
+  bridge the two. `NumberLit` is split into `IntLit`/`FloatLit`, `TCScalarNum`
+  into `TCScalarInt`/`TCScalarFloat` and `RCScalarNum` into
+  `RCScalarInt`/`RCScalarFloat`. The type primitive `number` is gone; `int` and
+  `float` replace it. Needs `aeson >= 2.2.1`, for its token decoder.
+
+  **The arithmetic profile** (`../specs/reference.md` \S9, \S11, \S12,
+  `../specs/v3-symbols.md` \S1.9, \S5.2 to \S5.5), as an option of one
+  evaluation that is off by default. Nine builtins: `sum`, `product`, `negate`,
+  `inverse`, `quotient`, `floor-quotient`, `modulo`, `floor` and `real`, over
+  the two number types with no conversion or promotion. Integer results are
+  held to the signed 64-bit range at every step of a fold and nothing wraps;
+  float results are one correctly rounded double operation at a time, in a left
+  fold. Over a symbol they build a term, written
+  `{"$term": <op>, "arguments": [...]}`, which crosses wherever a symbol does
+  and is refused wherever a symbol is.
+
+  New in `Tramaj.Eval`: `Options (..)` (`optMode`, `optArithmetic`),
+  `defaultOptions` (concrete mode, arithmetic off), `evalProgramWith` and
+  `runProgramWith`, which take an `Options` where `evalProgram` and
+  `runProgram` take a `Mode`. Those two keep their signatures and run without
+  the profile, so the nine names stay unbound there and `sum(1, 2)` is an
+  `UnboundName`. The option applies to the root and to every library the
+  evaluation runs. New in `Tramaj.Analysis`: `arithmeticNames`, `arithmeticOps`
+  and `deepArithmeticOps`, which report the arithmetic names a program
+  references free, so a host that leaves the profile off can refuse a program
+  before running it.
+
+  **Breaking**, with or without the profile:
+
+  - `EvalError` gains the constructor `NotRepresentable`: integer overflow, a
+    zero divisor, a float result that is not finite. A host that matches every
+    constructor needs a case for it.
+  - `"$term"` joins `"$sym"` and `"$type"` as a reserved key. `{"$term": 1}` in
+    a program is a parse error, and a context carrying that key is a
+    `TypeMismatch`, in concrete mode always and in symbolic mode unless it is a
+    well-formed term and the profile is on.
+
+  **Sorting, number formatting and `round`** (`../specs/decisions.md` \S20,
+  `../specs/reference.md` \S11).
+
+  - `sort-by(list, fn)` and `sort-by-descending(list, fn)` order a list by the
+    key `fn` gives each element. Keys are all integers, all floats or all
+    strings (compared by code point); anything else is a `TypeMismatch`, and a
+    symbol or a term a `NotConcrete`. Both are stable, each on its own terms,
+    and `fn` is applied once per element, in index order. They are core
+    forms, in every profile.
+  - `format-number(x, decimals, group)` writes an integer or a float in
+    positional decimal notation with `decimals` digits (0 to 20) after the
+    point and `group` between the groups of three digits of the integer part.
+    It rounds the exact value of the number, ties away from zero, never writes
+    an exponent or a negative zero, and has no locale. An ordinary builtin, in
+    every profile.
+  - `round(x)` is the tenth builtin of the arithmetic profile: the integer
+    nearest to `x`, ties away from zero, a `NotRepresentable` outside the
+    integer range, and a term over a symbol.
+
+  **Breaking:**
+
+  - `Expr` gains the constructor `SortBy Bool Expr Expr` (descending,
+    collection, key function). A host that matches every constructor needs a
+    case for it; `subExprs` and every analysis already traverse it.
+  - `sort-by` and `sort-by-descending` are special-form names, as `map` is. A
+    program that bound one of them and called it (`$sort-by(...)`) now gets
+    the form, or a parse error if the call does not have two arguments.
+  - `format-number` joins `builtinNames`, and `round` joins `arithmeticNames`,
+    so `arithmeticOps` reports it. A program that binds either name still
+    shadows it.
+
+  New in `Tramaj.Eval`: `emittedConstraintCount`, the number of constraints an
+  evaluation emitted before equal ones are made one. It is there for tests,
+  which have no other way to count the applications of a function.
 
   ## 0.3.0.0
 
@@ -76,8 +166,6 @@ changelog: |
 
   Not yet ported to the PureScript `tramaj` package, which still implements v1.
 
-  ## Unreleased
-
   Adds `fold(arr, init, fn)`, a fourth functional array primitive alongside
   `map`/`filter`/`scan`: same `(acc, item)` step and `scanl` iteration order as
   `scan`, but returns only the final accumulator instead of every intermediate
@@ -125,9 +213,9 @@ description: |-
   in agreement by hand-ported test fixtures; see the repository README for
   the caveats that come with that.
 description-type: haddock
-hash: b3b721459c6b52c872fda488d2b248b8610cbf7957743bcf5087d7467143b5bc
+hash: 8a77ab83addebafc78bdc5d267321add2c68dacdbaf41c9be726c9f7cbcce599
 homepage: https://github.com/lucasdicioccio/templating-lang
-latest: 0.3.0.0
+latest: 0.4.0.0
 license-name: MIT
 maintainer: lucas.dicioccio@gmail.com
 synopsis: Haskell parser/AST/evaluator for the tramaj language
