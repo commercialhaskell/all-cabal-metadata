@@ -7,10 +7,12 @@ all-versions:
 - 0.4.0.2
 - 0.4.1.0
 - 0.5.0.0
+- 0.7.0.0
 author: Stefanos Anagnostou
 basic-deps:
   base: '>=4.18.3 && <5'
   containers: '>=0.6.7 && <0.8'
+  foldl: '>=1.4.18 && <1.5'
   haal: '>=0'
   mtl: '>=2.3.1 && <2.4'
   process: '>=1.6.19 && <1.7'
@@ -19,8 +21,99 @@ basic-deps:
 changelog: "# Changelog for `haal`\n\nAll notable changes to this project will be
   documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand
   this project adheres to the\n[Haskell Package Versioning Policy](https://pvp.haskell.org/).\n\n##
-  Unreleased\n\n## 0.5.0.0 - 2026-04-22\n\n### Fixed\n- `Haal.Learning.LMstar.equivalenceClasses`
-  now iterates over `Sm` only,\n  matching Definition 2 of Shahbaz & Groz, \"Inferring
+  0.7.0.0 - 2026-10-10\n\nThis release replaces the built-in statistics with a general
+  mechanism:\nexperiments report events, and statistics are folds over them. It also
+  makes\n`query` overridable, adds a way to compare automata, and removes the Moore
+  and\nDFA types. See \"Migrating from 0.6\" at the end of this entry.\n\n### Added\n-
+  `query` is now a method of `Haal.BlackBox.SUL`, with the old behaviour\n  (reset,
+  then walk) as its default. A SUL can override it to answer a whole\n  query at once,
+  e.g. by sending the whole word in one message. The\n  documentation of `query` lists
+  what an override must guarantee.\n- `Haal.BlackBox.queryChecked`: `query`, checking
+  that the SUL returned exactly\n  one output per input. The learners and oracles
+  query through it, so an\n  override that breaks this fails with a clear error instead
+  of corrupting the\n  observation table.\n- `Haal.Statistics`, with the events an
+  experiment reports (`Event`:\n  `PhaseChanged`, `Queried`, `Hypothesis`, `Counterexample`,
+  and `Phase`), the\n  `Statistics` record and the `statistics` fold. `statistics`
+  measures the\n  membership queries and symbols sent while constructing hypotheses
+  and while\n  validating them, and records every hypothesis and counterexample. A\n
+  \ statistic is a `Control.Foldl.Fold` over events, so statistics combine with\n
+  \ `<*>` and users can define their own.\n- `Haal.Experiment.experimentWith`: run
+  an experiment, reporting every event\n  to a monadic handler.\n- `Haal.Experiment.measuredExperiment`:
+  run an experiment and a fold over its\n  events in one pass, returning the model
+  and the fold's result.\n- `Haal.BlackBox.difference`: a shortest input word on which
+  two Mealy\n  automata produce different outputs, or `Nothing` if they are equivalent.\n-
+  `MealyAutomaton` is a SUL in any monad, not only in `Identity`, so an\n  automaton
+  can be learned inside the monad that holds a user's own state.\n\n### Changed (breaking)\n-
+  `Haal.Experiment.experiment` returns only the learned model, instead of the\n  model
+  and a `Statistics` record.\n- `Haal.Experiment.Statistics` is removed; the new `Haal.Statistics.Statistics`\n
+  \ record, measured with `measuredExperiment statistics`, replaces it. Its\n  `hypotheses`
+  include the final one; the number of rounds is\n  `rounds stats`, and the number
+  of equivalence queries is\n  `length (hypotheses stats)`.\n- `query` is a class
+  method now, so a module that imports `SUL (..)` and\n  defines its own top-level
+  `query` gets an ambiguity error. Rename the local\n  definition (the `io` example
+  renames it to `askProgram`).\n- New dependency: `foldl`.\n\n### Removed\n- `Haal.Automaton.MooreAutomaton`
+  and `Haal.Automaton.DFA`. No learning\n  algorithm in haal produces or uses Moore
+  machines or DFAs, so supporting\n  these types on their own was not useful, and
+  their semantics had a known\n  quirk (a step emitted the output of the state it
+  left, not the one it\n  reached). Support for more kinds of automata will come back
+  properly in a\n  future release, together with learning algorithms for them. To
+  learn a DFA\n  today, encode it as a Mealy machine with `Bool` outputs, where the
+  output of\n  a transition says whether the state it reaches is accepting.\n\n###
+  Migrating from 0.6\n\n```haskell\n-- 0.6\n(model, stats) = runExperiment (experiment
+  learner oracle) sul\n-- statsRounds stats, statsCexs stats, statsHyps stats\n\n--
+  0.7: the model only\nmodel = runExperiment (experiment learner oracle) sul\n\n--
+  0.7: the model and statistics\n(model, stats) = runExperiment (measuredExperiment
+  statistics learner oracle) sul\n-- rounds stats, counterexamples stats, hypotheses
+  stats (incl. the final one),\n-- learning stats / testing stats: membership queries
+  and symbols per phase\n\n-- 0.7: your own statistics alongside, e.g. the number
+  of events\nimport qualified Control.Foldl as L\n(model, (stats, n)) = runExperiment
+  (measuredExperiment ((,) <$> statistics <*> L.length) learner oracle) sul\n```\n\n##
+  0.6.1.1 - 2026-10-09\n\n### Fixed\n- The W-method and the Wp-method (and their random
+  variants) did not test a\n  hypothesis with a single state. Such a hypothesis has
+  an empty characterizing\n  set, so the W-method and the Wp-method generated no test
+  words at all and\n  accepted it without testing, at any depth, and the random Wp-method
+  crashed\n  with `Set.elemAt: index out of range`. This happens whenever no single
+  input\n  distinguishes the states of the SUL, so learning stopped after the first\n
+  \ hypothesis with a wrong one-state model. Test words now end with the empty\n  word
+  when the characterizing set is empty, which still checks the outputs\n  along the
+  rest of the word.\n- The second phase of the Wp-method started from the wrong prefixes:
+  the state\n  cover without the transition cover instead of the transition cover
+  without\n  the state cover. Depth `k` therefore only accounted for about `k - 1`
+  extra\n  states. Learned models can now be correct at a lower depth: on four\n  `haal-models`
+  protocol models, depth 1 now learns three of them correctly\n  (before: none) and
+  depth 2 all four (before: three).\n\n## 0.6.1.0 - 2026-10-05\n\n### Added\n- `Haal.BlackBox.query`
+  runs a single query: it resets the SUL, then walks it\n  over the given inputs and
+  returns the outputs.\n\n### Fixed\n- The SUL is now reset before every membership
+  query and every equivalence\n  test case. Before, queries only started from the
+  initial state because the\n  library kept returning to the same SUL value. That
+  works for pure automata,\n  but a SUL that wraps a stateful system (a running process,
+  a socket) was\n  queried from whatever state the previous query left it in, so learning
+  could\n  produce wrong models or never terminate. Learning from an automaton that
+  is\n  not in its initial state is fixed too.\n- The documentation of `Haal.BlackBox.FiniteOrd`
+  said `(Ord, Bounded)` instead\n  of `(Ord, Finite)`.\n\n### Changed\n- Simplified
+  the examples.\n\n## 0.6.0.0 - 2026-10-03\n\n### Added\n- `Haal.Automaton.MealyAutomaton.mkMealyAutomatonTable`
+  builds a Mealy\n  automaton with states `0 .. n - 1` from a transition table and
+  an output\n  table, each encoded as a `String`, and validates both tables.\n- `Haal.Dot.MealyTable`
+  and `Haal.Dot.mealyTable` encode a `ParsedMealy` in\n  that table form, rejecting
+  automata with missing or conflicting\n  transitions.\n\n### Fixed\n- `Haal.Dot.parseDot`
+  again orders states, inputs, and outputs by first\n  appearance, as documented.
+  Since 0.5.0.0 it sorted them by name, which\n  changed the constructor order and
+  state numbering of generated modules.\n\n### Changed (breaking)\n- `Haal.Experiment.Learner`
+  drops its state parameter (`Learner l aut`);\n  learners now always produce automata
+  with `Int` states.\n\n### Changed\n- `haal-gen` (`Haal.Dot.generateModule`) emits
+  the transition and output\n  functions as string-literal tables built with `mkMealyAutomatonTable`,\n
+  \ instead of one equation per transition, and lists every transition in a\n  comment.
+  Generated modules have the same types and behaviour, but compile\n  about 2-3 times
+  faster. `generateModule` now rejects incomplete or\n  nondeterministic automata,
+  instead of generating functions that fail at\n  runtime.\n- `Haal.BlackBox.distinguish`
+  returns `[]` immediately when both states are\n  equal, instead of exploring the
+  product automaton first. Results are\n  unchanged. Its LiquidHaskell spec now states
+  that equal states yield an\n  empty word.\n\n### Removed (breaking)\n- `Haal.BlackBox.StateID`
+  type alias. Learned automata use `Int` states\n  directly, as `haal-gen` and `haal-models`
+  already do; replace any use of\n  `StateID` with `Int`.\n- `Haal.Experiment.pairwiseWalk`
+  and `Haal.Experiment.execute` are no longer\n  exported; use `findCex` instead.\n\n##
+  0.5.0.0 - 2026-04-22\n\n### Fixed\n- `Haal.Learning.LMstar.equivalenceClasses` now
+  iterates over `Sm` only,\n  matching Definition 2 of Shahbaz & Groz, \"Inferring
   Mealy Machines\".\n  Previously it iterated over `Sm ∪ Sm·I`, which could pick a
   representative\n  from `Sm·I` whose `rep++[i]` was not in the observation table,
   causing\n  `makeHypothesis` to fail on many real protocol models (DTLS, medium MQTT)\n
@@ -157,9 +250,9 @@ description: "```text\n\n\n                        _       _           _        
   = either error id (mkWMethod (WMethodConfig 2))\n\n-- Set up the experiment.\nghci>
   myexperiment = experiment learner teacher\n\n-- Define the Mealy system under learning.
   Remember that automata can act as suls.\nghci> mysul = mkMealyAutomaton2 sulTransitions
-  (Set.fromList [S0, S1, S2]) S0\n\n-- Run the experiment\nghci> (learnedmodel, stats)
-  = runExperiment myexperiment mysul\n\n-- View the learned model\nghci> learnedmodel\n{\n
-  \   Current State: 0,\n    Initial State: 0,\n    Transitions: fromList [\n        ((0,A),(1,X)),\n
+  (Set.fromList [S0, S1, S2]) S0\n\n-- Run the experiment\nghci> learnedmodel = runExperiment
+  myexperiment mysul\n\n-- View the learned model\nghci> learnedmodel\n{\n    Current
+  State: 0,\n    Initial State: 0,\n    Transitions: fromList [\n        ((0,A),(1,X)),\n
   \       ((0,B),(1,X)),\n        ((1,A),(2,Y)),\n        ((1,B),(2,Y)),\n        ((2,A),(0,X)),\n
   \       ((2,B),(0,Y))\n    ]\n}\n```\n\nThis shows how a simple Mealy machine can
   be learned using the `LM*` algorithm and a `W`-method equivalence oracle.\n\nThis
@@ -181,9 +274,9 @@ description: "```text\n\n\n                        _       _           _        
   itself is the language for defining automata**, without needing external DSLs or
   formats like DOT.\n\n---\n\n\n"
 description-type: markdown
-hash: 5e583ab14736ab021b404ec2facb93e3df475f82e7a5f362e3a4c309c34c37fb
+hash: 00ad52b5755ab664f164959517ee997d683480e3f0cfe8f6924d61d750dd4906
 homepage: https://github.com/steve-anunknown/haal#readme
-latest: 0.5.0.0
+latest: 0.7.0.0
 license-name: BSD-3-Clause
 maintainer: steve.anunknown@gmail.com
 synopsis: A Haskell library for Active Automata Learning.
@@ -192,6 +285,7 @@ test-bench-deps:
   base: '>=4.18.3 && <5'
   containers: '>=0'
   deepseq: '>=0'
+  foldl: '>=0'
   haal: '>=0'
   hspec: '>=0'
   mtl: '>=0'
