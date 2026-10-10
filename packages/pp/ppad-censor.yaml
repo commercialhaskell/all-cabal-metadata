@@ -1,0 +1,500 @@
+all-versions:
+- 0.5.1
+author: Jared Tobin
+basic-deps:
+  base: '>=4.9 && <5'
+  bytestring: '>=0.9 && <0.13'
+  ppad-eproc: '>=0.5 && <0.6'
+  primitive: '>=0.8 && <0.10'
+changelog: |
+  # Changelog
+
+  - unreleased
+    * The demo executables (censor-demo, censor-viz, censor-demo-ffi,
+      and the per-library suites censor-poly, censor-chacha,
+      censor-sha, censor-sha512, censor-aead, censor-secp), their
+      cabal flags, the rs-demo Rust crate, and the flake inputs they
+      pulled in are removed. Target-specific harnesses belong
+      outside censor, built on the library's suite scaffolds in
+      Censor.Runner.Report, which are unchanged.
+
+    * **Breaking:** Censor.Runner drops Case, runBattery, and
+      partitionVerdicts, and Censor.Runner.Report drops Suite and
+      runSuite, all unused. resultToJSON moves from Censor.Runner to
+      Censor.Runner.Report. Censor.Runner.Manifest newly exports
+      readRange and readSeed.
+
+    * The dlopen CLI now calls its target through an unsafe FFI
+      import. The import had defaulted to a safe call, which put the
+      RTS's thread suspend/resume inside every timed region.
+
+    * In the CLI's single-target mode the A/A and B/B controls get a
+      fresh hypothesis instance, as in manifest mode, rather than
+      continuing the main run's sampler streams.
+
+    * The haddocks are trimmed and deduplicated, with stale text
+      fixed (including a Censor.FFI example that did not compile).
+
+  - 0.5.1 (2026-08-23)
+    * **Copy-source symmetry in fix-vs-random**
+      (issues/handled/ISSUE4.md).
+      `fixVsRandom` and `fixVsRandomCtx` take a re-materialisation
+      function (`s -> IO s`), run on the pinned secret by *both*
+      classes every sample: class A completes around the fresh copy,
+      class B discards its copy and completes around its fresh draw.
+      With a function that performs a real copy (for ByteString
+      secrets, `\s -> evaluate (BS.copy s)`) the long-lived pinned
+      value is read exactly once per sample in each class, and the
+      completion's input is a fresh, same-aged allocation in both --
+      removing a copy-source locality asymmetry that surfaced as
+      intermittent CDF/shape rejections (effect CI straddling zero)
+      under the cycles meter, invisible to the A/A and B/B controls.
+      `pure` retains the old behaviour for secret types with no
+      cheap re-materialiser.
+
+    * **Secret regeneration in the dlopen CLI.** The CLI's secret
+      ranges are no longer overlaid from a long-lived buffer that
+      only class A reads -- the FFI form of the copy-source
+      asymmetry above. Both classes now refill their secret ranges
+      in place each sample through one shared generator, reseeded
+      before every use (`Censor.Rng.reseed`, new): class A to a
+      seed pinned at setup, class B to a word drawn from its own
+      stream, so the classes run identical code and differ only in
+      the seed value written into the generator state. Sampler
+      streams for a given `--seed` shift accordingly.
+
+    * censor-poly grows a pinned-pair (k1 vs k2, 320 B)
+      discriminator case: neither class draws or re-materialises
+      per sample, so a rejection there is key-content-dependent
+      timing alone -- the instrument that separates a copy-source
+      artefact from a real leak.
+
+  - 0.5.0 (2026-08-21)
+    * **Margin calibration cells and a host power-gain probe** in
+      censor-validate. The margin calibration cells shift class B by
+      less than the resolved margin, so their interval null is true
+      while the sharp null is false -- empirically validating margin
+      mode's type-I claim under exactly the sub-tolerance systematic
+      the margin absorbs; margin power cells confirm shifts beyond
+      the margin are still caught, and a sharp-contrast cell shows
+      the sub-margin shift rejecting at ~100% without one.
+      `censor-validate --power-gain [METER]` measures the host
+      instead of a synthetic meter: a cycle-identical, maximally
+      power-asymmetric control (zeros vs alternating 01/10 rewrites
+      of a 64 KiB buffer) bounds the host's power-to-time coupling
+      gain from above, with an A/A control and, when the bound
+      resolves usefully, a suggested `--margin`.
+
+    * **Interval nulls (margin mode).** `cfgMargin` (CLI `--margin`,
+      manifest `margin`) replaces the sharp null with the interval
+      null |E d_clipped| <= delta, where delta resolves at warmup as
+      the given fraction of the median pooled per-batch reading. The
+      three magnitude components become interval-null tests anchored
+      at +-delta (via ppad-eproc 0.5's `configInterval`) and alone
+      gate the verdict; the sign and CDF components are demoted to
+      non-gating diagnostics, since they carry no meter-unit
+      tolerance. A `Reject` then means the mean effect exceeds the
+      stated tolerance -- a claim the wall meter can actually support
+      on frequency-scaled hosts, where the sharp null is genuinely
+      false for host-mediated reasons and a consistent test
+      eventually rejects it (see the README's noisy-hosts section).
+      The resolved absolute margin is reported as `resMargin`
+      (`margin` in the result JSON) and must land in (0, c) for the
+      warmup clip bound c. `leakShape`/`diagnose` rank only the
+      gating components on margin-mode runs. Adding `cfgMargin` /
+      `resMargin` breaks positional construction of `Config` /
+      `Result`. Requires ppad-eproc >= 0.5.
+
+    * **Channel-attribution counters.** Four new `Counter` meters
+      complete the wall-decomposition ladder: `RefCycles`
+      (constant-rate reference cycles -- a class difference here with
+      clean `Cycles` is a frequency/DVFS effect by construction),
+      `TaskClock` (on-CPU nanoseconds including kernel time on the
+      task's behalf; a software counter, so it needs no PMU access
+      and is available in VMs -- but counting kernel time is itself
+      privileged, so it needs `perf_event_paranoid` at most 1 and
+      fails with `OpenFailed 13` at the 2 the other counters
+      tolerate), `BranchMisses` (secret-dependent branch
+      direction under balanced retired counts), and `CacheMisses`
+      (memory access patterns). With the existing meters, each
+      adjacent rung of instructions -> cycles -> ref-cycles ->
+      task-clock -> wall isolates exactly one cause of a class
+      difference: code path, microarchitectural latency, frequency,
+      kernel/interrupt time, scheduling. The dlopen CLI and suites
+      accept them as `ref-cycles`, `task-clock`, `branch-misses`,
+      and `cache-misses`. Adding constructors to `Counter` is a
+      breaking change for exhaustive matches on that type.
+
+  - 0.4.4 (2026-08-05)
+    * **Per-case baseline cost.** `baselineReading` measures the
+      target on fresh class-A draws at the case's batch and reports
+      the median and IQR in per-batch meter units -- the scale of
+      `resEffect` -- so an effect interval can be read as a relative
+      bound against the cost of a call. Fresh draws make every
+      measurement genuine work under any batch policy, unlike the
+      calibration noise probe, whose shared applied thunk makes it
+      meaningless for pure Haskell targets. `runTraceSuite` and both
+      dlopen CLI modes probe it per case; it surfaces as a new
+      optional per-case `baseline` key in the `censor/report-v3`
+      object and a `baseline med=N iqr=N` segment on the case detail
+      line.
+
+    * Fixes the benchmark suites, which had failed to compile since
+      `prepare` was added to `Hypothesis` in 0.4.1.
+
+  - 0.4.3 (2026-08-01)
+    * **The driver's pair loop is now flip-oblivious.** `runPair`'s
+      order branch compiled the two A/B orders to two distinct code
+      paths, so the per-pair order bit selected which physical code
+      executed the pair -- coupling the bit into the measured
+      readings through microarchitectural state and breaking the
+      conditional exchangeability the null rests on. The A/A
+      negative controls surfaced this as pervasive timing-meter
+      rejections on long-duration pure targets, with the
+      instruction lane clean (issues/ISSUE2.md). The pair now runs
+      one code path with a single call site per sampler and
+      measurement: sampler order is selected by indexing a
+      two-element array with the order word, class labels are
+      recovered by mask arithmetic after both measurements, and the
+      order bit is never scrutinised as a `Bool` inside the loop.
+      Verified branchless by disassembly, in both the main and
+      warmup loops.
+
+    * **The darwin wall meter is tick-resolved.** `wallClock` now
+      reads `clock_gettime_nsec_np(CLOCK_UPTIME_RAW)` (~42 ns
+      ticks on Apple Silicon) rather than GHC's
+      `getMonotonicTimeNSec`, whose `CLOCK_MONOTONIC` macOS
+      quantises to microseconds. Microsecond atoms concentrated
+      wall readings so that warmup placed CDF cut points exactly on
+      quantisation boundaries, where the indicator channel
+      amplifies nanosecond-scale harness perturbations into
+      percent-scale class asymmetries.
+
+    * Adds a `primitive` dependency (`SmallArray`, backing the
+      branchless sampler selection).
+
+  - 0.4.2 (2026-08-01)
+    * Makes minor adjustments to the flake setup and some demo binaries.
+
+  - 0.4.1 (2026-07-30)
+    * **`prepare` now runs during batch calibration.** `runPair` has
+      always run the prologue before either sampler, but
+      `calibrateBatchReport` drew its probe sample without one, so a
+      hypothesis whose sampler depends on its prologue calibrated
+      against uninitialised state. It now runs exactly one prologue
+      and one class-A draw.
+
+    * **Calibration and the main run no longer share a hypothesis
+      instance.** `runTraceSuite` and the manifest runner built one
+      instance, calibrated it, then ran it — advancing its sampler
+      state, and contradicting `TraceCase`'s documented contract that
+      the builder is re-executed per phase. Each phase now gets its
+      own instance, as documented.
+
+    * **Paired public context reaches the manifest.** A new
+      `context=off:len` case range (and matching `--context` flag) is
+      redrawn once per *pair* and written into both classes, so a
+      manifest can express a shared fresh public input. Previously
+      `fixVsRandomCtx` existed in the library with no route to it from
+      the foreign runner, whose public ranges were pinned for the
+      whole cell.
+
+    * **One layout validator for both entry points.** `checkLayout`
+      requires every range to fit the workspace and the three roles —
+      secret, public, context — to be pairwise disjoint. The manifest
+      and the single-case command line now share it; previously the
+      command line bounds-checked only, so `--secret 0:8 --context
+      0:8` ran a layout the manifest rejected, and the manifest in
+      turn accepted a public range that masked the context it
+      overlapped. A byte belongs to exactly one role, so an overlap
+      has no coherent reading and is an error rather than a
+      precedence question.
+
+    * **`label=` is presentation only.** It set `mcName`, from which
+      the per-case seed was derived, so renaming a case for display
+      silently re-rolled the secret it tested against. `ManifestCase`
+      now carries `mcId` — the case token as written — and seeds
+      derive from that.
+
+    * **The foreign runner no longer strands its buffers.** The three
+      per-hypothesis workspaces were raw `mallocBytes` with no
+      release; phase isolation multiplied that to as many as nine
+      workspaces per cell. They are now `ForeignPtr`s held by the
+      sampler closures, reclaimed with the hypothesis.
+
+    * **Replicate identity is stable.** `replicates=1` and
+      `replicates=2` now agree on cell #1: replicate #1 keeps the
+      unreplicated case's seed, so adding coverage extends a battery
+      instead of redefining the cell already in it. Each case also
+      mixes its own name into the run-wide seed, so cases no longer
+      all begin from identical fixed bytes.
+
+    * **`family-alpha on`** runs each of the M expanded cells at
+      `alpha / M`, making the battery a test at `alpha` family-wise
+      rather than only reporting the union bound. Off by default.
+
+    * **Report schema is now `censor/report-v3`.** The two seeds are
+      named apart — `samplerSeed` in the header, `orderSeed` in each
+      case result — where v2 called both `seed`. The resolved order
+      seed also appears in pretty and plain output, not only in JSON;
+      it is what replays a case, and a reader should not have to
+      reach for the JSON to find it.
+
+    * **The CDF channel reports per-cut-point detail.** `resCutPoints`
+      and the `resPeakCdf` field are replaced by `resCdf ::
+      [(Double, Double)]`, pairing each cut point with its
+      component's peak log e-value, so a CDF-driven rejection names
+      the threshold that found the difference. `resPeakCdf` remains,
+      as a function taking the maximum. In JSON, `cutPoints` becomes
+      `cdf` as `[cut point, peak]` pairs.
+
+    * Documentation corrections. The null is *stronger* than "the two
+      classes induce the same timing distribution", not weaker:
+      exchangeability implies equal marginals, and equal marginals
+      alone do not imply an exchangeable joint law. What delivers it
+      is the randomised order, given class-blind within-pair nuisance
+      dynamics — an assumption now stated rather than elided. The
+      order-bit seed's OS-entropy source is documented as the normal
+      path, not an unconditional one, since `/dev/urandom` failure
+      falls back to the monotonic clock. Stale `K=4` claims are
+      corrected to `K = 4 + n`.
+
+    * `censor-viz` uses `runCTWith` instead of a hand-rolled copy of
+      the driver, which had drifted: it omitted the CDF components and
+      the prologue while claiming to mirror `runCT`. The AEAD suite
+      draws its public input (nonce, AAD, plaintext) once per pair and
+      shares it across both classes, rather than independently per
+      class.
+
+  - 0.4.0 (2026-07-30)
+    * The null is now stated, and tested, as conditional
+      *exchangeability* of the measured pair `(ta, tb)` rather than
+      symmetry of `d = ta - tb`. Exchangeability is what the
+      randomised A/B order actually delivers; every hedge component
+      is an antisymmetric functional of the pair, and each such
+      functional is conditionally symmetric about zero under the
+      null.
+
+    * New **CDF-indicator channel**: one bounded-mean e-process on
+      `1[ta <= q] - 1[tb <= q]` per warmup-fixed cut point `q` (the
+      deciles and quartiles of the pooled warmup readings,
+      deduplicated). This detects dispersion leaks — a target whose
+      timing variance depends on the secret while its mean does not —
+      which leave `d` symmetric and were invisible to every previous
+      component. `K` grows from 4 to `4 + n`; `Result` gains
+      `resPeakCdf` and `resCutPoints`, and `LeakShape` gains
+      `CdfShift`.
+
+      Previously such a target passed unconditionally. The
+      variance-only cell in the validation suite moves from H_0 to
+      the power table accordingly.
+
+      The functional family is finite, so this is still not an
+      omnibus test of distributional equality. That limit is now
+      documented rather than left implicit.
+
+    * `Attribution` is no longer a four-way label. It is a record
+      carrying the `ControlVerdict` plus *both* control runs in full,
+      and `TargetLeak` is renamed `ControlsPass`. The A/A and B/B
+      runs are negative controls: they can convict the harness but
+      cannot acquit it, so the old name overstated what they
+      establish. The JSON `attribution` string field becomes a
+      `controls` object with `verdict`, `aa`, and `bb`.
+
+    * Clipping is counted at each of the hedge's three magnitude
+      bounds, not only the tight one. `Result` gains `resClipped4`
+      (`|d| > 4c`) and `resClipped16` (`|d| > 16c`) alongside
+      `resClipped`, and `resultToJSON` emits them as `clipped4` and
+      `clipped16`. The counts nest, and they qualify different
+      quantities: `resClipped` bounds what the tight magnitude
+      component could see, while `resClipped16` qualifies
+      `resEffect`, `16c` being the bound the effect interval's own
+      input is clipped to. A consumer quoting that interval
+      previously had no way to tell a starved tight component from a
+      truncated interval.
+
+      `HighClipRate` accordingly carries a `ClipRates` record with
+      the fraction at all three bounds rather than a bare `Double`
+      (`clipFraction`, `clipFraction4`, `clipFraction16` in JSON).
+      Its trigger is unchanged — the counts nest, so the tight rate
+      is the largest of the three and one trigger covers the
+      profile. `Censor.Runner` exports `clipText`, which renders the
+      profile for the one-line and terminal reports and stays as
+      terse as it was when nothing clipped past `c`.
+
+    * Reports carry suite-wide alpha accounting: `totals` gains
+      `alpha` and `familyAlpha` (the union bound `M * alpha` over `M`
+      cells), and multi-case footers render it. Censor's guarantee is
+      per run; a battery that fails when any cell rejects has the
+      family bound, not alpha.
+
+    * The default order-bit seed is drawn from OS entropy
+      (`/dev/urandom`) rather than `getMonotonicTimeNSec`; a clock
+      reading is not independent entropy, and the nuisance process
+      the order bit must be independent of may itself be periodic in
+      that same clock. The resolved seed is reported as `resSeed`, so
+      a randomised run stays exactly replayable.
+
+    * The `censor` CLI splits `--seed` (input samplers) from
+      `--order-seed` (the A/B order bit). They previously shared one
+      value, weakening the independence the conditional null needs.
+
+    * `Censor.Runner.Env` records the conditions a run executed
+      under: a best-effort host snapshot (OS, arch, kernel release,
+      CPU model, core count, Linux cpufreq/SMT/perf_event knobs, load
+      average, UTC timestamp) taken once at run start, backed by a
+      small C shim. Rides on the report header and into the JSON.
+      Alongside it, `calibrateBatchReport` records the meter's noise
+      floor (`Noise`: median and IQR of repeated readings) at the
+      selected batch, so a `Pass` obtained where dispersion rivals
+      the effect sizes of interest can be recognised as such.
+
+    * `TraceCase` carries an explicit `BatchPolicy` — `SingleShot`,
+      `RepeatableAuto`, or `FixedBatch n`. `runTraceSuite` no longer
+      auto-calibrates every case: repeating a pure Haskell target
+      forces one thunk and then measures no-ops, so a calibrated
+      batch counted no-ops as work. All bundled demo targets are
+      pure and now declare `SingleShot`. `--batch N` overrides every
+      case's policy; plain suites reject the flag. `rhAutoBatch`
+      becomes `rhPerCaseBatch`, rendering `batch=per-case`.
+
+    * `Hypothesis` gains a `prepare` field: a per-pair prologue run
+      before either sampler and outside the timed region. New
+      `fixVsRandomCtx` uses it to draw one fresh public context per
+      pair and build both classes around that same context, so the
+      tested axis is secret dependence conditional on identical
+      fresh public input. Previously the completion ran independently
+      per class, so public inputs were either independently random
+      across the pair (adding nuisance variance to `d`) or fixed for
+      the whole run (testing one public input). `FFIHypothesis`
+      gains the matching `ffiPrepare`.
+
+    * New `Censor.Runner.Manifest` and a `--manifest PATH` mode on
+      the `censor` CLI: a declarative battery of cases, driven by one
+      dlopen and emitted as a single report carrying every case, its
+      controls, the host environment, and the family-wise alpha.
+      Replaces the per-symbol process loop with hand-stitched output,
+      which duplicated the tool version and config in every script.
+      Cases support `replicates=N` to run several independent fixed
+      secrets, since a single pinned secret answers only whether
+      *that* secret times differently from random. See
+      `etc/example.manifest`.
+
+    * `TraceSuite` takes a heterogeneous case list (an existential
+      `TraceCase`), so cases with different hypothesis payload types
+      share one list, and auto-attributes on `Reject`. A run collapses
+      to a single canonical JSON object — the same one the `json`
+      renderer emits to stdout, with optional per-case batch, noise,
+      and trace fields. `renderTrace` is gone.
+
+    * The `censor` executable catches up with that surface: `--trace`
+      writes the same report object the `json` renderer emits, with
+      the frame trajectory embedded, rather than a separate format.
+
+    * `Censor.Runner` exports `shapeName`; `Censor.Runner.Report` now
+      imports it rather than keeping a second copy that could (and
+      did) fall out of step with `LeakShape`.
+
+    * `censor-secp` presents an 8-case surface: both constant-time
+      multipliers (`mul`, `mul_wnaf`), the ladder-based `sign_ecdsa`
+      / `sign_schnorr`, their precomputed-context wNAF variants, and
+      `ecdh` / `derive_pub`. The four signing cases hold the message
+      (and Schnorr aux) fixed and public across both classes, so the
+      derived RFC6979 / BIP340 nonce is deterministic in the fixed
+      class and fix-vs-random controls key + nonce rather than the
+      key alone.
+
+    * Report schema bumped to `censor/report-v2`, reflecting the
+      `controls` object, the new `Result` fields (`seed`,
+      `cutPoints`, `peaks.cdf`, `clipped4`, `clipped16`), the
+      `totals` alpha fields, and `"batch":"per-case"`.
+
+  - 0.3.1 (2026-07-09)
+    * The `censor` executable renders through `Censor.Runner.Report`
+      like the other suites. `--json` and `--summary` become
+      `--format pretty|json|plain`; verdict and attribution ride on
+      a single `CaseReport`. Exit codes and the `--trace` /
+      `--attribute` behavior are unchanged.
+
+  - 0.3.0 (2026-07-09)
+    * `Censor.Runner.Report`: uniform report rendering with a
+      header/case/footer data model and three renderers:
+      `pretty` (the ppad terminal aesthetic), `json`
+      (line-oriented `censor/report-v1` object), and `plain`
+      (ASCII/CI-safe).
+
+    * `Suite` and `TraceSuite` scaffolds package the full
+      test-suite lifecycle (arg parse, meter selection, header
+      assembly, `calibrateBatch`, per-case loop, optional trace
+      JSON dump) so a tool's `Main.hs` reduces to the
+      hypotheses and the case list.
+
+    * `Censor.Runner.DL` and the `censor` executable: a
+      dlopen-based runner that drives a constant-time
+      hypothesis against a foreign target resolved by name from
+      a shared library.
+
+    * `diagnose` interprets a `Result` into actionable
+      `Advisory`s (clip-rate warning, low-power `Pass`,
+      rejection-driver hint); `summary` and `resultToJSON` give
+      one-line and JSON views of the same evidence;
+      `calibrateBatchReport` returns the auto-batch decision
+      alongside its calibration probes.
+
+  - 0.2.0 (2026-07-07)
+    * Hardware performance-counter meters on Linux
+      (instructions retired, branches retired, cycles) via
+      perf_event_open, alongside the existing wall-clock meter.
+
+    * Foreign-function target support ('Censor.FFI'): a pinned
+      workspace shared across pairs lets C, Rust, or Go targets
+      run under the same sequential CT driver.
+
+    * Fix-vs-random hypothesis and 'Attribution': A/A and B/B
+      diagnostics fold into a four-way attribution of any
+      rejection (target, sampler, or harness).
+
+    * 'Result' now reports an anytime-valid p-value and a
+      time-uniform confidence interval on the leak's effect
+      size, with named fields throughout.
+
+    * Mixture internals delegated to ppad-eproc; verdicts
+      unchanged.
+
+    * 'Censor.Rng' extracts the splitmix64 sampler PRNG
+      previously duplicated across demos.
+
+  - 0.1.0 (2026-05-31)
+    * Initial release. Sequential constant-time testing via
+      anytime-valid e-processes, with wall-clock measurement on macOS
+      and Linux.
+changelog-type: text
+description: |-
+  A pure Haskell framework for sequential constant-time testing via
+  anytime-valid e-processes.
+
+  Declare a constant-time hypothesis (an @IO@ action plus two input
+  samplers); the driver times the action on paired inputs from the two
+  classes, in random order, and tests them with a hedged mixture of
+  ppad-eproc e-processes, halting as soon as the evidence suffices.
+
+  Provides dudect-style fix-vs-random hypotheses, A/A and B/B negative
+  controls, wall-clock and Linux hardware-counter meters, foreign
+  targets via FFI or a dlopen CLI, and anytime-valid p-values and
+  effect-size intervals.
+description-type: haddock
+hash: fa93bc94eb43237ed4e9bcaba87519e46e0192886dcf35063a588588862e5e21
+homepage: ''
+latest: 0.5.1
+license-name: MIT
+maintainer: jared@ppad.tech
+synopsis: Anytime-valid sequential constant-time testing.
+test-bench-deps:
+  base: '>=0'
+  bytestring: '>=0'
+  criterion: '>=0'
+  deepseq: '>=0'
+  ppad-censor: '>=0'
+  tasty: '>=0'
+  tasty-hunit: '>=0'
+  weigh: '>=0'
