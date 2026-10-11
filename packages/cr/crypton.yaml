@@ -26,6 +26,7 @@ all-versions:
 - 2.1.8
 - 2.1.9
 - 2.1.10
+- 2.2.0
 author: Vincent Hanquez <vincent@snarc.org>
 basic-deps:
   base: '>=4.13 && <5'
@@ -38,6 +39,48 @@ basic-deps:
   text: <2.2
 changelog: |+
   # CHANGELOG for crypton
+
+  ## 2.2.0
+
+  `ProcessorOption` is no longer a sum of constructors.  It is a number with
+  pattern synonyms for the names it knows, so it has `Ord` now and has lost
+  `Enum` and `Data`, and a `case` over the names needs a catch-all.  `RDRAND`
+  is gone from it, and with it the `support_rdrand` flag.  An AArch64 machine
+  reports `ARMAES` and `ARMPMULL` where it used to report `AESNI` and `PCLMUL`.
+
+  Two more things change under a caller without the type checker saying so:
+  `MonadRandom IO` draws from a per-thread generator rather than reading the
+  system on every call, and a missing or failing entropy source raises
+  `EntropyError` rather than an `ErrorCall` or an `IOException`.
+
+  * feat: take entropy from the kernel without a file descriptor
+    [#300](https://github.com/kazu-yamamoto/crypton/pull/300)
+  * feat: a ChaCha20 generator per operating system thread
+    [#300](https://github.com/kazu-yamamoto/crypton/pull/300)
+  * feat: MonadRandom IO goes through the per-thread generator
+    [#300](https://github.com/kazu-yamamoto/crypton/pull/300)
+  * fix: say that the system gave no entropy, rather than error
+    [#300](https://github.com/kazu-yamamoto/crypton/pull/300)
+  * fix: stop using RDRAND at all, since it cannot add anything
+    [#300](https://github.com/kazu-yamamoto/crypton/pull/300)
+  * feat: name every processor feature crypton dispatches on, not three of them
+    [#302](https://github.com/kazu-yamamoto/crypton/pull/302)
+  * fix: an AArch64 machine no longer reports AESNI and PCLMUL
+    [#302](https://github.com/kazu-yamamoto/crypton/pull/302)
+  * chore(rsa): deprecate `sign`, `signSafer` and `verify` in favour of them
+    [#305](https://github.com/kazu-yamamoto/crypton/pull/305)
+  * fix: compute the portable AES and GHASH without a table
+    [#308](https://github.com/kazu-yamamoto/crypton/pull/308)
+  * feat: use the AES instructions on 32-bit ARM
+    [#309](https://github.com/kazu-yamamoto/crypton/pull/309)
+  * test: skip the accelerated constant-time driver where the processor has no instructions
+    [#310](https://github.com/kazu-yamamoto/crypton/pull/310)
+  * feat: use the POWER8 AES and GHASH instructions on ppc64le
+    [#311](https://github.com/kazu-yamamoto/crypton/pull/311)
+  * test: the big-endian harness now asks about AES
+    [#312](https://github.com/kazu-yamamoto/crypton/pull/312)
+  * doc(tutorial): compile the examples, and teach the things people come for
+    [#313](https://github.com/kazu-yamamoto/crypton/pull/313)
 
   ## 2.1.10
 
@@ -926,32 +969,48 @@ description: |
   Side channels
   -------------
 
+  ### AES
+
   AES is where this matters most, and which implementation runs is decided at
   runtime from what the processor has.
 
-  On x86-64 with AES-NI and carry-less multiply, and on AArch64 with the ARMv8
-  cryptographic extension, AES and GHASH are instructions rather than tables.
-  crypton's AES and AES-GCM then make no branch and no memory access that
-  depends on the key or on the data: the secrets stay in vector registers and
-  never reach one a branch can test, which the generated code is checked
-  against.  Every x86-64 part since about 2010 and every AArch64 part in
-  ordinary use has these.
+  On x86-64 with AES-NI and carry-less multiply, on AArch64 and on 32-bit ARM
+  with the ARMv8 cryptographic extension, and on ppc64le with the vector
+  instructions PowerISA 2.07 brought to POWER8, AES and GHASH are instructions
+  rather than software.  crypton's AES and AES-GCM then make no branch and no
+  memory access that depends on the key or on the data: the secrets stay in
+  vector registers and never reach one a branch can test.  Every x86-64 part
+  since about 2010 and every AArch64 part in ordinary use has these, and the
+  ppc64le path is little-endian only.
 
-  Where neither is present crypton falls back to a table-driven AES, which
-  indexes a 256-byte substitution table with data derived from the key and the
-  input.  **That is not constant time**, and on a machine where an attacker can
-  observe the cache it is open to a timing attack.  The fallback exists so that
-  the library builds and runs everywhere; it is not meant for a setting where
-  that matters.
+  Where none of them is there, crypton computes AES and GHASH without a table.
+  The portable AES is bitsliced -- the S-box is boolean algebra over four
+  blocks held across eight 64-bit words -- and the GF(2^128) multiply is built
+  from shifts, masks and integer multiplies.  Neither looks anything up, so
+  neither derives an address from a secret, and **the portable path is constant
+  time as well**.  The code is BearSSL's, under MIT, in `cbits/bearssl`.
 
-  `Crypto.System.CPU.processorOptions` says which is in use.  `AESNI` in that
-  list means the instruction path, and `PCLMUL` that GHASH has its instruction
-  too; without `AESNI` it is the tables.  The list also reports `RDRAND`, which
-  is unrelated to this.
+  The constant-time harness in `cbits/tests/ct` runs the same driver against
+  the portable implementation and against each architecture's instructions, and
+  every one of them is required to report nothing at all.
+
+  So the answer does not depend on the machine any more, and what is left to
+  ask is whether AES is fast on it.  `hasAESAcceleration` and
+  `hasGHASHAcceleration` answer that without naming an architecture.
+  `processorOptions` says what was found, in the processor's own names --
+  `AESNI` and `PCLMUL` on x86, `ARMAES` and `ARMPMULL` on AArch64 and 32-bit
+  ARM, `PPCAES` and `PPCVPMSUM` on ppc64le -- along with everything else it was
+  asked about, which is unrelated to this.
 
       ghci> import Crypto.System.CPU
-      ghci> processorOptions
-      [AESNI,PCLMUL]
+      ghci> hasAESAcceleration
+      True
+      ghci> processorOptions           -- on an x86-64 machine
+      [AESNI,PCLMUL,SSSE3,AVX,AVX2,SHANI,MOVBE,ADX,VAES]
+      ghci> processorOptions           -- and on an AArch64 one
+      [NEON,ARMAES,ARMPMULL,ARMSHA1,ARMSHA2,ARMSHA512]
+
+  ### RSA
 
   RSA is the other place to know about, and there the choice is the caller's.
   The private key operations in `Crypto.PubKey.RSA.PKCS15`, `.OAEP` and `.PSS`
@@ -1164,10 +1223,15 @@ description: |
   ask for it, not because it is a good choice for anything new.  The algorithms
   that nothing should ask for any more -- MD5, 3DES, RC4, CBC mode -- are left
   out.
+
+  ML-KEM and ML-DSA are left out too, though 2.1.8 brought both and they are
+  fast -- `mlkem-native` and `mldsa-native`, from the PQ Code Package.  No
+  comparison is reported here: the implementations to measure against are
+  still developing.
 description-type: markdown
-hash: c91b59da112a53bdb138c7b994ae31a39664fab3551d2cf5baf721d4bce6fe36
+hash: 8eba39a8d5dff7f63b56ccee8a5db0f9e117335d545f06b6b5df9090ab7adae7
 homepage: https://github.com/kazu-yamamoto/crypton
-latest: 2.1.10
+latest: 2.2.0
 license-name: BSD-3-Clause AND MIT AND ISC
 maintainer: Kazu Yamamoto <kazu@iij.ad.jp>
 synopsis: Cryptography Primitives
@@ -1181,3 +1245,4 @@ test-bench-deps:
   ram: '>=0'
   random: '>=0'
   tasty-bench: '>=0'
+  unix: '>=0'
