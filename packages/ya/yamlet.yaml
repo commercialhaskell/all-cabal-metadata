@@ -1,0 +1,292 @@
+all-versions:
+- 1.0.0.0
+author: Andrzej Rybczak
+basic-deps:
+  base: '>=4.16 && <5'
+  bytestring: '>=0.11'
+  containers: '>=0.6.3.1'
+  deepseq: '>=1.4'
+  integer-logarithms: '>=1.0.3.1'
+  scientific: '>=0.3.9'
+  text: '>=2.0.2 && <3'
+  text-builder-linear: '>=0.1.3 && <0.2'
+  text-iso8601: '>=0.2'
+  time: '>=1.11'
+  uuid-types: '>=1.0.6'
+changelog: |
+  # yamlet-1.0.0.0 (2026-10-11)
+  * Initial release.
+changelog-type: markdown
+description: |
+  # yamlet
+
+  [![CI](https://github.com/arybczak/yamlet/actions/workflows/haskell-gha.yaml/badge.svg?branch=master)](https://github.com/arybczak/yamlet/actions/workflows/haskell-gha.yaml?query=branch%3Amaster)
+  [![Hackage](https://img.shields.io/hackage/v/yamlet.svg)](https://hackage.haskell.org/package/yamlet)
+  [![Stackage LTS](https://www.stackage.org/package/yamlet/badge/lts)](https://www.stackage.org/lts/package/yamlet)
+  [![Stackage Nightly](https://www.stackage.org/package/yamlet/badge/nightly)](https://www.stackage.org/nightly/package/yamlet)
+
+  A YAML 1.2.2 library written in Haskell. Main features:
+
+  - Conformance: the parser passes all cases of the
+    [YAML test suite](https://github.com/yaml/yaml-test-suite).
+  - Performance: decoding and encoding are very fast, see the
+    [benchmarks](#performance).
+  - Decoding and encoding with the classes `FromYaml` and `ToYaml`, with
+    instances for common types.
+  - Instances for your own data types, derived via `GenericYaml`.
+    Inspection tests check that the generic representation optimizes away
+    for common shapes of data types.
+  - Errors with the line, the column and the path of the problem, e.g.
+    `jobs[1].name`. The decoder reports the errors of independent parts
+    together, e.g. every bad field of a record.
+  - A syntax tree that keeps the comments and the empty lines. A program can
+    change a file and write it back with its comments, and a decoded value
+    can keep a part of the document as it was written.
+  - Output that YAML 1.1 parsers read the same way, e.g. PyYAML and go-yaml
+    v2, which Kubernetes uses.
+  - Safe for untrusted input. The time of a decode is close to linear in the
+    size of the input, and the memory is linear.
+
+  The library supports GHC 9.2 and later.
+
+  ## Example
+
+  A configuration type derives its decoder. The decoder rejects unknown keys,
+  and the default gives the paths when the key is missing:
+
+  ```haskell
+  {-# LANGUAGE GHC2021 #-}
+  {-# LANGUAGE DerivingVia #-}
+  {-# LANGUAGE NoFieldSelectors #-}
+
+  import Data.Text (Text)
+  import Yamlet
+
+  data Config = Config
+    { name :: Text
+    , paths :: [FilePath]
+    }
+    deriving stock (Generic, Show)
+    deriving (FromYaml) via GenericYaml Config
+
+  instance GenericYamlOptions Config where
+    yamlDefault = Just Config {name = requiredField, paths = ["."]}
+
+  main :: IO ()
+  main = do
+    result <- decodeFile @Config path
+    case result of
+      Left errs -> mapM_ (putStrLn . prettyError path) errs
+      Right config -> print config
+    where
+      path :: FilePath
+      path = "config.yaml"
+  ```
+
+  For this file:
+
+  ```yaml
+  name: app
+  ```
+
+  the program prints the configuration with the default paths:
+
+  ```
+  Config {name = "app", paths = ["."]}
+  ```
+
+  For this file:
+
+  ```yaml
+  paths:
+  - src
+  - 42
+  port: 80
+  ```
+
+  the program prints every error:
+
+  ```
+  config.yaml:1:1: missing key "name"
+    |
+  1 | paths:
+    | ^
+  config.yaml:3:3: paths[1]: expected a string, but got an integer, quote the value, e.g. '42'
+    |
+  3 | - 42
+    |   ^
+  config.yaml:4:1: unknown key "port", expected one of: name, paths
+    |
+  4 | port: 80
+    | ^
+  ```
+
+  A decoded type can also keep comments and parts of a document as they were
+  written:
+
+  ```haskell
+  {-# LANGUAGE GHC2021 #-}
+  {-# LANGUAGE DeriveAnyClass #-}
+  {-# LANGUAGE DerivingVia #-}
+  {-# LANGUAGE NoFieldSelectors #-}
+
+  import Data.Text (Text)
+  import Yamlet
+
+  data Workflow = Workflow
+    { name :: Commented Text
+    , matrix :: Node
+    }
+    deriving stock (Generic)
+    deriving anyclass (GenericYamlOptions)
+    deriving (FromYaml, ToYaml) via GenericYaml Workflow
+  ```
+
+  This input decodes to a `Workflow`, and `encodeText` writes it back
+  unchanged:
+
+  ```yaml
+  # The name in the UI.
+  name: build # short
+  matrix:
+    # Each system runs the jobs.
+    os: [linux, macos]
+    ghc: ['9.10', '9.12']
+  ```
+
+  The record types of the library, e.g. `Error` and `YamlOptions`, have no
+  field selectors. Read a field with the `OverloadedRecordDot` extension, e.g.
+  `err.message`, and set one with the record syntax, e.g.
+  `defaultYamlOptions {fieldLabelModifier = snakeCase}`, or with the generic
+  optics of [optics-core](https://hackage.haskell.org/package/optics-core),
+  e.g. `defaultYamlOptions & #fieldLabelModifier .~ snakeCase`.
+
+  ## Performance
+
+  Each library decodes three generated inputs into the same Haskell type and
+  encodes a value of that type back to YAML:
+
+  - `config`: a list of records in block style, as in a configuration file.
+  - `json`: a list of records in JSON syntax.
+  - `text`: a mapping of long multi-line strings.
+
+  Decoding:
+
+  | Input              | yamlet | HsYAML  | yaml   |
+  |--------------------|--------|---------|--------|
+  | `config`, 1105 KiB | 27 ms  | 3017 ms | 116 ms |
+  | `json`, 432 KiB    | 15 ms  | 2420 ms | 61 ms  |
+  | `text`, 834 KiB    | 7.1 ms | 637 ms  | 13 ms  |
+
+  Encoding:
+
+  | Input              | yamlet | HsYAML | yaml   |
+  |--------------------|--------|--------|--------|
+  | `config`, 1105 KiB | 21 ms  | 39 ms  | 57 ms  |
+  | `json`, 432 KiB    | 12 ms  | 19 ms  | 34 ms  |
+  | `text`, 834 KiB    | 3.2 ms | 11 ms  | 9.5 ms |
+
+  The times come from GHC 9.10.3 on a Ryzen 9950X3D. Each benchmark ran in its
+  own process, pinned to one core of the CCD with the 3D V-cache. The `yaml`
+  package uses the libyaml C library and converts the data by way of an aeson
+  `Value`. The section [Development](#development) shows how to run the
+  benchmarks.
+
+  ## Known limits
+
+  - No streaming. The parser reads the whole input, and a decode of a stream
+    parses all its documents before it decodes the first one. The library has
+    no interface to the events of the parser.
+  - Only YAML 1.2. A document with `%YAML 1.1` follows the rules of YAML 1.2,
+    e.g. `yes` is a string and `0755` is the integer 755. The merge keys of
+    YAML 1.1 (`<<`) are not supported.
+  - The renderer writes its own layout. A file written back keeps its
+    comments, empty lines, styles and anchors, but not its indentation or the
+    spaces between tokens.
+  - Limits for untrusted input. The aliases of a stream can add at most
+    100000 nodes and characters, or as many as the stream has if it has
+    more. The prefixes of `%TAG` directives can add at most 100000 bytes to
+    the tags of a stream, or as many as the stream has. A float with an
+    exponent beyond the range from -1000 to 1000 is an error, e.g. `1e1001`.
+    The library does not limit the size of the input, so a program that
+    reads untrusted input must limit it.
+  - No deriving with Template Haskell. The generic instances optimize well for
+    the common shapes of data types, and a second way to derive instances
+    would double what the tests must cover.
+
+  ## Coming from the yaml package
+
+  The instances of yamlet read and write the same YAML as the aeson instances
+  that the [yaml](https://hackage.haskell.org/package/yaml) package uses, with
+  a few exceptions. Some come from YAML 1.2, e.g. `yes` is a string and `<<`
+  is an ordinary key. Others come from the types, e.g. the keys of a
+  `Map Int` are integers and `1.0` is not an `Int`. The document
+  [Coming from the yaml package](https://github.com/arybczak/yamlet/blob/master/docs/coming-from-yaml.md)
+  lists all of them.
+
+  The package [yamlet-aeson](https://hackage.haskell.org/package/yamlet-aeson)
+  decodes and encodes with the instances of aeson, so a program can switch to
+  yamlet before it has instances of yamlet.
+
+  ## Development
+
+  The test suite reads the data of the YAML test suite, release
+  `data-2022-01-17`, from `tests/fixtures/yaml-test-suite`. The repository
+  contains the data. To download it again, e.g. after you change the release
+  in the script, run this command:
+
+  ```
+  scripts/fetch-test-suite.sh
+  ```
+
+  The file `tests/fixtures/error-messages.txt` holds the expected error
+  message for each invalid input of the YAML test suite. If you change an
+  error message on purpose, update the file with this command and review the
+  diff:
+
+  ```
+  YAMLET_ACCEPT_ERRORS=1 cabal test
+  ```
+
+  To run the benchmarks of the section [Performance](#performance) and print
+  its tables, run this command:
+
+  ```
+  scripts/bench-readme.sh
+  ```
+
+  The script runs each benchmark in its own process and pins it to core 2. To
+  use another core, set the `CORE` variable, e.g.
+  `CORE=4 scripts/bench-readme.sh`.
+description-type: markdown
+hash: bc8b044134184e08d74f9ab601f73a58ad17a590fabba4a5e5028c07bee27b9c
+homepage: ''
+latest: 1.0.0.0
+license-name: BSD-3-Clause
+maintainer: andrzej@rybczak.net
+synopsis: A pure, fast and conforming YAML 1.2 library.
+test-bench-deps:
+  HsYAML: '>=0'
+  aeson: '>=0'
+  attoparsec: '>=0'
+  attoparsec-aeson: '>=0'
+  base: '>=0'
+  bytestring: '>=0'
+  containers: '>=0'
+  deepseq: '>=0'
+  directory: '>=0'
+  filepath: '>=0'
+  ghc-heap: '>=0'
+  inspection-testing: '>=0'
+  scientific: '>=0'
+  tasty: '>=0'
+  tasty-bench: '>=0'
+  tasty-hunit: '>=0.10'
+  tasty-quickcheck: '>=0.8.1'
+  template-haskell: '>=0'
+  text: '>=0'
+  time: '>=0'
+  uuid-types: '>=0'
+  vector: '>=0'
+  yaml: '>=0'
+  yamlet: '>=0'
