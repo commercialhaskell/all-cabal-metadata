@@ -1,0 +1,188 @@
+all-versions:
+- 1.0.0.0
+author: Andrzej Rybczak
+basic-deps:
+  aeson: '>=2.3 && <2.4'
+  base: '>=4.16 && <5'
+  bytestring: '>=0.11'
+  containers: '>=0.6.3.1'
+  scientific: '>=0.3.9'
+  text: '>=2.0.2'
+  vector: '>=0.13.1'
+  yamlet: '>=1.0 && <2'
+changelog: |
+  # yamlet-aeson-1.0.0.0 (2026-10-11)
+  * Initial release.
+changelog-type: markdown
+description: |
+  # yamlet-aeson
+
+  [![CI](https://github.com/arybczak/yamlet/actions/workflows/haskell-gha.yaml/badge.svg?branch=master)](https://github.com/arybczak/yamlet/actions/workflows/haskell-gha.yaml?query=branch%3Amaster)
+  [![Hackage](https://img.shields.io/hackage/v/yamlet-aeson.svg)](https://hackage.haskell.org/package/yamlet-aeson)
+  [![Stackage LTS](https://www.stackage.org/package/yamlet-aeson/badge/lts)](https://www.stackage.org/lts/package/yamlet-aeson)
+  [![Stackage Nightly](https://www.stackage.org/package/yamlet-aeson/badge/nightly)](https://www.stackage.org/nightly/package/yamlet-aeson)
+
+  Use the `FromJSON` and `ToJSON` instances of
+  [aeson](https://hackage.haskell.org/package/aeson) with
+  [yamlet](https://hackage.haskell.org/package/yamlet), for the types that have
+  no `FromYaml` and `ToYaml` instances yet, e.g. in a program that moves from
+  the yaml package to yamlet.
+
+  - A value in `ViaAeson` decodes and encodes with its `FromJSON` and `ToJSON`
+    instances, so the functions of yamlet work with it, e.g.
+    `decodeFile @(ViaAeson Config)`. A program can try yamlet by changing only
+    the places that decode and encode.
+  - A type with `FromJSON` and `ToJSON` instances can derive its `FromYaml` and
+    `ToYaml` instances via `ViaAeson`, e.g. in a program that reads and writes
+    both JSON and YAML and keeps one set of instances.
+  - An error of a decoder of aeson points to the node that caused it, with the
+    line, the column and the path. An error of a key of a map points to the
+    value of the key, and its path names the key.
+  - The encoder keeps the order of the fields of a type whose instance defines
+    `toEncoding`, e.g. with `genericToEncoding`.
+  - The package also has the `FromYaml` and `ToYaml` instances for the `Value`
+    of aeson.
+
+  A program that uses the yaml package can switch to yamlet in steps with this
+  package. The document
+  [Coming from the yaml package](https://github.com/arybczak/yamlet/blob/master/docs/coming-from-yaml.md)
+  shows how, and lists the differences between the two.
+
+  ## Example
+
+  A list of servers decodes with the `FromJSON` instance of the server type.
+  Each server decodes on its own, so an error in one server does not hide the
+  errors in the others:
+
+  ```haskell
+  {-# LANGUAGE GHC2021 #-}
+  {-# LANGUAGE DeriveAnyClass #-}
+  {-# LANGUAGE DerivingStrategies #-}
+  {-# LANGUAGE NoFieldSelectors #-}
+  {-# LANGUAGE OverloadedRecordDot #-}
+
+  import Data.Aeson qualified as A
+  import Data.Text (Text)
+  import Yamlet
+  import Yamlet.Aeson
+
+  data Server = Server {port :: Int, host :: Text}
+    deriving stock (Generic, Show)
+    deriving anyclass (A.FromJSON)
+
+  main :: IO ()
+  main = do
+    result <- decodeFile @[ViaAeson Server] path
+    case result of
+      Left errs -> mapM_ (putStrLn . prettyError path) errs
+      Right servers -> mapM_ (print . (.value)) servers
+    where
+      path :: FilePath
+      path = "servers.yaml"
+  ```
+
+  For this file:
+
+  ```yaml
+  - port: 80
+    host: a.example.com
+  - port: 81
+    host: b.example.com
+  ```
+
+  the program prints the servers:
+
+  ```
+  Server {port = 80, host = "a.example.com"}
+  Server {port = 81, host = "b.example.com"}
+  ```
+
+  For this file:
+
+  ```yaml
+  - port: http
+    host: a.example.com
+  - port: 81
+  - port: 82
+    host: c.example.com
+  ```
+
+  the program prints every error:
+
+  ```
+  servers.yaml:1:9: [0].port: parsing Int failed, expected Number, but encountered String
+    |
+  1 | - port: http
+    |         ^
+  servers.yaml:3:3: [1]: parsing Main.Server(Server) failed, key "host" not found
+    |
+  3 | - port: 81
+    |   ^
+  ```
+
+  ## Order of keys
+
+  The encoder writes the keys of a mapping in the order of `toEncoding`. The
+  default `toEncoding` goes through `toJSON`, so the keys come in the order of
+  an aeson object, which is sorted by default.
+
+  The decoder of aeson gets the keys in no order, because an aeson object has
+  none. To keep the order of a mapping, a program decodes the mapping with a
+  decoder of yamlet, e.g. with `withMapping` and `objectEntries`. Its values
+  can still decode via `ViaAeson`.
+
+  ## Conversion
+
+  A YAML document converts to an aeson `Value` as follows:
+
+  - A key is the text of its scalar, e.g. `"0x10"` for `0x10` and `"~"` for
+    `~`, as in the yaml package. Two keys with the same text are an error,
+    e.g. `1` and `"1"`. A key that is a collection is an error.
+  - A key `<<` is an ordinary key, because the merge keys of YAML 1.1 are
+    not supported.
+  - `.inf` and `-.inf` are the strings `"+inf"` and `"-inf"`, and `.nan` is
+    null, which the `FromJSON` and `ToJSON` instances for `Double` and `Float`
+    read and write.
+  - `-0.0` is the number 0, because a `Scientific` has no negative zero.
+  - A number whose exponent in scientific notation is beyond the range
+    from -1000 to 1000, e.g. `1e1001`, is an error, as in yamlet. A `Number`
+    converts to YAML as aeson writes it in JSON: as an integer if its
+    `base10Exponent` is from 0 to 1024, otherwise in scientific notation.
+    Thus `1e1001` reads back as an integer, but `1e1025` and `1e-1001` do not
+    read back.
+  - A tag that is not of the core schema makes a scalar a string, e.g.
+    `!secret 123` is the string `"123"`. The yaml package reads it as the
+    number 123. A collection with such a tag converts as without it, e.g.
+    `!point {x: 1}` is the object `{"x": 1}`.
+
+  A `FromJSON` instance can convert two different keys to the same key and then
+  keep only one of the pairs, as it does for JSON, e.g. `1` and `1.0` for a
+  `Map Int`. The `FromYaml` instances for maps reject such keys.
+
+  A `Value` converts to YAML as aeson writes it in JSON, e.g. the keys of a
+  `Map Int` are strings, which the encoder quotes because they look like
+  numbers.
+description-type: markdown
+hash: f43ab6e43aed7161237b85fbc30e4fe28295c790ca624bc35fccdf4af036cd3d
+homepage: ''
+latest: 1.0.0.0
+license-name: BSD-3-Clause
+maintainer: andrzej@rybczak.net
+synopsis: Use the FromJSON and ToJSON instances of aeson with yamlet.
+test-bench-deps:
+  aeson: '>=0'
+  base: '>=0'
+  bytestring: '>=0'
+  containers: '>=0'
+  deepseq: '>=0'
+  ghc-heap: '>=0'
+  scientific: '>=0'
+  tasty: '>=0'
+  tasty-bench: '>=0'
+  tasty-hunit: '>=0.10'
+  tasty-quickcheck: '>=0.8.1'
+  text: '>=0'
+  vector: '>=0'
+  yaml: '>=0'
+  yamlet: '>=0'
+  yamlet-aeson: '>=0'
