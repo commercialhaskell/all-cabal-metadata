@@ -22,6 +22,7 @@ all-versions:
 - 1.0.10.0
 - 1.0.11.0
 - 1.0.12.0
+- 1.0.13.0
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   base: '>=4.11 && <5'
@@ -35,6 +36,12 @@ basic-deps:
   testcontainers-postgresql: ^>=0.2
   text: '>=1.2 && <3'
 changelog: |
+  # v1.0.13.0
+
+  ## Non-breaking
+
+  - Added `getResult`, `exec` and `execParams` specs covering a connection that is lost while it is idle and is then used: `sendQuery` (a multi-statement text), `sendQueryParams`, `sendPrepare`, `sendQueryPrepared` (a statement prepared before the loss) and a two-command pipeline run through `getResult` until the sync, plus `exec` and `execParams`, each against three ways of dying - a silent close (FIN with no protocol message), a server-announced termination (`pg_terminate_backend` from a second connection) and a reset (RST). The handle is then used once more and finished. Every call of the victim runs under `try` and a 5 s `timeout`, so that a throw or a hang is recorded in the compared transcript as `THREW …` or `TIMED OUT` instead of aborting the run, and the transcript is compared line by line. The connection goes through an in-process TCP proxy (`Pqi.Conformance.Fixture.ConnectionLoss`) that keeps the client side open and drained once the database side is gone, and the scenario waits for the victim's own socket to have noticed the death before the victim's next command. A direct connection cannot be killed deterministically: the dead server answers the victim's write with a reset that races with reading the `FATAL`/EOF (38 EOF to 2 `Connection reset by peer` in 40 attempts of one cell), and a victim that writes before an RST has been processed by its kernel takes a different path than one that writes after. Found `pqi-native` 1.0.1.12 diverging from `libpq` in every cell. Where the connection is closed or terminated, `getResult` throws `pqi-native: connection closed by server: end of file` where `libpq` returns a `FatalError` result; `status` stays `ConnectionOk` where `libpq` reports `ConnectionBad` (for a termination `libpq` is `ConnectionOk` after the server's `FATAL` and only goes bad on the second `getResult`, which `pqi-native` never reaches); `errorMessage` is empty where `libpq` carries its "server closed the connection unexpectedly" text (after a termination, appended to the `FATAL` text); and the handle accepts a further `sendQuery` (`True`) where `libpq` answers `False` with "no connection to the server", then throws again on `getResult`. After a reset the send already fails (`False`, and for a pipeline the sends after the first) where `libpq` defers a write failure and reports the loss from the following `getResult`. `exec` and `execParams` no longer throw, but their `FatalError` result carries a `DiagMessagePrimary` error field where `libpq`'s made-up result has no error fields at all, after a termination `errorMessage` lacks the preceding `FATAL` text, and after the loss `errorMessage` keeps the "server closed the connection" text where `libpq` reports "no connection to the server". Found via `hasql` issue #341.
+
   # v1.0.12.0
 
   ## Non-breaking
@@ -263,9 +270,9 @@ description: |
   Contributions extending the suite are very welcome. The more thoroughly we
   cover the operations, the more confidence we can have in the adapters.
 description-type: markdown
-hash: eed85b5a849e2927289b7e5ec12d776f76025cbb3f76fa7981e2dcc89f400237
+hash: 3c27eac1e9398d0cd3266278a2a0b373823d96737d1c54e71ca16eaeeb6e6e33
 homepage: https://github.com/nikita-volkov/pqi-conformance
-latest: 1.0.12.0
+latest: 1.0.13.0
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Differential conformance tests for pqi adapters
