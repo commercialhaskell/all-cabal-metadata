@@ -24,6 +24,7 @@ all-versions:
 - 1.0.1.11
 - 1.0.1.12
 - 1.0.1.13
+- 1.0.1.14
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   base: '>=4.11 && <5'
@@ -38,6 +39,14 @@ basic-deps:
   unix: '>=2.7 && <2.9'
   vector: '>=0.12 && <0.14'
 changelog: |
+  # v1.0.1.14
+
+  ## Fixes
+
+  - Fixed the `hostaddr` conninfo parameter being ignored ([#11](https://github.com/nikita-volkov/pqi-native/issues/11)). With a `hostaddr`, libpq connects to that numeric address and never resolves `host`, which it keeps only for authentication and for naming the server in messages. `pqi-native` had no notion of it: it resolved `host` through DNS regardless, so a conninfo whose `host` does not resolve failed to connect, and the `hostaddr` key was forwarded to the server in the startup packet as if it were a run-time setting, which libpq never does. `hostaddr` is now parsed from both the `key=value` form and the URI's query string, kept out of the startup parameters, and dialled over TCP in preference to `host`, also when `host` is a Unix-domain socket directory, and also by a later `cancel` and `reset`. `host` is still what `Pqi.host` reports. Caught by the `pqi-conformance` spec `Pqi.Conformance.Operation.Connectdb.Hostaddr`.
+
+  - Fixed a lost connection being reported by throwing an `IOException` instead of the way libpq reports it. When the server closed the connection, or the socket failed, while a flow was waiting for results, `Pqi.getResult` (and, for a send that failed, the send itself) used to throw `pqi-native: connection closed by server: end of file` or a socket error such as `Connection reset by peer`; `status` stayed `ConnectionOk`; `errorMessage` stayed empty or lost the server's own `FATAL` text; and a further send was accepted and threw again. libpq never throws here ([hasql#341](https://github.com/nikita-volkov/hasql/issues/341)). Now, as in `pqReadData`, `PQgetResult` and `pqDropConnection`, the loss returns a `FatalError` result with no error fields (so no SQLSTATE) whose `resultErrorMessage` is libpq's "server closed the connection unexpectedly" text, appended to the connection's `errorMessage` after whatever was recorded before it. The connection becomes `ConnectionBad`, its socket is dropped (`socket` is `Nothing`, `finish` stays safe) and the next `getResult` returns `Nothing`. When the server announced the termination with a `FATAL`, that result is still returned first and unchanged, with `status` `ConnectionOk`, and the loss is reported by the read that follows. A pipeline that is lost ends the same way, without `PipelineAbort` results made up for the outstanding commands. A failed write (`Broken pipe`, `Connection reset by peer`) no longer throws either: as in libpq's `pqsecure_raw_write` it is remembered, the send reports success, and the loss is reported by the following read. A send, or a synchronous `exec` family call, on a connection that is not usable returns `False` (`Nothing`) and sets `errorMessage` to "no connection to the server", and `transactionStatus` is `TransUnknown`, as libpq's are. `putCopyData` and `putCopyEnd` on such a connection return `CopyInError` instead of attempting the write. Also fixed in a pipeline: `errorMessage` was empty after a server error where libpq has the server's text, and was not cleared when the next command's results begin. Only `IOException` from the transport is caught, so asynchronous exceptions such as `ThreadKilled` and `Timeout` still propagate untouched. Caught by the `pqi-conformance` specs `Pqi.Conformance.Operation.GetResult.LostConnection`, `Pqi.Conformance.Operation.Exec.LostConnection` and `Pqi.Conformance.Operation.ExecParams.LostConnection`, whose scenario (`pqi-conformance` 1.0.14.0) also pins `transactionStatus` and `socket` after the loss.
+
   # v1.0.1.13
 
   ## Non-breaking
@@ -255,14 +264,14 @@ description: |
   otherwise a Unix-domain socket in `/tmp` on Unix-like systems, or `localhost`
   on Windows.
 description-type: markdown
-hash: 78ea26eef0b5b2147d4cf2579470f2c31812b8d858d0da0e914abda29a47f1d7
+hash: 4d7e3b060c2cfe22512e5d72e8f29c53d746bcddc2c01f2c3b4fccf3f68314b9
 homepage: https://github.com/nikita-volkov/pqi-native
-latest: 1.0.1.13
+latest: 1.0.1.14
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Native (pure-Haskell) adapter for pqi
 test-bench-deps:
   base: '>=4.11 && <5'
   hspec: '>=2.11 && <2.12'
-  pqi-conformance: ^>=1.0.12
+  pqi-conformance: ^>=1.0.15
   pqi-native: '>=0'
