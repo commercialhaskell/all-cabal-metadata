@@ -3,6 +3,7 @@ all-versions:
 - 0.1.0.2
 - 0.1.1.0
 - 0.2.0.0
+- 0.3.0.0
 author: Daniel van den Eijkel
 basic-deps:
   aeson: '>=2.0 && <2.3'
@@ -37,7 +38,127 @@ changelog: |
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-  ## [Unreleased]
+  ## [0.3.0.0] - 2026-10-13
+
+  ### Added
+
+  - Cross-provider history regression test (`test/LLM/CrossProviderSpec.hs`).
+    One mixed history (Claude → Gemini → OpenAI → Claude turns, a base64
+    image, a redacted-thinking-only turn) is encoded by every provider and
+    checked against rules the live APIs enforce: Gemini thought signatures on
+    every function call, DeepSeek `reasoning_content` in thinking mode, no empty
+    assistant messages on the OpenAI protocol, only Claude thinking blocks and
+    paired tool ids for Claude, and no provider's opaque payload in another
+    provider's request.
+
+  ### Changed
+
+  - **Breaking:** `LLMProvider.sendStreamRequest` is split into `openStream`
+    (HTTP transport; hands the raw body reader to a continuation) and
+    `parseStream` (turns raw body bytes into a response). Custom providers must
+    implement both. Streaming behaviour is unchanged; the split lets recorded
+    conversation fixtures capture the raw SSE body and replay it through the
+    real stream parsers.
+  - Agent runs (`generateText` / `streamText`) stay on a fallback model once it
+    has answered. Each tool round used to start again at `mwfModel`, so while
+    the primary was down every round paid its full retry/backoff/timeout cost
+    and the history alternated between providers. Now each round uses the chain
+    rotated so the model that answered comes first; models that failed move to
+    the end and remain a last resort. This lasts for one `generateText` /
+    `streamText` call; the next call starts from the caller's chain again. A
+    switch is logged once at `Info` ("Continuing run on …"). New
+    `withModelFallbacksRotated` (`LLM.Generate.GenerateUtils`),
+    `generateTextWithFallbacksRotated` and `streamTextWithFallbacksRotated`
+    (`LLM.Generate.Generate`).
+
+  ### Fixed
+
+  - `remove_directory` no longer deletes the whole workspace when given a path
+    that resolves to the workspace root (`"."`, `""`, `"./"`, `"sub/.."`); it
+    returns an error message instead. `remove_file` and `move_file` (source)
+    refuse the root too, and `remove_file` on a directory returns a clear error
+    instead of throwing. New helper `isSandboxRoot` in `LLM.Tools.FsConfig`.
+  - `mcRequestTimeout` now applies to each attempt instead of covering all
+    retries and backoff sleeps, and `TimeoutError` is now retryable
+    (`isRetryable`). For streaming, the timeout only covers the time until the
+    first stream event, so long answers are no longer cut off. New
+    `withFirstEventTimeout` (`LLM.Core.Utils`) and `callWithRetry`
+    (`LLM.Generate.GenerateUtils`).
+  - **Breaking:** `StreamChunk` gains `StreamAttemptReset`. Streaming consumers
+    used to see duplicated output when an attempt failed after streaming some
+    chunks and a retry or fallback model started over. The reset is emitted
+    before the next attempt (only if the failed attempt streamed something);
+    consumers should discard the chunks of the current round when they get it.
+    Exhaustive pattern matches on `StreamChunk` need a new case.
+  - Claude thinking: `budget_tokens` is capped at `max_tokens - 1`; Anthropic
+    rejects a budget that is not below `max_tokens`, so medium effort or above
+    with `maxTokens: 4096` failed with HTTP 400 on every call. If `max_tokens`
+    leaves no room for the 1024-token minimum budget, the Claude gateway returns
+    `UnsupportedCapability` without sending the request (new
+    `checkClaudeThinkingBudget`). Example catalog: `haiku_4_5` uses
+    `maxTokens: 16000` so thinking leaves room for the answer.
+  - Mid-stream errors are no longer ignored. A Claude `event: error` or an
+    OpenAI-compatible `data: {"error": ...}` chunk (OpenAI, DeepSeek, Ollama)
+    now yields `HttpError status body` instead of partial content or
+    `EmptyResponse`. Claude error types map to Anthropic's HTTP statuses
+    (`overloaded_error` → 529, `rate_limit_error` → 429, `api_error` → 500, …),
+    so overload and rate limits are retried. OpenAI-style errors use their numeric
+    code if present, otherwise 429 / 503 / 500.
+  - Tool calls whose arguments are not valid JSON (e.g. cut off by `max_tokens` /
+    `finish_reason: "length"`) now yield `ParseError` instead of a tool call with
+    `String` arguments, in both streaming and non-streaming parsers. Empty
+    argument strings decode as `{}`. A non-streaming Claude response that stops
+    at `max_tokens` inside a `tool_use` block is also a `ParseError`.
+  - Tool execution, `safeHooks` and `emitEvent` no longer catch asynchronous
+    exceptions. A `timeout`, `killThread` or `cancel` during a tool call used to
+    become a "Tool error" result and the agent loop kept going. New `trySync`
+    in `LLM.Core.Utils`.
+  - `stripBoundsAndComments` is schema-aware: it removes `minimum` / `maximum` /
+    `$comment` keywords but keeps properties with those names and leaves
+    literal values (`enum`, `const`, `default`, `examples`) alone. Gemini applies
+    it only to tool `parameters` and `responseSchema` at body-build time, not to
+    the whole request (which could strip keys from tool-call arguments).
+  - OpenAI-compatible stream parser (OpenAI, DeepSeek, Ollama) keeps every tool
+    call in a chunk, not just the first. Ollama often sends all calls complete in
+    one chunk, sometimes without `index`; the array position is used then. Tool
+    calls are emitted in index order.
+  - Gemini: a `functionCall` part without a matching thought signature (a call
+    from another provider, or from a different Gemini model) now carries
+    Google's placeholder `"skip_thought_signature_validator"` (new
+    `skipThoughtSignatureValidator`). Gemini 3 rejected such history with
+    `400 "Function call is missing a thought_signature"`, so a fallback into
+    Gemini 3, or between two Gemini models, failed partway through a tool loop.
+  - DeepSeek with thinking enabled: every assistant message now carries
+    `reasoning_content`, `""` when the turn has no thinking text (turns from
+    OpenAI, Ollama, or Claude without thinking). DeepSeek rejected such history
+    with `400 "The reasoning_content in the thinking mode must be passed back"`.
+    Requests with thinking off are unchanged. **Breaking:**
+    `MessageEncodeOptions` is now a two-field record with the new
+    `meoRequireReasoning`; code that constructs it directly must set it. The
+    streamed DeepSeek fixture's requests gained the empty field.
+  - OpenAI-protocol providers (OpenAI, OpenRouter, Ollama, DeepSeek) no longer
+    send an assistant message with neither `content` nor `tool_calls`, e.g. a
+    Claude turn that held only (redacted) thinking. OpenAI rejected
+    `{"role":"assistant"}` with "expected a string, got null"; such turns now
+    send `"content": ""`. Tool-call-only turns still omit `content`.
+  - Image media types are checked per provider. `mkImageBase64` accepts HEIC
+    and HEIF, but only Gemini does; Claude, OpenAI, Ollama and DeepSeek return
+    400 for anything but jpeg, png, gif and webp. A HEIC image in a Gemini
+    conversation broke the fallback to those providers, because the vision
+    check passed. `validateModelCapabilities` now skips a model whose gateway
+    does not accept every inline image's media type (`UnsupportedCapability`,
+    like a model without vision). URL images have no known type and are not
+    checked. New `commonImageMediaTypes` (`LLM.Core.Types`). **Breaking:**
+    `LLMGateway` gained `gwImageMediaTypes` and `LLMProvider` gained
+    `providerImageMediaTypes` (copied by `toGateway`); code that constructs
+    either directly must set it.
+  - Ollama models are skipped for conversations with URL images. Ollama's
+    OpenAI-compatible endpoint answers an `image_url` with an https URL with
+    `400 "image URLs are not currently supported, please use base64 encoded
+    data instead"` (checked against Ollama with `moondream`; base64 data URLs
+    work). **Breaking:** `LLMGateway` gained `gwImageUrlSupport` and
+    `LLMProvider` gained `providerImageUrlSupport` (`False` only for Ollama);
+    code that constructs either directly must set it.
 
   ## [0.2.0.0] - 2026-10-06
 
@@ -186,11 +307,12 @@ changelog: |
     DeepSeek), single-shot generation with fallbacks, agent tool loops, structured
     output, JSON model catalog loading, and workspace-scoped filesystem tools.
 
+  [0.3.0.0]: https://github.com/aische/llm-simple/compare/v0.2.0.0...v0.3.0.0
+  [0.2.0.0]: https://github.com/aische/llm-simple/compare/v0.1.1.0...v0.2.0.0
   [0.1.1.0]: https://github.com/aische/llm-simple/compare/v0.1.0.2...v0.1.1.0
   [0.1.0.2]: https://github.com/aische/llm-simple/compare/v0.1.0.1...v0.1.0.2
   [0.1.0.1]: https://github.com/aische/llm-simple/compare/v0.1.0.0...v0.1.0.1
   [0.1.0.0]: https://github.com/aische/llm-simple/releases/tag/v0.1.0.0
-  [0.2.0.0]: https://github.com/aische/llm-simple/compare/v0.1.1.0...v0.2.0.0
 changelog-type: markdown
 description: |
   # llm-simple
@@ -199,7 +321,7 @@ description: |
 
   The API stays small on purpose: JSON model and provider catalogs, bundled filesystem tools, and a straight line from `loadModelOrThrow` to `generateText`. Under that surface you still get multi-provider gateways, fallbacks, streaming, structured output, and sandboxed workspace tools — enough to prototype and compare ideas without assembling the pieces yourself.
 
-  **Status:** early 0.2.x release. APIs may change.
+  **Status:** early 0.3.x release. APIs may change.
 
   ## Features
 
@@ -259,7 +381,7 @@ description: |
   | `pricing`         | `pricePerMillionInput` / `pricePerMillionOutput` for usage cost tracking; optional `pricePerMillionCacheRead` / `pricePerMillionCacheWrite` (fall back to input rate) |
   | `maxTokens`       | Max tokens per request                                                   |
   | `temperature`     | Sampling temperature (optional)                                          |
-  | `requestTimeout`  | Request timeout in ms (optional)                                         |
+  | `requestTimeout`  | Timeout in ms per attempt (optional); for streaming, time until the first event; timeouts are retried |
   | `throttleDelay`   | Delay between requests in ms (optional)                                  |
   | `retryCount`      | Number of retries on failure                                             |
   | `jitterBackoff`   | Backoff jitter in ms between retries                                     |
@@ -484,9 +606,9 @@ description: |
 
   BSD-3-Clause. See [LICENSE](LICENSE).
 description-type: markdown
-hash: f9fc2e0cc84ebed4eb2ae36fdfe0b9de6a8f8d5ca824e5eb51a40176e683bf46
+hash: 30a5bbcea598f67b1818ae5f5b76bf96034d45ed76c146e051847e76521e75a9
 homepage: https://github.com/aische/llm-simple#readme
-latest: 0.2.0.0
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: 1515314+aische@users.noreply.github.com
 synopsis: Multi-provider LLM library with agent tool loops and filesystem tools
