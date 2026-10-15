@@ -6,6 +6,7 @@ all-versions:
 - 0.1.3.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.4.0.0
 author: Anton Gushcha
 basic-deps:
   JuicyPixels: '>=3.2 && <3.4'
@@ -15,40 +16,90 @@ basic-deps:
   binary: '>=0.8 && <0.10'
   bytestring: '>=0.10 && <0.13'
   containers: '>=0.6 && <0.9'
+  deepseq: '>=1.4 && <1.6'
   directory: '>=1.2 && <1.4'
   filepath: '>=1.4 && <1.6'
   optparse-simple: '>=0.0.3 && <0.2'
+  transformers: '>=0.5 && <0.7'
   vector: '>=0.10 && <0.14'
-changelog: "0.3.0.0 (2026-10-15)\n====================\n\nBreaking changes:\n\n- `encodeBlpUncompressedWithAlpha`
-  always writes an alpha plane and\n  `encodeBlpUncompressedWithoutAlpha` never does.
-  Both used to pick by the\n  input image, so the two were identical and `blp2any
-  -b` had no effect.\n- `decodeBlp` and `decodeBlpMipmaps` always return `ImageRGBA8`.
-  JPEG BLPs\n  whose stream is not four-component (greyscale, YCbCr) used to come
-  back as\n  `ImageY8` or `ImageRGB8`.\n- Removed unused functions from `Codec.Picture.Blp.Internal.Convert`:\n
-  \ `toPngRepresentable` and `toBlpUncompressable`.\n- `mipMapsUpTo` counts every
-  level down to the minimum side; it was one short\n  and returned 0 or less for tiny
-  images.\n- Removed the `TextShow` and `Hashable` instances from\n  `Codec.Picture.Blp.Internal.Data`,
-  and with them the `text-show` and\n  `hashable` dependencies. `blp2any` no longer
-  depends on\n  `unordered-containers`.\n\nThe encoder always writes mip 0; a mipmap
-  count of zero or less used to\nproduce an unreadable file, which `blp2any` did for
-  1x1 images.\n\nThe uncompressed encoder no longer hands out ByteStrings over image
-  memory it\ndoes not keep alive, and no longer relies on an orphan, endianness-dependent\n`Storable
-  PixelRGBA8` instance.\n\nDecoder robustness for BLP1 files found in the wild:\n\n-
-  Accept picture type 6 (WoW JPEG variant) and picture type 0 (#5, #10).\n- Tolerate
-  palettes shorter than 256 entries (#6).\n- Decode files labelled with-alpha whose
-  mipmap 0 has no alpha plane as\n  without-alpha instead of crashing (#8).\n- A corrupt
-  JPEG mipmap no longer fails the whole file; the mipmap list is\n  cut at the first
-  broken level (#9).\n- `decodeBlpMipmaps` renders uncompressed mipmaps at their own
-  sizes instead of\n  crashing; a mip 0 too short for the image is a `Left` (#13).\n-
-  Without-alpha textures decode opaque regardless of the palette's fourth\n  byte,
-  so the encoder's own output no longer comes back transparent (#14).\n- Decoding
-  no longer dumps the parsed structure to stderr (#15).\n- The JPEG encoder writes
-  plain BGRA planes instead of dividing colour by\n  alpha, and a uniformly semi-transparent
-  alpha plane is kept; only all-0x00\n  or all-0xFF planes count as unpopulated (#17).\n-
-  The JPEG encoder shares one header between mipmaps; 1x1 textures no longer\n  encode
-  to a file without image data (#18).\n- Skip mipmap slots that point past the end
-  of the file or overlap an earlier\n  one (#7).\n- Decode JPEG planes as BGRA instead
-  of CMYK (#11).\n\nSupport GHC 9.4 – 9.14: relax upper bounds for `attoparsec`, `bytestring`,\n`hashable`,
+changelog: "0.4.0.0 (2026-10-15)\n====================\n\nBreaking changes:\n\n- New
+  encoding API: `encodeBlpWith` and `writeBlpWith` take\n  `BlpEncodeOptions` (a `BlpFormat`
+  and a mip level count) and return\n  `Either BlpEncodeError`. Empty images, sides
+  above 65535, JPEG quality\n  outside 1..100 and files over 4 GiB are errors instead
+  of crashes or\n  silent wrap-around (#31). `encodeBlpJpeg`, `encodeBlpUncompressedWithAlpha`,\n
+  \ `encodeBlpUncompressedWithoutAlpha` and their `writeBlp*` variants still\n  work
+  as deprecated wrappers; they clamp the JPEG quality, which used to\n  wrap modulo
+  256.\n- The decoder takes alpha from the `alphaBits` header field, as the format\n
+  \ specifies, instead of from the `extra` field. Paletted files with 1-bit and\n
+  \ 4-bit alpha now decode, files whose `extra` field says otherwise keep their\n
+  \ alpha, and unknown `extra` values are no longer rejected (#25).\n- Non-square
+  textures get the full mip chain down to 1x1 instead of\n  stopping when the shorter
+  side reaches one pixel, and `mipMapsUpTo` counts\n  levels by the larger side, capped
+  at 16 (#26, #31).\n- Mipmap colour is averaged with alpha as the weight, so transparent
+  pixels\n  no longer darken the edges of sprites, and the alpha of paletted mipmaps\n
+  \ is averaged instead of sampled. Opaque textures encode exactly as before\n  (#32).\n-
+  `Codec.Picture.Blp.Internal.*`:\n  - `BlpStruct` keeps the raw header values in
+  `blpAlphaBits`, `blpExtra` and\n    `blpHasMipmaps`; `blpCompression` is a function
+  of `blpExt`. `BlpFlag` and\n    `BlpPictureType` are gone.\n  - Paletted content
+  is one `BlpPaletted` constructor holding each level's\n    raw data.\n  - The parser
+  is `parseBlp` plus `mipLevels` and `jpegFrameSize`; the\n    attoparsec walk over
+  the content (`blpJpegParser`, `skipToOffset`, ...)\n    is gone.\n  - `encodeBlp`
+  and `blpEncoder` take just the `BlpStruct`; `toBlpStruct`\n    takes a `BlpFormat`.\n\nDecoding
+  untrusted files (#30):\n\n- Errors that JuicyPixels' JPEG decoder raises from pure
+  code are returned\n  as `Left`; in a tail mipmap they end the list.\n- Width and
+  height must be between 1 and 65535. Larger values used to\n  overflow the size checks
+  and leave an exception in the decoded image.\n- Each JPEG level's frame size is
+  read before decoding. A frame larger than\n  the level is rejected, so an 800-byte
+  file can no longer demand gigabytes;\n  a smaller one is padded with transparent
+  black.\n- Mipmap slots are read by index. A missing or garbage slot ends the chain\n
+  \ instead of shifting the later levels, and a garbage slot that points into\n  the
+  palette no longer breaks the file.\n- Some corrupt JPEG streams still make JuicyPixels
+  loop forever\n  (haskell-github-trust/Juicy.Pixels#230), so decoding untrusted files
+  needs\n  a timeout.\n\nEncoder fixes (#31):\n\n- Unused mipmap slots are zero, as
+  the format requires, and `hasMipmaps` is\n  0 when only one level is written.\n-
+  Only the levels that are written are encoded; asking for one level of a\n  2048x2048
+  JPEG texture used to encode all of them.\n\nFaster (#34): JPEG decoding is 2.1–2.7x
+  and JPEG encoding 2.2–2.8x as fast,\nmeasured with the new benchmark suite (`bench/Main.hs`).
+  Output is\nbyte-identical.\n\nblp2any (#33):\n\n- `-s`/`--shallow` and `-p` (now
+  also `--flatten`) were accepted but did\n  nothing; they now keep conversion to
+  the top folder and write all output\n  into one folder.\n- A file that fails no
+  longer aborts a batch conversion or `stats`: it is\n  reported on stderr and skipped,
+  and `convert` prints a summary and exits\n  with status 1 if anything failed.\n-
+  An input folder given with a trailing slash no longer sends output to the\n  root
+  of the file system.\n- `--version` reports the package version.\n\nDocumentation:
+  `docs/format.md` describes the BLP1 format and what the\nlibrary does with each
+  part; the README covers usage, `blp2any`,\nlimitations and benchmarking; every module
+  has haddock (#27).\n\n0.3.0.0 (2026-10-15)\n====================\n\nBreaking changes:\n\n-
+  `encodeBlpUncompressedWithAlpha` always writes an alpha plane and\n  `encodeBlpUncompressedWithoutAlpha`
+  never does. Both used to pick by the\n  input image, so the two were identical and
+  `blp2any -b` had no effect.\n- `decodeBlp` and `decodeBlpMipmaps` always return
+  `ImageRGBA8`. JPEG BLPs\n  whose stream is not four-component (greyscale, YCbCr)
+  used to come back as\n  `ImageY8` or `ImageRGB8`.\n- Removed unused functions from
+  `Codec.Picture.Blp.Internal.Convert`:\n  `toPngRepresentable` and `toBlpUncompressable`.\n-
+  `mipMapsUpTo` counts every level down to the minimum side; it was one short\n  and
+  returned 0 or less for tiny images.\n- Removed the `TextShow` and `Hashable` instances
+  from\n  `Codec.Picture.Blp.Internal.Data`, and with them the `text-show` and\n  `hashable`
+  dependencies. `blp2any` no longer depends on\n  `unordered-containers`.\n\nThe encoder
+  always writes mip 0; a mipmap count of zero or less used to\nproduce an unreadable
+  file, which `blp2any` did for 1x1 images.\n\nThe uncompressed encoder no longer
+  hands out ByteStrings over image memory it\ndoes not keep alive, and no longer relies
+  on an orphan, endianness-dependent\n`Storable PixelRGBA8` instance.\n\nDecoder robustness
+  for BLP1 files found in the wild:\n\n- Accept picture type 6 (WoW JPEG variant)
+  and picture type 0 (#5, #10).\n- Tolerate palettes shorter than 256 entries (#6).\n-
+  Decode files labelled with-alpha whose mipmap 0 has no alpha plane as\n  without-alpha
+  instead of crashing (#8).\n- A corrupt JPEG mipmap no longer fails the whole file;
+  the mipmap list is\n  cut at the first broken level (#9).\n- `decodeBlpMipmaps`
+  renders uncompressed mipmaps at their own sizes instead of\n  crashing; a mip 0
+  too short for the image is a `Left` (#13).\n- Without-alpha textures decode opaque
+  regardless of the palette's fourth\n  byte, so the encoder's own output no longer
+  comes back transparent (#14).\n- Decoding no longer dumps the parsed structure to
+  stderr (#15).\n- The JPEG encoder writes plain BGRA planes instead of dividing colour
+  by\n  alpha, and a uniformly semi-transparent alpha plane is kept; only all-0x00\n
+  \ or all-0xFF planes count as unpopulated (#17).\n- The JPEG encoder shares one
+  header between mipmaps; 1x1 textures no longer\n  encode to a file without image
+  data (#18).\n- Skip mipmap slots that point past the end of the file or overlap
+  an earlier\n  one (#7).\n- Decode JPEG planes as BGRA instead of CMYK (#11).\n\nSupport
+  GHC 9.4 – 9.14: relax upper bounds for `attoparsec`, `bytestring`,\n`hashable`,
   `text-show`, `vector` and `filepath`. Minimum supported GHC is now 9.4.\n\n0.2.1.0\n=======\n\nRelax
   upper boundary for `text-show-3.9`.\n\n0.2.0.0\n=======\n\nImplement #1. Tool now
   preserves subfolder structure.\n\n0.1.3.0\n=======\n\nFix #2 index error. \n\n0.1.2.0\n=======\n\nRelax
@@ -61,25 +112,163 @@ description: |
   ===============
 
   [![CI](https://github.com/NCrashed/JuicyPixels-blp/actions/workflows/ci.yml/badge.svg)](https://github.com/NCrashed/JuicyPixels-blp/actions/workflows/ci.yml)
+  [![Hackage](https://img.shields.io/hackage/v/JuicyPixels-blp.svg)](https://hackage.haskell.org/package/JuicyPixels-blp)
 
-  The library provides decoding/encoding functions for BLP1 texture format of Warcraft III game.
-  The result is represented in types of [JuicyPixels](http://hackage.haskell.org/package/JuicyPixels) library.
+  Read and write BLP1, the texture format of Warcraft III, with images as
+  [JuicyPixels](https://hackage.haskell.org/package/JuicyPixels) types. The
+  package also ships `blp2any`, a command-line converter between BLP and
+  common image formats.
 
-  Features:
+  For the layout of a BLP file and how the library handles each part, see
+  [docs/format.md](docs/format.md).
 
-  - Supported all three subtypes of BLP1: JPEG with alpha, paletted without alpha and paletted with alpha.
+  ## Library
 
-  - Command line utility to convert BLPs from/to PNG, JPEG, BMP, TGA, TIFF, GIF, Radiance formats.
+  ```haskell
+  import Codec.Picture
+  import Codec.Picture.Blp
 
-  TODO:
+  main :: IO ()
+  main = do
+    -- Decode: the result is always ImageRGBA8.
+    Right img <- readBlp "war3mapMap.blp"
+    writePng "war3mapMap.png" (convertRGBA8 img)
 
-  - BLP0 support
+    -- Encode: JPEG at quality 90 with every mip level down to 1x1.
+    Right png <- readImage "icon.png"
+    result <- writeBlpWith "icon.blp" defaultBlpEncodeOptions png
+    either print return result
+  ```
 
-  - BLP2 support
+  - `readBlp` / `decodeBlp` return the full size image.
+  - `readBlpMipmaps` / `decodeBlpMipmaps` return the image followed by its
+    mipmaps.
+  - `encodeBlpWith` / `writeBlpWith` encode with `BlpEncodeOptions`:
+    - `blpFormat`: `BlpFormatJpeg quality` (1 to 100; the texture gets alpha
+      when the image has it) or `BlpFormatPaletted withAlpha` (256 colour
+      palette, with 8-bit alpha or none).
+    - `blpMipLevels`: how many mip levels to write, clamped to 1 and the full
+      chain. `mipMapsUpTo` computes it from a smallest side length.
+
+    They return `Left` for images they cannot encode (`BlpEncodeError`): an
+    empty image, a side above 65535, an invalid JPEG quality, or a file over
+    4 GiB.
+  - The older `encodeBlpJpeg`, `encodeBlpUncompressedWithAlpha`,
+    `encodeBlpUncompressedWithoutAlpha` and their `write` variants are
+    deprecated wrappers around `encodeBlpWith`.
+
+  The `Codec.Picture.Blp.Internal.*` modules expose the parser, encoder and
+  file structure. They are useful for tools, but their API may change between
+  minor versions.
+
+  ## What works
+
+  - **Decoding** all BLP1 variants: JPEG, and paletted with 0, 1, 4 or 8-bit
+    alpha, including their mipmaps.
+  - **Damaged and non-standard files** that are common in community maps and
+    ports of World of Warcraft assets:
+    - odd header values;
+    - short palettes;
+    - garbage in unused mipmap slots;
+    - truncated or corrupt mipmaps. These cost only the levels from the damaged
+      one onwards; a damaged full size image still fails the file.
+
+    The decoder reports malformed input as `Left`, including errors raised
+    inside JuicyPixels' JPEG decoder. One known exception: some corrupt JPEG
+    streams make JuicyPixels loop forever
+    ([Juicy.Pixels#230](https://github.com/haskell-github-trust/Juicy.Pixels/issues/230)),
+    so decoding untrusted files needs a timeout.
+  - **Encoding** to JPEG or a 256 colour palette, with or without alpha. The
+    JPEG header is shared between mipmaps, as in Blizzard's own files.
+
+  ## Limitations
+
+  - **BLP0 and BLP2.** Only BLP1 is supported. BLP0 keeps mipmaps in separate
+    `.b00`–`.b15` files; BLP2 is the World of Warcraft variant
+    ([#3](https://github.com/NCrashed/JuicyPixels-blp/issues/3)).
+  - **Lossy palette.** Uncompressed encoding quantises to 256 colours with
+    dithering, so it is lossy for images with more colours.
+  - **Fixed header values.** The encoder writes `extra` as 3 with alpha and 5
+    without, and `hasMipmaps` as 5, or 0 for a single level.
+
+  ## blp2any
+
+  ```
+  blp2any convert INPUT_PATH OUTPUT_PATH [-i FORMAT] [-f FORMAT] [-q QUALITY]
+                  [-b jpg|uncompressedWithAlpha|uncompressedWithoutAlpha]
+                  [--min-mipmap-size N] [-s|--shallow] [-p|--flatten]
+  blp2any stats DIRECTORY OUTPUT_PATH
+  ```
+
+  - **`convert`** turns a file or a whole directory from one format into
+    another. Supported formats are `blp`, `png`, `jpg`, `tiff`, `gif` and
+    `bmp`.
+    - Formats are inferred from the file names, or given with `-i` and `-f`.
+    - With a directory it recurses unless `-s` is given, and it recreates the
+      subdirectories unless `-p` (`--flatten`) is given. A file that fails is
+      reported on stderr and skipped; at the end it prints how many files were
+      converted and failed, and exits with status 1 if any failed.
+    - When writing BLP, `-b` picks the internal format (JPEG by default) and
+      `--min-mipmap-size` the smallest mip level to keep. The default is 1,
+      which writes every level down to 1×1. A larger value leaves textures
+      without their smallest levels; Warcraft III draws missing levels as
+      transparent black, so this is only safe for interface images.
+  - **`stats`** groups the BLP files in a directory by their header values
+    and copies one example of each group to `OUTPUT_PATH`. Files it cannot
+    read are reported and skipped. It helps when hunting for unusual files.
+
+  ```
+  blp2any convert war3/ textures-png/ -f png
+  blp2any convert icons/ icons-blp/ -i png -f blp -b jpg -q 85
+  ```
+
+  ## Building and testing
+
+  With [Nix](https://nixos.org) (flakes enabled), each supported GHC has its
+  own development shell:
+
+  ```
+  nix develop .#ghc912      # or ghc94, ghc96, ghc98, ghc910, ghc914
+  cabal build all
+  cabal test
+  ```
+
+  `nix develop` without a name gives a shell with haskell-language-server.
+  `nix build` builds the package, and `nix run . -- --help` runs `blp2any`.
+  Plain `cabal` works as well. `stack.yaml` is kept for Stack users, but CI
+  does not test it.
+
+  - **Test suite.** It builds its BLP fixtures in code (`test/Fixture.hs`):
+    paletted files byte by byte, and JPEG files from the encoder, patched where
+    needed. A test that pins down a fix names its PR or issue.
+  - **CI.** It builds and tests GHC 9.4 to 9.14 with `-Werror`. The benchmarks are built
+    in CI but not run.
+
+  ### Benchmarks
+
+  `bench/Main.hs` (tasty-bench) times decoding and encoding at several sizes
+  for each content type, plus a few internals. The inputs are generated in
+  code. To compare a change against the current state:
+
+  ```
+  cabal bench --ghc-options=-fproc-alignment=64 --benchmark-options '--csv before.csv'
+  # ... change the code ...
+  cabal bench --ghc-options=-fproc-alignment=64 --benchmark-options '--baseline before.csv'
+  ```
+
+  Use `-p` to run a subset, for example `-p decode` or `-p '/jpeg alpha/'`.
+
+  Two things make the numbers noisy:
+
+  - **Code alignment.** Without `-fproc-alignment=64`, a change in one module
+    can move the tight loops of another and shift its timings by 20–25%. This
+    happened to the paletted decoder while the JPEG code was being changed.
+  - **Machine load.** Compare runs made under the same conditions, ideally by
+    alternating the two builds.
 description-type: markdown
-hash: 6ab89f2a7dad4f526c9e5467c886153b813c71f39007b6b3a4f11981afe30942
+hash: ea8f9b555480545793409ed4205153fc4f79de4feeea16ad53b5e06cd5a155b6
 homepage: https://github.com/NCrashed/JuicyPixels-blp#readme
-latest: 0.3.0.0
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: ncrashed@gmail.com
 synopsis: BLP format decoder/encoder over JuicyPixels library
@@ -88,7 +277,9 @@ test-bench-deps:
   JuicyPixels-blp: '>=0'
   base: '>=0'
   bytestring: '>=0'
+  deepseq: '>=0'
   directory: '>=0'
   filepath: '>=0'
   tasty: '>=1.4 && <1.6'
+  tasty-bench: '>=0.3 && <0.5'
   tasty-hunit: '>=0.10 && <0.11'
