@@ -4,6 +4,7 @@ all-versions:
 - 0.3.0.0
 - 0.4.0.0
 - 0.5.0.0
+- 0.6.0.0
 author: Rodrigo Ribeiro
 basic-deps:
   base: '>=4.18 && <5'
@@ -15,6 +16,115 @@ changelog: |
   # Changelog
 
   ## Unreleased
+
+  ### A failed parse says what it found and what it expected; `%label`
+
+  `ParseError` gains two fields, still in 0.6.0.0:
+
+  ```haskell
+  data ParseError = ParseError
+    { errLine, errColumn, errOffset :: !Int
+    , errFound    :: Found        -- FoundToken "print" | FoundEnd
+    , errExpected :: [Expected]   -- ExpChar, ExpString, ExpClass, ExpAny,
+    }                             -- ExpEnd, ExpLabel
+  ```
+
+  and `renderParseError` writes them as
+  `1:12: unexpected ';', expecting [0-9], '*', '+' or ')'`.  What was found is a
+  whole word when the error is on a letter, digit or `_`, and a single
+  character otherwise.
+
+  What was expected is everything that failed exactly at the error's offset:
+  characters, classes and literals as themselves, a class repeated with `*` or
+  `+` that stops there, and `!.` as the end of the input; nothing inside a
+  lookahead.  A new directive names rules in that list:
+
+  ```
+  %label factor "an operand"   -- listed as "an operand"
+  %label ws     ""             -- never listed
+  ```
+
+  A labelled rule that *starts* at the error contributes its name instead of
+  what it looked for; one that started before contributes what it looked for.
+  The splice rejects a `%label` for a rule that does not exist, a rule
+  labelled twice, and a name that is not a string literal.  For grammars
+  built with combinators there is a `Label` constructor, `label` and `hidden`.
+
+  **Cost: none while parsing.**  The grammar is compiled a second time over a
+  different failure tracker, and that copy is run only after a parse has
+  failed, and only if `errExpected` is looked at; while parsing, the tracker is
+  the `Int` that already tracked the position.  Allocation per input byte on
+  the benchmarks is unchanged (identical on most rows, +0.4% on `json`).
+  `Step` and `Res` take the tracker as a parameter, and `compileGrammar` a
+  `Tracker` constraint.
+
+  Time per parse against 0.5, pinned to one core, the three versions
+  interleaved per grammar (megaparsec, unchanged, varied by -4% to +6% between
+  runs, which is the noise): within that noise on `arith`, `csv`, `idents`,
+  `json` and `quoted-class`; +1% to +7% on `nested`, matching its extra
+  allocation; and 4% to 15% *faster* on `quoted-lookahead`, and on ByteString
+  generally, from the strict character in the ByteString instances.
+
+  Making the compiler generic over the tracker exposed an optimiser hazard: GHC
+  eta-expanded the function that compiles a node, and then compiled the grammar
+  again on every step it ran.  Each node is now returned boxed from a
+  `NOINLINE` function, which a comment in `PEG.Parse` explains.
+
+  `typed-peg-errors` now checks the found token and the expected list as
+  well: cases for each rule above, `%label` errors at the splice, and the
+  reference interpreter, extended with labels, on 3000 generated grammars.
+
+  ### Breaking. A failed parse says where: `Fail ParseError`
+
+  `Fail` carries the line, column and offset of the error (version 0.6.0.0):
+
+  ```haskell
+  data Result s a = OK a s s | Fail !ParseError
+
+  data ParseError = ParseError
+    { errLine   :: !Int   -- from 1
+    , errColumn :: !Int   -- from 1
+    , errOffset :: !Int   -- characters before the error
+    }
+  ```
+
+  With `%start e:expr !.`, so that the whole input has to parse:
+
+  ```
+  ghci> parse arith "1+*3"
+  Fail (ParseError {errLine = 1, errColumn = 3, errOffset = 2, ...})
+  ```
+
+  The position is the *furthest* offset at which any part of the grammar failed
+  during the parse, not where the start expression finally gave up: an ordered
+  choice backtracks before trying its next alternative, so the latter is nearly
+  always the start of some rule.  A string literal fails where it starts, the
+  failure that ends a repetition counts, and nothing inside a lookahead does —
+  so a `!.` ending the start expression reports the start of the leftover
+  input.  Columns follow `PEG.Location`: a tab advances the column by one.
+
+  Migration: a pattern `Fail` becomes `Fail _`, or `Fail e` to use the
+  position.
+
+  **How it is tracked.**  Every compiled step takes the furthest failure offset
+  so far and returns it on both branches, as a boxed `Int` that is passed along
+  unchanged unless the furthest point moves forward; the line and column are
+  computed only after a parse has failed, from the consumed prefix of the input.
+  `Step`, `Res` and therefore `compileGrammar` change type.
+
+  Allocation per input byte on the benchmark grammars, against 0.5: within 1%
+  on `arith`, `csv` and `quoted-*`; +1–4% on `json`, and on `idents` over
+  `String`/`Text`; +5–8% on `nested`, deeply parenthesised input whose
+  furthest point moves forward on nearly every character.  ByteString parsers
+  allocate *less* on `json` and `quoted-lookahead`, because the instance now
+  forces each character it reads rather than handing a predicate a thunk.
+
+  `offsetToLineCol` walks the input only up to the offset instead of indexing
+  all of it; its results are unchanged.
+
+  New test suite `typed-peg-errors`: hand-picked cases for each rule above, and
+  a reference interpreter compared with the compiled parser on 3000 generated
+  grammars, over `String`, `Text` and `ByteString`, with and without layout.
 
   ### Source positions in semantic actions: `@` and `PEG.Location`
 
@@ -615,6 +725,9 @@ description: |
   - Indentation-sensitive parsing (`PEG.Indent`)
   - Quasi-quoter for concrete grammar syntax (`PEG.QQ`)
   - Source positions in semantic actions (`@`, `PEG.Location`)
+  - Syntax errors reported with a line and a column — the furthest point the
+    parse reached — what was found there and what was expected, with rules
+    named by `%label`
   - Parses any `PEG.Stream`: `String`, strict/lazy `Text`, strict/lazy
     `ByteString`
 
@@ -640,6 +753,63 @@ description: |
 
   Lines and columns count from 1.  The parser tracks only the offset, so a
   grammar that does not use `@` pays nothing for it.
+
+  ## Syntax errors
+
+  A parse that fails says where, what it found there, and what it expected:
+
+  ```haskell
+  data Result s a = OK a s s | Fail !ParseError
+
+  data ParseError = ParseError
+    { errLine, errColumn, errOffset :: !Int
+    , errFound    :: Found          -- a word, a character, or the end
+    , errExpected :: [Expected]     -- 'x', "while", [0-9], end of input, a label
+    }
+
+  renderParseError :: ParseError -> String
+  ```
+
+  `%label` names a rule in that list, and `%label rule ""` keeps it out — which
+  is what whitespace wants:
+
+  ```haskell
+  [pegGrammar|
+    %name   prog
+    %stream String
+    %start  ss:prog !.
+    %label  factor "an operand"
+    %label  name   "a name"
+    %label  ws     ""
+    ...
+  |]
+  ```
+
+  `renderParseError` on three inputs that do not parse:
+
+  ```
+  x := (1 + 2;                1:12: unexpected ';', expecting [0-9], '*', '+' or ')'
+  x := 1;                     2:11: unexpected ')', expecting an operand
+  y := (2 + ) * x;
+  x := 1;                     2:10: unexpected '@', expecting "print", a name or end of input
+  print x; @
+  ```
+
+  A label replaces what its rule looked for when the rule *starts* at the
+  error; one that started earlier lists what it looked for, which is more
+  precise — above, one more digit would have continued the `2`.
+
+  The position is the **furthest** point at which any part of the grammar
+  failed to match — an ordered choice backtracks before it tries its next
+  alternative, so the point where the start expression finally gave up is
+  usually the start of a rule, well before the mistake.  A string literal fails
+  where it starts; nothing inside a lookahead (`!e`, `&e`) counts.  End the start
+  expression with `!.` to make leftover input an error rather than `rest`.
+
+  Only the offset is tracked while parsing; the line and column are computed
+  once, when the parse has failed.  What was expected is found by running the
+  grammar a second time, after a failure and only if `errExpected` is looked
+  at, so a parse that succeeds costs exactly what it did without any of this.
 
   ## Input streams
 
@@ -898,7 +1068,7 @@ description: |
   a loop:
 
   ```haskell
-  myParser :: String -> Result Exp
+  myParser :: String -> Result String Exp
   myParser = parse myGrammar
   ```
 
@@ -906,9 +1076,9 @@ description: |
 
   BSD-3-Clause. See [LICENSE](LICENSE).
 description-type: markdown
-hash: c5221ec25ac07ea139d9681d96de43389c86e885bea474778f05664c0224c1a3
+hash: 5a0d15fc206c506162548d50c0fc5df370bfdb9ab34bdafd60e0340d10c3f29e
 homepage: https://github.com/rodrigogribeiro/typed-peg
-latest: 0.5.0.0
+latest: 0.6.0.0
 license-name: BSD-3-Clause
 maintainer: rodrigo.ribeiro@ufop.edu.br
 synopsis: Type-safe PEG parser combinators
@@ -918,5 +1088,6 @@ test-bench-deps:
   criterion: '>=1.6 && <1.7'
   deepseq: '>=0'
   megaparsec: '>=9.5 && <10'
+  template-haskell: '>=0'
   text: '>=0'
   typed-peg: '>=0'
