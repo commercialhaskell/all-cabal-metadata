@@ -1,6 +1,7 @@
 all-versions:
 - 1.2.0.0
 - 1.3.0.0
+- 1.4.0.0
 author: Marius Georgescu
 basic-deps:
   aeson: ^>=2.2
@@ -24,6 +25,60 @@ basic-deps:
   web3-provider: '>=1.1 && <1.2'
 changelog: |
   # Revision history for solana-haskell-sdk
+
+  ## 1.4.0.0 -- 2026-10-19
+
+  * Added v1 transaction support (SIMD-0385), in the new
+    `Network.Solana.Core.MessageV1`: `compileV1Message`,
+    `newV1TransactionIntent`, and the `TransactionConfig` record (with
+    `emptyTransactionConfig`) carrying a v1 message's priority fee,
+    compute-unit limit, loaded-accounts data size limit and heap size.
+    v1 lists every address inline (it has no address lookup tables), moves
+    resource requests out of `ComputeBudget` instructions and into a header
+    configuration mask, places the signatures after the message rather than
+    before it, and raises the transaction size limit to 4096 bytes.
+
+    Both entry points take the fee payer explicitly, unlike their legacy and
+    v0 counterparts, which derive it from the instruction list. The reference
+    implementation's only v1 compile path does the same, and the implicit
+    form is a trap in this format: the priority fee travels inside the
+    message, so instruction order alone would decide who pays it.
+
+    Compilation rejects a message the network would refuse, or would accept
+    and charge for without it being able to do any work:
+    `LimitExceeded` for more than 64 addresses, more than 64 instructions,
+    more than 12 required signatures, an instruction with more than 255
+    accounts or 65535 data bytes, or a transaction over 4096 bytes once
+    signed; `InvalidMessage` for no instructions at all, the fee payer named
+    as a program id, a compute-unit or loaded-accounts request of zero, or a
+    heap request that is not a multiple of 1024 within [32768, 262144].
+
+    Note that in v1 an absent resource request means the *minimum*, not the
+    generous default earlier formats use: an absent compute-unit limit means
+    0 rather than a per-instruction allowance, and an absent loaded-accounts
+    data size limit means 0 rather than 64 MiB. `emptyTransactionConfig` is
+    therefore a base for record update rather than a usable configuration,
+    and compiling with it unchanged fails.
+  * Changed (breaking): `CompileException` is no longer a newtype over a
+    single `MissingIndex` constructor. It gains `LimitExceeded` and
+    `InvalidMessage`, so the v1 checks above report something other than a
+    missing index, and callers can discriminate without matching on the
+    message text. Existing `MissingIndex` matches still compile but are no
+    longer exhaustive.
+  * Changed (behavioural): `getBlock` and `getTransaction` now send
+    `maxSupportedTransactionVersion: 1` instead of `0`. Without it a node
+    refuses any block holding a v1 transaction with error -32015, which now
+    covers most blocks. A v1 message's `transactionConfig` is not surfaced by
+    `CompiledMessage`, which drops it as it already drops a v0 message's
+    `addressTableLookups` — and, unlike a legacy transaction's
+    `ComputeBudget` instructions, it is not recoverable from the parsed
+    instruction list either.
+  * Added: `Network.Solana.Core.Instruction` now also exports
+    `CompiledInstruction`'s constructor and fields (`ciProgramIdIndex`,
+    `ciAccounts`, `ciData`), which the v1 serializer needs, since v1 writes
+    the fixed-width instruction headers apart from the variable-width
+    payloads. Code importing that module unqualified and defining names of
+    its own that collide will need a `hiding` clause.
 
   ## 1.3.0.0 -- 2026-09-13
 
@@ -253,9 +308,11 @@ description: "\n<p align=\"center\">\n  <a href=\"https://solana.com/docs\">\n  
   \U0001F680 [Features](#features)\n- \U0001F9D1‍\U0001F4BB [Usage Examples](#usage-examples)\n-
   \U0001F4DD [Contributing](#contributing)\n- ✨ [Credits](#credits)\n- ⚖️ [License](#license)\n\n##
   Documentation\n\nAPI documentation is generated with Haddock (`cabal haddock`).
-  Serialization correctness methodology: every instruction, message, and transaction
-  encoder is asserted byte-identical to vectors generated from the official Rust crates
-  (solana-sdk, spl-token, mpl-token-metadata) — see [tools/README.md](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/tools/README.md).\n\n##
+  Serialization correctness methodology: each instruction, message, and transaction
+  encoder is asserted byte-identical to a golden vector — generated from the official
+  Rust crates (solana-sdk, spl-token, mpl-token-metadata), except for the v1 transaction
+  format, whose vector is a transaction recorded from devnet (the pinned Rust crates
+  predate it) — see [tools/README.md](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/tools/README.md).\n\n##
   Integration tests\n\nAn opt-in test suite runs the SDK against a local validator.
   It sits behind the `integration` cabal flag, so a plain `cabal test all` neither
   builds it nor pulls its extra dependencies:\n\n    solana-test-validator --reset\n
@@ -280,21 +337,24 @@ description: "\n<p align=\"center\">\n  <a href=\"https://solana.com/docs\">\n  
   Program Derived Addresses (`findProgramAddress` / `createProgramAddress`)\n- [x]
   Transaction building, signing and submission\n  - [x] Priority fees via Compute
   Budget (`setComputeUnitLimit`, `setComputeUnitPrice`)\n  - [x] Versioned (v0) transactions
-  and Address Lookup Tables\n  - [x] Clients for native programs\n    - [x] Address
-  Lookup Table\n    - [x] BPF Loader (upgradeable)\n    - [x] Compute Budget\n    -
-  [x] Secp256k1 (instruction construction; signing out of scope)\n    - [x] Stake
-  (delegation lifecycle; seed-authority variants out of scope)\n    - [x] System Program
-  (all 13 instructions)\n    - [x] Vote (account management)\n  - [x] Clients for
-  Solana Program Library (SPL)\n    - [x] Memo\n    - [x] SPL Token (instructions
+  and Address Lookup Tables\n  - [x] v1 transactions (SIMD-0385): inline addresses,
+  header config mask, 4096-byte limit\n  - [x] Clients for native programs\n    -
+  [x] Address Lookup Table\n    - [x] BPF Loader (upgradeable)\n    - [x] Compute
+  Budget\n    - [x] Secp256k1 (instruction construction; signing out of scope)\n    -
+  [x] Stake (delegation lifecycle; seed-authority variants out of scope)\n    - [x]
+  System Program (all 13 instructions)\n    - [x] Vote (account management)\n  - [x]
+  Clients for Solana Program Library (SPL)\n    - [x] Memo\n    - [x] SPL Token (instructions
   0-20, incl. `transferChecked`)\n    - [x] Associated Token Account (derive + create,
   idempotent variant)\n  - [x] Metaplex Token Metadata (create/update metadata, master
   edition)\n- [x] On-chain account state decoders (SPL token accounts and mints, lookup
   tables, stake and nonce accounts, Metaplex metadata)\n- [x] PubSub (WebSocket) signature
   and account subscriptions, with push-based confirmation\n- [x] Serialization verified
-  byte-for-byte against the official Rust crates (solana-sdk, spl-token, mpl-token-metadata)
-  (golden-vector tests)\n\n### Release status\n\nThe current stable release is **v1.3.0.0**.
-  Serialization is verified byte-for-byte against the official Rust SDK by golden-vector
-  tests (see test/fixtures/ and [tools/README.md](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/tools/README.md)).\n\n##
+  byte-for-byte by golden-vector tests, against the official Rust crates (solana-sdk,
+  spl-token, mpl-token-metadata) — and, for v1, against a transaction recorded from
+  devnet\n\n### Release status\n\nThe current stable release is **v1.4.0.0**. Serialization
+  is verified byte-for-byte by golden-vector tests — against the official Rust SDK,
+  and for the v1 format against a transaction recorded from devnet (see test/fixtures/
+  and [tools/README.md](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/tools/README.md)).\n\n##
   Usage Examples\n\n### Simple transfer\n\nThis example demonstrates how to use the
   Haskell Solana SDK to interact with a Solana validator and perform basic blockchain
   operations such as keypair generation, account funding via airdrop, balance checking,
@@ -403,9 +463,9 @@ description: "\n<p align=\"center\">\n  <a href=\"https://solana.com/docs\">\n  
   for how to get started.\n\n## Credits\n\nCreated and maintained by Marius Georgescu.\n\n##
   License\n\n[Apache-2.0](https://github.com/mariusgeorgescu/solana-haskell-sdk/blob/main/LICENSE)\n"
 description-type: markdown
-hash: 7970d47ff417a581ae51c66b29384f32bf05741ec1778148922ed8c74849ecb0
+hash: 8166d5e53d4c8de6c325771f077dbb4bc675c7430d90a9d08157332988e63398
 homepage: https://github.com/mariusgeorgescu/solana-haskell-sdk
-latest: 1.3.0.0
+latest: 1.4.0.0
 license-name: Apache-2.0
 maintainer: georgescumarius@live.com
 synopsis: 'Solana SDK: transaction building, signing, program clients, and JSON-RPC.'
