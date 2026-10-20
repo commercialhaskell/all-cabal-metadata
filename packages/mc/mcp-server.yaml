@@ -24,6 +24,7 @@ all-versions:
 - 0.2.0.1
 - 0.2.0.2
 - 0.3.0.0
+- 0.3.0.1
 author: Tom Wells
 basic-deps:
   aeson: '>=2 && <3'
@@ -32,17 +33,107 @@ basic-deps:
   base64-bytestring: '>=1.0 && <1.3'
   bytestring: '>=0.10 && <0.13'
   containers: '>=0.6 && <0.9'
+  crypton: '>=1.1.4 && <2.3'
   http-types: '>=0.12 && <1'
   mcp-server: '>=0'
   network-uri: '>=2.6 && <2.8'
+  ram: '>=0.20.1 && <0.23'
   scientific: '>=0.3 && <0.4'
   stm: '>=2.5 && <2.6'
   template-haskell: '>=2.16 && <2.25'
   text: '>=1.2 && <3'
+  time: '>=1.9 && <1.17'
   wai: '>=3.2 && <4'
   warp: '>=3.3 && <4'
 changelog: |
   # Revision history for mcp-server
+
+  ## 0.3.0.1 - 2026-10-20
+
+  Handlers can ask the user for input part-way through a request: the
+  multi round-trip requests of MCP 2026-07-28 (ADR 0009).
+
+  ### Upgrading from 0.3.0.0
+
+  * Derived handlers (`derive*Handler`) need no changes.
+  * Hand-written `ToolCallHandler`, `PromptGetHandler` and
+    `ResourceReadHandler` functions return `Outcome`: wrap results in
+    `Complete`, e.g. `Right (Complete result)`.
+  * Code that builds a `ClientContext` by hand should start from
+    `anonymousContext` and record-update it; the type gained fields.
+  * `mcpApplication` returns `IO Application`: bind it before handing it
+    to Warp.
+  * Code that calls `handleMcpMessage` directly passes a `StateCodec` after
+    the `CacheHints`; `handlePromptsGet`, `handleResourcesRead` and
+    `handleToolsCall` take one as their first argument. One from
+    `ephemeralStateCodec` will do.
+  * `MCP.Server` now exports the names of `MCP.Server.Ask` (`Ask`, `elicit`,
+    `elicitUrl`, `step`, `Form`, `Answer(..)`, `HandlerMonad`, `runAsk`,
+    `askContext`): hide or qualify them where they clash with your own.
+  * `MCP.Server.Derive` now exports aeson's `Value`, so a module that also
+    imports `Value` from `Data.Aeson` may get a redundant-import warning;
+    drop one of the two.
+
+  ### Asking for input
+
+  * Derived handlers can ask: the `derive*Handler` functions accept
+    handlers returning `Ask` as well as `IO` (through the new
+    `HandlerMonad` class), so a handler starts asking by changing its
+    type. `elicit` asks for a form and `elicitUrl` sends the user to a URL;
+    the answer is `Accepted`, `Declined`, `Cancelled` or, without a round
+    trip when the client cannot ask, `Unavailable`.
+  * `deriveForm`, `deriveFormWithDescription` and `deriveFormWithOptions`
+    (labels and defaults, via `FormFieldOptions`) derive the new `Form`
+    class from flat records. Fields a form cannot hold, options for unknown
+    fields and defaults that do not fit their field are compile-time
+    errors. `MCP.Server.Derive` re-exports aeson's `Value` for writing
+    defaults.
+  * The `Ask` monad (new module `MCP.Server.Ask`, re-exported by
+    `MCP.Server`) runs a handler from the start on every round against a
+    journal of earlier rounds: answers and `step` results are recorded once
+    and replayed. A handler that asks something different at a position
+    fails rather than receiving the wrong answer. `runAsk` runs one from a
+    hand-written handler.
+  * Low level: call handlers return `Outcome` (`Complete`, or
+    `InputRequired` with requests and state), answered as an
+    `input_required` result. Retries carry the answers in
+    `clientInputResponses` and the handler's state in
+    `clientRequestState`; `clientSupportsInput` checks the client's
+    protocol revision and declared capabilities.
+  * The `requestState` sent to clients is sealed by a `StateCodec` (new
+    module `MCP.Server.RequestState`): ChaCha20-Poly1305, bound to the
+    caller, the request's parameters and an expiry (60 minutes by
+    default), and verified before the handler runs. The default key is
+    random per process; multi-instance HTTP deployments set a shared key
+    with `httpStateCodec` and `aeadStateCodec`, which supports rotation.
+    `stdioStateCodec` does the same for stdio.
+  * New example `ask-example` (`examples/Ask`): a table-booking server whose
+    tools ask the user for details and confirmation.
+
+  ### Other changes
+
+  * `deriveToolHandlerWithOutput` and its variants no longer need
+    `toJSON`, `object` and `.=` from `Data.Aeson` in scope where they are
+    spliced: the generated serializer looked those names up in the user's
+    module.
+  * Documentation: every module has a header and every export a doc
+    comment, and Haddock links that were ambiguous or out of scope are
+    fixed.
+  * New dependencies: `crypton` (1.1.4 to 2.2), `ram` and `time`.
+
+  ### Breaking changes, in full
+
+  * `ToolCallHandler`, `PromptGetHandler` and `ResourceReadHandler` return
+    `Outcome`.
+  * `ClientContext` gains `clientInputResponses` and `clientRequestState`;
+    `StdioConfig` and `HttpConfig` gain `stdioStateCodec` and
+    `httpStateCodec`.
+  * `handleMcpMessage`, `handlePromptsGet`, `handleResourcesRead` and
+    `handleToolsCall` take a `StateCodec`.
+  * `mcpApplication` returns `IO Application`, creating the default key
+    once.
+  * `MCP.Server` exports `MCP.Server.Ask`, and `MCP.Server.Derive` exports
+    aeson's `Value`: new names that can clash with or duplicate yours.
 
   ## 0.3.0.0 - 2026-10-16
 
@@ -465,7 +556,7 @@ description: |
 
   The derivation reads your types, so the schema on the wire always matches the
   handler that receives the arguments. Given this constructor from
-  [`examples/Complete`](examples/Complete/Types.hs):
+  [`examples/Complete`](https://github.com/drshade/haskell-mcp-server/blob/main/examples/Complete/Types.hs):
 
   ```haskell
   data ShippingSpeed = Standard | Express | Overnight
@@ -481,7 +572,8 @@ description: |
       | ...
   ```
 
-  `tools/list` returns exactly this (captured from the running example):
+  `tools/list` returns exactly this (captured from the running example; a
+  field without a description is described by its name):
 
   ```json
   {
@@ -492,14 +584,16 @@ description: |
       "type": "object",
       "required": ["speed", "shipTo"],
       "properties": {
-        "speed":  { "type": "string", "enum": ["standard", "express", "overnight"] },
+        "speed":  { "type": "string", "enum": ["standard", "express", "overnight"],
+                    "description": "speed" },
         "shipTo": {
           "type": "object",
+          "description": "shipTo",
           "required": ["street", "city"],
           "properties": {
-            "street":  { "type": "string" },
-            "city":    { "type": "string" },
-            "zipCode": { "type": "string" }
+            "street":  { "type": "string", "description": "street" },
+            "city":    { "type": "string", "description": "city" },
+            "zipCode": { "type": "string", "description": "zipCode" }
           }
         }
       }
@@ -595,7 +689,7 @@ description: |
 
   Claude Desktop launches stdio servers from `claude_desktop_config.json`. A
   Docker image is a convenient way to ship a Haskell binary to it — the
-  repository's [`Dockerfile`](Dockerfile) builds all three examples:
+  repository's [`Dockerfile`](https://github.com/drshade/haskell-mcp-server/blob/main/Dockerfile) builds all the examples:
 
   ```bash
   docker build -t haskell-mcp-server .
@@ -648,7 +742,7 @@ description: |
   recursively until a record is found:
 
   ```haskell
-  data SetValueParams = SetValueParams { key :: Text, value :: Text }
+  data SetValueParams = SetValueParams { setKey :: Text, setValue :: Text }
 
   data SimpleTool
       = GetValue { key :: Text }
@@ -712,7 +806,7 @@ description: |
 
   ### Descriptions, annotations and icons
 
-  Every `derive*` function has a `WithDescription` variant taking a flat list of
+  Every `derive*Handler` and `deriveResourceTemplates` function has a `WithDescription` variant taking a flat list of
   constructor and field descriptions, and a `WithOptions` variant taking
   per-constructor `DefinitionOptions`: description, title, icons, behavioral
   annotations (which drive client permission UX, such as auto-approving
@@ -820,7 +914,7 @@ description: |
 
   - A `derive*` splice can only see types declared in an earlier declaration
     group. Either put the types in their own module (as the
-    [examples](examples/) do) or end the group with an empty `$(pure [])`
+    [examples](https://github.com/drshade/haskell-mcp-server/tree/main/examples/) do) or end the group with an empty `$(pure [])`
     splice before the `main` that uses them.
   - Every handler receives the per-request `ClientContext` first. It carries the
     caller's bearer token and principal on HTTP, the protocol revision and
@@ -835,10 +929,14 @@ description: |
 
   ```haskell
   promptListHandler :: ClientContext -> IO [PromptDefinition]
-  promptGetHandler  :: ClientContext -> PromptName -> Map Text Text -> IO (Either Error PromptResult)
+  promptGetHandler  :: ClientContext -> PromptName -> Map Text Text -> IO (Either Error (Outcome PromptResult))
 
   handlers = noHandlers { prompts = Just (promptListHandler, promptGetHandler) }
   ```
+
+  `tools/call`, `prompts/get` and `resources/read` handlers return an
+  `Outcome`: `Complete result`, or a request for input (see
+  [Asking the user for input](#asking-the-user-for-input)).
 
   Tool schemas built by hand can use `SchemaRaw` for anything the typed
   shapes cannot express — `null`, `anyOf`, `$defs` and `$ref`, numeric bounds
@@ -870,7 +968,7 @@ description: |
   ### Streamable HTTP
 
   ```haskell
-  import MCP.Server.Transport.Http
+  import MCP.Server
 
   main = runMcpServerHttp serverInfo handlers            -- localhost:3000/mcp
 
@@ -915,13 +1013,17 @@ description: |
   import MCP.Server (mcpApplication, defaultHttpConfig)
   import qualified Network.Wai.Handler.Warp as Warp
 
-  main = Warp.runSettings mySettings $ \req respond ->
-      -- route /mcp to the MCP endpoint, everything else to your app
-      mcpApplication defaultHttpConfig serverInfo handlers req respond
+  main = do
+      mcp <- mcpApplication defaultHttpConfig serverInfo handlers
+      Warp.runSettings mySettings $ \req respond ->
+          -- route /mcp to the MCP endpoint, everything else to your app
+          mcp req respond
   ```
 
-  `httpPort` and `httpHost` are ignored when embedding; the endpoint path,
-  Origin validation, bearer auth and streaming all apply as usual.
+  Build the application once: it holds the key that protects multi
+  round-trip state. `httpPort` and `httpHost` are ignored when embedding; the
+  endpoint path, Origin validation, bearer auth and streaming all apply as
+  usual.
 
   ## Long-running tools
 
@@ -979,6 +1081,150 @@ description: |
   Requests are served concurrently on both transports. Handlers touching shared
   mutable state must synchronize with `MVar`, `STM` or similar.
 
+  ## Asking the user for input
+
+  A tool, prompt or resource handler can stop part-way through and ask the
+  user something: a form to fill in, or a URL to visit. This uses the
+  2026-07-28 multi round-trip requests. Give the handler the type `Ask`
+  instead of `IO`, derive forms from the records you want back, and write
+  the questions in order, as if the handler could wait for the answers:
+
+  ```haskell
+  data Environment = Staging | Production
+
+  data DeployTarget = DeployTarget
+    { environment :: Environment     -- a choice: staging, production
+    , reason      :: Text
+    , notify      :: Maybe Bool      -- optional
+    }
+
+  newtype Confirm = Confirm { proceed :: Bool }
+
+  data OpsTool = Deploy { service :: Text } | Status { service :: Text }
+
+  $(deriveFormWithDescription ''DeployTarget [("reason", "Why deploy now?")])
+  $(deriveForm ''Confirm)
+
+  handleTool :: ClientContext -> OpsTool -> Ask Content
+  handleTool _ (Deploy svc) = do
+    target <- elicit ("Where should " <> svc <> " deploy to?")
+    case target of
+      Accepted t -> do
+        plan <- step (planDeploy svc (environment t))      -- runs once
+        ok   <- elicit ("Apply " <> describePlan plan <> "?")
+        case ok of
+          Accepted (Confirm True) -> ContentText <$> step (applyPlan plan)
+          _                       -> pure (ContentText "Deployment cancelled")
+      Unavailable -> pure (ContentText "This client cannot ask where to deploy")
+      _           -> pure (ContentText "No target chosen")
+  handleTool _ (Status svc) = ContentText <$> liftIO (currentStatus svc)
+
+  tools = Just $(deriveToolHandler ''OpsTool 'handleTool)
+  ```
+
+  `elicit` picks the form from the type the code expects back, so
+  `Accepted (Confirm True)` is all it takes to ask the `Confirm` form. The
+  answer is `Accepted` with the submitted record, `Declined` or `Cancelled`,
+  or `Unavailable`, without a round trip, when the client cannot ask: it
+  speaks an older protocol revision or did not declare form elicitation.
+  `elicitUrl` sends the user to a URL instead.
+
+  The `derive*Handler` functions take `IO` and `Ask` handlers alike, so a
+  handler switches by changing its type. A tool that never asks, like
+  `Status`, finishes in one round; plain IO runs in `Ask` through `liftIO`.
+  Structured output works the same way: return `Ask (ToolOutput a)`.
+
+  ### Forms
+
+  `deriveForm` builds the form's schema and its parser from a record.
+  Elicitation forms are flat, so the fields can be `Text`, `Int`, `Integer`,
+  `Double`, `Float`, `Bool`, enumerations (offered as snake_cased choices),
+  lists of enumerations (several choices) and `Maybe` of these for optional
+  fields. Anything else, such as a nested record, is a compile-time error
+  naming the field. `deriveFormWithDescription` adds help text per field, and
+  `deriveFormWithOptions` also sets labels and starting values:
+
+  ```haskell
+  $(deriveFormWithOptions ''DeployTarget
+      [ ("environment", defaultFormFieldOptions
+          { formFieldTitle = Just "Environment", formFieldDefault = Just "staging" })
+      , ("reason", defaultFormFieldOptions { formFieldDescription = Just "Why deploy now?" })
+      ])
+  ```
+
+  A default that does not fit its field, or an option for a field the record
+  does not have, is also a compile-time error. `deriveForm` is a declaration splice, and
+  Template Haskell lets later splices see only the types declared above the
+  last declaration splice, so declare the tool, prompt and resource types
+  before the `deriveForm` lines (or in another module). For a form a record cannot
+  describe, write the `Form` instance by hand: a schema and a parser.
+
+  ### How it works, and the rules that follow
+
+  The handler does not pause between rounds. Each round ends the request:
+  the client asks the user, then sends the request again with the answer,
+  possibly to another server instance. So the handler runs again from the
+  start, and the library replays a journal of what earlier rounds produced,
+  kept in the state the client carries: `elicit` returns the recorded
+  answer, or ends the round with its question; `step` returns its recorded
+  result instead of running the action again.
+
+  - **Ask the same questions and run the same steps in the same order on
+    every round.** A handler that strays from its journal fails with an
+    internal error naming the position, rather than receiving the answer to
+    a different question.
+  - **`step` is at-least-once.** A client that retries from an earlier state
+    runs later steps again. Make effects that must happen once idempotent.
+  - **`step` results travel to the client and back**, encrypted, on every
+    later round: return an id rather than the whole object. Plain `liftIO` is
+    not journaled and runs on every round; use it for reads.
+
+  ### Protecting the state
+
+  The library protects the state the client carries between rounds: it is
+  encrypted, and bound to the caller, the request's arguments and an expiry
+  (60 minutes by default), and a retry presenting tampered, expired or
+  misdirected state is rejected before the handler runs. By default the key
+  is random per process, which suits stdio and a single HTTP instance. HTTP
+  deployments with several instances must share a key:
+
+  ```haskell
+  main = do
+    secret <- readSecret                                  -- 32 bytes, shared by every instance
+    key <- maybe (fail "state key must be 32 bytes") pure (stateKey "2026-10" secret)
+    runMcpServerHttpWithConfig defaultHttpConfig
+      { httpStateCodec = Just (aeadStateCodec key []) }   -- to rotate: aeadStateCodec new [old]
+      serverInfo handlers
+  ```
+
+  ### Low-level handlers
+
+  Hand-written call handlers return an `Outcome`: `Complete` with the result,
+  or `InputRequired` with requests keyed by ids of the handler's choosing and
+  some state of its own. On the retry the handler sees the answers in
+  `clientInputResponses` and its state in `clientRequestState`:
+
+  ```haskell
+  deploy :: ToolCallHandler
+  deploy ctx _ _ = pure $ Right $
+    case Map.lookup "confirm" (clientInputResponses ctx) of
+      Nothing | clientSupportsInput ctx question ->
+        InputRequired (Map.singleton "confirm" question) (Just "step-1")
+      Just (ElicitResponse ElicitAccept (Just answer))
+        | Map.lookup "ok" answer == Just (Bool True) ->
+            Complete (toolResult [ContentText "Deployed"])
+      _ -> Complete (toolError "Not confirmed")
+    where
+      question = ElicitForm "Deploy to production?"
+        (schema (SchemaObject [("ok", schema SchemaBoolean)] ["ok"]))
+  ```
+
+  `clientSupportsInput` says whether the client can answer: it must speak
+  2026-07-28 and have declared the elicitation mode (or sampling, or roots)
+  in question. Asking a client that cannot answer is reported as an internal
+  error, so check first and fall back. A low-level handler can also run an
+  `Ask` computation with `runAsk`, which is what the derived handlers do.
+
   ## Change notifications
 
   Servers whose tool, prompt or resource lists change at runtime can push
@@ -1016,30 +1262,35 @@ description: |
   | Progress and per-request logging | ✅ | ✅ |
   | Cancellation | ✅ | ✅ |
   | Change notifications | stdio only | `subscriptions/listen` (stdio and HTTP) |
+  | Asking for input (multi round-trip requests) | — | `Ask` handlers and derived forms, protected `requestState` |
   | Result typing and cacheability hints | — | `resultType`, `httpCacheHints` |
   | HTTP request-metadata headers | — | `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` validated |
 
-  Design decisions and planned work (input-required results, OAuth resource
-  metadata, pagination, the tasks extension) live as ADRs under
-  [`specs/`](specs/README.md), ordered by [`specs/ROADMAP.md`](specs/ROADMAP.md).
+  Design decisions and planned work (OAuth resource metadata, pagination,
+  the tasks extension) live as ADRs under
+  [`specs/`](https://github.com/drshade/haskell-mcp-server/blob/main/specs/README.md), ordered by [`specs/ROADMAP.md`](https://github.com/drshade/haskell-mcp-server/blob/main/specs/ROADMAP.md).
 
   ## Examples
 
-  - [`examples/Simple/`](examples/Simple/): a key-value store with two tools over stdio.
-  - [`examples/Complete/`](examples/Complete/): prompts, resources, a resource
+  - [`examples/Simple/`](https://github.com/drshade/haskell-mcp-server/tree/main/examples/Simple): a key-value store with two tools over stdio.
+  - [`examples/Complete/`](https://github.com/drshade/haskell-mcp-server/tree/main/examples/Complete): prompts, resources, a resource
     template, tools with enum, nested and list arguments, `isError`,
     annotations, progress and completions.
-  - [`examples/HttpSimple/`](examples/HttpSimple/): the key-value store over
+  - [`examples/Ask/`](https://github.com/drshade/haskell-mcp-server/tree/main/examples/Ask): tools that ask the user for input
+    part-way through: a table booking with a derived form, a confirmation
+    and a fallback for clients that cannot ask.
+  - [`examples/HttpSimple/`](https://github.com/drshade/haskell-mcp-server/tree/main/examples/HttpSimple): the key-value store over
     Streamable HTTP.
 
   ```bash
   cabal run simple-example        # stdio; type JSON-RPC on stdin
+  cabal run ask-example           # stdio; asks for input (2026-07-28 clients)
   cabal run http-simple-example   # http://localhost:3000/mcp
   ```
 
   ## Conformance corpus
 
-  The wire-format fixtures under [`test/golden/`](test/golden/README.md) are a
+  The wire-format fixtures under [`test/golden/`](https://github.com/drshade/haskell-mcp-server/blob/main/test/golden/README.md) are a
   language-agnostic MCP conformance corpus: each case is a raw JSON-RPC
   `.request.json` and the exact `.response.json` a reference server answers,
   per protocol era, enumerated by a `manifest.json`. Any MCP implementation
@@ -1055,7 +1306,7 @@ description: |
   ## Contributing
 
   Contributions are welcome. See the issue tracker for open issues and feature
-  requests, and [RELEASING.md](RELEASING.md) for how versions reach Hackage.
+  requests, and [RELEASING.md](https://github.com/drshade/haskell-mcp-server/blob/main/RELEASING.md) for how versions reach Hackage.
 
   ## AI assistance
 
@@ -1069,9 +1320,9 @@ description: |
 
   BSD-3-Clause
 description-type: markdown
-hash: 85d633f42bbd3110f3f55d8b02bc567a2b5fa8c11a506875a206f8ca60c0b4a3
+hash: e2e87c85b92371323df478b6232b6b90643f49c255a8b74932467f04c2de42b7
 homepage: https://github.com/drshade/haskell-mcp-server
-latest: 0.3.0.0
+latest: 0.3.0.1
 license-name: BSD-3-Clause
 maintainer: drshade@gmail.com
 synopsis: Library for building Model Context Protocol (MCP) servers
@@ -1088,5 +1339,6 @@ test-bench-deps:
   mcp-server: '>=0'
   network-uri: '>=0'
   stm: '>=0'
+  template-haskell: '>=0'
   text: '>=0'
   wai: '>=0'
