@@ -1,0 +1,430 @@
+all-versions:
+- 0.1.0.0
+author: Tony Morris <ʇǝu˙sıɹɹoɯʇ@ןןǝʞsɐɥ> <dibblego>
+basic-deps:
+  aeson: '>=2.2.3 && <2.4'
+  aeson-pretty: '>=0.8.10 && <0.9'
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11.5.4 && <0.13'
+  containers: '>=0.6.7 && <0.9'
+  cryptohash-sha256: '>=0.11.102.1 && <0.12'
+  deepseq: '>=1.4.8.1 && <2'
+  directory: '>=1.3.8.5 && <2'
+  document-build: '>=0'
+  either-n: '>=0.1 && <0.2'
+  exitcode: '>=0.3.0.1 && <0.4'
+  filepath: '>=1.4.301.0 && <1.6'
+  filepather: '>=0.7 && <0.8'
+  lens: '>=5.2.1 && <6'
+  mtl: '>=2.3.1 && <2.4'
+  natural: '>=0.5.0.1 && <0.6'
+  process: '>=1.6.19.0 && <2'
+  temporary: '>=1.3 && <2'
+  text: '>=2.0.2 && <2.2'
+  time: '>=1.12.2 && <2'
+  transformers: '>=0.6.1 && <0.7'
+changelog: |
+  # Changelog
+
+  ## 0.1.0.0
+
+  * Start again, replacing the earlier prototype, with the project layout,
+    linting and CI of either-n
+  * Depend on filepather 0.7, in this repository, for FilePather and Tracked
+    build steps
+  * Add Document.Build.Build: Build and Command, running builds, running
+    processes, and the assertions requireInput, requireDirectory and
+    requirePath
+  * Add Document.Build.Error: BuildError and CommandLine, with prisms,
+    lenses, exit codes and classy optics, including BuildCycle for a chain of
+    build steps that would go round in a cycle, and OutputNotInDirectory for a
+    build step that makes a file outside the output directory, and
+    ShallowRepository for a git history that is too shallow to give the last
+    commit of each file
+  * Add operations for PDF (Document.Build.Pdf), LibreOffice
+    (Document.Build.LibreOffice), pandoc (Document.Build.Pandoc), images
+    (Document.Build.Image), git (Document.Build.Git), hashes
+    (Document.Build.Hash), string replacement (Document.Build.Replace) and
+    files (Document.Build.File), every one a FilePather value; operations
+    that take several input files (pdfJoin, pdfConcatenate, pdftk,
+    imageAppend) take the directory they are in
+  * Add Document.Build.Operations, which exports every operation
+  * Add Document.Build.Project: projectPath, placeholders from environment
+    variables and of each file, from the last commit to change it rather than
+    of the repository, placeholder aliases, prepareFile, and project fonts
+  * Add Document.Build.Context: the Directories of a build and the Context
+    that rules run in, as data with optics, Rules, buildStep, and combinators
+    that choose the files rules apply to
+  * Add Document.Build.Rules: rules that prepare, convert, join, split,
+    count, extract pages of and resize the files of a project, archive files
+    and write the tree of output files, each with its settings as arguments,
+    and no defaults
+  * Add Document.Build.Documents: build and buildProject, which run rules over
+    the directories of a project until they make no more files, then once
+    more when the build is complete
+  * Add Document.Build.Output: the tree of output files of a build, with the
+    hash, git details, page count and image information of each file, in JSON
+    and an HTML page
+  * Add build.hs, the build file of a set of projects, a cabal script with
+    the settings of every project, and exceptions for some
+  * Add hedgehog property tests for the laws of the optics, doctests, and
+    criterion benchmarks
+changelog-type: markdown
+description: |
+  # document-build
+
+  ![System F Logo](https://logo.systemf.com.au/systemf-450x450.png)
+
+  Build documents with Haskell: convert them between formats, get information
+  about them, and replace strings in them.
+
+  The project has four layers:
+
+  1. [`filepather`](filepather): the `FilePather` type, and `Tracked` build
+     steps that record the files they make
+  2. `Document.Build.Operations`: the canonical document operations, every one
+     a `FilePather` value
+  3. `Document.Build.Context`, `Document.Build.Rules` and
+     `Document.Build.Documents`: rules that wrap the operations in named steps,
+     combinators that choose the files they apply to, and `build`, which runs
+     rules over a project
+  4. The build file of a document project, which calls `build` with the
+     directories of the project and its rules
+
+  The library has no settings of its own: no directories, file names,
+  extensions, sizes or styles. A build file gives them all, as arguments.
+
+  ## 1. `FilePather` and `Tracked`
+
+  The [`filepather`](filepather) package, in this repository, provides
+  `FilePather`, a computation that depends on the file path being operated on:
+
+  ```haskell
+  newtype FilePather f a = FilePather (FilePath -> f a)
+  type FilePather' a = FilePather Identity a
+  ```
+
+  It is isomorphic to `ReaderT FilePath f a`, with the same instances: when `f`
+  is a `Monad`, so is `FilePather f`, and `ask` is the file path being operated
+  on. `p ~> q` runs `q` on the file path that `p` produces, `onFile` runs on
+  another file path, and `everyFile directoryFiles r` applies the rule `r` to
+  every file in a directory.
+
+  It also provides `Tracked`, a named build step that records the files it
+  makes, with the steps that made them:
+
+  ```haskell
+  newtype Tracked f a = Tracked (FilePather (ReaderT Trail (ExceptT Cycle f)) (Outputs, a))
+
+  step  :: Applicative f => String -> (FilePath -> [FilePath]) -> FilePather f a -> Tracked f a
+  step' :: Functor f => String -> FilePather f ([FilePath], a) -> Tracked f a
+  ```
+
+  A `Tracked` value runs with the `Trail` of its input file: the steps that
+  built it, back to its source file. `step` checks the trail before it runs: a
+  step that is already in the trail, or that would make a file already in the
+  trail, is stopped with a `Cycle`, and does not run. `step'` checks after it
+  runs, for steps whose outputs are known only then. A `Cycle` describes the
+  whole chain:
+
+  ```
+  src/a.md → markdown to pdf → public/a.pdf → pdf page 1 → public/a_page1.pdf → pdf page 1 again
+  ```
+
+  `Tracked` is a separate type, so that `FilePather` keeps all of its
+  instances. Its `<>` runs both steps and keeps the outputs of both, and its
+  `<|>` and `catchError` alternate in `f`, so that a `Cycle` is never caught or
+  discarded.
+
+  ## 2. Operations
+
+  `Document.Build.Operations` provides the canonical document operations: every
+  one a `FilePather` value in `Build e`, which runs `IO` and fails with an exit
+  code and an error, using [exitcode](https://hackage.haskell.org/package/exitcode).
+
+  ```haskell
+  type Build e = Exitcode e (ExceptT IOException IO)
+  type Command e a = FilePather (Build e) a
+  ```
+
+  | Input | Operation | Result |
+  |---|---|---|
+  | PDF | `pdfPages`, `pdfPageCountFile` | number of pages |
+  | LibreOffice, Word | `libreofficePages`, `docxPages` | number of pages |
+  | markdown | `markdownToPdf`, `markdownToHtml`, `markdownToDocx`, `markdownToOdt`, `pandoc` | PDF, HTML, Word, OpenDocument |
+  | PDF | `pdfToJpg`, `pdfToPng`, `pdfToGif`, `pdfToSvg`, `pdfToImages` | an image for each page |
+  | any file | `sha256` | SHA-256 hash |
+  | PDF | `pdfFirstPage`, `pdfPage`, `pdfSelect` | a PDF of some pages |
+  | `.odt`, `.ods`, `.odp`, `.odg` | `libreofficeFlat` | `.fodt`, `.fods`, `.fodp`, `.fodg` |
+  | `.fodt`, `.fods`, `.fodp`, `.fodg` | `libreofficeZipped` | `.odt`, `.ods`, `.odp`, `.odg` |
+  | LibreOffice, Word | `libreoffice`, `libreofficeToPdf`, ... | any format LibreOffice exports |
+  | PDF | `pdfSplit`, `pdfBurst` | PDF files |
+  | any file | `gitDetails`, `gitPlaceholders` | the last commit and authors, and placeholders for them |
+  | text file | `replaceStrings`, `requireStrings` | a file with strings replaced |
+  | image | `imageInfo` | format, width, height, resolution, ... |
+  | image | `imageResize`, `imageConvert` | images |
+  | directory | `pdfJoin`, `pdfConcatenate`, `pdftk` | one PDF of the PDF files in it |
+  | directory | `imageAppend` | one image of images in it, side by side |
+  | file, directory | `requireInput`, `requireDirectory`, `requirePath` | an assertion that it exists |
+
+  An operation with parameters is a function that returns a `FilePather`
+  value, such as `replaceStrings :: [(String, String)] -> FilePath -> Command e
+  FilePath`. An operation that takes several input files takes the directory
+  they are in as its file path, and their paths relative to it. Every operation
+  checks that its input exists and that the tool produced its output, so a
+  failure stops the build with an error that says what went wrong, and an exit
+  code.
+
+  ### Writing an operation
+
+  An operation is a `FilePather`, so a build file can define its own. Use `ask`
+  or `requireInput` for the input file, `process` to run a program, `io` to run
+  an `IO` action, and `failBuild` to fail:
+
+  ```haskell
+  wordCount :: ReviewBuildError e => Command e Int
+  wordCount =
+    do
+      p <- requireInput
+      o <- lift (process (CommandLine "wc" ["-w", p]))
+      maybe
+        (lift (failBuild (ProcessOutputUnrecognised (CommandLine "wc" ["-w", p]) "a word count")))
+        pure
+        (readMaybe (takeWhile (/= ' ') o))
+  ```
+
+  Operations fail with any error type `e` that has a `ReviewBuildError`
+  instance, so a build file can have an error type of its own that includes
+  `BuildError`.
+
+  ## 3. Rules and builds
+
+  A rule wraps an operation in a named step, and says which files it applies
+  to:
+
+  ```haskell
+  type Rules = Context -> Tracked Build' ()
+  data Directories = Directories FilePath [FilePath] (Maybe FilePath)
+  ```
+
+  The `Context` holds the `Directories` of the build (the output directory, the
+  input directories, and the fonts directory, if any), the path of the project
+  (such as `group/project`, from `CI_PROJECT_PATH` in CI, or the path of the
+  `origin` git remote otherwise), and what the rules are running on. Rules
+  combine with `<>`, which runs both. `onProject`, `onProjects`, `withProject`,
+  `onPaths`, `onFiles`, `onDirectories`, `onComplete`, `onSources`,
+  `onOutputs`, `afterStep` and `unlessAfterStep` choose the files a rule
+  applies to, and `buildStep` makes a named step of an operation.
+
+  `build directories rules` builds the project in the current directory, or
+  the directory given as its argument. It removes the output directory, then:
+
+  1. runs the rules on every file of the input directories, in order, then on
+     every file they make, and so on, until they make no more files
+  2. runs the rules on every directory of the output directory, then goes back
+     to 1 for the files they make, until nothing new is made
+  3. runs the rules once more, on the output directory, when the build is
+     complete, such as to archive files or write the tree of output files
+
+  Each file has a trail, the steps that made it. A step that would make a file
+  already in its chain, or that is already in its chain, stops the build with
+  the chain (`BuildCycle`). A step that makes a file outside the output
+  directory stops the build (`OutputNotInDirectory`), so a build never changes
+  its input directories. A file that two different steps make is kept as the
+  first made it, with a warning. Building twice gives the same output: a build
+  never reads the output of an earlier build.
+
+  ### The rules
+
+  Every rule takes its settings as arguments, and none has a default:
+
+  | Rule | Step | What it does |
+  |---|---|---|
+  | `prepareRules exts placeholders dir` | `prepare` | prepare the files of `dir` in the output directory, replacing placeholders in files with the extensions `exts` |
+  | `assetRules exts placeholders dir` | `prepare asset` | the same, for files that are not converted |
+  | `fontRules dir` | `copy font` | copy the files of `dir` to the output directory |
+  | `libreofficeRules [(exts, formats)]` | `libreoffice FORMAT` | convert prepared LibreOffice files to formats |
+  | `libreofficeCounterpartRules` | `libreoffice flat`, `libreoffice zipped` | convert prepared flat LibreOffice files to zipped, and zipped to flat |
+  | `pandocHtmlRules exts name options` | `pandoc html` | convert LibreOffice text documents to standalone HTML with pandoc |
+  | `markdownRules name [(format, options)]` | `pandoc FORMAT` | convert prepared markdown files with pandoc |
+  | `bookRules parts` | `book` | concatenate `name-PART.pdf` for each part into `name.pdf` |
+  | `imageJoinRules names` | `join images` | join `name-N.png` side by side into `name.png` |
+  | `mergePdf inputs ranges output` | `pdf merge` | merge pages of PDF files with pdftk |
+  | `pageCountRules name` | `page count` | write the page count of every PDF file |
+  | `pageOneRules pdfName imageName` | `pdf page 1`, `page 1 image` | extract the first page of every PDF file, and make an image of it |
+  | `pdfPageImageRules options name` | `pdf page images` | make an image of each page of every PDF file |
+  | `splitPdf pdf [(range, file)]` | `pdf split` | split a PDF file by page ranges |
+  | `imageRules exts formats sizes convertedName resizedName` | `image FORMAT`, `image FORMAT SIZE` | convert images to formats, and resize them |
+  | `requirePlaceholders names` | `require placeholders` | fail unless files contain placeholders |
+  | `archiveRules select archive` | `archive` | when the build is complete, archive the files that satisfy a predicate |
+  | `outputTreeRules json html title` | `output tree` | when the build is complete, write the tree of output files |
+
+  Names of output files are functions, such as ``(`replaceExtension` "png")``
+  or `(<> ".pages")`. pandoc options are commands, run on the input file, so
+  that they can depend on the files of the project: `whenFileExists` and
+  `filesWithExtension` give options for files that a project may or may not
+  have. A build file can choose files by the step that made them, with
+  `afterStep` and `unlessAfterStep`, such as to count the pages of every PDF
+  file except first pages:
+
+  ```haskell
+  unlessAfterStep (== "pdf page 1") (pageCountRules (<> ".pages"))
+  ```
+
+  ### Placeholders
+
+  Text files have their placeholders, such as `${NAME}`, replaced as
+  `prepareRules` and `assetRules` prepare them, with the values of a command,
+  run on each file. The library gives the parts to make it of:
+
+  * `filePlaceholders`: placeholders of the last commit to change the file,
+    not of the repository, so each document says when it last changed, and by
+    whom: `${GIT_COMMIT_HASH}`, `${GIT_COMMIT_HASH_SHORT}`,
+    `${GIT_AUTHOR_NAME}`, `${GIT_AUTHOR_EMAIL}`, `${GIT_AUTHOR_TIME}`,
+    `${GIT_COMMITTER_NAME}`, `${GIT_COMMITTER_EMAIL}`, `${GIT_COMMIT_TIME}`,
+    `${GIT_SUBJECT}` and `${GIT_AUTHORS}` (everyone who has changed the file,
+    most recent first)
+  * `environmentPlaceholders`: placeholders from environment variables, the
+    same for every file, each with a value for when it is not set, such as
+    `directoryName`
+  * `placeholderAliases`: placeholders with the values of others, such as
+    `${UPDATED}` for `${GIT_COMMIT_TIME}`
+  * `withPlaceholder`: set the value of a placeholder, such as for one project
+    with `withProject`
+
+  A file that has not been committed has the placeholders of the last commit
+  of the repository, with a warning. `filePlaceholders` needs the whole git
+  history, and stops with `ShallowRepository` if it is shallow: in GitLab CI,
+  set `GIT_DEPTH: 0`.
+
+  ## 4. The build file
+
+  A build file is a cabal script in the project, so it runs as an executable:
+
+  ```
+  ./build.hs [DIRECTORY]
+  cabal run build.hs -- [DIRECTORY]
+  ```
+
+  It gives `build` the directories of the project and its rules. For example,
+  a project of markdown documents in `src`, built into `public`:
+
+  ```haskell
+  #!/usr/bin/env cabal
+  {- cabal:
+  build-depends: base, document-build, filepath
+  -}
+  import Document.Build
+  import System.FilePath (dropExtension, replaceExtension)
+
+  main :: IO ()
+  main =
+    build
+      (Directories "public" ["src"] Nothing)
+      ( prepareRules ["md"] placeholders "src"
+          <> markdownRules (flip replaceExtension) [("pdf", pure ["--standalone"]), ("html", pure ["--standalone"])]
+          <> pageOneRules (\p -> dropExtension p <> "-1.pdf") (`replaceExtension` "png")
+          <> onProject "group/project" (splitPdf "report.pdf" [("1", "report_cover.pdf")])
+          <> outputTreeRules "outputs.json" "outputs.html" directoryName
+      )
+    where
+      placeholders =
+        placeholderAliases [("UPDATED", "GIT_COMMIT_TIME")] <$> filePlaceholders
+  ```
+
+  A build file can define operations of its own, and make rules of them with
+  `buildStep`:
+
+  ```haskell
+  -- writeWordCount :: Command' (), an operation of your own
+  onFiles (onOutputs (onPaths (hasExtension ["txt"]) (fromTracked (buildStep "word count" (\p -> [p <> ".words"]) writeWordCount))))
+  ```
+
+  The `build.hs` of this repository is the build file of a set of document
+  projects that share it: one file, byte for byte, in each, with the settings
+  of every project, and exceptions for some.
+
+  ### The output tree
+
+  `outputTreeRules` writes the tree of output files. Each file of the input
+  directories is a root, and each file is a child of the input file of the
+  step that made it:
+
+  ```
+  src/report.fodt
+  `- public/report.fodt
+     |- public/report.docx
+     |- public/report.pdf
+     |  |- public/report.pdf.pages
+     |  `- public/report-1.pdf
+     |     `- public/report-1.png
+     `- ...
+  ```
+
+  A file made from several files, such as a concatenated book, appears once,
+  under the first of them. Each node holds the path, the SHA-256 hash, the git
+  details of the file at the root, the page count of a PDF file, and the
+  width, height and format of an image. The JSON file holds the tree for other
+  programs (read it with `readOutputForest`), and the HTML page links to every
+  output file.
+
+  ### Getting the library
+
+  A cabal script cannot depend on a package from a git repository, so the
+  libraries must come from a package repository: Hackage, once they are
+  released, or a local repository until then. To use a local repository, add
+  it to the cabal configuration (`~/.cabal/config`, or the configuration in
+  CI):
+
+  ```
+  repository document-build-local
+    url: file+noindex:///path/to/repository
+  ```
+
+  and put the source distributions of both packages there:
+
+  ```
+  cabal sdist all -o /path/to/repository
+  cabal update
+  ```
+
+  ### Tools
+
+  The operations run these programs, which must be installed:
+
+  * `soffice` (LibreOffice)
+  * `pandoc`, and `xelatex` for PDF output
+  * `pdfinfo` and `pdftocairo` (poppler-utils), and `pdftk`
+  * `convert` and `identify` (ImageMagick 6), with PDF enabled in its
+    `policy.xml`
+  * `git` and `tar`
+
+  ## Development
+
+  ```
+  cabal build all
+  cabal test all
+  bin/lint.sh        # apply hlint suggestions and format with fourmolu
+  bin/lint.sh --check
+  ```
+description-type: markdown
+hash: fc6242fe4650fb269d8e07530b8ab483f98859d6d2e1e2a8f4d37b7dbf81974b
+homepage: https://gitlab.com/tonymorris/document-build
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: Tony Morris <ʇǝu˙sıɹɹoɯʇ@ןןǝʞsɐɥ> <dibblego>
+synopsis: Build documents with Haskell
+test-bench-deps:
+  aeson: '>=2.2.3 && <2.4'
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11.5.4 && <0.13'
+  containers: '>=0.6.7 && <0.9'
+  criterion: '>=1.6.2.0 && <2'
+  document-build: '>=0'
+  filepather: '>=0'
+  hedgehog: '>=1.2 && <2'
+  lens: '>=5.2.1 && <6'
+  mtl: '>=2.3.1 && <2.4'
+  process: '>=1.6.19.0 && <2'
+  text: '>=2.0.2 && <2.2'
+  time: '>=1.12.2 && <2'
