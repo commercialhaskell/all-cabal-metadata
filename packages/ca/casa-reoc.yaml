@@ -1,0 +1,396 @@
+all-versions:
+- 0.1.0.0
+author: Tony Morris <ʇǝu˙sıɹɹoɯʇ@ןןǝʞsɐɥ> <dibblego>
+basic-deps:
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11.5.4 && <0.13'
+  casa-reoc: '>=0'
+  directory: '>=1.3.8.5 && <2'
+  filepath: '>=1.4.301.0 && <1.6'
+  lens: '>=5.2.1 && <6'
+  tagged: '>=0.8.6 && <0.9'
+  template-haskell: '>=2.20 && <2.25'
+  text: '>=2.0.2 && <2.2'
+  time: '>=1.12.2 && <2'
+  validation: '>=1.1.3 && <1.2'
+changelog: |
+  # Changelog
+
+  ## 0.1.0.0
+
+  * The variables of a ReOC initial issue application, its RPAS operations
+    manual and its RePL training manual as data types with classy optics,
+    following the classy optics recipe: one module for each data type and each
+    name, manifests, checks of inheritance, and `ReOC.Model`, which re-exports
+    them
+  * Filling in field by field: every form type has a valid and an unfilled
+    form (one type parameter for each field), with the same optics;
+    `fillReOC` gives the valid `ReOC` or every error at the path of its field
+    (`ReOCError`: unfilled, invalid or too many), with the help text of each
+    field (`ReOC.Help`), and `unfillReOC` the unfilled form of a valid one
+  * Primitive types with invariants (`Text1`, `FormText`, `ABN`, `ARN`,
+    `EmailAddress`, `PhoneNumber`, `Postcode`, `Positive`, `Percentage`,
+    `GrossWeight`, `ReviewMonths`, `PassMark`, `Some`, `AtMost`), each with a
+    prism and, for values, a literal checked at compile time
+  * Key positions held by one or several people, several types of RPA with
+    their type-specific procedures, solo and multi-crew operations, and remote
+    pilots other than the chief remote pilot
+  * Text on the form fits its box, and every document is well-formed XML
+  * An amendment record whose versions increase and dates keep their order,
+    and reviews within 12 months
+  * `ReOC.Render.ApplicationForm`: CASA Form 101-02 as XFDF
+  * `ReOC.Render.OperationsManual`: the operations manual from a template read
+    at compile time, with a function for each hole, and its organisational
+    diagram drawn from the key positions
+  * `ReOC.Render.TrainingManual`: the RePL training manual from marked-up
+    markdown read and checked at compile time
+  * `ReOC.Render.BlankForm`: the blank CASA Form 101-02, read from `etc/casa`
+    when the package is compiled, which `writeDocuments` writes beside the
+    XFDF that names it, with the written signature of the declarant
+    (`WrittenSignature`: its contents, or the path of its file)
+  * `ReOC.Render.BuildInfo`: fills the placeholders of the document build
+  * `examples`: the applications of four made-up operators and their
+    documents, and `reoc-examples`, which writes them
+  * hedgehog tests of the laws of every optic, the coverage of every sum, the
+    fields of the form and their boxes, the well-formedness of the documents;
+    doctests
+changelog-type: markdown
+description: |
+  # casa-reoc
+
+  ![System F Logo](https://logo.systemf.com.au/systemf-450x450.png)
+
+  The variables of an application to the Civil Aviation Safety Authority (CASA)
+  for the initial issue of a remotely piloted aircraft operator's certificate
+  (ReOC), of its RPAS operations manual and of its RePL training manual, as
+  Haskell data types. A `ReOC` is filled in field by field, and a valid one
+  gives the documents:
+
+  * `rpa-operators-certificate-initial-issue.xfdf`: the answers to CASA Form
+    101-02, to fill into the blank form
+  * `rpas-operations-manual.fodt`: the operations manual, as Flat ODF text
+  * `repl-training-manual.fodt`: the RePL training manual, only when RePL
+    training is applied for
+
+  ```haskell
+  data ReOC' a1 a2 a3 a4 = ReOC' a1 a2 a3 a4
+  type ReOC = ReOC' Operator ApplicationForm OperationsManual (Maybe TrainingMaterial)
+  type UnfilledReOC = ReOC' UnfilledOperator UnfilledApplicationForm UnfilledOperationsManual (Maybe UnfilledTrainingMaterial)
+  ```
+
+  ## Filling in
+
+  Every data type of the form (a product, or a sum with a constructor that
+  holds a value) takes a type parameter for each of its fields, and has two
+  forms: the valid form (`Company`), and the unfilled form (`UnfilledCompany`),
+  whose fields hold what has been entered, if anything. An unfilled form holds
+  raw values: text for an ABN or a name, a number for a weight, the unfilled
+  form of a nested product, `Maybe` of a sum or an enumeration, and a list for
+  any list. Each field has one name, an optic, for both forms, so a form is
+  filled in with the same optics that read a valid one:
+
+  ```haskell
+  draft :: UnfilledReOC
+  draft =
+    mkUnfilledReOC
+      & operator . company . companyName ?~ "Banksia Point Aerial Media"
+      & operator . company . abn ?~ "15 092 285 143"
+      & operator . keyPersonnel . chiefPilot . crpNominee ?~ CRPIsCEO
+  ```
+
+  `fillReOC` (and `fillT` for each form type) checks an unfilled form, and
+  gives either the valid form, or every reason it is not valid, each at the
+  path of its field from the whole form:
+
+  ```haskell
+  fillReOC :: AsReOCError e => UnfilledReOC -> Either (NonEmpty e) ReOC
+  ```
+
+  The errors are of three kinds, each a data type with a name: `Unfilled` (a
+  required field left empty), `Invalid` (a value its field does not accept,
+  with what it is: `InvalidABN`, `InvalidFormText`, ...) and `TooMany` (a list
+  with more elements than its field holds). `AsReOCError e` lets the caller
+  choose the error type, with the names of the three; `ReOCError` is their sum.
+  A path is a list of `Step`s, each a `Field` (one constructor for each field
+  of each form type, such as `CompanyAbn`) or the index of a list element, so
+  the same field in different places (a person's name as CEO or as chief remote
+  pilot) is told apart. `fieldHelp` gives the help text of a field, and
+  `fieldLabel` its label; `renderReOCErrors` writes errors with both:
+
+  ```
+  operator › company › ABN: “15 092 285 143” is not an ABN: 11 digits with valid check digits (The company’s Australian business number (ABN).)
+  operator › company › ARN: not filled in (The company’s CASA aviation reference number (ARN).)
+  ```
+
+  `unfillReOC` gives the unfilled form of a valid `ReOC`, to change it and fill
+  it in again; filling in the unfilled form of a valid value gives it back.
+
+  A field that may be empty (a business name, RePL training) is `Maybe` in
+  both forms, and `Nothing` means none. A sum chosen without its value (`RePLTraining Nothing`)
+  is unfilled at the value.
+
+  The checks are those of the types (below). No check of a limit that the
+  operator sets (`Policies`) is made: the CASA publications in `etc/casa` give
+  no numbers for them (AC 101-01, section 5.7.1: CASA has no requirements for
+  continuing flight proficiency or currency), and the reviews that they do
+  require (the manual and the risk register, at least annually) are held by
+  the types.
+
+  The documents hold placeholders for a document build to fill:
+  `${CI_COMMIT_SHA}` and `${CI_PAGES_URL}` in the manuals, and
+  `${DECLARATION_DAY}`, `${DECLARATION_MONTH}` and `${DECLARATION_YEAR}` in the
+  form, so that each build records the version it was built from and the date
+  of the declaration. `writeDocuments` keeps them, and `writeFilledDocuments`
+  fills them.
+
+  Beside the application form, `writeDocuments` writes the blank CASA Form
+  101-02 (`blankForm`, `blankFormFile`), which the XFDF names, and, if the
+  application form holds one, the written signature of the declarant
+  (`written-signature.png`), so that a directory of documents refers to
+  nothing outside it. The blank form is read from `etc/casa` when the package
+  is compiled; the written signature is given by its contents
+  (`WrittenSignatureImage`) or by the path of its file (`WrittenSignatureFile`),
+  which is read when the documents are written. `etc/casa` also holds the CASA
+  publications that the documents were written from. To fill the form:
+
+  ```
+  pdftk rpa-operators-certificate-reoc-initial-issue-variation-renewal-form-101-02.pdf \
+    fill_form rpa-operators-certificate-initial-issue.xfdf output filled.pdf
+  ```
+
+  Placing the written signature in the signature box of question 31 is left to
+  the document build.
+
+  To make the documents of an operator, fill in an `UnfilledReOC` (start from
+  one of the examples) in a package that depends on `casa-reoc`, and pass the
+  `ReOC` that `fillReOC` gives to `writeDocuments`.
+
+  ## Licence
+
+  BSD-3-Clause (`LICENCE`). The CASA publications in `etc/casa` are CASA's,
+  and are not covered by it.
+
+  ## Writing the documents
+
+  `examples` holds the applications of four made-up operators
+  (`ReOC.Examples`), each filled in field by field from `mkUnfilledReOC`, and
+  the documents that each gives, in its own directory:
+
+  * `banksia-point-aerial-media`: one person who holds every key position,
+    flies solo, and operates one type of small multirotor;
+  * `ironbark-asset-inspection`: three key personnel, other remote pilots,
+    multi-crew operations, three types of multirotor including a medium RPA, a
+    revised manual, a chief remote pilot of another ReOC holder, and a
+    regulatory action;
+  * `saltbush-ag-surveys`: a CEO who is not a director and does not fly, a
+    chief remote pilot who is also maintenance controller, a multirotor, a
+    fixed-wing and a powered-lift RPA, a disclosed history, and a declaration
+    by a director;
+  * `wattle-creek-drone-academy`: RePL training, with a chief RePL instructor
+    who is not otherwise key personnel, three courses (initial, a higher
+    weight class and a new category) and intents for questions 14 and 16.
+
+  `ReOC.Example.Draft` is an application that has only been started, and the
+  errors that filling it in gives.
+
+  Their companies, people, numbers and addresses are made up: phone numbers
+  are from the ranges that ACMA reserves for fiction, email addresses are in
+  the reserved `.example` domain, and ABNs have valid check digits but are not
+  registered to the examples. The RPA are real types, with illustrative
+  procedures. After changing an example, write its documents again (a test
+  checks that they are up to date, where they are: the source distribution
+  does not hold them). `reoc-examples` is built only with the flag `examples`,
+  which `cabal.project` turns on:
+
+  ```
+  cabal run reoc-examples -- --output examples
+  ```
+
+  From GHCi (`cabal repl examples --repl-options=-ignore-dot-ghci`; the `.ghci`
+  here loads the library from `src`, which only `cabal repl casa-reoc` can):
+
+  ```haskell
+  :set -XTemplateHaskell -XOverloadedStrings
+  import ReOC
+  import ReOC.Examples
+  either (Data.Text.IO.putStr . renderReOCErrors) (writeDocuments "/tmp/reoc-example") wattleCreek
+  either (Data.Text.IO.putStr . renderReOCErrors) (writeFilledDocuments (BuildInfo "abc123" "https://example.net" (read "2026-10-23")) "/tmp/reoc-filled") ironbark
+  either (Data.Text.IO.putStr . renderReOCErrors) (const (pure ())) draft
+  ```
+
+  ## Data types
+
+  `ReOC` holds:
+
+  * `Operator`: the `Company` (a proprietary company: its name, ABN, ARN,
+    registered office, operational headquarters, contact details and
+    registered business name), its `KeyPersonnel` and its fleet of
+    `OperatedType` (a type of RPA, with the facts and type-specific procedures
+    that the manual gives for it, and each RPA of that type);
+  * `ApplicationForm`: the answers to CASA Form 101-02 that appear only on the
+    form (primary contact, personnel and regulatory history, documents
+    submitted, the declaration);
+  * `OperationsManual`: the parts of the manual that appear only in the manual
+    (amendment record, services, the limits that the operator sets in
+    `Policies`, the risk register, whether operations are solo or multi-crew,
+    and whether the CRP is the only remote pilot);
+  * `Maybe TrainingMaterial`: RePL training, if it is applied for: the chief
+    RePL instructor, the courses and the `TrainingArrangements` of the RePL
+    training manual.
+
+  The types of the valid form say what the documents can hold, so that a valid
+  value gives valid documents:
+
+  * The application is always for initial issue; questions that the form's own
+    flow skips are not filled (question 3 when the applicant is the primary
+    contact, 13 to 18 and 29 without RePL training, 25 and 26 without
+    regulatory action), and their answers have no field to hold them.
+  * Details that the form asks for only after a yes are held by the yes
+    (`HistoryDisclosed`, `OtherReOCRolesHeld`, `RegulatoryActionTaken`, ...),
+    and question 17 is the intent of each no in questions 14 to 16.
+  * Each key position holds a person or refers to the holder of another
+    position (`CRPIsCEO`, `MCIsCRP`, `CRIIsMC`, ...), so a person who holds
+    several positions is given once. The manual's preface, organisational
+    overview, organisational diagram, list of key personnel and the section on
+    holding several positions follow from who holds what.
+  * Text that goes on the form is `FormText`, which fits its box: the form has
+    a fixed 10 pt font and cuts off text that does not fit. A one-line box
+    holds no line breaks, and only characters that the form's fonts can show
+    are allowed. Text shared by a box (the details of questions 19 to 22 in
+    question 23, the intents of question 17) is given a share of it.
+  * The fleet has at most 8 types and at most 9 courses, each with its own
+    training RPA, so that question 27 (17 rows) and question 29 (9 rows) hold
+    them all. The training RPA of each course is listed with the fleet in both
+    documents, and the category and weight class of a course are those of its
+    training RPA.
+  * RPA have a maximum gross weight from 1 g to 25 kg (`GrossWeight`): the
+    manual does not cover heavier RPA, which also rules out the liquid-fuel
+    complexity and the safety case of question 30. Airships are not covered.
+  * The amendment record is a first issue and revisions: each revision is a
+    major or minor revision, a number of months after the entry before it, so
+    versions always increase and dates never go backwards. The manual is
+    reviewed 12 months after its last amendment, and each risk is reviewed
+    within 12 months of its entry (`ReviewMonths`).
+  * A risk rating comes from the risk rating matrix, and a risk is owned by a
+    key position that exists.
+  * Values with an invariant are primitive types under `ReOC.Primitive`, whose
+    constructors are not exported: `Text1` (not blank, and only characters that
+    XML can hold), `FormText`, `ABN` (correct check digits), `ARN`,
+    `EmailAddress` (which also fits a box of the form), `PhoneNumber`
+    (Australian), `Postcode`, `Positive`, `Percentage`, `GrossWeight`,
+    `ReviewMonths`, `PassMark` (70% to 100%), `Some n a` (1 to n values) and
+    `AtMost n a` (0 to n values). Each is built with a prism (`_ABN`) or a
+    literal checked at compile time (`$$(abnLiteral "15 092 285 142")`), and
+    is checked when an unfilled form is filled in.
+
+  What the types cannot check is meaning: text can say anything, and a person
+  given twice with the same ARN and different details is two people.
+
+  ## Classy optics
+
+  Every data type follows the classy optics recipe: one module for each data
+  type under `ReOC.Data` (its class, instances, manifest `lawNamesT'`, synonym
+  `InheritT'` and checks of inheritance), one module for each name under
+  `ReOC.Name`, and `ReOC.Model`, which re-exports them all.
+
+  A form type is the data type `T'`, with a type parameter for each field
+  (section 2 of the recipe), and each field's name changes that parameter
+  alone, so setting a field of an unfilled form keeps it unfilled, and the
+  same name reads the valid form. Its fields hold type parameters, and nothing
+  is inherited through a type parameter, so a field is reached by composing
+  the names of the fields on its path:
+
+  ```haskell
+  view (cloneLens (operator . company . companyName)) reoc
+  preview (operator . keyPersonnel . chiefPilot . rePLOrigin . rePLTrainingOrganisation) reoc
+  set (operator . keyPersonnel . chiefExecutive . nominee . person . fullName) (Just "Alex") unfilled
+  ```
+
+  The data types of errors and paths (`ReOCError`, `Unfilled`, `Step`, ...)
+  have no parameters, and inherit as usual: `path` is an affine traversal of
+  every `ReOCError`.
+
+  ## Documents
+
+  * `ReOC.Render.ApplicationForm`: the XFDF of CASA Form 101-02.
+  * `ReOC.Render.OperationsManual`: the manual, from the template
+    `template/rpas-operations-manual.fodt`, read when the package is compiled.
+    Each hole `{{legal-name}}` is filled by `holeLegalName` in
+    `ReOC.Render.OperationsManual.Holes`; a hole with no function fails to
+    compile. The organisational diagram is drawn from the key positions
+    (`ReOC.Render.OperationsManual.Diagram`).
+  * `ReOC.Render.TrainingManual`: the RePL training manual, from the marked-up
+    markdown `template/repl-training-manual.md` (holes, `<!-- per-course -->`
+    blocks repeated for each course, and conditions on the courses), in the
+    shell `template/repl-training-manual.fodt` (the styles, cover and master
+    pages of the operations manual). An unknown hole or condition, or a marker
+    that is not closed, fails to compile.
+  * `ReOC.Render.Write`: writes the documents into a directory.
+
+  To change the wording of a manual, change its template; to add a variable,
+  add a field to a data type, a hole to the template and its function.
+
+  The table of contents of the operations manual has the page numbers of the
+  template; LibreOffice does not update them when it converts the manual, so
+  they are right only while the manual has the length of the template.
+
+  ## The RePL training manual
+
+  The text of the RePL training manual was drafted from AC 101-01, the key
+  personnel guide for the chief RePL instructor and Form 101-02. The Part 101
+  MOS and Annex A to AC 101-01 were not available, so before it is submitted:
+
+  * every row marked `[MOS: to be confirmed]` needs its Part 101 MOS reference,
+    and the unit names must match the MOS;
+  * the question bank of the theory examinations, which the manual describes
+    but does not hold, must be written;
+  * the pass mark of 70%, the minimum age, the upgrade flight times, the flight
+    test tolerances and the general-knowledge content of the theory notes must
+    be checked.
+
+  ## Tests
+
+  ```
+  cabal test hedgehog
+  cabal test doctest -w ghc-9.6.7 --builddir=dist-newstyle-9.6.7
+  ```
+
+  The hedgehog tests check the manifest of every data type, the laws of every
+  lens, prism and affine traversal (including every inherited instance), that
+  every constructor of each sum is generated, the laws of the prisms of the
+  primitive types, and of random values of `ReOC`: that every field the form
+  is filled with is a field of CASA Form 101-02 with a value that checks it,
+  that every text fits its box, that every document is well-formed XML, that
+  no hole or marker is left, that the amendment record is in order, that
+  filling in the unfilled form of a valid value gives it back, and that an
+  invalid, empty or overfull field gives one error at its own path. The
+  doctest suite runs the `doctest` executable, which must be built with the
+  same GHC; a separate build directory keeps the two compilers apart.
+
+  `bin/lint.sh` runs hlint and fourmolu (`bin/lint.sh --check` to check only).
+
+  The modules under `ReOC.Data` and `ReOC.Name`, `ReOC.Model`, `ReOC.Fill`,
+  `ReOC.Help`, the module list of `casa-reoc.cabal`, `test/DataGens.hs` and
+  `test/OpticsTests.hs` are generated from a description of the data types
+  (with the help text of each field) by scripts that are not in this
+  repository.
+description-type: markdown
+hash: 906606fdb02de1ec24628bff0a81063dd4da0bdb71f75c69f77981bd78026af3
+homepage: https://gitlab.com/system-f/code/casa-reoc
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: Tony Morris <ʇǝu˙sıɹɹoɯʇ@ןןǝʞsɐɥ> <dibblego>
+synopsis: The documents of a CASA ReOC application, as Haskell data types
+test-bench-deps:
+  base: '>=4.18 && <5'
+  bytestring: '>=0.11.5.4 && <0.13'
+  casa-reoc: '>=0'
+  containers: '>=0.6.7 && <0.9'
+  directory: '>=1.3.8.5 && <2'
+  filepath: '>=1.4.301.0 && <1.6'
+  hedgehog: '>=1.2 && <2'
+  lens: '>=5.2.1 && <6'
+  process: '>=1.6.19.0 && <2'
+  text: '>=2.0.2 && <2.2'
+  time: '>=1.12.2 && <2'
+  xml-conduit: '>=1.9 && <1.11'
