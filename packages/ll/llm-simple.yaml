@@ -4,6 +4,7 @@ all-versions:
 - 0.1.1.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.4.0.0
 author: Daniel van den Eijkel
 basic-deps:
   aeson: '>=2.0 && <2.3'
@@ -18,17 +19,19 @@ basic-deps:
   filepath: '>=1.4 && <1.6'
   heptapod: '>=1.1 && <1.2'
   http-client: '>=0.7 && <0.8'
+  http-client-tls: '>=0.3 && <0.5'
   http-types: '>=0.12 && <0.13'
   lens: '>=5.3 && <5.4'
   llm-simple: '>=0'
   mtl: '>=2.3 && <2.4'
   optparse-applicative: '>=0.16 && <0.19'
+  random: '>=1.2.1 && <1.4'
   req: '>=3.13.4 && <3.14'
   retry: '>=0.9 && <0.10'
   text: '>=1.2 && <2.2'
   time: '>=1.11 && <1.15'
   unordered-containers: '>=0.2 && <0.3'
-  uuid-types: '>=1.0 && <1.1'
+  uuid-types: '>=1.0.4 && <1.1'
   vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog
@@ -37,6 +40,142 @@ changelog: |
 
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+  ## [0.4.0.0] - 2026-10-24
+
+  ### Fixed
+
+  - Provider requests are no longer resent by req. req's default config
+    retried timeouts and 408/504 responses up to 5 times, resending (and
+    billing) the POST, before `withRetry` retried again. Its default 30 s
+    response timeout also failed any non-streaming call that took longer than
+    30 s to generate. All providers now share one TLS manager without a
+    response timeout and a config that never retries; `mcRequestTimeout` is the
+    only response deadline. New `mkLenientConfig` (`LLM.Core.ProviderUtils`)
+    builds that config for a given manager.
+  - One missing API key no longer breaks loading of every model.
+    `loadModelOrThrow` / `loadModelsOrThrow` used to build every catalog entry
+    and fail on the first one whose provider had no key, with a misleading
+    "Provider not found". Now only the requested models must be available; for
+    one that is not, the error names the reason, e.g. "Model haiku_4_5 needs
+    provider claude, but env var CLAUDE_API_KEY is not set" (or the invalid
+    base URL). The returned `ModelConfigMap` / `GatewayMap` hold all currently
+    available models and gateways. "Model not found" errors now name the model.
+    New `resolveGateway`, `resolveGateways` and `ProviderUnavailable`
+    (`LLM.Load.LoadGateways`).
+  - File tools no longer corrupt non-UTF-8 files or depend on the locale.
+    `replace_in_file` and `multi_replace_in_file` decoded leniently and wrote
+    the whole file back, replacing every invalid byte with U+FFFD; they now
+    refuse files that are not valid UTF-8 and leave them unchanged. Writes
+    (`writefile` and both replace tools) always produce UTF-8; under `LANG=C`
+    they used to fail or mangle non-ASCII text. `grep` and `file_info` read
+    bytes and decode leniently, so `grep` no longer skips files it cannot
+    decode. `getSystemPrompt` reports a `file:` prompt that is not valid UTF-8
+    as a `LoadSystemPromptError` naming the file.
+  - An abort during a tool round no longer leaves an unanswered tool call in
+    `gerPartialNewMessages`. The partial history used to end with the
+    assistant's tool calls and no `ToolTurn`, which Claude and OpenAI reject on
+    the next request. It now ends with a `ToolTurn` holding the real results of
+    the calls that ran and "Aborted before execution" for the rest.
+    **Breaking:** `executeToolsWithAbort` returns the new `ToolRoundOutcome`
+    (`ToolRoundCompleted` / `ToolRoundAborted`) instead of
+    `GenerateResult [ToolResult]`.
+  - Gemini structured output works with thinking enabled. The response's first
+    part was the thought summary, which the object parser tried to decode as
+    JSON (`EmptyResponse`). The parser now joins the text of all parts not
+    marked `"thought": true`, and object requests no longer ask for thought
+    summaries (`includeThoughts`).
+  - Ollama honours the max-token limit. Chat requests sent `num_predict` and
+    object requests `max_completion_tokens`; Ollama's OpenAI-compatible endpoint
+    ignores both, so `mcMaxTokens` had no effect. Both now send `max_tokens`.
+    Streamed Ollama responses now request usage (`stream_options.include_usage`)
+    as OpenAI's do. The recorded Ollama conversation fixtures were re-recorded.
+  - File tools handle symbolic links as documented. `sandboxPath` resolves
+    links, so the tools' `isSymlink` checks on its result never fired:
+    `remove_file` and `remove_directory` on a link deleted the link's target
+    inside the workspace, and `move_file` / `copy_file` moved or copied the
+    target. `remove_file` and `remove_directory` now remove the link itself
+    and leave its target unchanged (also for links pointing outside the
+    workspace); `move_file` and `copy_file` refuse a link source. New
+    `sandboxSymlink` (`LLM.Tools.FsConfig`).
+  - Claude and Gemini no longer send turns with empty content. After a
+    fallback, an assistant turn holding only foreign thinking (e.g. a DeepSeek
+    turn cut off during reasoning, or a Claude turn with only redacted
+    thinking) encoded to `"content": []` / `"parts": []`, which the API
+    rejects with a 400. Such turns, and user turns whose parts all encode to
+    nothing, are now left out; both APIs accept the consecutive same-role
+    turns this can leave. The OpenAI protocol was fixed in 0.3.0.0.
+  - Gemini thought signatures are only replayed to the model that produced
+    them. Model names were compared by prefix, so `gemini-2.5-flash` and
+    `gemini-2.5-flash-lite` counted as the same model and received each
+    other's signatures. Names now must be equal apart from a `models/` prefix
+    and a stable version suffix (`-001`); other calls get the documented
+    placeholder signature.
+  - Claude non-streaming responses with unknown content blocks (e.g.
+    `server_tool_use`, `web_search_tool_result`) no longer fail as
+    `EmptyResponse`. Unknown blocks are skipped, as streaming already did.
+  - Non-streaming HTTP errors keep their status and raw body. `HttpError`
+    bodies (and the `onLLMResponseError` text) were Haskell `show` output
+    (`Object (fromList [...])`); they are now the body as sent, as for
+    streaming. A non-JSON error response (e.g. an HTML 401/502 from a proxy)
+    made req throw, which became a retryable `NetworkError` without its
+    status; it is now `HttpError status body`. A 200 body that is not JSON is
+    a `ParseError`. Streaming error bodies that are not valid UTF-8 are
+    decoded leniently instead of throwing. **Breaking:** `sendRequest` and
+    `sendObjectRequest` in `LLMProvider` return the raw body
+    (`IO (Int, ByteString)`) instead of a decoded `Value`.
+  - HTTP 500, 502 and 504 are retried, like 429/503/529. They are usually
+    transient, and a Claude mid-stream `api_error` (mapped to 500) was never
+    retried. Each retry delay is now capped at 30 s; `fullJitterBackoff` grew
+    without bound for large `retryCount`s. `Retry-After` is still ignored;
+    the `mcJitterBackoff` docs and the README now say so.
+  - Reasoning is no longer cut to its first chunk. `respReasoning` (and
+    `projectReasoning`) returned only the first thinking part, so a streamed
+    Gemini response kept only its first thought chunk, and the OpenAI/DeepSeek
+    encoder replayed a truncated `reasoning_content`. Both now concatenate all
+    thinking text. `mkChatResponse` merges adjacent thinking parts that carry
+    no opaque payload; signed parts (e.g. Claude thinking blocks) stay one per
+    block.
+  - The generate layer honours `grAbortSignal`, as its docs promised.
+    `generateTextWithFallbacks` / `streamTextWithFallbacks` (and the
+    `Rotated` variants) never read it, so the `Aborted` path was dead. The
+    signal is now checked before each model in the fallback chain and before
+    each attempt (also after throttle and backoff sleeps), and a stream is cut
+    off at its next event; all yield `GErrAborted`. A non-streaming HTTP call
+    already in flight is not interrupted. **Breaking:** removed the unused
+    `LLMError` constructor `ToolLoopExceeded` (the agent loop reports
+    `GErrToolExceeded`).
+  - Documented what happens at `agMaxToolRounds`: the last round's tools run
+    and their results are in `gerPartialNewMessages`, but the model is not
+    called again, so it never sees them.
+  - Smaller file-tool gaps. `grep` on an explicit file path skipped the 1 MB
+    size cap that applies to files found by its directory walk; such a file is
+    now refused with an error. `read_file_paginated` threw on bytes that are
+    not valid UTF-8; it now shows them as U+FFFD, like the other read-only
+    tools. `find_files` backtracked exponentially on patterns with many `*`s
+    (e.g. `*a*a*a*a*a*a*a*a*b` took seconds on a 40-character name); matching
+    is now O(pattern × name), with the same results. Its walk no longer
+    recounts and reverses the match list at every entry.
+  - Gemini tool-call ids no longer repeat across processes. They were
+    `call_<n>` from `Data.Unique`, which restarts at 1 in every process, so a
+    saved conversation reloaded in a new process got new calls with ids it
+    already held; after a fallback, Claude and OpenAI reject or mismatch
+    those. Ids are now `call_<random UUID v4>`. New direct dependency:
+    `random`.
+  - Gemini errors, blocks and finish reasons are no longer all
+    `EmptyResponse`. A stream that fails midway stays HTTP 200 and sends
+    `{"error": {"code": 503, ...}}` as a data event; that event was ignored,
+    so the call ended as a non-retryable `EmptyResponse` (or as a shortened
+    success). It is now `HttpError code body`, retried like the same error
+    before streaming, as for Claude and OpenAI. A response without content
+    names why Gemini stopped: a blocked prompt (`promptFeedback.blockReason`)
+    or a filter finish reason (`SAFETY`, `RECITATION`, `PROHIBITED_CONTENT`,
+    …) gives the new `ResponseBlocked`; `MAX_TOKENS` (common when thinking
+    uses the whole budget) and other finish reasons give a `ParseError` naming
+    the reason. A response with content is still returned when the token
+    limit cut it off. Structured output cut off by `MAX_TOKENS` is a
+    `ParseError` saying so. **Breaking:** new `LLMError` constructor
+    `ResponseBlocked`.
 
   ## [0.3.0.0] - 2026-10-13
 
@@ -307,6 +446,7 @@ changelog: |
     DeepSeek), single-shot generation with fallbacks, agent tool loops, structured
     output, JSON model catalog loading, and workspace-scoped filesystem tools.
 
+  [0.4.0.0]: https://github.com/aische/llm-simple/compare/v0.3.0.0...v0.4.0.0
   [0.3.0.0]: https://github.com/aische/llm-simple/compare/v0.2.0.0...v0.3.0.0
   [0.2.0.0]: https://github.com/aische/llm-simple/compare/v0.1.1.0...v0.2.0.0
   [0.1.1.0]: https://github.com/aische/llm-simple/compare/v0.1.0.2...v0.1.1.0
@@ -321,7 +461,7 @@ description: |
 
   The API stays small on purpose: JSON model and provider catalogs, bundled filesystem tools, and a straight line from `loadModelOrThrow` to `generateText`. Under that surface you still get multi-provider gateways, fallbacks, streaming, structured output, and sandboxed workspace tools — enough to prototype and compare ideas without assembling the pieces yourself.
 
-  **Status:** early 0.3.x release. APIs may change.
+  **Status:** early 0.4.x release. APIs may change.
 
   ## Features
 
@@ -351,7 +491,12 @@ description: |
   DEEPSEEK_API_KEY=...
   ```
 
-  Ollama needs no API key. The library reads keys from the **process environment**.
+  Ollama needs no API key. It is used through its OpenAI-compatible endpoint
+  (`/v1/chat/completions`); tested with Ollama 0.32.4. Streamed responses
+  request usage via `stream_options.include_usage`; an Ollama version that does
+  not support it streams without usage.
+
+  The library reads keys from the **process environment**.
   Load `.env` yourself in `main` (the example executable does this), or call
   `loadGatewaysWithDotenv` when building gateways manually.
 
@@ -383,8 +528,8 @@ description: |
   | `temperature`     | Sampling temperature (optional)                                          |
   | `requestTimeout`  | Timeout in ms per attempt (optional); for streaming, time until the first event; timeouts are retried |
   | `throttleDelay`   | Delay between requests in ms (optional)                                  |
-  | `retryCount`      | Number of retries on failure                                             |
-  | `jitterBackoff`   | Backoff jitter in ms between retries                                     |
+  | `retryCount`      | Number of retries on retryable errors (429, 500, 502, 503, 504, 529, network errors, timeouts) |
+  | `jitterBackoff`   | Base backoff in ms between retries; full jitter, exponential, each delay capped at 30 s. `Retry-After` is not honoured, so raise this for providers that often rate-limit you |
   | `thinking`        | Extended thinking effort level (optional, provider-dependent)            |
   | `capabilities`    | Optional object: `thinking`, `vision`, `promptCaching` (default `false`) |
 
@@ -606,9 +751,9 @@ description: |
 
   BSD-3-Clause. See [LICENSE](LICENSE).
 description-type: markdown
-hash: 30a5bbcea598f67b1818ae5f5b76bf96034d45ed76c146e051847e76521e75a9
+hash: ebbe95ad3c1e971dc985b5d565e85b5f2670bd9ffdae8afbd3cf89d558c84195
 homepage: https://github.com/aische/llm-simple#readme
-latest: 0.3.0.0
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: 1515314+aische@users.noreply.github.com
 synopsis: Multi-provider LLM library with agent tool loops and filesystem tools
@@ -623,10 +768,14 @@ test-bench-deps:
   filepath: '>=1.4 && <1.6'
   heptapod: '>=1.1 && <1.2'
   hspec: '>=2.10 && <2.12'
+  http-client: '>=0.7 && <0.8'
   llm-simple: '>=0'
   mtl: '>=2.3 && <2.4'
+  network: '>=3.1 && <3.3'
+  req: '>=3.13.4 && <3.14'
   retry: '>=0.9 && <0.10'
   scientific: '>=0.3 && <0.4'
   temporary: '>=1.3 && <1.4'
   text: '>=1.2 && <2.2'
+  uuid-types: '>=1.0.4 && <1.1'
   vector: '>=0.13 && <0.14'
