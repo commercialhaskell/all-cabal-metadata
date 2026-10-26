@@ -11,6 +11,7 @@ all-versions:
 - 0.6.0.0
 - 0.6.1.0
 - 0.6.1.1
+- 0.7.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.0 && <2.3'
@@ -23,14 +24,71 @@ basic-deps:
   hs-opentelemetry-api: '>=1.0 && <2'
   hs-opentelemetry-semantic-conventions: '>=1.40 && <2'
   http-types: '>=0.12 && <0.13'
-  pgmq-core: '>=0.6 && <0.7'
-  pgmq-hasql: '>=0.6 && <0.7'
+  pgmq-core: '>=0.7 && <0.8'
+  pgmq-hasql: '>=0.7 && <0.8'
   text: '>=2.0 && <2.2'
   unliftio: '>=0.2 && <0.3'
   unordered-containers: '>=0.2 && <0.3'
   vector: ^>=0.13
 changelog: |
   # Revision history for pgmq-effectful
+
+  ## 0.7.0.0 -- 2026-10-26
+
+  ### Bug Fixes
+
+  - `isTransient` now classifies a connection lost while waiting for a reply as transient
+    (BUG-1). hasql reports such a loss through statement constructors rather than
+    `ConnectionSessionError`, in one of two shapes, and both used to be permanent. The first
+    is a `ServerError` with an empty SQLSTATE: libpq's own connection-loss result, which
+    carries no fields. Every `ErrorResponse` PostgreSQL sends carries a SQLSTATE, so an empty
+    code is always client-side. It appears after SIGKILL of the backend, an immediate server
+    shutdown, or a TCP reset. The second is `UnexpectedRowCountStatementError 1 1 1`, hasql's
+    encoding of a stray second result, which appears when the server sends a FATAL such as
+    `57P01` and libpq then appends its own connection-loss result. Only that exact value is
+    transient; a genuine row-count mismatch never reports an actual count inside its bounds,
+    so `1 1 0`, `1 1 2`, and every other count stay permanent.
+  - `ScriptSessionError` now follows the same SQLSTATE rule as statement errors. Previously
+    every script error was permanent, including `57P01`.
+  - Every other server SQLSTATE, decode, missing-type, and driver-error policy is unchanged.
+    After either disconnect shape the pool keeps the dead connection, so a retry loop sees one
+    more transient `ConnectionSessionError` (which evicts it) before a fresh connection
+    succeeds.
+
+  ### New Features
+
+  - `isAmbiguousReply :: PgmqRuntimeError -> Bool`, exported from `Pgmq.Effectful` and
+    `Pgmq.Effectful.Interpreter`, answers `True` exactly when a statement was delivered but
+    no server verdict came back: an empty-SQLSTATE server error in a statement or script, or
+    `UnexpectedRowCountStatementError 1 1 1`. Every ambiguous reply is also transient. Retrying
+    a lost send reply blindly can duplicate a message that already committed, so gate the
+    retry of non-idempotent operations on `isAmbiguousReply` and reconcile first. See the
+    bounded, sticky loop in the README and `docs/design/017-transient-error-classification.md`.
+  - Non-destructive inspection on the `Pgmq` effect (IR-1): `peekMessages`,
+    `peekArchivedMessages`, `lookupMessage`, `lookupArchivedMessage`, and
+    `queueMetricsUnvalidated`, re-exported from `Pgmq.Effectful` with `PeekMessages`,
+    `LookupMessage`, and `ArchivedMessage`. Both interpreters run them; the traced one labels
+    the four hand-written reads `pgmq.peek`, `pgmq.peek_archive`, `pgmq.lookup_message`, and
+    `pgmq.lookup_archived_message` (`Internal` spans; lookups carry `messaging.message.id`)
+    and keeps `pgmq.metrics` for the lenient metrics read. See
+    `docs/design/019-non-destructive-inspection-reads.md`.
+
+  ### Breaking Changes
+
+  - The `Pgmq` effect gained five constructors (`PeekMessages`, `PeekArchivedMessages`,
+    `LookupMessage`, `LookupArchivedMessage`, `QueueMetricsUnvalidated`). An interpreter that
+    matches every constructor, such as a mock in a consumer's test suite, must add five cases.
+
+  ### Other Changes
+
+  Test infrastructure: create and validate owner-only (`0700`) ephemeral roots, tighten
+  existing owned directories, reject unsafe paths and preserve lifecycle registry contents.
+
+  - Clarify that enableNotifyInsert does not deliver on a partitioned queue's documented parent channel.
+
+  Inspection Haddocks now state the moving-view cursor contract and the need for
+  finite database deadlines and inspection capacity separate from workers; a row limit
+  does not bound scan work or payload bytes.
 
   ## 0.6.1.1 -- 2026-09-25
 
@@ -302,9 +360,9 @@ description: |-
   library for PGMQ (PostgreSQL Message Queue). Includes OpenTelemetry
   instrumentation for tracing pgmq operations.
 description-type: haddock
-hash: 7277aa5c722cb933ba61e474db10c0bdde6d099fa8bd6d062d3c648c4470a127
+hash: abeb93f5719c423939be5e98fdf71fd2d759a7ec305a0dd9029e58458d48a15e
 homepage: https://github.com/shinzui/pgmq-hs
-latest: 0.6.1.1
+latest: 0.7.0.0
 license-name: MIT
 maintainer: Nadeem Bitar
 synopsis: Effectful effects for PGMQ (PostgreSQL Message Queue)
@@ -313,7 +371,7 @@ test-bench-deps:
   base: '>=4.18 && <5'
   directory: '>=0'
   effectful-core: ^>=2.6 || ^>=2.7
-  ephemeral-pg: '>=0.3.1.0'
+  ephemeral-pg: '>=0.3.1 && <0.4'
   hasql: ^>=1.10
   hasql-pool: ^>=1.4
   hs-opentelemetry-api: '>=1.0 && <2'
@@ -322,10 +380,10 @@ test-bench-deps:
   hs-opentelemetry-sdk: '>=1.0 && <2'
   hs-opentelemetry-semantic-conventions: '>=1.40 && <2'
   pg-migrate: '>=0'
-  pgmq-core: '>=0.6 && <0.7'
-  pgmq-effectful: '>=0.6 && <0.7'
-  pgmq-hasql: '>=0.6 && <0.7'
-  pgmq-migration: '>=0.6 && <0.7'
+  pgmq-core: '>=0.7 && <0.8'
+  pgmq-effectful: '>=0.7 && <0.8'
+  pgmq-hasql: '>=0.7 && <0.8'
+  pgmq-migration: '>=0.7 && <0.8'
   random: ^>=1.2
   tasty: ^>=1.5
   tasty-hunit: ^>=0.10
