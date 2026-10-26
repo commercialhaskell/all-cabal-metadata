@@ -1,0 +1,350 @@
+all-versions:
+- 0.2.0.0
+author: Sabrinathan Nair
+basic-deps:
+  aeson: '>=2.2 && <2.3'
+  base: '>=4.20 && <4.22'
+  bytestring: '>=0.11 && <0.13'
+  conduit: '>=1.3 && <1.4'
+  containers: '>=0.6.7 && <0.8'
+  deepseq: '>=1.4.8 && <1.6'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  libyaml: '>=0.1.2 && <0.2'
+  scientific: '>=0.3.7 && <0.4'
+  temporary: '>=1.3 && <1.4'
+  text: '>=2.0.2 && <2.2'
+  time: '>=1.9 && <1.15'
+  toml-parser: '>=2.0 && <2.1'
+  vector: '>=0.13 && <0.14'
+changelog: |
+  # Changelog
+
+  ## 0.2.0.0 — 2026-10-22
+
+  A breaking redesign, following a forensic audit of 0.1
+  (`docs/audit-remediation.md` maps every finding to its fix and test).
+
+  ### Fixed
+  - Environment and CLI providers dropped every value (`APP_HOST=x` became
+    `{host: {}}`).
+  - Decode errors reported the alphabetically first key instead of the
+    failing one.
+  - The compile-time "provider check" was disconnected from the layers it
+    claimed to check.
+  - Missing JSON/YAML files threw `IOException`; TOML caught asynchronous
+    exceptions.
+  - TOML dates became `null`, `inf`/`nan` became garbage numbers, invalid
+    UTF-8 was silently replaced; duplicate YAML keys and env conflicts
+    were resolved silently.
+  - The depth limit ran after parsing, so it never protected the parsers.
+  - The README example did not compile.
+
+  ### Added
+  - `Figment.Tutorial`: a sixteen-section guided tour whose snippets are
+    compiled and run by the test suite.
+  - Profiles (`Default`, `Global`, custom; `select`; nested files; profile
+    hints) with Rust figment's semantics.
+  - A native, accumulating decoder (`FromConfig`, generic deriving with
+    options, combinators): every error is reported at once with path,
+    source, line/column, profile and the provider-native key name.
+  - Higher-kinded partial configurations (`Field`, `Partial`,
+    `extractPartial`, `extractTotal`).
+  - `Tagged`, `RelativePath`, `ViaAeson`; `extractLossy`, `extractAt`,
+    `findValue`, `contains`, `findMetadata`, `focus`, `reselect`.
+  - Providers: `fromText`, `file` (optional, searched upward), `fileExact`,
+    `required`, `nested`; Rust-compatible `Env` with options; revised
+    `Cli`; `Serialized` (`defaults`, `globals`, `keyed`); figments as
+    providers.
+  - Metadata: structured source, the call site where each provider was
+    added, and a key-name interpolater.
+  - Parser limits (`Limits`: depth and node count) enforced inside every
+    parser; YAML alias-bomb protection.
+  - `Figment.Jail` for configuration tests.
+  - `Exception` instance and a human-readable renderer for `ConfigErrors`.
+
+  ### Removed
+  - `composeChecked`, `composeUnchecked`, `Figment.Check`, `RawJSON`,
+    `mkTagged`, `ProvMap`/`runExtractProv` (superseded), `SourceId`,
+    `Depth` (now `Limits`), Safe Haskell pragmas, the `yaml` dependency.
+
+  ### Changed
+  - `base >= 4.20` (GHC 9.10 and 9.12, as tested).
+
+  ## 0.1.0.0
+  Initial pre-release.
+changelog-type: markdown
+description: |
+  # figment
+
+  Layered configuration for Haskell, after Rust's
+  [`figment`](https://docs.rs/figment): combine files (JSON, TOML, YAML),
+  environment variables, command-line arguments and Haskell values; select
+  profiles; decode into your own types. Every value remembers where it came
+  from, so when something is wrong you get **every** problem at once, each
+  pointing at the key, the name you would actually type (`APP_PORT`,
+  `--port`), the file, and the line and column:
+
+  ```text
+  4 configuration errors:
+
+  error: missing field `name`
+    --> key `name`
+    = hint: no source sets it; it can be set as `name` in TOML source string, or `APP_NAME` in environment variables (prefix APP_)
+
+  error: unknown field `hots`
+    --> key `db.hots` in TOML source string at line 4, column 8
+    = hint: did you mean `host`?
+
+  error: invalid value: found integer 70000, expected an integer in the range 0..65535
+    --> key `db.port` in TOML source string at line 3, column 8
+
+  error: unknown variant `verbose`, expected one of `Debug`, `Info`
+    --> key `level` (`APP_LEVEL`) in environment variables (prefix APP_)
+  ```
+
+  (That exact output is pinned by a golden test.)
+
+  ## Quick start
+
+  ```haskell
+  {-# LANGUAGE DeriveAnyClass, DeriveGeneric, DerivingStrategies #-}
+  {-# LANGUAGE OverloadedStrings, TypeApplications #-}
+
+  import Data.Aeson ((.=))
+  import qualified Data.Aeson as Aeson
+  import Data.Function ((&))
+  import Data.Text (Text)
+  import GHC.Generics (Generic)
+
+  import qualified Figment as F
+
+  data Config = Config
+    { name :: Text
+    , port :: Int
+    , debug :: Bool
+    }
+    deriving stock (Show, Generic)
+    deriving anyclass (F.FromConfig)
+
+  figment :: F.Figment
+  figment =
+    F.new
+      & F.merge (F.defaults (Aeson.object ["port" .= (8080 :: Int), "debug" .= False]))
+      & F.merge (F.file F.toml "App.toml")      -- optional; searched for upwards
+      & F.merge (F.prefixed "APP_")              -- APP_PORT=9000, APP_DEBUG=true
+
+  main :: IO ()
+  main = F.loadExtractOrThrow @Config figment >>= print
+  ```
+
+  Import `Figment` qualified: it exports `merge`, `join` and `from`. The
+  README examples are compiled and run by the test suite.
+
+  **New to figment?** Start with the tutorial,
+  [`Figment.Tutorial`](https://hackage.haskell.org/package/figment/docs/Figment-Tutorial.html):
+  sixteen short sections covering layering, environment variables, the
+  command line, profiles, errors, decoding, provenance, partial
+  configurations, library patterns, custom providers and testing. It also
+  has a cheat sheet for Rust figment users and a guide for upgrading from
+  0.1.
+
+  ## Concepts
+
+  **Providers** produce configuration, one dictionary per **profile**. A
+  **`Figment`** is a pure description: an ordered list of providers, each
+  combined with one of four strategies (the same as Rust figment):
+
+  | strategy  | on a conflicting key | arrays      |
+  |-----------|----------------------|-------------|
+  | `merge`   | incoming value wins  | replaced    |
+  | `join`    | existing value wins  | kept        |
+  | `admerge` | incoming value wins  | concatenated|
+  | `adjoin`  | existing value wins  | concatenated|
+
+  Dictionaries always merge key by key. Building a figment does no IO.
+  `load` runs every provider, collects **every** failure (an unreadable
+  file and a syntax error elsewhere are reported together), and combines
+  the results. `Figment` is a lawful `Monoid`, so a library can publish its
+  defaults as a `Figment` and an application can append overrides with
+  `<>`. (The value-level merge is *not* associative, so values have no
+  `Semigroup`; the laws are property-tested.)
+
+  **Profiles.** On extraction, the `Default` profile is merged with the
+  selected profile, and the `Global` profile is merged over both. Select
+  with `F.select "prod"`, or read the choice from the environment with
+  `F.profileFromEnv "APP_PROFILE" F.Default`. With `F.nested`, a file's
+  top-level keys are profiles:
+
+  ```toml
+  [default]
+  workers = 4
+  [prod]
+  workers = 32
+  ```
+
+  ## Providers
+
+  | provider | notes |
+  |---|---|
+  | `F.file fmt path` | optional; a relative path is searched for in the working directory and its parents. `F.fileExact` does not search; `F.required` makes absence an error; `F.nested` maps top-level keys to profiles |
+  | `F.fromText fmt text` | configuration held in memory |
+  | formats `F.json`, `F.toml`, `F.yaml` | each parser enforces depth and size limits *while parsing*, rejects duplicate keys, and (TOML, YAML) records line and column for every value |
+  | `F.prefixed "APP_"` | environment variables, Rust semantics: no splitting unless `Env.split "__"`; values are typed (`8080`, `true`, `[1, 2]`, `{a = 1}`) while keeping the original text (so a `Text` field gets `007`, not `7`); conflicts are errors; see `Figment.Provider.Env` for `only`, `ignore`, `mapKeys`, `global`, ... |
+  | `F.cli args` | `--key=value`, `--flag`, `--no-flag`, `--db.port=1`, `--` ends options; see `Figment.Provider.Cli` |
+  | `F.defaults x`, `F.globals x`, `F.keyed "db.port" x` | any `ToJSON` value; errors point at the Haskell source line |
+  | a `Figment` | figments nest, keeping the provenance of every inner value |
+  | your own | implement the three-method `Provider` class |
+
+  Format details: TOML dates and times arrive as ISO 8601 strings and
+  decode straight into `Day`, `LocalTime`, `ZonedTime`, `UTCTime`; `inf`
+  and `nan` are kept as non-finite numbers. YAML uses the 1.2 core schema
+  (`no` and `on` stay strings, so there is no "Norway problem"), supports
+  anchors, aliases and merge keys (`<<`), and charges alias expansion to
+  the node limit, which defeats "billion laughs". Invalid UTF-8 is an
+  error, never silently replaced.
+
+  ## Decoding
+
+  `FromConfig` is figment's own decoding class. It reads the value tree
+  directly, which is how errors know their source and position. Derive it
+  with `Generic`:
+
+  * records are dictionaries; `Maybe` fields are optional;
+  * enums are strings, matched case-insensitively; unknown variants list
+    the valid ones;
+  * other sum types are externally tagged (`{ Circle = { radius = 1 } }`);
+  * newtypes unwrap and positional constructors are arrays.
+
+  `genericDecoder defaultOptions { fieldLabelModifier = snakeCase,
+  rejectUnknownFields = True }` changes the key names and reports unknown
+  keys with suggestions. Hand-written decoders use an **accumulating**
+  applicative (`field`, `optionalField`, `fieldOr`, `validate`, ...). It
+  deliberately has no `Monad` instance, so independent errors are never
+  hidden; `andThen` gives you sequencing when you need it.
+
+  Strict by default: a string is not a number. `F.extractLossy` accepts
+  `"8080"` for numbers and `"yes"` for booleans (Rust's `extract_lossy`).
+
+  Magic types: `Tagged a` carries the value's provider, profile, position
+  and path. `RelativePath` resolves a path written in a file against
+  *that file's* directory. `ViaAeson a` reuses an existing `FromJSON`
+  instance, and aeson's error path is translated so it still points at
+  the right key and line.
+
+  Queries on a loaded configuration: `findValue`, `contains`,
+  `findMetadata`, `extractAt` (Rust: `extract_inner`), `focus`,
+  `reselect`.
+
+  ## Partial configurations: no missing field, by construction
+
+  Write the record once, parameterised by a functor:
+
+  ```haskell
+  data ServerF f = Server
+    { host :: F.Field f Text
+    , listen :: F.Field f Int
+    , workers :: F.Field f Int
+    }
+    deriving stock (Generic)
+
+  instance F.Partial ServerF
+
+  type Server = ServerF F.Identity   -- ordinary fields: host :: Text
+
+  serverDefaults :: ServerF Maybe
+  serverDefaults = (F.emptyPartial @ServerF) {listen = Just 8080, workers = Just 4}
+
+  -- given a loaded configuration `loaded :: F.Loaded`, every missing field
+  -- is reported at once, each with the env var, CLI flag, or file key
+  -- that would have set it:
+  --
+  --   F.extractPartial serverDefaults loaded :: Either F.ConfigErrors Server
+  ```
+
+  `F.extractTotal` takes *total* defaults (`ServerF Identity`). Its type
+  guarantees that a missing-field error cannot happen; only type errors in
+  the values that are present remain. Nested partial records are
+  supported, and `overlay`, `complete` and `total` are available for your
+  own layering.
+
+  ## Safety
+
+  * **Limits** (`F.defaultLimits`: depth 64, one million values; override
+    with `F.withLimits`) are enforced inside every parser, so a hostile
+    `[[[[...` megabyte is rejected at depth 65 without being built.
+  * No exception escapes `load`: I/O and parse failures are errors, and a
+    synchronous exception thrown by a third-party provider becomes an
+    `IoError` (asynchronous exceptions are re-thrown, as they must be).
+  * `ConfigErrors` is an `Exception` whose `displayException` is the
+    rendered report.
+
+  ## Testing your configuration
+
+  `Figment.Jail.withJail` runs a test in a fresh temporary working
+  directory with a snapshot of the environment, restores both afterwards,
+  and serialises jails process-wide, so jailed tests are safe under a
+  parallel runner. `Env.fromList` gives an environment provider fixed
+  variables, with no global state at all.
+
+  ## Compared with Rust figment
+
+  Feature parity: providers, the four strategies, profiles (default,
+  global, nested, selection), metadata with interpolated key names and the
+  code location where each provider was added, `Tagged`, `RelativePath`,
+  lossy extraction, `extract_inner`/`focus`/`find_value`/`contains`, a
+  test jail, and figments as providers.
+
+  Beyond it:
+
+  * all errors are reported at once, not one per run;
+  * TOML and YAML errors and values carry line and column;
+  * missing-field hints list the exact env var, flag and key to set;
+  * unknown fields come with "did you mean" suggestions;
+  * `extractTotal` guarantees, through its type, that no field is missing;
+  * resource limits are enforced inside the parsers, YAML alias bombs are
+    defeated, and the YAML 1.2 core schema avoids the Norway problem;
+  * conflicting env vars or flags are errors, never silently resolved;
+  * the builder is a lawful monoid with property-tested laws.
+
+  ## Building
+
+  ```bash
+  cabal build all
+  cabal test
+  bash scripts/check-compile-fail.sh   # the compile-time guarantees
+  cabal bench
+  ```
+
+  Supported compilers: GHC 9.10 and 9.12.
+
+  Version 0.2.0.0 is a breaking redesign of 0.1; see the changelog. The
+  source distribution also contains the design record: `ADRs/` (decisions
+  016 onwards apply to 0.2) and `docs/audit-remediation.md` (each problem
+  found in 0.1, how it was fixed, and the test that pins it).
+
+  License: BSD-3-Clause.
+description-type: markdown
+hash: 09a983d37f3f3375c4032025079c831fa7520813cdf23f77191ae6ef2ed4cc49
+homepage: https://github.com/Bombay-Boyz/Figment
+latest: 0.2.0.0
+license-name: BSD-3-Clause
+maintainer: bombay.boyz@hotmail.com
+synopsis: Layered configuration with provenance, profiles and complete error reports
+test-bench-deps:
+  QuickCheck: '>=2.14 && <2.17'
+  aeson: '>=0'
+  base: '>=0'
+  bytestring: '>=0'
+  containers: '>=0'
+  criterion: '>=1.6 && <1.7'
+  deepseq: '>=0'
+  figment: '>=0'
+  filepath: '>=0'
+  tasty: '>=1.4 && <1.6'
+  tasty-golden: '>=2.3 && <2.4'
+  tasty-hunit: '>=0.10 && <0.11'
+  tasty-quickcheck: '>=0.10 && <0.12'
+  text: '>=0'
+  time: '>=0'
+  vector: '>=0'
