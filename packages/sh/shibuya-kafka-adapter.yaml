@@ -10,6 +10,7 @@ all-versions:
 - 0.9.0.0
 - 0.9.0.1
 - 0.9.1.0
+- 0.12.0.0
 author: Nadeem Bitar
 basic-deps:
   base: ^>=4.21.0.0
@@ -21,7 +22,7 @@ basic-deps:
   hw-kafka-client: '>=5.3 && <6'
   hw-kafka-streamly: ^>=0.2
   kafka-effectful: ^>=0.3.1.0
-  shibuya-core: ^>=0.10.0.0
+  shibuya-core: ^>=0.12.0.0
   stm: ^>=2.5
   streamly: ^>=0.11
   streamly-core: ^>=0.3
@@ -30,6 +31,34 @@ basic-deps:
   unordered-containers: ^>=0.2
 changelog: |
   # Changelog
+
+  ## 0.12.0.0 — 2026-10-26
+
+  ### Breaking Changes
+
+  - Require the published `shibuya-core ^>=0.12.0.0` across the library, tests,
+    examples, and benchmarks. Its delivery-status contract lets the runner skip
+    superseded deliveries. This also adopts the extended application configuration,
+    processor metrics, and paused-state API introduced in core 0.11.0.0 from
+    `mori://shinzui/shibuya`.
+  - In the exposed internal module, replace `dropStaleRecords` with `gateRecords`;
+    `kafkaSource` now yields seek-stamped `Polled` records.
+
+  ### Bug Fixes
+
+  - Under serial single-message processing, skip buffered successors before
+    handler entry until the retried record resolves. Same-batch work already
+    admitted together and later revocation races retain their documented limits.
+  - Retain replayed successors behind a pending retry so successful processing
+    advances stored offsets to the log end without a restart. Missing retry offsets
+    resume at the next available record with a warning.
+
+  ### Other Changes
+
+  - Keep all three repository packages on the shared `0.12.0.0` version line.
+  - Update the Nix library build to use the published Shibuya core 0.12.0.0.
+  - Run integration tests against the project-local Redpanda cluster, with
+    `KAFKA_TEST_BROKER` available to select another broker.
 
   ## 0.9.1.0 — 2026-09-21
 
@@ -393,7 +422,9 @@ description: |
 
   Offset reset policy belongs to the `Subscription` passed to `runKafkaConsumer`, for example `topics [TopicName "orders"] <> offsetReset Earliest`. `KafkaAdapterConfig.topics` is metadata used for adapter naming and a construction-time warning if it differs from the live subscription.
 
-  `AckRetry` seeks the partition back to the failed message and does not store that message's offset. `AckDeadLetter` stores the offset so the consumer group moves on, prints `[shibuya-kafka-adapter] WARNING: dead-lettered message DROPPED` to stderr, and makes the message unrecoverable from the group's committed position. This adapter does not include a DLQ producer.
+  `AckRetry` seeks the partition back to the failed message and does not store that message's offset. Records polled before the seek are discarded. Replayed successors wait behind the retried record until it is resolved; if retention or compaction removed that offset, the adapter warns, abandons the missing record, and resumes at the next available offset. `AckDeadLetter` stores the offset so the consumer group moves on, prints `[shibuya-kafka-adapter] WARNING: dead-lettered message DROPPED` to stderr, and makes the message unrecoverable from the group's committed position. This adapter does not include a DLQ producer.
+
+  Under serial single-message processing, already-buffered successors are skipped before handler entry and redelivered after the retried record resolves. This preserves partition handler order, subject to the missing-offset recovery policy. A retry cannot undo successors already admitted in the same batch; later superseded batches are skipped. Concurrent processing is unsupported and can admit a successor before the retry is recorded.
 
   Kafka does not expose a per-message delivery-attempt counter through this consumer API, so `Envelope.attempt` is always `Nothing`. Handlers that need bounded retries must use their own store or return `AckHalt` to stop the stream.
 
@@ -401,7 +432,7 @@ description: |
 
   On shutdown, the adapter commits offsets stored so far and signals the source stream to stop. Let the surrounding `runKafkaConsumer` scope end normally after stopping the app so the consumer close path can flush offsets stored during the drain window.
 
-  For rebalance visibility, create state with `newKafkaAdapterState`, install `Kafka.Consumer.setCallback (Kafka.Consumer.rebalanceCallback (kafkaRebalanceHandler state))` before consumer creation, and pass the same state to `kafkaAdapterWith`. The helper logs rebalance events and clears retry barriers for revoked partitions; in-flight fencing for cooperative rebalances is out of scope.
+  For rebalance visibility, create state with `newKafkaAdapterState`, install `Kafka.Consumer.setCallback (Kafka.Consumer.rebalanceCallback (kafkaRebalanceHandler state))` before consumer creation, and pass the same state to `kafkaAdapterWith`. The helper logs rebalance events and fences deliveries from revoked assignments. Deliveries already revoked when their status is checked are skipped before handler entry. A revocation after that admission check cannot cancel an admitted handler.
 
   ## Packages
 
@@ -445,10 +476,14 @@ description: |
   ## License
 
   MIT. See package cabal files for details.
+
+
+  The adapter requires the published `shibuya-core ^>=0.12.0.0`, which provides
+  the delivery-status API used to skip superseded deliveries before handler entry.
 description-type: markdown
-hash: 4d0adca744aeb8f91cfa27f2f3627cf4aea560427154eaa28a62499ba31ddfb7
+hash: 50e407cbde020a9701e29cd3623cb7c1ae2aad8365f0aebda08065ad1a117ad7
 homepage: https://github.com/shinzui/shibuya-kafka-adapter
-latest: 0.9.1.0
+latest: 0.12.0.0
 license-name: MIT
 maintainer: nadeem@gmail.com
 synopsis: Kafka adapter for the Shibuya queue processing framework
@@ -464,7 +499,7 @@ test-bench-deps:
   kafka-effectful: '>=0'
   process: '>=0'
   random: '>=0'
-  shibuya-core: ^>=0.10.0.0
+  shibuya-core: ^>=0.12.0.0
   shibuya-kafka-adapter: '>=0'
   stm: '>=0'
   streamly: '>=0'
