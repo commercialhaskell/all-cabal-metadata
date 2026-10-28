@@ -1,5 +1,6 @@
 all-versions:
 - 0.1.0.0
+- 0.2.0.0
 author: Tony Morris <ʇǝu˙sıɹɹoɯʇ@ןןǝʞsɐɥ> <dibblego>
 basic-deps:
   aeson: '>=2.2.3 && <2.4'
@@ -11,20 +12,65 @@ basic-deps:
   deepseq: '>=1.4.8.1 && <2'
   directory: '>=1.3.8.5 && <2'
   document-build: '>=0'
-  either-n: '>=0.1 && <0.2'
   exitcode: '>=0.3.0.1 && <0.4'
   filepath: '>=1.4.301.0 && <1.6'
-  filepather: '>=0.7 && <0.8'
+  filepather: '>=0.8 && <0.9'
   lens: '>=5.2.1 && <6'
   mtl: '>=2.3.1 && <2.4'
   natural: '>=0.5.0.1 && <0.6'
   process: '>=1.6.19.0 && <2'
+  tagged: '>=0.8.7 && <0.9'
   temporary: '>=1.3 && <2'
   text: '>=2.0.2 && <2.2'
   time: '>=1.12.2 && <2'
   transformers: '>=0.6.1 && <0.7'
 changelog: |
   # Changelog
+
+  ## 0.2.0.0
+
+  * Depend on filepather 0.8, and replace the optics of every data type with
+    the classy optics recipe of claude-haskell: each data type has a class,
+    `TLike`, whose method is its own name (`commandLine`, `buildError`,
+    `directories`, `target`, `context`, `gitDetails`, `imageInfo`,
+    `outputFile`), each field and constructor has a name, a class in its own
+    module under Document.Build.Name, and each data type has a manifest
+    (`lawNamesT`), a synonym and function of inheritance (`InheritT`,
+    `inheritT`) and, where it holds another data type, a check of inheritance
+    (`inheritsT`)
+  * Remove the GetX, HasX, ReviewX and AsX classes, and the Field and Injection
+    instances of every data type; the field lenses keep their names
+    (`commandLineProgram`, `outputDirectory`, `gitCommitHash`, `imageWidth`,
+    `outputPath` and so on), and are read with `view (cloneLens n)`
+  * `ReviewBuildError e` is a constraint synonym for
+    `BuildErrorLike Tagged Identity e e`, the class of BuildError at
+    `review`; it needs FlexibleContexts
+  * The constructors of BuildError with two or more fields each hold a product
+    type of their own, in a module under Document.Build.Error: ProcessFailed,
+    ProcessOutputUnrecognised, OutputFileMissing, StringsMissing,
+    FileTypeUnsupported, InputFilesTooFew and OutputNotInDirectory, held by
+    BuildErrorProcessFailed and so on; the prisms `_ProcessFailed` and so on
+    are the names `processFailed`, `inputFileMissing`, `cycle` and so on, and
+    BuildError inherits the names of the types it holds, such as `file` and
+    `commandLine`, as affine traversals
+  * Move CommandLine to Document.Build.CommandLine, Directories to
+    Document.Build.Directories, Target to Document.Build.Target, GitDetails to
+    Document.Build.GitDetails, ImageInfo to Document.Build.ImageInfo and
+    OutputFile to Document.Build.OutputFile; the prisms `_TargetFile`,
+    `_TargetDirectory` and `_TargetComplete` are the names `targetFile`,
+    `targetDirectory` and `targetComplete`, and the lenses
+    `contextDirectories` and `contextTarget` are `directories` and `target`
+  * Rename the operations gitDetails and imageInfo to readGitDetails and
+    readImageInfo, because `gitDetails` and `imageInfo` are the names of
+    GitDetails and ImageInfo
+  * Document.Build exports the name `cycle`, which has the same name as
+    Prelude.cycle
+  * Remove the dependency on either-n, and depend on tagged
+  * Build with -Werror=incomplete-patterns, and without
+    -Wredundant-constraints
+  * Add hedgehog tests of the classy optics: generators in the shape of each
+    manifest, the coverage of each sum, the manifest laws, and the laws of the
+    kind of every instance of every name
 
   ## 0.1.0.0
 
@@ -116,14 +162,14 @@ description: |
   ```haskell
   newtype Tracked f a = Tracked (FilePather (ReaderT Trail (ExceptT Cycle f)) (Outputs, a))
 
-  step  :: Applicative f => String -> (FilePath -> [FilePath]) -> FilePather f a -> Tracked f a
-  step' :: Functor f => String -> FilePather f ([FilePath], a) -> Tracked f a
+  track  :: Applicative f => String -> (FilePath -> [FilePath]) -> FilePather f a -> Tracked f a
+  track' :: Functor f => String -> FilePather f ([FilePath], a) -> Tracked f a
   ```
 
   A `Tracked` value runs with the `Trail` of its input file: the steps that
-  built it, back to its source file. `step` checks the trail before it runs: a
+  built it, back to its source file. `track` checks the trail before it runs: a
   step that is already in the trail, or that would make a file already in the
-  trail, is stopped with a `Cycle`, and does not run. `step'` checks after it
+  trail, is stopped with a `Cycle`, and does not run. `track'` checks after it
   runs, for steps whose outputs are known only then. A `Cycle` describes the
   whole chain:
 
@@ -159,9 +205,9 @@ description: |
   | `.fodt`, `.fods`, `.fodp`, `.fodg` | `libreofficeZipped` | `.odt`, `.ods`, `.odp`, `.odg` |
   | LibreOffice, Word | `libreoffice`, `libreofficeToPdf`, ... | any format LibreOffice exports |
   | PDF | `pdfSplit`, `pdfBurst` | PDF files |
-  | any file | `gitDetails`, `gitPlaceholders` | the last commit and authors, and placeholders for them |
+  | any file | `readGitDetails`, `gitPlaceholders` | the last commit and authors, and placeholders for them |
   | text file | `replaceStrings`, `requireStrings` | a file with strings replaced |
-  | image | `imageInfo` | format, width, height, resolution, ... |
+  | image | `readImageInfo` | format, width, height, resolution, ... |
   | image | `imageResize`, `imageConvert` | images |
   | directory | `pdfJoin`, `pdfConcatenate`, `pdftk` | one PDF of the PDF files in it |
   | directory | `imageAppend` | one image of images in it, side by side |
@@ -188,14 +234,40 @@ description: |
       p <- requireInput
       o <- lift (process (CommandLine "wc" ["-w", p]))
       maybe
-        (lift (failBuild (ProcessOutputUnrecognised (CommandLine "wc" ["-w", p]) "a word count")))
+        (lift (failBuild (BuildErrorProcessOutputUnrecognised (ProcessOutputUnrecognised (CommandLine "wc" ["-w", p]) "a word count"))))
         pure
         (readMaybe (takeWhile (/= ' ') o))
   ```
 
-  Operations fail with any error type `e` that has a `ReviewBuildError`
-  instance, so a build file can have an error type of its own that includes
-  `BuildError`.
+  Operations fail with any error type `e` for which `ReviewBuildError e` holds:
+  `e` has an instance of `BuildErrorLike`, the class of `BuildError`, that
+  makes a `BuildError` into an `e`. So a build file can have an error type of
+  its own that includes `BuildError`. `ReviewBuildError e` needs
+  `FlexibleContexts`.
+
+  ### Optics
+
+  Every data type has a name for each of its fields and constructors: a class
+  whose method is an optic, of the kind that each data type gives it (the
+  classy optics recipe of
+  [claude-haskell](https://github.com/sirius-beta/claude-haskell)). Each name
+  is in its own module under `Document.Build.Name` (or `System.FilePather.Name`),
+  and each data type has its own name too, such as `buildError`, `directories`
+  and `gitDetails`. A data type that holds another inherits its names, so
+  `outputDirectory` reaches the output directory of `Directories` and of a
+  `Context`, and `file` reaches the file that a `BuildError` is about, through
+  whichever constructor holds one:
+
+  ```haskell
+  view (cloneLens outputDirectory) context    -- a lens
+  preview file err                            -- an affine traversal
+  review fileNotUtf8 "notes.odt" :: BuildError
+  ```
+
+  Read one value with `view (cloneLens n)`, at most one with `preview n`, and
+  set with `set` and `over`. A constructor of `BuildError` with two or more
+  fields holds a type of its own, such as
+  `BuildErrorProcessFailed (ProcessFailed commandLine stdout stderr)`.
 
   ## 3. Rules and builds
 
@@ -408,9 +480,9 @@ description: |
   bin/lint.sh --check
   ```
 description-type: markdown
-hash: fc6242fe4650fb269d8e07530b8ab483f98859d6d2e1e2a8f4d37b7dbf81974b
+hash: 01ce06b08b8a8aeacb8c04a3239ad4a2adf049cf95130bf0121bbc2f9f6f9f07
 homepage: https://gitlab.com/tonymorris/document-build
-latest: 0.1.0.0
+latest: 0.2.0.0
 license-name: BSD-3-Clause
 maintainer: Tony Morris <ʇǝu˙sıɹɹoɯʇ@ןןǝʞsɐɥ> <dibblego>
 synopsis: Build documents with Haskell
@@ -423,6 +495,7 @@ test-bench-deps:
   document-build: '>=0'
   filepather: '>=0'
   hedgehog: '>=1.2 && <2'
+  hedgehog-fn: '>=1.1 && <2'
   lens: '>=5.2.1 && <6'
   mtl: '>=2.3.1 && <2.4'
   process: '>=1.6.19.0 && <2'
