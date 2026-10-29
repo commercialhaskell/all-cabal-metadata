@@ -26,25 +26,107 @@ all-versions:
 - 0.6.1.0
 - 0.6.1.1
 - 0.6.2.0
+- 1.0.0.0
 author: Marcin Szamotulski
 basic-deps:
   base: '>=4.12 && <4.23'
   bytestring: '>=0.10 && <0.13'
+  containers: '>=0.6.0.1 && <0.9'
+  deepseq: '>=1.4 && <1.6'
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
   ghc: '>=8.4 && <10'
-  ghc-tags-core: ^>=0.6
-  ghc-tags-pipes: ^>=0.1.1
+  ghc-tags-core: '>=1.0.0.0 && <1.1'
+  ghc-tags-pipes: ^>=0.2.0.1
   ghc-tags-plugin: '>=0'
   lukko: ^>=0.1
   mtl: '>=2.2 && <2.4'
-  optparse-applicative: '>=0.15.1 && <0.19'
+  optparse-applicative: '>=0.15.1 && <0.20'
   pipes: ^>=4.3
   pipes-bytestring: ^>=2.1
   pipes-safe: ^>=2.3
   text: '>=1.2 && <2.2'
 changelog: |
   # Revision history for ghctags
+
+  ## 1.0.0.0 -- 2026-10-28
+
+  **Breaking changes** (existing tags files must be regenerated):
+
+  - Kind characters for type and data families are swapped to follow the
+    convention that uppercase denotes an instance: `f` = type family,
+    `F` = type family instance, `d` = data family, `D` = data family instance.
+
+  - The type-signature kind character changed from `~` to `⊢`.
+
+  - Pattern synonym signatures now use the signature kind (`⊢`) instead of
+    the pattern kind (`p`); unsigned pattern synonyms are unaffected.
+
+  - Relative tags file paths are now resolved from the nearest
+    `cabal.project`, `cabal.project.local`, or `stack.yaml` rather than
+    from the package's `*.cabal` directory.
+
+  - Extend `--debug` with wall-clock timings for lock acquisition, reading,
+    parsing, generation, merging, writing, and the complete update. Cover ctags,
+    streaming ctags, etags, and Template Haskell updates without double-counting
+    nested streaming stages.
+
+  - Add `--no-filter` / `-F` to retain signature/definition pairs and same-named
+    type/data constructors. Filtering remains enabled by default.
+
+  - Correct export flags for associated type/data family instances and type defaults.
+    Tag defaults using the family name rather than the right-hand-side type, and
+    keep data-instance constructors private unless their exports include them.
+
+  - Omit `file:` on default and instance methods exported through their class,
+    including instance signatures, while retaining it on nested local bindings.
+
+  - Emit pattern synonym signatures with the signature kind (`⊢`) and a `type:`
+    field, suppressing the corresponding pattern definition tags. Unsigned pattern
+    definitions retain the pattern kind (`p`).
+
+  - Add `--qualified` to emit defining-module-qualified names alongside ordinary
+    names, including Template Haskell declarations, in ctags and etags output.
+
+  - Extend `gtp-check` with duplicate declaration reports, source file and line
+    checks, and comparison of ctags and etags declaration locations, preserving
+    duplicate counts and resolving paths relative to each tags file.
+
+
+  - Resolve relative tags paths from the nearest `cabal.project` or `stack.yaml`,
+    honoring `STACK_YAML`. Warn and fall back to the package directory when no
+    project configuration is found.
+
+  - Extend `gtp-check` with `--etags`/`-e`, parsed tag counts, ctags program/version
+    metadata, parser diagnostics and warnings for unsorted ctags files.
+
+  - Refresh ctags metadata during Template Haskell updates, replacing stale or
+    missing headers. Correct signature and type/data-family kind descriptions.
+
+  - Keep local bindings when an unrelated binding with the same name has a signature.
+
+  - Filter etags declarations before applying file/line ordering, consistently
+    removing redundant definitions and type constructors in both output formats.
+
+  - Apply signature filtering to Template Haskell updates, removing redundant
+    function tags even when generated declarations share the same source location.
+
+  - Preserve source filenames when Template Haskell updates an etags file
+    containing tags from multiple modules.
+
+  - Recover valid tags before and after malformed records, report skipped input,
+    and continue updating damaged tags files, including streaming and TH updates.
+
+  - Write tags atomically: output is staged to a private temporary file beside
+    the destination and published with a rename. Concurrent readers always see a
+    complete file; a failed or aborted update never corrupts the existing tags.
+    The temporary file inherits the destination's permissions before publication.
+
+  - Remove duplicate tags consistently in streaming and non-streaming updates,
+    including when the existing tags file is empty.
+
+  - Identify compiled modules relative to the tags directory, keeping modules with
+    the same source path in different packages separate in shared tags files.
 
   ## 0.6.2.0 -- 2026-03-08
 
@@ -175,23 +257,101 @@ description: |
   ----------------
 
   ```
-  Usage: <program> [-e|--etags] [--stream] [--debug] [file_path]
+  Usage: <program> [-e|--etags] [--stream] [--debug] [--qualified] [-F|--no-filter] [file_path]
     write tags from ghc abstract syntax tree
 
   Available options:
     -e,--etags               produce emacs etags file
     --stream                 stream existing tags (ctags only)
-    file_path                tags file: default tags or TAGS (when --etags is
-                             specified)
-    --debug                  debugging output
+    file_path                tags file relative to cabal.project or stack.yaml:
+                             default tags or TAGS (with --etags)
+    --debug                  tag counts, file sizes, and update timings
+    -q,--qualified           also generate names qualified by the defining module
+    -F,--no-filter           retain both signatures and definitions
   ```
 
-  It can be an absolute path or relative (to the `*.cabal` package file rather
-  than `cabal.project` file), for example:
+  The tags path can be absolute or relative to the nearest directory containing
+  `cabal.project`, `cabal.project.local`, or `stack.yaml`, searching upward from
+  the compiled package. Packages using the same project root can share one tags
+  file:
   ```
-  -fplugin-opt=Plugin.GhcTags:../tags
+  -fplugin-opt=Plugin.GhcTags:tags
   ```
-  This is useful if for *cabal packages* which are located in subdirectories.
+  A `cabal.project.local` file is a project-root marker even without a
+  `cabal.project` beside it. A nearer marker takes precedence over configurations
+  in parent directories. For example, with `/repo/cabal.project` and
+  `/repo/package/cabal.project.local`, compiling that package writes to
+  `/repo/package/tags`.
+
+  If `STACK_YAML` points to an existing configuration file, its directory is used
+  instead. If no project configuration is found, the plugin prints a warning and
+  resolves the path relative to the nearest `*.cabal` package file. When no package
+  file is found either, it uses the compiler's working directory. Absolute output
+  paths are used unchanged.
+
+  ## ● Qualified names
+
+  To generate module-qualified names alongside ordinary names, enable:
+
+  ```
+  -fplugin-opt=Plugin.GhcTags:--qualified
+  ```
+
+  For example, a declaration `lookup` in `Data.Map` produces both `lookup` and
+  `Data.Map.lookup`, pointing to the same declaration. This works with ctags,
+  streaming ctags, etags, and declarations generated by Template Haskell. Module
+  tags themselves are kept unchanged. Modules without a module header use `Main`.
+
+  The prefix identifies the module containing the declaration. It does not resolve
+  import aliases or re-exports: `import qualified Data.Map as M` does not add
+  `M.lookup`. Local bindings also receive module-prefixed names; those names
+  identify their containing module, rather than a valid qualified import.
+
+  Only recompiled modules are updated. Rebuild all modules after enabling or
+  disabling this option to update existing tags consistently.
+
+  ## ● Signature and definition filtering
+
+  By default, a type signature replaces the corresponding function or pattern
+  synonym definition in the tags file. A data constructor also takes precedence
+  over a type constructor with the same name. To retain both tags, use:
+
+  ```
+  -fplugin-opt=Plugin.GhcTags:--no-filter
+  ```
+
+  The short form is `-fplugin-opt=Plugin.GhcTags:-F`. This applies to ctags,
+  streaming ctags, etags, and Template Haskell signature/definition pairs. Tags
+  remain sorted. Recompile all modules after changing this option to update
+  existing tags consistently.
+
+  ## ● Update timings
+
+  Enable timing diagnostics with:
+
+  ```
+  -fplugin-opt=Plugin.GhcTags:--debug
+  ```
+
+  Each completed update reports monotonic wall-clock durations in milliseconds:
+
+  - `lock-wait`: opening and acquiring the tags-file lock.
+  - `read`: reading the existing tags file.
+  - `parse`: parsing its records.
+  - `generate`: extracting and preparing tags for the current module or splice.
+  - `merge`: combining old and new tags, including sorting where required.
+  - `write`: formatting, writing, and flushing the replacement's contents.
+  - `total`: elapsed time from before lock acquisition until after release,
+    including temporary-file close/rename, bookkeeping, and other debug output.
+
+  Reports include the module, tags path, output mode, and whether the update came
+  from parsing or a Template Haskell declaration splice. Streaming ctags measures
+  each stage as records flow through it, excluding upstream work from downstream
+  phase times. It does not load the existing file into memory for timing.
+
+  Debug mode forces lazy results within their measured phase and adds measurement
+  overhead, especially when streaming. The phase times need not sum to `total`.
+  With debug disabled, timing does not read the clock or force additional results.
 
   ## ● Emacs support
 
@@ -202,92 +362,176 @@ description: |
 
   ## ● Editor configuration
 
-  By default each generated tags file is put next to the corresponding `*.cabal`
-  package file.  If you just have a repo with a cabal file in the main directory
-  `vim` default `tags` setting will work, if you have some modules in
-  subdirectories you will either need to set:
+  By default the generated `tags` file is put in the nearest directory containing
+  `cabal.project`, `cabal.project.local`, or `stack.yaml`. To let Vim or Neovim find
+  it while editing files in package subdirectories, enable searching parent
+  directories:
   ```
-  :set tags+=*/tags
+  :set tags+=./tags;
   ```
-  or pass an option to modify where tags are written, see below.
+  You can also pass an option to change where tags are written, see below.
 
   ● Configuration: Ghc / Cabal / Stack
   ------------------------------------
 
-  Configuration of this plugin requires some familiarity with `ghc` packages.
-  Check out
-  [documentation](https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/packages.html#packages)
-  to use `-plugin-package` or `-plugin-package-id`.  In the examples below we
-  use `-plugin-package=ghc-tags-plugin` but specifying version
-  `-package=ghc-tags-plugin-0.0.0.0` (where `0.0.0.0` is the version you
-  installed), might work better.  You can use `ghc-pkg latest ghc-tags-plugin`
-  (likely with appropriate `--package-db` flag) to check which version is
-  available.
+  ## ● Cabal: quick start with GHCi
 
-  ## ● Ghc
+  To generate tags in a REPL session without installing the plugin separately or
+  editing any `.cabal` files, run:
 
-  ```
-  ghc -plugin-package=ghc-tags-plugin -fplugin=Plugin.GhcTags
+  ```sh
+  cabal repl TARGET \
+    --build-depends=ghc-tags-plugin \
+    --repl-options=-fplugin=Plugin.GhcTags \
+    --repl-options=-fplugin-opt=Plugin.GhcTags:tags
   ```
 
-  You might also need to pass `-package-db` in which you installed the plugin.
+  Replace `TARGET` with a component such as `lib:my-package` or `exe:my-program`.
+  Cabal builds the plugin and makes it available to that REPL session. This
+  command was tested with Cabal 3.16.1.0 and GHC 9.10.3 using a local plugin
+  checkout and this repository's project configuration. See Cabal's
+  [`--build-depends` documentation](https://cabal.readthedocs.io/en/stable/cabal-commands.html#cmdoption-repl-build-depends).
 
-  ## ● Cabal
+  The plugin's dependencies are solved together with the target project's
+  dependencies, using that project's `index-state`, constraints, and
+  `allow-newer` settings.  You might need to modify `allow-newer` via
+  [`--allow-newer` documentation](https://cabal.readthedocs.io/en/stable/cabal-commands.html#cmdoption-allow-newer).
 
-  Install the `ghc-tags-plugin` to cabal store with:
-  ```
-  cabal install --lib ghc-tags-plugin
+
+  This configures the REPL session only. For normal builds and HLS, use the
+  persistent configuration below.
+
+  ## ● Cabal: persistent configuration
+
+  This setup enables the plugin through `cabal.project.local`, without changing
+  any `.cabal` files.
+
+  First, install the plugin into Cabal's store:
+
+  ```sh
+  cabal install --lib ghc-tags-plugin --package-env=ghc-tags
   ```
 
-  In `cabal.project.local` file add [`program-options`] stanza, which enables the plugin
-  for all local packages:
+  If installation encounters the GHC 9.14 dependency bounds described above,
+  add `--allow-newer=pipes-safe:base,ghc-tags-pipes:base` to this command too.
+
+  The named `ghc-tags` environment keeps this installation separate from the
+  default GHC package environment. The configuration below loads the plugin
+  through its package database, so it does not require selecting that environment.
+  See Cabal's [package environment documentation](https://cabal.readthedocs.io/en/stable/cabal-commands.html#adding-libraries-to-ghc-package-environments).
+
+  Use the same GHC to install the plugin and build the target project. If the
+  project selects a particular compiler, pass `-w /absolute/path/to/ghc` to the
+  installation command as well. Reinstall the plugin when changing compilers.
+
+  With Cabal 3.16.1.0 or newer, run this in the target project to find its compiler
+  and the corresponding store directory:
+
+  ```sh
+  cabal path --compiler-info
   ```
+
+  Append `/package.db` to the reported `compiler-store-path` to obtain
+  `PACKAGE_DB`. For example, the resulting path might be:
+
+  ```text
+  /home/alice/.cabal/store/ghc-9.10.3-1be3/package.db
+  ```
+
+  Use the reported path rather than constructing it from the GHC version:
+  compiler ABI suffixes and custom store locations can change the directory name.
+  With older Cabal versions, locate the compiler's `package.db` in the Cabal store
+  (the store location can be queried with `cabal path --store-dir` where available).
+
+  Add the following [`program-options`] stanza to `cabal.project.local`:
+
+  ```cabal
   program-options
       ghc-options: -package-db=PACKAGE_DB
                    -plugin-package=ghc-tags-plugin
                    -fplugin=Plugin.GhcTags
+                   -fplugin-opt=Plugin.GhcTags:tags
   ```
 
-  `PACKAGE_DB` is likely to be something like
-  (all environment variables must be expanded):
-  ```
-  ${HOME}/.cabal/store/ghc-9.12.2/package.db
-  ```
-  or on Windows (note the `""` syntax)
-  ```
-  "C:\\Users\\USER_NAME\\AppData\\Roaming\\cabal\\store\\ghc-8.6.5\\package.db
+  Replace `PACKAGE_DB` with the absolute path found above. Environment variables
+  such as `$HOME` are not expanded in this file. If the path contains spaces,
+  quote the entire argument, for example `"-package-db=C:/Users/My Name/cabal/store/ghc-VERSION/package.db"`.
+
+  The stanza applies to all local packages. You can now run `cabal build` or
+  `cabal repl` normally. When HLS uses a Cabal cradle, restart it after changing
+  the configuration so it reloads the compiler options.
+
+  The default relative path shares a tags file across packages that resolve to the
+  same project root. To choose an absolute destination, use:
+
+  ```text
+  -fplugin-opt=Plugin.GhcTags:/absolute/path/to/tags
   ```
 
-  Note that you can also configure in this way non-local projects.  You will
-  likely want to pass `-fplugin-opt=Plugin.GhcTags=PATH` where `PATH` is *an
-  absolute* path to your `tags` file.
+  Relative paths in the examples above are resolved from the project configuration
+  directory. For example, `../tags` writes one directory above the selected
+  `cabal.project`, `cabal.project.local`, or `stack.yaml`.
 
+  To apply the plugin to dependencies as well, use a `package *` stanza instead
+  of `program-options`. This can rebuild dependencies and applies the options to
+  the plugin's own dependencies too; install the plugin before enabling it.
+
+  ## ● GHC directly
+
+  After installing the plugin, pass its package database and enable it:
+
+  ```sh
+  ghc -package-db=PACKAGE_DB \
+      -plugin-package=ghc-tags-plugin \
+      -fplugin=Plugin.GhcTags Main.hs
+  ```
+
+  Replace `PACKAGE_DB` as described above. If multiple plugin versions are
+  installed, select one with `-plugin-package=ghc-tags-plugin-VERSION`, or use
+  `-plugin-package-id=UNIT_ID` to select a particular installed instance. Inspect
+  the database with:
+
+  ```sh
+  ghc-pkg --package-db=PACKAGE_DB list ghc-tags-plugin
+  ```
+
+  See GHC's [package documentation](https://downloads.haskell.org/ghc/latest/docs/users_guide/packages.html)
+  and [compiler plugin documentation](https://downloads.haskell.org/ghc/latest/docs/users_guide/extending_ghc.html#using-compiler-plugins).
 
   ## ● Stack
 
-  This is alternative method, which also could be modified for `cabal` (but it is
-  not as nice as the previous method where you don't need to modify any files
-  checked in a VCS).
+  Add `ghc-tags-plugin` to `build-depends` in the relevant components of your
+  `.cabal` files, optionally behind a development flag. If the plugin is not in
+  your snapshot, add a release compatible with the snapshot's GHC to `extra-deps`
+  in `stack.yaml`.
 
-  Add `ghc-tags-plugin` to  `build-depends` in your `*.cabal` files. (You should
-  hide it behind a cabal flag).  And add these lines to `stack.yaml` file:
+  Configure the target package in `stack.yaml` under `ghc-options`:
 
-  ```
-  extra-deps:
-    - git: https://github.com/coot/ghc-tags-plugin
-      commit: a841dae7fb9c335101f7fa4187d02687d306f972
-
-  test-project: -plugin-package=ghc-tags-plugin
+  ```yaml
+  ghc-options:
+    my-package: -plugin-package=ghc-tags-plugin
                 -fplugin=Plugin.GhcTags
+                -fplugin-opt=Plugin.GhcTags:tags
   ```
+
+  Replace `my-package` with your package name. This Stack setup uses a declared
+  build dependency; the Cabal setups above avoid changing `.cabal` files.
 
   ## ● Ghcid
 
-  If you follow the cabal configuration as above (using `stack` should work too)
+  For automatic tag updates while editing, use the REPL quick start with ghcid:
+
+  ```sh
+  ghcid --command="cabal repl TARGET --build-depends=ghc-tags-plugin --repl-options=-fplugin=Plugin.GhcTags --repl-options=-fplugin-opt=Plugin.GhcTags:tags"
   ```
-  ghcid --comaand "cabal repl project"
+
+  If you have already enabled the plugin in `cabal.project.local`, use:
+
+  ```sh
+  ghcid --command="cabal repl TARGET"
   ```
-  will update `tags` file as you modify your project.
+
+  Replace `TARGET` with the component you want ghcid to load.
 
 
   ## ● Makefile
@@ -296,6 +540,45 @@ description: |
   contains some useful commands, e.g. `install`,  `uninstall` or `reinstall` the
   package in a `package.db` (by default into `cabal` store).  This is mostly for
   development, but it could be useful in other scenarios as well.
+
+  ## ● Checking and comparing tags files
+
+  The optional `gtp-check` development tool reports tag counts, ctags metadata,
+  parser diagnostics, sorting problems, repeated declaration locations, missing
+  or unreadable source files, and line numbers outside their source files:
+
+  ```sh
+  cabal run -fgtp-check gtp-check -- tags
+  cabal run -fgtp-check gtp-check -- --etags TAGS
+  ```
+
+  Source paths are resolved relative to the directory containing each tags file,
+  so the command can be run from another directory. Duplicate locations mean
+  entries with the same source file, tag name and line number; kinds and columns
+  are not used to distinguish them.
+
+  For a tags file copied elsewhere, pass `--source-root /path/to/original/root`
+  to resolve source paths from its original directory. This override applies to
+  both files when comparing snapshots.
+
+  To compare the declarations in two files:
+
+  ```sh
+  cabal run -fgtp-check gtp-check -- tags --compare TAGS
+  cabal run -fgtp-check gtp-check -- --etags TAGS --compare tags
+  ```
+
+  The format of the comparison file is detected automatically. Both files can
+  also use the same format. Comparison uses canonical source paths, names and
+  line numbers, and preserves duplicate counts. Differences are reported with
+  concrete declaration locations. Tags without numeric line addresses are
+  reported and excluded from line checks and comparison; a ctags `line:` field
+  can supply the line number for an entry addressed by a search pattern.
+
+  Each diagnostic category shows up to ten examples by default. Use
+  `--max-examples N` to change the limit, or `--max-examples 0` to show all.
+  Tags-file read or parse errors and unequal comparisons return a nonzero exit
+  status. Other findings are warnings.
 
   ● Exceptions
   ------------
@@ -315,25 +598,26 @@ description: |
   ● Tips
   ------
 
-  - If you're getting installation problems when running
-    `cabal install --lib ghc-tags-plugin`; you may need to
+  - If GHC cannot find the installed plugin, check that installation and
+    compilation use the same compiler and package database:
 
-    * remove the installed version from
-      `~/.ghc/x86_64-linux-8.6.5/environments/default`
-    (or whatever is your default environment)
-
-    * unregister the installed version from cabal store (you can check what is
-    installed in your store with `ghc-pkg --package=PACKAGE_DB list | grep ghc-tags`
-    for the following command):
-
+    ```sh
+    ghc-pkg --package-db=PACKAGE_DB list ghc-tags-plugin
     ```
-    ghc-pkg --package-db=PACKAGE_DB unregister z-ghc-tags-plugin-z-ghc-tags-library ghc-tags-plugin
-    ```
+
+    After changing GHC versions, reinstall the plugin with the new compiler and
+    update `PACKAGE_DB` in `cabal.project.local`.
 
   - The plugin is safe for concurrent compilation, i.e. setting `jobs: $ncpus` is
     safe.  The plugin holds an exclusive (advisory) lock on a lock file.  This
     will create synchronisation between threads / process which are using
     the same `tags` file.
+
+  - Tag updates are written to a temporary file and renamed over the destination
+    only after a successful write. Interrupted compilation (including editor
+    cancellation) leaves the previous tags file intact. If tags were lost with an
+    older plugin version, rebuild the affected modules with `-fforce-recomp` to
+    regenerate them; an incremental build may skip those modules.
 
   - If you are working on a larger project, it might be better to not collect all
     tags in a single `tags` file, since at every compilation step one will need
@@ -373,10 +657,27 @@ description: |
   [`ghc-tags-core`]: https//hackage.haskell.org/package/ghc-tags-core
   [`program-options`]: https://cabal.readthedocs.io/en/stable/cabal-project-description-file.html#program-options
 description-type: markdown
-hash: 279fa8d993a2d0e749a2c75e119532c2adced6fced8b1bf96db40f30bfc834e9
+hash: def55b4f590a7cd69874f5c5b137ca8a018ed04a32ac863e0667343b2e710d13
 homepage: https://github.com/coot/ghc-tags-plugin#readme
-latest: 0.6.2.0
+latest: 1.0.0.0
 license-name: MPL-2.0
 maintainer: coot@coot.me
 synopsis: A compiler plugin which generates tags file from GHC parsed syntax tree.
-test-bench-deps: {}
+test-bench-deps:
+  base: '>=4.12 && <4.23'
+  bytestring: '>=0'
+  containers: '>=0'
+  deepseq: '>=0'
+  directory: '>=0'
+  filepath: '>=0'
+  ghc: '>=0'
+  ghc-boot-th: '>=0'
+  ghc-tags-core: '>=0'
+  optparse-applicative: '>=0'
+  pipes: '>=0'
+  quickcheck-instances: '>=0'
+  tasty: '>=0'
+  tasty-hunit: '>=0'
+  tasty-quickcheck: '>=0'
+  temporary: '>=0'
+  text: '>=0'
