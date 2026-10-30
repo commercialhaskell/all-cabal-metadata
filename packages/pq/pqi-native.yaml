@@ -26,6 +26,7 @@ all-versions:
 - 1.0.1.13
 - 1.0.1.14
 - 1.0.1.15
+- 1.0.1.16
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   base: '>=4.11 && <5'
@@ -40,6 +41,14 @@ basic-deps:
   unix: '>=2.7 && <2.9'
   vector: '>=0.12 && <0.14'
 changelog: |
+  # v1.0.1.16
+
+  ## Fixes
+
+  - Fixed reading a result's cells being quadratic in its rows ([#15](https://github.com/nikita-volkov/pqi-native/issues/15)). `mkResult` kept the rows, fields and parameter OIDs as lists, and `getvalue`, `getvalue'`, `getisnull` and `getlength` reached the requested row with `drop` from the head of the list on every call, so scanning every row through them took time quadratic in the row count: 3.9 s for 40,000 rows, where libpq, which indexes an array, took 17 ms. The rows, fields and parameter OIDs are now indexed into vectors once per result, on first access, and shared by every accessor, so each lookup takes constant time. Out-of-range indexes still return the same values. Caught by the `pqi-conformance` spec `Pqi.Conformance.Operation.Getvalue.ManyRows`.
+
+  - Fixed a synchronous call returning the results of an earlier query whose results were still unread ([#16](https://github.com/nikita-volkov/pqi-native/issues/16)). `exec`, `execParams`, `prepare`, `execPrepared`, `describePrepared` and `describePortal` sent their query and read up to the next `ReadyForQuery` without recording that a query was in flight. When an asynchronous exception, such as one from `timeout`, interrupted one of them while it waited, the interrupted query's messages stayed unread. The next call read them as its own and returned the interrupted query's result, and every call after that returned the result of the one before it, with no error. A `sendQuery` or `sendQueryParams` whose results were never fetched had the same effect on the synchronous call that followed it. libpq's `PQexecParams` is a blocking foreign call that cannot be interrupted, and `PQexecStart` reads and discards any leftover results before a synchronous call sends its query. The synchronous flows now do the same: they first discard any results still pending (outside pipeline mode), and they mark the connection busy from their send until their own `ReadyForQuery`, so an interrupted flow leaves its results to be discarded by the next one. If the connection is lost while discarding, the call returns `Nothing`, as `PQexec` does. Because the connection is now marked busy while a synchronous flow waits, a `cancel` from another thread reaches its query, where before it was skipped as if nothing were running. Caught by the `pqi-conformance` specs `Pqi.Conformance.Operation.ExecParams.Interrupted` and `Pqi.Conformance.Operation.Exec.Interrupted`.
+
   # v1.0.1.15
 
   ## Fixes
@@ -271,14 +280,14 @@ description: |
   otherwise a Unix-domain socket in `/tmp` on Unix-like systems, or `localhost`
   on Windows.
 description-type: markdown
-hash: bf78971658c1dc8032b6333e5f05f1c58fa4a8e942a0e312732fb8adadf759a4
+hash: 7aecbed38b8fa02602c7201768cc82314d382362dfee08d27e8dcf6b3b8c11bc
 homepage: https://github.com/nikita-volkov/pqi-native
-latest: 1.0.1.15
+latest: 1.0.1.16
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Native (pure-Haskell) adapter for pqi
 test-bench-deps:
   base: '>=4.11 && <5'
   hspec: '>=2.11 && <2.12'
-  pqi-conformance: ^>=1.0.16
+  pqi-conformance: ^>=1.0.17
   pqi-native: '>=0'
