@@ -1,0 +1,263 @@
+all-versions:
+- 0.1.0.0
+author: Kronor
+basic-deps:
+  base: '>=4.20 && <4.23'
+  bytestring: '>=0.11 && <0.13'
+  hasql-check: '>=0.5 && <0.6'
+  postgresql-syntax: '>=0.5 && <0.6'
+  prettyprinter: '>=1.7 && <1.8'
+  text: '>=2.0 && <2.2'
+  text-builder: '>=1.0 && <1.1'
+changelog: ''
+changelog-type: ''
+description: |
+  # hasql-th-format
+
+  Format the SQL inside your
+  [hasql-th](https://hackage.haskell.org/package/hasql-th) quasiquotes, in place.
+
+  It parses each statement with
+  [postgresql-syntax](https://hackage.haskell.org/package/postgresql-syntax) and
+  renders it again, so the layout comes from the statement's structure rather
+  than from whoever typed it:
+
+  ```haskell
+  recent =
+      [vectorStatement|
+          select o.id::int8, c.email::text, o.total::numeric from orders o join customer c on c.id = o.customer_id where o.placed_at > $1::timestamptz and o.status = $2::text order by o.placed_at desc limit 50
+      |]
+  ```
+
+  ```
+  $ hasql-th-format src/Shop/Orders.hs
+  Reformatted: src/Shop/Orders.hs
+  ```
+
+  ```haskell
+  recent =
+      [vectorStatement|
+          select
+              o.id::int8
+            , c.email::text
+            , o.total::numeric
+          from orders o
+          join customer c
+            on c.id = o.customer_id
+          where o.placed_at > $1::timestamptz
+            and o.status = $2::text
+          order by o.placed_at desc
+          limit 50
+      |]
+  ```
+
+  ## Contents
+
+  - [Installing](#installing)
+  - [Formatting](#formatting)
+  - [It will not change what a statement means](#it-will-not-change-what-a-statement-means)
+  - [Checking a refactor did not either: `hasql-th-audit`](#checking-a-refactor-did-not-either-hasql-th-audit)
+  - [The `kronor-syntax` flag](#the-kronor-syntax-flag)
+  - [Reference](#reference)
+  - [Limitations](#limitations)
+  - [Development](#development)
+
+  ## Installing
+
+  ```
+  git clone https://github.com/kronor-io/hasql-check
+  cd hasql-check/format
+  cabal install exe:hasql-th-format exe:hasql-th-audit
+  ```
+
+  It reads quotes through `hasql-check`'s lexer, which links against libpq, so
+  install your platform's PostgreSQL client library first (`libpq-dev` on Debian
+  and Ubuntu).
+
+  ## Formatting
+
+  Give it files. It rewrites every supported quasiquote in place and says which
+  files it touched:
+
+  ```
+  $ hasql-th-format src/Shop/Orders.hs src/Shop/Customers.hs
+  Reformatted: src/Shop/Orders.hs
+  ```
+
+  `--check` changes nothing and exits 1 if any file would be rewritten, which is
+  what you want in CI or a pre-commit hook:
+
+  ```
+  $ hasql-th-format --check src/Shop/Orders.hs
+  Would reformat: src/Shop/Orders.hs
+  ```
+
+  `--stdin` reads one file's worth of Haskell on standard input and writes the
+  formatted result to stdout, which is the quickest way to see what the formatter
+  does with a quote. It is Haskell it reads, not bare SQL: a statement on its own
+  has no quasiquote around it, and comes back untouched.
+
+  ```
+  $ printf 'q =\n    [vectorStatement|\n        select c.id::int8, c.email::text from customer c where c.active\n    |]\n' \
+      | hasql-th-format --stdin
+  q =
+      [vectorStatement|
+          select
+              c.id::int8
+            , c.email::text
+          from customer c
+          where c.active
+      |]
+  ```
+
+  These quoters are recognised: `singletonStatement`, `maybeStatement`,
+  `vectorStatement`, `foldStatement`, `resultlessStatement`,
+  `rowsAffectedStatement`.
+
+  ## It will not change what a statement means
+
+  After rendering, the formatter **re-parses its own output and compares the two
+  ASTs**. If they differ it writes nothing, leaves the file byte for byte as it
+  was, and fails:
+
+  ```
+  $ hasql-th-format src/Report/Ledger.hs
+  Error processing src/Report/Ledger.hs: line 164: AST mismatch: formatter rendered semantically-different SQL (renderer bug)
+  ```
+
+  That is a bug in this tool, not in your SQL — please report it. An earlier
+  version fell back silently to the unformatted text, and a renderer bug that
+  dropped a `DISTINCT ON` clause reached production that way.
+
+  There is no false-positive risk: `postgresql-syntax` parses
+  semantically-equivalent text to identical ASTs — whitespace, keyword case and
+  `::` spacing all normalise — so a mismatch is always real.
+
+  The other failure is `AST mismatch: formatter output did not re-parse`, meaning
+  the renderer emitted SQL that is not valid. It should be unreachable, and
+  reports the underlying parse error if it happens.
+
+  ## Checking a refactor did not either: `hasql-th-audit`
+
+  The check above runs per quote, at format time, against the input the formatter
+  was just handed. It cannot see a hand-edit, a tree-wide rename, or any change
+  `hasql-th-format` was never run on — and if the formatter itself crashes, it
+  does not run at all.
+
+  `hasql-th-audit` takes two versions of a file and compares their quotes by AST,
+  using only `postgresql-syntax`:
+
+  ```
+  $ hasql-th-audit old/Orders.hs new/Orders.hs
+  new/Orders.hs:6 (qq #1): AST DIFFERS
+    --- old (line 6) ---
+    ... order by o.placed_at desc
+        limit 50
+    --- new (line 6) ---
+    ... order by o.placed_at desc
+        limit 20
+  ```
+
+  Exit codes: `0` every quote is equivalent, `1` one or more differ (or the
+  counts differ), `2` usage error or lexer failure.
+
+  Across a branch:
+
+  ```bash
+  BIN=$(cabal list-bin hasql-th-audit)
+  base=$(git merge-base origin/main HEAD)
+
+  while read -r f; do
+      old=$(mktemp); new=$(mktemp)
+      git show "$base:$f" > "$old" 2>/dev/null || { rm -f "$old"; continue; }
+      git show "HEAD:$f"  > "$new" 2>/dev/null || { rm -f "$old" "$new"; continue; }
+      "$BIN" "$old" "$new" || echo "REGRESSION: $f"
+      rm -f "$old" "$new"
+  done < <(git diff --name-only "$base" HEAD -- '*.hs')
+  ```
+
+  ## The `kronor-syntax` flag
+
+  Off by default, the formatter handles what upstream `postgresql-syntax` accepts
+  plus hasql-th's `::type?` nullability markers.
+
+  Kronor's fork of hasql-th adds two more forms, and `+kronor-syntax` parses
+  *and* renders both:
+
+  ```sql
+  select $Just (name :: text), $Row { id = o.id :: int8 }
+  from orders o
+  where o.customer_id = $1.$customerId :: int8
+  ```
+
+  The flag needs Kronor's fork of `postgresql-syntax`, where those constructors
+  live, so a build against Hackage must leave it off. It is the same flag,
+  meaning the same thing, as `hasql-check`'s.
+
+  ## Reference
+
+  ### `hasql-th-format`
+
+  | | |
+  |---|---|
+  | `hasql-th-format FILES...` | Rewrite every quote in each file, in place |
+  | `--check` | Change nothing; exit 1 if any file would change |
+  | `--stdin` | Format one statement from stdin onto stdout |
+
+  Exit codes: `0` success, `1` a file would change (`--check`) or a quote failed
+  to parse or round-trip, `2` usage error.
+
+  ### `hasql-th-audit`
+
+  | | |
+  |---|---|
+  | `hasql-th-audit OLD NEW` | Compare the quotes of two versions of one file |
+
+  ## Limitations
+
+  - **Long lines it cannot break.** The renderer wraps at a set of known
+    constructs. An expression built from others — a deeply nested `case` inside a
+    function argument, say — can still exceed the line budget.
+  - **`(select ...)` in a `join`** renders with both the subquery's parens and
+    the join's, so you get `((select ...))`. It parses the same; it just looks
+    odd.
+  - **Some `AExpr` / `CExpr` constructors have no multi-line form** and fall
+    through to the inline renderer whatever their length.
+
+  ## Development
+
+  ```
+  cabal build
+  cabal test          # 64 golden cases, each also asserting AST equivalence
+  ```
+
+  The test suite in `test/Test.hs` is the right home for a minimised reproducer
+  once you have narrowed a layout bug down. Each case is an input and the exact
+  expected output, so a change in layout shows up as a diff rather than as a
+  judgement call.
+
+  Two render paths run over the same AST: an inline one used inside subqueries
+  and short targets, and a multi-line one. Most layout bugs are a construct
+  handled by one and not the other. Wrapping is driven by three thresholds in
+  `SqlFormat.hs` — `inlineLengthThreshold` (60), `subqueryInlineThreshold` (100)
+  and `selectTargetInlineThreshold` (150) — and by the `isWrapEligible*`
+  predicates, which decide whether a construct has a multi-line form at all.
+
+  `cabal test` rebuilds the test suite but **not** the executables. Run
+  `cabal build` before running the binary over a codebase, or you will be running
+  the previous one.
+description-type: markdown
+hash: e911a779bd2f5a47f26e7351d22085ae131eb3a69b665f9d4e4b0783b6e84f87
+homepage: https://github.com/kronor-io/hasql-check
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: lorenzo@kronor.io
+synopsis: Format the SQL inside hasql-th quasiquotes
+test-bench-deps:
+  base: '>=4.20 && <4.23'
+  hasql-check: '>=0.5 && <0.6'
+  postgresql-syntax: '>=0.5 && <0.6'
+  prettyprinter: '>=1.7 && <1.8'
+  string-interpolate: '>=0.3 && <0.4'
+  text: '>=2.0 && <2.2'
+  text-builder: '>=1.0 && <1.1'
