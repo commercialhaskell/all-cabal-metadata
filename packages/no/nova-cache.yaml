@@ -25,6 +25,7 @@ all-versions:
 - 0.11.0.1
 - 0.11.1.0
 - 0.11.1.1
+- 0.12.0.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.22 && <5'
@@ -38,6 +39,7 @@ basic-deps:
   nova-cache: '>=0'
   ram: '>=0.20 && <1'
   text: '>=2.0 && <2.2'
+  time: '>=1.9 && <1.17'
   unix: '>=2.8 && <2.9'
   vector: '>=0.12 && <0.14'
   wai: '>=3.2 && <3.3'
@@ -45,6 +47,11 @@ basic-deps:
   warp: '>=3.3 && <3.5'
 changelog: |
   # Changelog
+
+  ## 0.12.0.0 - 2026-11-01
+
+  - **`nova-cache-server reclaim-nars` lists, and with `--delete` removes, the NARs no narinfo references.** A client uploads a path's NAR before its narinfo, as upstream's `BinaryCacheStore::addToStoreCommon` does, so a NAR whose narinfo the server refuses, or whose push dies before the narinfo, stayed under `nar/` for good: the server has no route that deletes, and gains none. The subcommand runs on the host against the store directory. A narinfo names its NAR by its `URL` alone, as upstream reads it (`getFile(info->url)`), with the compression suffix part of the name. Three rules guard a run. A NAR is eligible only once it is two weeks old by its modification time (`--min-age-hours` overrides), because a NAR is unreferenced until its push sends the narinfo and nothing bounds how long a push takes; git's `gc.pruneExpire` gives unreferenced objects the same two weeks against the same race. A narinfo that cannot be read, parsed, or resolved to `nar/<file>` blocks the whole run instead of being skipped, since the NAR it names would otherwise look unreferenced. And a store holding NARs and no narinfo at all blocks it too, since one that lost its `narinfo/` directory, which the server recreates empty when it starts, looks the same as one whose every NAR is unreferenced. A run is not atomic with the server, so it belongs on a cache with no push in progress: a narinfo that arrives during a run for a NAR past the minimum age, as upstream's `nix copy` can send after skipping a NAR already present, loses that NAR. Upstream ships no garbage collection for binary caches, so there is no behavior to match beyond the URL. The library gains `NovaCache.Reclaim` (the pure selection and the store scan) and, in `NovaCache.Store`, `listNarFiles`, `listNarInfoFiles`, `removeNar` and `fileStoreAt`, a constructor that creates no directories; `time` joins the dependencies.
+  - **A narinfo is refused unless the NAR its `URL` names is stored and matches its `FileSize` and `FileHash`.** `PUT /<hash>.narinfo` validated the narinfo's own fields and signed it without looking at the NAR, so a NAR that arrived short or wrong sat behind a signed narinfo: clients rejected the NAR on its hash, and nova-nix's push never repaired it, because a push skips every path whose narinfo exists. Warp before 3.4.17 made the short case reachable: it ended a chunked request body at the connection's end of input as if the terminating chunk had arrived (yesodweb/wai#1129), so a `PUT /nar/<file>` cut off mid-chunk got 200 and stored a prefix. The narinfo is now refused with a 400 naming the problem unless its `URL` resolves, exactly as a GET for it is routed, to a file under `nar/` of `FileSize` bytes that hashes to `FileHash`, so an upload that went wrong fails at the narinfo. nova-nix's next push sends both again. Upstream's `nix copy` skips a NAR whose file already exists, so a wrong file under that name goes on refusing the narinfo until `reclaim-nars` removes it. A narinfo without `FileSize` or `FileHash` is refused as well, since the signature does not cover them and nothing else records which file the narinfo describes, and so is a `URL` that is not under `nar/`, such as an absolute one, which upstream can read but its `BinaryCacheStore` never writes. Upstream's `BinaryCacheStore::addToStoreCommon` and nova-nix's push both send the two fields and a relative `nar/` URL, and both upload the NAR before its narinfo, so a complete upload from either is accepted. `cacheApp` refuses requests it used to accept, which is why this is a major version. The server reads the stored NAR through once more when the narinfo arrives, in constant memory, and answers 500 if that read fails. The library gains the check's pure pieces in `NovaCache.Server` (`narUrlFileName`, `narClaim`, `judgeStoredNar`, `renderNarRefusal`).
 
   ## 0.11.1.1 - 2026-08-26
 
@@ -380,25 +387,40 @@ changelog: |
   - 54 tests across 8 modules
 changelog-type: markdown
 description: |
-  <div align="center">
-  <h1>nova-cache</h1>
-  <p><strong>The Nix binary cache protocol, in Haskell.</strong></p>
-  <p>nix-base32, NAR archives (strict and streaming), narinfo, store paths, Ed25519 signing, and bounded xz, zstd, and bzip2 codecs as the public nova-cache:xz, nova-cache:zstandard, and nova-cache:bzip2 sublibraries (decompression bounded, zstd compression for the push direction) - with an optional WAI cache server. A pure core; IO is confined to the storage and server boundaries.</p>
+  # nova-cache
 
   [![CI](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml/badge.svg)](https://github.com/Novavero-AI/nova-cache/actions/workflows/ci.yml)
   [![Hackage](https://img.shields.io/hackage/v/nova-cache.svg)](https://hackage.haskell.org/package/nova-cache)
-  ![GHC](https://img.shields.io/badge/GHC-9.14-purple)
-  ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+  [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-  </div>
+  nova-cache implements the Nix binary cache protocol in Haskell: nix-base32,
+  NAR serialization (whole-tree and streaming), narinfo parsing, store paths,
+  Ed25519 signing and upload validation, and an optional WAI cache server.
+  Bounded xz, zstd and bzip2 codecs are the public `nova-cache:xz`,
+  `nova-cache:zstandard` and `nova-cache:bzip2` sublibraries, and the zstd codec
+  also compresses for uploads.
 
-  ---
+  Parsing, formatting, hashing, signing and validation are pure. Reading and
+  writing trees, hashing files, the codecs, the store and the server run in
+  `IO`. nova-cache is the protocol layer under
+  [nova-nix](https://github.com/Novavero-AI/nova-nix).
 
   ## Installation
 
   ```cabal
-  build-depends: nova-cache
+  build-depends: nova-cache >= 0.11 && < 0.12
   ```
+
+  The codecs are separate sublibraries, named alongside the main library:
+
+  ```cabal
+  build-depends: nova-cache:{nova-cache, xz, zstandard} >= 0.11 && < 0.12
+  ```
+
+  libbz2 and libzstd are bundled. liblzma comes from the `xz` package, which
+  prefers a system liblzma found through pkg-config and falls back to its bundled
+  sources. `constraints: xz -system-xz` in `cabal.project` forces the bundled
+  copy, as this repository does.
 
   ## Usage
 
@@ -423,23 +445,21 @@ description: |
   ```haskell
   import NovaCache.Validate (validateFull)
 
-  -- Validate an upload: fields + NAR hash + file hash + signatures.
-  -- Pure, and every error is collected rather than failing on the first.
+  -- Validate an upload: fields, NAR hash, file hash and signatures. Every
+  -- error is collected rather than stopping at the first.
   case validateFull publicKey ni narBytes fileBytes of
     Right ()  -> accept
     Left errs -> reject errs
   ```
 
   ```haskell
+  import qualified Data.ByteString as BS
   import NovaCache.NAR (defaultCaseHack, withNarSource)
   import qualified NovaCache.Hash as Hash
 
-  -- Stream a tree's NAR and hash it in one pass; the archive never
-  -- exists in memory. The parsing side is NovaCache.NAR.Stream, a
-  -- chunk-fed event machine; the nova-cache:xz, nova-cache:zstandard,
-  -- and nova-cache:bzip2 sublibraries add decompression bounded by a
-  -- narinfo's declared NarSize, and the zstd side also compresses for
-  -- the push direction.
+  -- Stream a tree's NAR and hash it in one pass, without holding the archive
+  -- in memory. NovaCache.NAR.Stream parses NARs incrementally, and the codec
+  -- sublibraries bound decompression by a narinfo's declared NarSize.
   narHash <- withNarSource defaultCaseHack path $ \pull ->
     let go ctx = do
           chunk <- pull
@@ -455,9 +475,9 @@ description: |
   cabal run --flag server nova-cache-server -- --port 5000 --store ./nix-cache
   ```
 
-  The protocol itself lives in the `NovaCache.Server` library module as a WAI
-  `Application`, so any operator can embed the cache in their own server with
-  their own root page; the bundled executable is one such embedding.
+  The protocol lives in the `NovaCache.Server` library module as a WAI
+  `Application`, so the cache can be embedded in another server with its own
+  root page. The bundled executable is one such embedding.
 
   ### Configuration
 
@@ -465,7 +485,7 @@ description: |
   | --- | --- |
   | `PORT` | Listen port (default: 5000; also `--port`) |
   | `HOST` | Bind host (default: all interfaces; also `--host`) |
-  | `NIX_CACHE_DIR` | Store directory (default: `./nix-cache`) |
+  | `NIX_CACHE_DIR` | Store directory (default: `./nix-cache`; also `--store`) |
   | `CACHE_API_KEY` | Bearer token required for `PUT`. The server refuses to start without it unless `--allow-open-writes` is passed. |
   | `SIGNING_KEY_FILE` | Ed25519 secret key file for server-side narinfo signing |
   | `LOG_REQUESTS` | Set to `0` to disable request logging |
@@ -479,48 +499,86 @@ description: |
   | `GET` | `/narinfo-hashes` | All cached narinfo hashes, newline-delimited (authenticated) |
   | `GET` | `/<hash>.narinfo` | Fetch a narinfo |
   | `GET` | `/nar/<file>` | Fetch a NAR (streamed from disk) |
-  | `PUT` | `/<hash>.narinfo` | Upload a narinfo (authenticated, validated) |
+  | `PUT` | `/<hash>.narinfo` | Upload a narinfo (authenticated, validated; refused unless the NAR its `URL` names is stored with its `FileSize` and `FileHash`) |
   | `PUT` | `/nar/<file>` | Upload a NAR (authenticated, streamed to disk) |
 
   `HEAD` is answered wherever `GET` is.
 
+  ### Reclaiming unreferenced NARs
+
+  A client uploads each NAR before its narinfo, so a NAR whose narinfo was
+  refused, or never sent because the push died, stays under `nar/` with nothing
+  referencing it. No endpoint deletes anything. The `reclaim-nars` subcommand
+  does, run on the host against the store directory:
+
+  ```bash
+  nova-cache-server reclaim-nars --store /var/lib/nix-cache           # list
+  nova-cache-server reclaim-nars --store /var/lib/nix-cache --delete  # remove
+  ```
+
+  - A NAR is eligible only once it is at least `--min-age-hours` old (default
+    336, two weeks), measured from its modification time. A NAR is unreferenced
+    until its push sends the narinfo, and a push can run for hours.
+  - If any narinfo cannot be read or parsed, or its `URL` is not `nar/<file>`,
+    the run prints those narinfos, lists and deletes nothing, and exits nonzero:
+    the NAR such a narinfo names is unknown, so no NAR can be called unreferenced.
+  - If the store holds NARs and no narinfo at all, the run lists and deletes
+    nothing and exits nonzero: a store that lost its narinfos looks the same as
+    one whose every NAR is unreferenced.
+  - A run is not atomic with the server, so run it with no push in progress. A
+    narinfo that arrives during a run for a NAR past the minimum age loses that
+    NAR, which leaves a signed narinfo with nothing behind it.
+  - A deletion that fails is reported for that file, and the exit status is
+    nonzero.
+  - The store root comes from `--store`, then `NIX_CACHE_DIR`, then
+    `./nix-cache`, as for the server. A missing `narinfo/` or `nar/` directory is
+    an error, never an empty store.
+
   ### Public cache
 
-  A public instance runs at `cache.novavero.ai`:
+  A public instance runs at `cache.novavero.ai`. It serves store paths that
+  nova-nix builds, which today means its Windows MinGW-w64 toolchain seed
+  ([nova-nix#207](https://github.com/Novavero-AI/nova-nix/issues/207)). To use
+  it from Nix, add it to `/etc/nix/nix.conf`. On a multi-user install, Nix
+  ignores substituters set by users it does not trust.
 
   ```
   extra-substituters = https://cache.novavero.ai
   extra-trusted-public-keys = cache.novavero.ai-1:9gQ7tLWMM+2tdC9H5sKMJltDIPfD7X2GWlZe8Aa8hHQ=
   ```
 
-  ## Build & test
+  ## Building from source
+
+  Tested with GHC 9.14.1. CI uses the latest cabal-install release.
 
   ```bash
-  cabal build
-  cabal test
+  cabal update
+  cabal build all -f server --enable-tests --ghc-options="-Werror"
+  cabal test -f server --ghc-options="-Werror"
   ```
 
-  Optional extras: `--flag server` builds the cache server, and the public `nova-cache:xz`, `nova-cache:bzip2`, and `nova-cache:zstandard` sublibraries carry the bounded codecs - consumers depend on them with `build-depends: nova-cache:xz` and the like. libbz2 and libzstd are bundled; liblzma comes from the `xz` package, which prefers a pkg-config system liblzma and falls back to its bundled `xz-clib` (pin `constraints: xz -system-xz` to force the bundled copy, as this repo's cabal.project does). Requires GHC 9.14+ and cabal-install 3.10+.
+  ## License
 
-  ---
-
-  <p align="center"><sub>Apache-2.0 - <a href="https://github.com/Novavero-AI">Novavero AI Inc.</a></sub></p>
+  Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 description-type: markdown
-hash: 26919760701a419bd383fa4e1253e5adc75a2a5fa7e19037baf9d52a6f9fc265
+hash: 792ac580ffd640d1f3e461c2174e89f17381a09e2b4f7cf230f12ee74c8365f0
 homepage: https://github.com/Novavero-AI/nova-cache
-latest: 0.11.1.1
+latest: 0.12.0.0
 license-name: Apache-2.0
 maintainer: devon.tomlin@novavero.ai
-synopsis: Pure-first Nix binary cache protocol library
+synopsis: 'Nix binary cache protocol: NAR, narinfo, signing and a WAI server'
 test-bench-deps:
+  QuickCheck: '>=2.12 && <2.20'
   base: '>=4.22 && <5'
   base64-bytestring: '>=1.2 && <1.3'
   bytestring: '>=0.11 && <0.13'
+  containers: '>=0.6 && <0.9'
   crypton: '>=1.1 && <2'
   directory: '>=1.3 && <1.4'
   http-types: '>=0.12 && <0.13'
   nova-cache: '>=0'
   ram: '>=0.20 && <1'
   text: '>=2.0 && <2.2'
+  time: '>=1.9 && <1.17'
   wai: '>=3.2 && <3.3'
   wai-extra: '>=3.1 && <3.2'
