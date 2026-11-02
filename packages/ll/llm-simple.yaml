@@ -6,6 +6,7 @@ all-versions:
 - 0.3.0.0
 - 0.4.0.0
 - 0.4.0.1
+- 0.4.1.0
 author: Daniel van den Eijkel
 basic-deps:
   aeson: '>=2.0 && <2.3'
@@ -29,6 +30,7 @@ basic-deps:
   random: '>=1.2.1 && <1.4'
   req: '>=3.13.4 && <3.14'
   retry: '>=0.9 && <0.10'
+  stm: '>=2.5 && <2.6'
   text: '>=1.2 && <2.2'
   time: '>=1.11 && <1.15'
   unordered-containers: '>=0.2 && <0.3'
@@ -41,6 +43,120 @@ changelog: |
 
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+  ## [0.4.1.0] - 2026-11-02
+
+  ### Added
+
+  - `waitAborted :: AbortSignal -> IO ()` (in `LLM.Core.Abort` and
+    `LLM.Core`) blocks until the signal fires.
+  - `LLM.Core.Utils.interruptOnAbort` runs an action and interrupts it when
+    the signal fires.
+  - `LLM.Tools.FsConfig.withWorkspacePaths` runs a filesystem action so that
+    an `IOException` it throws names its file relative to the workspace.
+  - `LLM.Core.ProviderUtils.decodeObjectText` and `unexpectedResponse`, and
+    `LLM.Providers.OpenAI.parseOpenAIObjectResponse`: the structured-output
+    parsing the bundled providers use, for custom providers.
+
+  ### Fixed
+
+  - An abort now interrupts work in flight. Before, the signal was only
+    checked between steps, so it could not stop a non-streaming call that was
+    waiting for its response, a stream that stalled after its first event, a
+    throttle or backoff sleep, or a running tool. **Behaviour change:**
+    - When `grAbortSignal` / `rtAbortSignal` fires, the model call in flight
+      is interrupted wherever it is, its HTTP connection is closed, and the
+      call returns `GErrAborted`.
+    - A tool call that is running when the signal fires is interrupted. It
+      counts as not run: it gets the result "Aborted before execution", like
+      the calls after it, and `onToolError` reports `"Aborted"`. Its side
+      effects may have partly happened.
+    - The interrupt is an asynchronous exception thrown to the calling thread.
+      Tool code that catches every exception, asynchronous ones included, can
+      swallow it and keep running.
+    - A stream that stalls after its first event still blocks until it is
+      aborted: there is no idle timeout yet.
+  - A truncated or corrupt stream is no longer reported as success.
+    **Behaviour change:** some streams that used to return `Right` with a
+    partial answer, or throw, now return `Left`.
+    - The stream parsers did not check for the end-of-stream marker, so a
+      connection that closed cleanly partway through returned the text received
+      so far as a complete answer. Each protocol now needs its marker:
+      `[DONE]` or a `finish_reason` (OpenAI-compatible: OpenAI, DeepSeek,
+      Ollama), a `finishReason` or `blockReason` (Gemini), or `message_stop`
+      (Claude). A stream that ends without its marker is
+      `NetworkError "stream ended before <marker>"`. It is retried and then
+      falls back like any other network error.
+    - A data event that is not valid JSON was skipped. It is now a
+      `ParseError` quoting the start of the event.
+    - A stream event that is not valid UTF-8 threw a `UnicodeException`, which
+      escaped the typed error path, so fallback models were never tried. It is
+      now a `ParseError`.
+    - An in-band provider error event (for example Claude's `overloaded_error`)
+      still takes precedence over these checks.
+  - API keys are no longer sent over plain HTTP. A provider that sends a key
+    with a base URL (or `*_BASE_URL` override) of `http://` to a non-loopback
+    host is now unavailable, with `InvalidBaseUrl` saying the URL is insecure;
+    `loadGatewaysFromCatalogOrThrow` throws for it. `http://` to `localhost`,
+    `127.0.0.0/8` or `::1` is still allowed, as is any `http://` host for
+    Ollama and other keyless providers. **Behaviour change:** a catalog that
+    pointed a keyed provider at a remote `http://` proxy no longer loads that
+    provider; use `https://`.
+  - `mcThrottleDelay` (`throttleDelay`) now applies before every attempt,
+    retries included. It was slept once before the first attempt, so retries
+    ran after their backoff alone and could hit the rate limit the throttle
+    was meant to avoid. Before a retry, throttle and backoff add up.
+    **Behaviour change:** a call that retries with a throttle set now takes
+    longer.
+  - `loadGatewaysWithDotenv` no longer swallows cancellation. It ignored every
+    exception from loading `.env`, including `ThreadKilled`, `UserInterrupt`
+    and timeouts, so a cancellation that arrived during loading was lost. It
+    now ignores only `IOException` (a missing or unreadable `.env`). The
+    example executables and the README examples do the same.
+    **Behaviour change:** a `.env` that dotenv cannot parse used to be ignored
+    silently; its parse error is now thrown.
+  - JSON dumps (`withJsonDump`, `debugHooks`, `defaultDebugHooks`) stay in
+    their directory and no longer overwrite each other. The provider name,
+    which for a custom provider comes from `providers.json`, was used in the
+    file name as is, so a name like `../leak` wrote outside the dump
+    directory. Dumps written in the same millisecond had the same name, and
+    the later one replaced the earlier. In the provider name, every character
+    other than an ASCII letter, digit, `-` or `_` now becomes `_`, and each
+    dump is created as a new file with a unique suffix:
+    `{provider}-{request|response}-{timestamp}-{unique}.json`. **Behaviour
+    change:** dump file names have the extra suffix, and dump files are now
+    readable only by their owner (mode 0600).
+  - Structured-output responses that cannot be parsed are no longer reported
+    as `EmptyResponse`. OpenAI, Ollama, DeepSeek and Claude reported model
+    text that is not valid JSON, and a response body without the expected
+    fields, as `EmptyResponse`, dropping the reason; Gemini did the same for
+    text that is not valid JSON. These are now `ParseError`s with the JSON
+    decoder's message and the first 200 characters of the text or body.
+    `EmptyResponse` is kept for content that is actually empty: no choice or
+    text block, or text that is empty once code fences are stripped.
+    **Behaviour change:** code that matched `EmptyResponse` for these cases
+    gets `ParseError`. Neither is retried, and both still fall back to the
+    next model.
+  - Tool errors no longer show the model absolute host paths. An
+    `IOException` from a filesystem tool (a missing file, a permission error)
+    was shown to the model with its absolute path, revealing where the
+    workspace lives on the host. The bundled filesystem tools now name the
+    file relative to the workspace (`sub/missing.txt: removeLink: does not
+    exist ...`), or leave it out if it is outside the workspace. For any tool,
+    the model-facing error drops an absolute file name from an
+    `IOException`. **Behaviour change:** the `IOException`s the filesystem
+    tools throw carry the relative path, and `onToolError` gets the same
+    redacted text as the model.
+  - `isSymlink` (`LLM.Tools.FsConfig`) no longer fails open. When the lookup
+    failed for any reason, it answered `False` ("not a link"), so the sandbox
+    checks and the recursive tools treated a path they could not inspect as a
+    regular file or directory. It still answers `False` when nothing exists
+    at the path (missing, or a component is not a directory), so new paths
+    can be written. Any other failure (permission denied, a symlink loop) now
+    answers `True`, so the path is refused or skipped like a symlink.
+    **Behaviour change:** such a path now fails the sandbox check, is skipped
+    by `grep`, `find_files` and `directory_tree`, and is listed with `@` by
+    `readdir`.
 
   ## [0.4.0.1] - 2026-10-27
 
@@ -464,6 +580,7 @@ changelog: |
     DeepSeek), single-shot generation with fallbacks, agent tool loops, structured
     output, JSON model catalog loading, and workspace-scoped filesystem tools.
 
+  [0.4.1.0]: https://github.com/aische/llm-simple/compare/v0.4.0.1...v0.4.1.0
   [0.4.0.1]: https://github.com/aische/llm-simple/compare/v0.4.0.0...v0.4.0.1
   [0.4.0.0]: https://github.com/aische/llm-simple/compare/v0.3.0.0...v0.4.0.0
   [0.3.0.0]: https://github.com/aische/llm-simple/compare/v0.2.0.0...v0.3.0.0
@@ -498,6 +615,8 @@ description: |
   ```
 
   Requires GHC 9.6–9.12 with `GHC2021` (see `tested-with` in `llm-simple.cabal`).
+
+  Tested on Linux and macOS. Windows is not supported and not tested.
 
   ## Quick start
 
@@ -546,8 +665,8 @@ description: |
   | `maxTokens`       | Max tokens per request                                                   |
   | `temperature`     | Sampling temperature (optional)                                          |
   | `requestTimeout`  | Timeout in ms per attempt (optional); for streaming, time until the first event; timeouts are retried |
-  | `throttleDelay`   | Delay between requests in ms (optional)                                  |
-  | `retryCount`      | Number of retries on retryable errors (429, 500, 502, 503, 504, 529, network errors, timeouts) |
+  | `throttleDelay`   | Delay in ms before each request attempt, retries included; added to the retry backoff (optional) |
+  | `retryCount`      | Number of retries on retryable errors (429, 500, 502, 503, 504, 529, network errors including streams that end early, timeouts) |
   | `jitterBackoff`   | Base backoff in ms between retries; full jitter, exponential, each delay capped at 30 s. `Retry-After` is not honoured, so raise this for providers that often rate-limit you |
   | `thinking`        | Extended thinking effort level (optional, provider-dependent)            |
   | `capabilities`    | Optional object: `thinking`, `vision`, `promptCaching` (default `false`) |
@@ -618,6 +737,11 @@ description: |
   `CLAUDE_BASE_URL`, `GEMINI_BASE_URL`, `DEEPSEEK_BASE_URL`, `OLLAMA_BASE_URL`.
   Do not include the protocol path (`/v1/...` or `/v1beta/...`) in `baseUrl`; the
   library appends it.
+  A provider that sends an API key must use an `https://` base URL, or `http://`
+  to a loopback host (`localhost`, `127.0.0.0/8`, `::1`); any other `http://`
+  base URL makes the provider unavailable, so the key is never sent unencrypted.
+  Keyless providers (Ollama, or entries without `apiKeyEnv`) may use any
+  `http://` host.
   `loadGateways` and `loadGatewaysWithDotenv` always use built-in provider defaults.
   Custom providers from a co-located `providers.json` apply when loading models via
   `loadModelOrThrow` or `loadModelsOrThrow`.
@@ -626,11 +750,11 @@ description: |
 
   ```haskell
   import Configuration.Dotenv (defaultConfig, loadFile)
-  import Control.Exception (SomeException, catch)
+  import Control.Exception (IOException, catch)
   import LLM.Load (loadModelsOrThrow)
 
   main = do
-    loadFile defaultConfig `catch` \(_ :: SomeException) -> pure ()
+    loadFile defaultConfig `catch` \(_ :: IOException) -> pure ()
     (gemini, deepseek) <-
       loadModelsOrThrow "./model-catalog.json" ("gemini_lite", "deepseek4flash")
     ...
@@ -646,7 +770,7 @@ description: |
 
   ```haskell
   import Configuration.Dotenv (defaultConfig, loadFile)
-  import Control.Exception (SomeException, catch)
+  import Control.Exception (IOException, catch)
   import Heptapod (generate)
   import LLM.Agent (Agent (..), RuntimeArgs (..), generateText, noEventObserver)
   import LLM.Core (pattern UserTurn)
@@ -655,7 +779,7 @@ description: |
 
   main :: IO ()
   main = do
-    loadFile defaultConfig `catch` \(_ :: SomeException) -> pure ()
+    loadFile defaultConfig `catch` \(_ :: IOException) -> pure ()
 
     (gemini, deepseek) <-
       loadModelsOrThrow "./model-catalog.json" ("gemini_lite", "deepseek4flash")
@@ -689,7 +813,7 @@ description: |
 
   Set `rtReadonly = True` to omit mutating tools from the schema sent to the model and to block them at execution time.
 
-  For local debugging, `defaultDebugHooks` enables stderr logging and writes request/response JSON to `./dumps` — avoid that in production or shared environments.
+  For local debugging, `defaultDebugHooks` enables stderr logging and writes request/response JSON to `./dumps` — avoid that in production or shared environments. Each dump is a new file readable only by its owner; dumps hold prompts, tool arguments and results, and model output, and are never deleted by the library.
 
   ### Single request (no agent loop)
 
@@ -732,12 +856,17 @@ description: |
 
   ### Filesystem sandbox
 
-  Filesystem tools enforce **workspace-relative path containment**: `..` escapes, absolute paths outside the workspace, and symlinks pointing outside are rejected. A symlink is judged by where it points, including when its target does not exist yet: writing through a dangling link that leads out of the workspace is refused and does not create the target. A link that resolves inside the workspace is followed, and the operation lands on its target. Recursive tools skip symlinks rather than following them.
+  Filesystem tools enforce **workspace-relative path containment**: `..` escapes, absolute paths outside the workspace, and symlinks pointing outside are rejected. A symlink is judged by where it points, including when its target does not exist yet: writing through a dangling link that leads out of the workspace is refused and does not create the target. A link that resolves inside the workspace is followed, and the operation lands on its target. Recursive tools skip symlinks rather than following them. A path that cannot be checked for being a symlink (for example, permission denied) is treated as one.
+
+  Errors that reach the model name paths relative to the workspace, so the model does not learn where the workspace lives on the host. For any tool, the library drops an absolute file name from an `IOException` before it shows the error to the model.
+
+  **Threat model.** The sandbox keeps the *model* inside the workspace. Through the tools, a model can only reach paths inside it: `..`, absolute paths and symlinks are checked as described above. The tools cannot create symlinks, and an agent runs its tool calls one at a time, so a model cannot change the workspace while a check it relies on is in progress.
+
+  The sandbox does **not** protect against *other processes* that write to the workspace while the agent runs. A path is checked and then opened. A process that swaps a directory for a symlink between those two steps (a time-of-check/time-of-use race) can make a tool read or write outside the workspace. Hard links to files outside the workspace are not detected either. Such a process usually runs as the same user and can reach those files directly, so this only matters if it has less access than the agent. If a less-trusted process can write to the workspace, isolate the agent at the OS level (a container, or a separate user).
 
   **Limitations (0.1.x):**
 
   - The sandbox is **path-scoped**, not kernel-level isolation. Use a dedicated, disposable workspace directory — not your home directory or a production tree.
-  - A **time-of-check/time-of-use (TOCTOU)** window exists between path validation and file open; a concurrent process inside the workspace could theoretically plant a symlink between those steps.
   - There is no denylist for sensitive in-workspace files (`.env`, `.git/config`, etc.). Anything inside the workspace is accessible to tools the model can call.
   - Read tools enforce byte caps: whole-file and edit tools use a 1 MiB limit; `read_file_paginated` accepts source files up to 10 MiB.
   - `rtReadonly` omits mutating tools from the model schema and blocks them at execution time if they are invoked anyway.
@@ -770,9 +899,9 @@ description: |
 
   BSD-3-Clause. See [LICENSE](LICENSE).
 description-type: markdown
-hash: 24ceb87523997c606bfb90f2412a3318333329ac23f5589d55c42813d301fe79
+hash: 4d0342f70130b7d9893b098b4fb6f4ccd8114e341125b782af4f31c5566d05da
 homepage: https://github.com/aische/llm-simple#readme
-latest: 0.4.0.1
+latest: 0.4.1.0
 license-name: BSD-3-Clause
 maintainer: 1515314+aische@users.noreply.github.com
 synopsis: Multi-provider LLM library with agent tool loops and filesystem tools
