@@ -1,0 +1,185 @@
+all-versions:
+- 0.1.0.0
+author: Nadia Yvette Chambers
+basic-deps:
+  base: '>=4.14 && <5'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  gargamelle-core: '>=0.1 && <0.2'
+  polytropos-core: '>=0.1.0.1 && <0.2'
+  process: '>=1.6 && <1.7'
+  text: '>=2.0 && <2.2'
+changelog: |
+  # Changelog for gargamelle-sandbox
+
+  ## 0.1.0.0 — Initial Release
+
+  - Bubblewrap namespace sandboxing and resource limit enforcement.
+  - Isolated filesystem views and network unsharing.
+  - Fallback subprocess execution runners.
+changelog-type: markdown
+description: |
+  # `gargamelle-sandbox` — Bubblewrap Linux Container Isolation & Resource Limiting Boundaries
+
+  [![Haskell](https://img.shields.io/badge/Language-Haskell2010-purple.svg)](https://haskell.org)
+  [![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-blue.svg)](https://spdx.org/licenses/EUPL-1.2.html)
+  [![Tier 1 Host Integration](https://img.shields.io/badge/Tier-1%20Substrates%20%26%20Host%20Integration-teal.svg)](../../README.md#architectural-tier-map)
+
+  ---
+
+  ## 1. Executive Summary & Problem Framing
+
+  Counterexample-Guided Inductive Synthesis (CEGIS), automated program generation, and multi-agent repair routines must execute untrusted, dynamically synthesized candidate programs against target test suites. Executing arbitrary candidate code directly on the host machine presents severe security and operational vulnerabilities:
+  1. **Host Disk Corruption:** Malicious or buggy candidates can overwrite repository files, corrupt build caches, or delete user directories.
+  2. **Process Contamination & Fork Bombs:** Unchecked candidates can spawn background daemons, kill running developer servers, or exhaust operating system PID tables.
+  3. **Unbounded Latency & Infinite Loops:** Non-terminating synthesis candidates can hang the synthesis pipeline indefinitely.
+
+  `gargamelle-sandbox` provides a robust, defense-in-depth isolation boundary:
+  - **Unprivileged Linux Container Namespaces:** Leverages Bubblewrap (`/usr/bin/bwrap`) to unshare mount, network, PID, IPC, and UTS namespaces without requiring root permissions or `setuid` binaries.
+  - **Strict Read-Only Host Filesystems:** Mounts `/` read-only (`--ro-bind / /`), providing candidate binaries access to necessary system libraries while strictly preventing modifications.
+  - **Ephemeral Writable Sandboxes:** Automatically scopes writable file operations to bracketed temporary directories (`withTempSandboxDir`), guaranteeing cleanup on exit.
+  - **Deterministic Resource Bounds:** Wraps execution in `/usr/bin/timeout` to enforce timeout and memory constraints deterministically.
+
+  ---
+
+  ## 2. Mathematical Foundations & Theoretical Invariants
+
+  ### 2.1 The Bubblewrap Namespace Isolation Boundary
+  Bubblewrap establishes an unprivileged Linux container sandbox around the candidate process:
+
+  ```
+  ┌─────────────────────────────────────────────────────────────┐
+  │                      Host Linux OS                          │
+  │                                                             │
+  │   ┌─────────────────────────────────────────────────────┐   │
+  │   │        Bubblewrap Namespace Sandbox (bwrap)         │   │
+  │   │                                                     │   │
+  │   │  - Mount Namespace:                                 │   │
+  │   │      /         -> Read-Only Bind (--ro-bind / /)    │   │
+  │   │      /dev      -> Hermetic Devfs (--dev /dev)       │   │
+  │   │      /proc     -> Fresh Procfs (--proc /proc)       │   │
+  │   │      /tmp      -> In-Memory Tmpfs (--tmpfs /tmp)    │   │
+  │   │      workDir   -> Isolated Writable Bind            │   │
+  │   │  - PID / IPC / UTS / Net Namespaces: Private        │   │
+  │   │  - Lifetime: Bound to parent (--die-with-parent)    │   │
+  │   │                                                     │   │
+  │   │        ┌───────────────────────────────────┐        │   │
+  │   │        │   Synthesized Candidate Process   │        │   │
+  │   │        └───────────────────────────────────┘        │   │
+  │   └─────────────────────────────────────────────────────┘   │
+  └─────────────────────────────────────────────────────────────┘
+  ```
+
+  1. **Physical Containment:** By mounting `/proc` anew within a private PID namespace, candidate processes cannot inspect, enumerate, or signal host processes.
+  2. **Hermetic File Mutations:** All scratch file creation occurs inside ephemeral directories or tmpfs mounts; no changes persist to the host.
+  3. **Guaranteed Cleanup:** `--die-with-parent` ensures the kernel sends `SIGKILL` to child processes if the parent Haskell runtime terminates abruptly.
+
+  <!-- See Note [Bubblewrap Namespace Isolation and Resource Limiting Boundaries] [ref:note-sandbox-bwrap-isolation] -->
+
+  ---
+
+  ## 3. Module Architecture & Repertoire Breadth
+
+  The package exports 2 modules providing declarative effects and production container handlers:
+
+  | Module | Primary Types & Typeclasses | Architectural Purpose |
+  | :--- | :--- | :--- |
+  | [`Sandbox.Effect`](src/Sandbox/Effect.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Effect.html)) | [`ResourceLimits`](src/Sandbox/Effect.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Effect.html#t:ResourceLimits)), [`defaultLimits`](src/Sandbox/Effect.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Effect.html#v:defaultLimits)), [`SandboxOp`](src/Sandbox/Effect.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Effect.html#t:SandboxOp)) | First-class resource limits (timeout seconds, memory MB) and isolated execution AST operations. |
+  | [`Sandbox.Handler`](src/Sandbox/Handler.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Handler.html)) | [`executeSandboxed`](src/Sandbox/Handler.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Handler.html#v:executeSandboxed)), [`executeBubblewrapSandboxed`](src/Sandbox/Handler.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Handler.html#v:executeBubblewrapSandboxed)), [`withTempSandboxDir`](src/Sandbox/Handler.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Handler.html#v:withTempSandboxDir)), [`pureMockSandboxRun`](src/Sandbox/Handler.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-sandbox/docs/Sandbox-Handler.html#v:pureMockSandboxRun)) | Production IO handlers executing commands with Bubblewrap isolation, bracketed temp dirs, and test mocks. |
+
+  ---
+
+  ## 4. Executable Worked Examples
+
+  ### 4.1 Running a Command in an Isolated Bubblewrap Sandbox
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module ExampleSandbox where
+
+  import qualified Data.Text as T
+  import Sandbox.Effect
+  import Sandbox.Handler
+
+  -- Run candidate binary in an isolated sandbox with custom limits
+  runCandidate :: FilePath -> [String] -> IO ()
+  runCandidate bin args = do
+    let limits = defaultLimits { limitTimeoutSeconds = 5 }
+    res <- withTempSandboxDir "candidate-run" $ \workDir -> do
+      (code, stdout, stderr) <- executeBubblewrapSandboxed limits workDir bin args
+      if code == 0
+        then putStrLn $ "Success: " ++ T.unpack stdout
+        else putStrLn $ "Failed (code " ++ show code ++ "): " ++ T.unpack stderr
+    case res of
+      Right () -> pure ()
+      Left err -> putStrLn $ "Sandbox execution error: " ++ T.unpack err
+  ```
+
+  ### 4.2 Bounded Pure Mock for Unit Tests
+  ```haskell
+  module ExampleMockSandbox where
+
+  import Sandbox.Effect
+  import Sandbox.Handler
+
+  -- Execute deterministic mock without spawning system processes
+  mockTest :: (Int, String)
+  mockTest =
+    let (code, stdout, _) = pureMockSandboxRun defaultLimits "/bin/test" []
+    in (code, show stdout)
+  ```
+
+  ---
+
+  ## 5. Integration Points & Subsystem Boundaries
+
+  `gargamelle-sandbox` operates at **Tier 1 (Host Integration)** of the architecture:
+
+  ```
+  ┌────────────────────────────────────────────────────────┐
+  │               Downstream Consumers                     │
+  │  - gargamelle-workflow: Grounded CEGIS Execution       │
+  │  - gargamelle-evidence: Sandboxed Test Run Evidence    │
+  └──────────────────────────▲─────────────────────────────┘
+                             │
+                    [gargamelle-sandbox]
+                             │
+  ┌──────────────────────────▼─────────────────────────────┐
+  │               Upstream Substrates                      │
+  │  - Host OS: /usr/bin/bwrap (Bubblewrap Container)      │
+  │  - Host OS: /usr/bin/timeout (GNU Coreutils)           │
+  │  - polytropos-core: Flat Struct Payloads               │
+  └────────────────────────────────────────────────────────┘
+  ```
+
+  ---
+
+  ## 6. Diagnostic & Troubleshooting Guide
+
+  ### 6.1 Unprivileged User Namespaces Disabled
+  - **Symptom:** `executeBubblewrapSandboxed` returns error `bwrap: No permissions to create new namespace`.
+  - **Root Cause:** Some hardened Linux distributions disable unprivileged user namespaces via `sysctl kernel.unprivileged_userns_clone = 0`.
+  - **Remedy:** Enable unprivileged user namespaces (`sudo sysctl kernel.unprivileged_userns_clone=1`), or install Bubblewrap with setuid bit enabled (`chmod u+s /usr/bin/bwrap`). When disabled, `executeSandboxed` automatically falls back to bounded subprocess execution.
+
+  ### 6.2 Synthesis Timeout Exceeded
+  - **Symptom:** `executeSandboxed` returns exit code 124 (GNU timeout standard exit status).
+  - **Root Cause:** Synthesized program entered an infinite loop or exceeded `limitTimeoutSeconds`.
+  - **Remedy:** Treat timeout as a non-terminating counterexample witness and feed back to synthesis engine to disallow unbounded recursive structures.
+
+  ---
+
+  *Part of the [Gargamelle Verification Suite](../../README.md).*
+description-type: markdown
+hash: 39f18a5ca0391a069064513d248faf150388e1cb0ecbc973b99632d612239c72
+homepage: https://github.com/NadiaYvette/gargamelle
+latest: 0.1.0.0
+license-name: EUPL-1.2
+maintainer: nadia.yvette.chambers@ik.me
+synopsis: Bubblewrap namespace sandboxing and resource limit enforcement
+test-bench-deps:
+  base: '>=4.14 && <5'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  gargamelle-sandbox: '>=0'
+  hspec: '>=2.10 && <2.12'
+  text: '>=2.0 && <2.2'

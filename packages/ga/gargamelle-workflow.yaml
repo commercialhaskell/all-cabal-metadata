@@ -1,0 +1,287 @@
+all-versions:
+- 0.1.0.0
+author: Nadia Yvette Chambers
+basic-deps:
+  base: '>=4.14 && <5'
+  beam-core: '>=0.10 && <0.12'
+  beam-sqlite: '>=0.5 && <0.8'
+  containers: '>=0.6 && <0.9'
+  crem: '>=0.1 && <0.2'
+  gargamelle-core: '>=0.1 && <0.2'
+  gargamelle-effect: '>=0.1 && <0.2'
+  gargamelle-evidence: '>=0.1 && <0.2'
+  gargamelle-logic: '>=0.1 && <0.2'
+  gargamelle-model: '>=0.1 && <0.2'
+  gargamelle-persistence: '>=0.1 && <0.2'
+  gargamelle-sandbox: '>=0.1 && <0.2'
+  gargamelle-sheaf: '>=0.1 && <0.2'
+  lattices: '>=2.2 && <2.3'
+  polytropos-core: '>=0.1.0.1 && <0.2'
+  singletons-base: '>=3.0 && <3.6'
+  sqlite-simple: '>=0.4 && <0.5'
+  text: '>=2.0 && <2.2'
+  tree-diff: '>=0.3 && <0.5'
+changelog: |
+  # Changelog for gargamelle-workflow
+
+  ## 0.1.0.0 — Initial Release
+
+  - Synthesis workflow and Crem verified state machine orchestration.
+  - End-to-end integration across logic, models, evidence, effects, and sandboxes.
+  - Complete CEGIS loop coordination.
+changelog-type: markdown
+description: |
+  # `gargamelle-workflow` — Formally Verified Mealy Automata, Structural Tree Diffing & Sheaf-Gated CEGIS
+
+  [![Haskell](https://img.shields.io/badge/Language-Haskell2010-purple.svg)](https://haskell.org)
+  [![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-blue.svg)](https://spdx.org/licenses/EUPL-1.2.html)
+  [![Tier 5 Workflow Engine](https://img.shields.io/badge/Tier-5%20Workflow%20%26%20Orchestration-teal.svg)](../../README.md#architectural-tier-map)
+
+  ---
+
+  ## 1. Executive Summary & Problem Framing
+
+  Counterexample-Guided Inductive Synthesis (CEGIS) and autonomous multi-agent program repair systems must iteratively generate candidate programs, execute them in hermetic sandboxes, capture failure evidence, and guide further repairs. In production environments, unconstrained synthesis pipelines suffer from three fundamental vulnerabilities:
+  1. **Invalid State Machine Transitions:** Without compile-time enforcement, complex synthesis loops can skip essential verification steps (e.g. bypassing sandboxed execution or evading evidence persistence).
+  2. **Futile Regression Cycles:** Iterative synthesizers frequently generate trivial permutations of previously disproven candidates (renaming variables, reordering commutative operations), wasting solver cycles on known dead ends.
+  3. **Monolithic Failure Feedback:** Traditional CEGIS loops provide only binary pass/fail feedback or unparsed counterexamples, failing to guide multi-component system repair.
+
+  `gargamelle-workflow` resolves these challenges by unifying all Gargamelle substrates into a closed-loop verified workflow:
+  - **Formally Verified Mealy Automata:** Type-checked state machine topology using Tweag's `crem` and `singletons-base`, making invalid state transitions impossible at compile time.
+  - **Structural Tree Diffing (`tree-diff`):** Normalizes AST expressions into generic trees and calculates normalized edit distances to prune proposals structurally similar to known failures.
+  - **End-to-End Sheaf-Gated CEGIS Loop:** Wires Bubblewrap container isolation (`gargamelle-sandbox`), Beam SQLite persistence (`gargamelle-persistence`), and cellular sheaf cohomology (`gargamelle-sheaf`) into a cohesive synthesis pipeline.
+  - **Cohomological Obstruction-Guided Repair:** Evaluates the sheaf coboundary $\delta^0$. When boundary discrepancies occur ($H^1 \neq 0$), exact failing interface edges are isolated and fed back to direct localized repair.
+
+  ---
+
+  ## 2. Mathematical Foundations & Theoretical Invariants
+
+  ### 2.1 Formally Verified Mealy Automata Topology
+  The synthesis workflow is structured as a Mealy state machine $(S, \Sigma, \Lambda, T, G)$ where states $S$ and transitions $T \subseteq S \times S$ are verified at the type level:
+
+  ```
+              ┌─────────────────┐
+              │  StatePropose   │ ◄──────────────────────────────┐
+              └────────┬────────┘                                │
+                       │ CmdProposeCandidate                     │
+                       ▼                                         │
+              ┌─────────────────┐                                │
+              │ StateSandboxRun │                                │
+              └────────┬────────┘                                │
+                       │ CmdRunSandbox                           │
+                       ▼                                         │
+          ┌─────────────────────────┐                            │
+          │   StateCollectEvidence  │                            │
+          └────────────┬────────────┘                            │
+                       │ CmdEvaluateEvidence                     │
+                       ▼                                         │
+          ┌─────────────────────────┐                            │
+          │  StateSimilarityCheck   │ ── Similar to Known Fail? ─┘
+          └────────────┬────────────┘   (CmdCheckSimilarity True)
+                       │ Non-Similar
+                       ▼
+              ┌─────────────────┐
+              │ StateSheafCheck │ ── H^1 Obstruction? ───────────┘
+              └────────┬────────┘    (CmdEvaluateSheaf False)
+                       │ H^1 = 0 (Harmonic Global Section)
+                       ▼
+              ┌─────────────────┐
+              │  StateComplete  │
+              └─────────────────┘
+  ```
+
+  Type-level guarantees provided by `synthesisTopology` ensure that any attempt to construct an execution path skipping `StateSandboxRun` or `StateCollectEvidence` fails to compile.
+
+  <!-- See Note [Formally Verified Mealy Automata State Topology] [ref:note-crem-mealy-topology] -->
+
+  ### 2.2 AST Structural Similarity via Tree-Diff
+  To prevent regression loops, candidate proposals are compared against historical failures in Beam SQLite:
+  $$\operatorname{sim}(A, B) = \frac{\operatorname{copies}}{\operatorname{copies} + \operatorname{changes}} \in [0.0, 1.0]$$
+
+  where $\operatorname{copies}$ and $\operatorname{changes}$ are extracted from the minimal edit script `exprDiff (toExpr A) (toExpr B)`. If $\operatorname{sim}(A, B) \ge \tau$ (e.g. $\tau = 0.8$), the candidate is pruned before executing expensive SMT queries.
+
+  <!-- See Note [AST Tree-Diff Structural Similarity Heuristics] [ref:note-ast-structural-similarity] -->
+
+  ### 2.3 The Sheaf-Gated CEGIS Architecture
+  The end-to-end synthesis loop integrates five physical and mathematical boundaries:
+
+  ```
+  ┌────────────────────────────────────────────────────────┐
+  │ 1. Propose Candidate                                   │
+  │    - Record start in Beam SQLite (startRunRecord)      │
+  │    - Query past failures (findEvidenceByRep)           │
+  └───────────────────────────┬────────────────────────────┘
+                              │
+  ┌───────────────────────────▼────────────────────────────┐
+  │ 2. Isolated Container Sandbox Execution                │
+  │    - Execute via Bubblewrap (/usr/bin/bwrap)           │
+  │    - Enforce timeout & memory limits                   │
+  └───────────────────────────┬────────────────────────────┘
+                              │
+  ┌───────────────────────────▼────────────────────────────┐
+  │ 3. Evidence Persistence & Structural Similarity        │
+  │    - Persist failures to SQLite (insertEvidenceRecord) │
+  │    - Prune structurally similar candidates (tree-diff) │
+  └───────────────────────────┬────────────────────────────┘
+                              │
+  ┌───────────────────────────▼────────────────────────────┐
+  │ 4. Cellular Sheaf Cohomology Gate                      │
+  │    - Compute coboundary: \delta^0 : C^0 -> C^1         │
+  │    - If H^1 = 0: Output SheafCEGISSuccess              │
+  │    - If H^1 /= 0: Output SheafCEGISObstruction         │
+  └────────────────────────────────────────────────────────┘
+  ```
+
+  <!-- See Note [End-to-End Sheaf-Gated CEGIS Synthesis Loop] [ref:note-sheaf-gated-cegis-loop] -->
+
+  ---
+
+  ## 3. Module Architecture & Repertoire Breadth
+
+  The package exports 1 module delivering the complete verified synthesis workflow:
+
+  | Module | Primary Types & Typeclasses | Architectural Purpose |
+  | :--- | :--- | :--- |
+  | [`Workflow.Synthesis`](src/Workflow/Synthesis.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-workflow/docs/Workflow-Synthesis.html)) | [`SynthesisVertex`](src/Workflow/Synthesis.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-workflow/docs/Workflow-Synthesis.html#t:SynthesisVertex)), [`SynthesisTopology`](src/Workflow/Synthesis.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-workflow/docs/Workflow-Synthesis.html#t:SynthesisTopology)), [`synthesisMachine`](src/Workflow/Synthesis.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-workflow/docs/Workflow-Synthesis.html#v:synthesisMachine)), [`computeExprSimilarity`](src/Workflow/Synthesis.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-workflow/docs/Workflow-Synthesis.html#v:computeExprSimilarity)), [`runSheafGatedCEGIS`](src/Workflow/Synthesis.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-workflow/docs/Workflow-Synthesis.html#v:runSheafGatedCEGIS)), [`runSheafGatedCEGISWithDiffusion`](src/Workflow/Synthesis.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-workflow/docs/Workflow-Synthesis.html#v:runSheafGatedCEGISWithDiffusion)) | Crem Mealy state machines, structural tree-diff similarity, and end-to-end Sheaf-Gated CEGIS pipelines. |
+
+  ---
+
+  ## 4. Executable Worked Examples
+
+  ### 4.1 Running a Batch of Commands Through the Crem State Machine
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module ExampleCremWorkflow where
+
+  import Workflow.Synthesis
+
+  runSampleWorkflow :: IO ()
+  runSampleWorkflow = do
+    let machine = createSynthesisMachine
+        commands =
+          [ CmdProposeCandidate "patch_v1"
+          , CmdRunSandbox (0, "Build succeeded", "")
+          , CmdEvaluateEvidence Nothing
+          ]
+        (events, _) = runSynthesisBatch machine commands
+
+    mapM_ print events
+    -- Emits: EvtCandidateProposed, EvtSandboxCompleted, EvtSynthesisSucceeded
+  ```
+
+  ### 4.2 Executing End-to-End Sheaf-Gated CEGIS
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module ExampleSheafCEGIS where
+
+  import Database.SQLite.Simple (open, close)
+  import Data.Text (Text)
+  import Gargamelle.Sheaf
+  import Sandbox.Effect (defaultLimits)
+  import Workflow.Synthesis
+
+  executeFullSynthesis :: IO ()
+  executeFullSynthesis = do
+    conn <- open "cegis-runs.db"
+    let (complex :: CellComplex Text Text) = fromEdges [("api", "AuthService", "PaymentService")]
+        sheaf = symmetricSheaf (\_ (c :: Text) -> c) (\_ (e :: Text) -> e)
+        spec = fromListCochain0 [("AuthService", "JWT_v2"), ("PaymentService", "JWT_v2")]
+        config = SheafCEGISConfig
+          { cegisDbConn        = conn
+          , cegisRunId         = 1001
+          , cegisCandidateName = "jwt_upgrade_candidate"
+          , cegisChangeRep     = "ast_hash_9482"
+          , cegisSig           = "AuthServiceProtocol"
+          , cegisLimits        = defaultLimits
+          , cegisSandboxCmd    = ("echo", ["compiling-candidate"])
+          , cegisComplex       = complex
+          , cegisSheaf         = sheaf
+          , cegisCandidateSpec = spec
+          , cegisTimestamp     = 1700000000
+          }
+
+    (outcome, _events) <- runSheafGatedCEGIS config
+    case outcome of
+      SheafCEGISSuccess _ msg -> putStrLn $ "CEGIS Verified: " ++ show msg
+      SheafCEGISObstruction obs -> putStrLn $ "CEGIS Obstructions: " ++ show obs
+      _ -> putStrLn "CEGIS run terminated."
+    close conn
+  ```
+
+  ---
+
+  ## 5. Integration Points & Subsystem Boundaries
+
+  `gargamelle-workflow` resides at **Tier 5 (Workflow & Orchestration)** of the monorepo architecture:
+
+  ```
+  ┌────────────────────────────────────────────────────────┐
+  │                  Top-Level Consumers                   │
+  │  - Multi-Agent Synthesis Engines (e.g. sarutahiko)     │
+  │  - Autonomous Inductive Program Repair Runners         │
+  └──────────────────────────▲─────────────────────────────┘
+                             │
+                   [gargamelle-workflow]
+                             │
+  ┌──────────────────────────▼─────────────────────────────┐
+  │               Upstream Substrates                      │
+  │  - crem & singletons-base: Mealy Machine Topology      │
+  │  - tree-diff: Structural AST Edit Distance             │
+  │  - gargamelle-sheaf: Cohomological Obstructions (H¹)   │
+  │  - gargamelle-sandbox: Bubblewrap Container Isolation  │
+  │  - gargamelle-persistence: Beam SQLite Storage         │
+  │  - gargamelle-evidence: Structural Evidence Records    │
+  └────────────────────────────────────────────────────────┘
+  ```
+
+  ---
+
+  ## 6. Diagnostic & Troubleshooting Guide
+
+  ### 6.1 State Machine Stuck on `EvtSynthesisRetry`
+  - **Symptom:** `stepSynthesis` emits `EvtSynthesisRetry "Unexpected command in ... state"`.
+  - **Root Cause:** A command was issued that does not correspond to a valid outgoing edge from the active vertex in `synthesisTopology`.
+  - **Remedy:** Inspect `synthesisTopology` to ensure commands follow the prescribed sequence: `CmdProposeCandidate` $\to$ `CmdRunSandbox` $\to$ `CmdEvaluateEvidence` $\to$ `CmdCheckSimilarity` $\to$ `CmdEvaluateSheaf`.
+
+  ### 6.2 Recurrent Structural Similarity Pruning
+  - **Symptom:** Synthesis repeatedly prunes candidate with `EvtSynthesisRetry "Similar known failure detected"`.
+  - **Root Cause:** The candidate generator is producing superficial variations of a disproven candidate.
+  - **Remedy:** Adjust `isAstStructurallySimilar` threshold or clear obsolete failure records in `Persistence.Beam`.
+
+  ---
+
+  *Part of the [Gargamelle Verification Suite](../../README.md).*
+description-type: markdown
+hash: 8eb60557e0abdae8425fb1d40c7b3fa39120cdb9f79a8b2f03b338c0dfc85c02
+homepage: https://github.com/NadiaYvette/gargamelle
+latest: 0.1.0.0
+license-name: EUPL-1.2
+maintainer: nadia.yvette.chambers@ik.me
+synopsis: Synthesis workflow, Crem state machine, and end-to-end integration
+test-bench-deps:
+  base: '>=4.14 && <5'
+  beam-core: '>=0.10 && <0.12'
+  beam-sqlite: '>=0.5 && <0.8'
+  containers: '>=0.6 && <0.9'
+  crem: '>=0.1 && <0.2'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  gargamelle-core: '>=0.1 && <0.2'
+  gargamelle-effect: '>=0.1 && <0.2'
+  gargamelle-equational: '>=0.1 && <0.2'
+  gargamelle-evidence: '>=0.1 && <0.2'
+  gargamelle-fol: '>=0.1 && <0.2'
+  gargamelle-logic: '>=0.1 && <0.2'
+  gargamelle-model: '>=0.1 && <0.2'
+  gargamelle-persistence: '>=0.1 && <0.2'
+  gargamelle-sandbox: '>=0.1 && <0.2'
+  gargamelle-sheaf: '>=0.1 && <0.2'
+  gargamelle-workflow: '>=0'
+  hspec: '>=2.10 && <2.12'
+  lattices: '>=2.2 && <2.3'
+  process: '>=1.6 && <1.7'
+  sqlite-simple: '>=0.4 && <0.5'
+  text: '>=2.0 && <2.2'
+  tree-diff: '>=0.3 && <0.5'

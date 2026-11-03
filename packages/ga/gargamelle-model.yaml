@@ -1,0 +1,222 @@
+all-versions:
+- 0.1.0.0
+author: Nadia Yvette Chambers
+basic-deps:
+  base: '>=4.18 && <5'
+  constraints: '>=0.14 && <0.15'
+  containers: '>=0.6 && <0.9'
+  contravariant: '>=1.5 && <1.6'
+  gargamelle-logic: '>=0.1 && <0.2'
+  indexed-profunctors: '>=0.1 && <0.2'
+  lattices: '>=2.2 && <2.3'
+  polytropos-core: '>=0.1.0.1 && <0.2'
+  profunctors: '>=5.6 && <5.7'
+changelog: |
+  # Changelog for gargamelle-model
+
+  ## 0.1.0.0 — Initial Release
+
+  - Observable runtime models and free verifier ASTs for Gargamelle.
+  - Proof-carrying satisfaction structures and semantics.
+  - Functorial state interpretation and structural validation.
+changelog-type: markdown
+description: |
+  # `gargamelle-model` — Observable Runtime Models, Free Verifier ASTs & Proof-Carrying Satisfaction
+
+  [![Haskell](https://img.shields.io/badge/Language-Haskell2010-purple.svg)](https://haskell.org)
+  [![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-blue.svg)](https://spdx.org/licenses/EUPL-1.2.html)
+  [![Tier 3 Substrate](https://img.shields.io/badge/Tier-3%20Substrate%20%26%20Semantics-teal.svg)](../../README.md#architectural-tier-map)
+
+  ---
+
+  ## 1. Executive Summary & Problem Framing
+
+  Formal verification tools frequently suffer from an "all-or-nothing" opacity trap:
+  1. **Binary Satisfaction Opacity:** Traditional satisfaction predicates return an uninformative boolean: $M \models \varphi \in \{\text{True}, \text{False}\}$. When verification fails, the caller receives `False` with no witness, no assignment trace, and no indication of which conjunct failed.
+  2. **Opaque Lambda Closures:** Verifier combinators implemented as higher-order functions $(M \to \text{Bool})$ cannot be statically inspected, optimized, or mapped across signature morphisms by autonomous agents or SMT solvers.
+  3. **Lost Repair Feedback in CEGIS Loops:** In Counterexample-Guided Inductive Synthesis (CEGIS), synthesis engines require precise diagnostic counterexamples to compute non-trivial inductive generalizations and prevent repeating failed repairs.
+
+  `gargamelle-model` resolves this opacity:
+  - **Algebraic Satisfaction Evidence:** Replaces `Bool` with `Evidence`, a commutative monoid where `VerifiedSection` is identity and `Counterexample` witnesses accumulate across failing conjuncts.
+  - **Observable Free `Divisible`/`Decidable` Verifier AST:** Reifies verification logic into an inspectable GADT (`Verifier`) where product splittings (`DivideV`) and sum branchings (`ChooseV`) use `ObsMor` terms rather than opaque closures.
+  - **Structural Satisfaction Isomorphism:** Reifies the institutional satisfaction condition biconditional ($\iff$) as a bidirectional evidence isomorphism (`SatisfactionIso`).
+
+  ---
+
+  ## 2. Mathematical Foundations & Theoretical Invariants
+
+  ### 2.1 The Free Divisible / Decidable Functor
+  A verifier is fundamentally a contravariant consumer of models. By instantiating `Divisible` (conjunction over cartesian products) and `Decidable` (disjunction over coproducts/sums), `Verifier` forms an algebraic AST:
+
+  ```
+                            Contravariant Verifier AST
+                                        │
+                ┌───────────────────────┴───────────────────────┐
+                ▼                                               ▼
+       Product Conjunction                              Sum Disjunction
+     (Divisible: divide id)                          (Decidable: choose id)
+     DivideV split vA vB                              ChooseV split vLeft vRight
+                │                                               │
+                ├─ Model: (a, b)                                ├─ Model: Either a b
+                ├─ Runs vA on a                                 ├─ Evaluates active branch
+                └─ Runs vB on b                                 └─ Bypasses inactive branch
+  ```
+
+  Because `split` is an `ObsMor` term rather than a Haskell lambda, autonomous agents can call `inspectVerifierPlan` to inspect the complete verification strategy without requiring a runtime model.
+
+  <!-- See Note [Free Verifier AST and Algebraic Counterexample Evidence] [ref:note-free-verifier-ast] -->
+
+  ### 2.2 Evidence Monoid Algebra
+  Evidence accumulates under conjunction according to standard monoid laws:
+  $$\operatorname{VerifiedSection} \diamond e = e \diamond \operatorname{VerifiedSection} = e$$
+  $$\operatorname{Counterexample}(s_1, w_1) \diamond \operatorname{Counterexample}(s_2, w_2) = \operatorname{Counterexample}(s_1 \mathbin{;} s_2, w_1 \mathbin{|} w_2)$$
+
+  This guarantees that composite checks do not drop counterexamples: when multiple subsystems fail simultaneously, every failure point is preserved in the evidence payload.
+
+  <!-- See Note [Free Verifier AST and Algebraic Counterexample Evidence] [ref:note-free-verifier-ast] -->
+
+  ### 2.3 The Satisfaction Condition Isomorphism
+  In Goguen-Burstall Institutions, the satisfaction condition asserts:
+  $$\operatorname{Mod}(\sigma)(M') \models_{\Sigma} \varphi \iff M' \models_{\Sigma'} \operatorname{Sen}(\sigma)(\varphi)$$
+
+  In `gargamelle-model`, this biconditional is reified as an observable bidirectional arrow pair:
+  ```haskell
+  module ExampleSatisfactionIso where
+
+  import Gargamelle.Logic.Defunctionalize (ObsMor)
+  import Gargamelle.Model.Satisfaction (Evidence)
+
+  data SatisfactionIso = SatisfactionIso
+    { forwardEvidence  :: ObsMor Evidence Evidence
+    , backwardEvidence :: ObsMor Evidence Evidence
+    }
+  ```
+  This enables autonomous agents to translate counterexamples discovered by SMT solvers or sandbox runs in a target institution back to the vocabulary of the base system.
+
+  <!-- See Note [Satisfaction Condition Preservation across Signature Morphisms] [ref:note-satisfaction-iso] -->
+
+  ### 2.4 Multi-Sorted Carrier Interpretations
+  `LogicModel` bridges syntax and semantics by binding carrier sorts to predicate evaluators:
+  $$\operatorname{evalSymbol} : \operatorname{interp}(s) \to \operatorname{pred}(s) \to \operatorname{Evidence}$$
+
+  <!-- See Note [Universal LogicModel Sorting and Product Splittings] [ref:note-logic-model-sorting] -->
+
+  ---
+
+  ## 3. Module Architecture & Repertoire Breadth
+
+  The package exports 2 focused modules:
+
+  | Module | Primary Types & Typeclasses | Architectural Purpose |
+  | :--- | :--- | :--- |
+  | [`Gargamelle.Model.Satisfaction`](src/Gargamelle/Model/Satisfaction.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Satisfaction.html)) | [`Evidence`](src/Gargamelle/Model/Satisfaction.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Satisfaction.html#t:Evidence)), [`Verifier`](src/Gargamelle/Model/Satisfaction.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Satisfaction.html#t:Verifier)), [`evalVerifier`](src/Gargamelle/Model/Satisfaction.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Satisfaction.html#v:evalVerifier)), [`inspectVerifierPlan`](src/Gargamelle/Model/Satisfaction.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Satisfaction.html#v:inspectVerifierPlan)), [`SatisfactionIso`](src/Gargamelle/Model/Satisfaction.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Satisfaction.html#t:SatisfactionIso)) | Observable free `Divisible`/`Decidable` verifier AST, Evidence monoid, and satisfaction isomorphisms. |
+  | [`Gargamelle.Model.Structure`](src/Gargamelle/Model/Structure.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Structure.html)) | [`LogicModel`](src/Gargamelle/Model/Structure.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Structure.html#t:LogicModel)), [`RuntimeModel`](src/Gargamelle/Model/Structure.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Structure.html#t:RuntimeModel)), [`compilePairVerifier`](src/Gargamelle/Model/Structure.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Structure.html#v:compilePairVerifier)), [`compileEitherVerifier`](src/Gargamelle/Model/Structure.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-model/docs/Gargamelle-Model-Structure.html#v:compileEitherVerifier)) | Multi-sorted carrier bindings and product/sum verifier combinators. |
+
+  ---
+
+  ## 4. Executable Worked Examples
+
+  ### 4.1 Composing Multi-Property Verifiers Across Product Models
+  ```haskell
+  module ExampleVerifier where
+
+  import Gargamelle.Model.Satisfaction
+  import Gargamelle.Model.Structure
+
+  -- Define atomic property checks
+  checkAge :: Verifier Int
+  checkAge = verifyPredicate "validAge" (\age -> age >= 0 && age <= 120)
+
+  checkName :: Verifier String
+  checkName = verifyPredicate "nonEmptyName" (not . null)
+
+  -- Compose checks across a pair model (Int, String) using compilePairVerifier
+  userVerifier :: Verifier (Int, String)
+  userVerifier = compilePairVerifier checkAge checkName
+
+  -- Evaluate against valid model
+  passExample :: Evidence
+  passExample = evalVerifier userVerifier (28, "Alice")
+  -- Evaluates to: VerifiedSection
+
+  -- Evaluate against doubly failing model
+  failExample :: Evidence
+  failExample = evalVerifier userVerifier (-5, "")
+  -- Evaluates to:
+  --   Counterexample "validAge; nonEmptyName" "Predicate violated: validAge | Predicate violated: nonEmptyName"
+  ```
+
+  ### 4.2 Statically Inspecting a Verification Strategy
+  ```haskell
+  module ExampleInspection where
+
+  import Gargamelle.Model.Satisfaction
+  import Gargamelle.Model.Structure
+
+  userVerifier :: Verifier (Int, String)
+  userVerifier = compilePairVerifier
+    (verifyPredicate "validAge" (\(age :: Int) -> age >= 0 && age <= 120))
+    (verifyPredicate "nonEmptyName" (not . null))
+
+  plan :: [String]
+  plan = inspectVerifierPlan userVerifier
+  -- Evaluates statically to:
+  --   ["Step:divide", "AtomCheck:validAge", "AtomCheck:nonEmptyName"]
+  ```
+
+  ---
+
+  ## 5. Integration Points & Subsystem Boundaries
+
+  `gargamelle-model` resides at **Tier 3 (Substrate & Semantics)**:
+
+  ```
+  ┌────────────────────────────────────────────────────────┐
+  │               Downstream Consumers                     │
+  │  - gargamelle-core: Institutional Satisfaction Models  │
+  │  - gargamelle-sheaf: Cell Stalk Model Verification     │
+  │  - gargamelle-workflow: CEGIS Counterexample Guidance  │
+  └──────────────────────────▲─────────────────────────────┘
+                             │
+                   [gargamelle-model]
+                             │
+  ┌──────────────────────────▼─────────────────────────────┐
+  │               Upstream Substrates                      │
+  │  - gargamelle-logic: ObsMor defunctionalized morphisms │
+  │  - contravariant (>= 1.5): Divisible & Decidable       │
+  │  - lattices (>= 2.2): Refinement lattice orders        │
+  └────────────────────────────────────────────────────────┘
+  ```
+
+  ---
+
+  ## 6. Diagnostic & Troubleshooting Guide
+
+  ### 6.1 Silent Failure Swallowing
+  - **Symptom:** Upstream synthesis loop repeats identical failing patches.
+  - **Root Cause:** A custom verifier returned `VerifiedSection` or discarded `Counterexample` witnesses.
+  - **Remedy:** Ensure custom atomic checks use `verifyPredicate` or return `Counterexample symbol witness` on failure.
+
+  ### 6.2 Recursive Free Verifier Stack Blowup
+  - **Symptom:** Evaluating a deeply nested `Verifier` exhausts memory or stack.
+  - **Root Cause:** Constructing balanced binary trees of `divide` across large tuples.
+  - **Remedy:** Pre-flatten tuples using `ObsMor` projection steps (`ProjectTag`) or decompose models into hierarchical sub-records.
+
+  ---
+
+  *Part of the [Gargamelle Verification Suite](../../README.md).*
+description-type: markdown
+hash: 9f16222c5f15ca91af4b723fe61b260fd9cfe541ee331418618a8794f365c7ca
+homepage: https://github.com/NadiaYvette/gargamelle
+latest: 0.1.0.0
+license-name: EUPL-1.2
+maintainer: nadia.yvette.chambers@ik.me
+synopsis: Runtime models and proof-carrying satisfaction for Gargamelle
+test-bench-deps:
+  base: '>=4.18 && <5'
+  contravariant: '>=1.5 && <1.6'
+  gargamelle-logic: '>=0.1 && <0.2'
+  gargamelle-model: '>=0'
+  hspec: '>=2.10 && <2.12'
+  lattices: '>=2.2 && <2.3'
+  polytropos-core: '>=0.1.0.1 && <0.2'

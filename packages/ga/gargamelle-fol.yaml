@@ -1,0 +1,206 @@
+all-versions:
+- 0.1.0.0
+author: Nadia Yvette Chambers
+basic-deps:
+  base: '>=4.18 && <5'
+  containers: '>=0.6 && <0.9'
+  gargamelle-core: '>=0.1 && <0.2'
+  gargamelle-model: '>=0.1 && <0.2'
+  polytropos-core: '>=0.1.0.1 && <0.2'
+  process: '>=1.6 && <1.7'
+changelog: |
+  # Changelog for gargamelle-fol
+
+  ## 0.1.0.0 — Initial Release
+
+  - First-order logic institution and streaming Z3 SMT solver pipeline.
+  - Hyperdoctrine structures and quantifier elimination.
+  - Refinement calculus generation for formal program verification.
+changelog-type: markdown
+description: |
+  # `gargamelle-fol` — First-Order Logic Institution, Hyperdoctrines & Streaming Z3 SMT-LIB2
+
+  [![Haskell](https://img.shields.io/badge/Language-Haskell2010-purple.svg)](https://haskell.org)
+  [![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-blue.svg)](https://spdx.org/licenses/EUPL-1.2.html)
+  [![Tier 3 Logic Engine](https://img.shields.io/badge/Tier-3%20Logic%20%26%20Institution%20Engine-teal.svg)](../../README.md#architectural-tier-map)
+
+  ---
+
+  ## 1. Executive Summary & Problem Framing
+
+  Predicate logic with quantifiers and relational constraints is fundamental to system verification, contract refinement, and theorem proving. However, embedding first-order logic (FOL) into modern multi-agent synthesis loops introduces major architectural hurdles:
+  1. **FFI Brittleness & ABI Drift:** Direct C/C++ FFI bindings to solvers like Z3 cause crashes across varying GHC versions (9.6–9.14) and complicate packaging across Nix, Stack, and Cabal.
+  2. **Opaque Solver Outputs:** Traditional solver interfaces return bare booleans (`Sat`/`Unsat`), discarding the countermodel witnesses necessary for automated fault repair and inductive learning.
+  3. **Context Weakening & Quantifier Inconsistency:** Ad-hoc substitution engines frequently introduce variable capture and fail to preserve the adjunction laws governing universal ($\forall$) and existential ($\exists$) quantifiers.
+
+  `gargamelle-fol` resolves these issues via rigorous categorical foundations and POSIX streaming:
+  - **First-Order Institution:** Embeds FOL into the Goguen-Burstall framework, supporting Herbrand universe evaluation and signature morphisms.
+  - **Lawvere Hyperdoctrines:** Formalizes quantifiers functorially as adjoints ($\exists_t \dashv t^* \dashv \forall_t$) to substitution functors over context categories.
+  - **Streaming SMT-LIB2 Pipe:** Emits standard SMT-LIB2 scripts streamed over POSIX pipes directly to host Z3 without FFI overhead.
+  - **Structured Evidence Extraction:** Automatically transforms Z3 countermodels into inspectable `Counterexample` witnesses and verified proofs into `VerifiedSection`.
+
+  ---
+
+  ## 2. Mathematical Foundations & Theoretical Invariants
+
+  ### 2.1 Categorical Hyperdoctrine Quantifier Adjunctions
+  In Lawvere's categorical logic, a First-Order Hyperdoctrine is a functor $\mathcal{P} : \mathbf{C}^{\mathrm{op}} \to \mathbf{HeytAlg}$ indexing propositional fibers over a cartesian category of contexts $\mathbf{C}$:
+  ```
+                         P(X × Y) (Fiber over extended context)
+                         ▲      ▲
+           Substitution  │      │  Universal Quantifier
+            π* (Pullback)│      │  ∀_π (Right Adjoint)
+                         │      ▼
+                           P(X)   (Fiber over base context)
+  ```
+
+  1. **Pullback (Substitution):** For any projection or term substitution $\pi : X \times Y \to X$, the contravariant functorial action $\pi^* : \mathcal{P}(X) \to \mathcal{P}(X \times Y)$ models context weakening.
+  2. **Existential Quantifier as Left Adjoint:**
+     $$\exists_\pi \dashv \pi^* \iff (\exists_\pi(\varphi) \le \psi \iff \varphi \le \pi^*(\psi))$$
+  3. **Universal Quantifier as Right Adjoint:**
+     $$\pi^* \dashv \forall_\pi \iff (\pi^*(\psi) \le \varphi \iff \psi \le \forall_\pi(\varphi))$$
+  4. **Beck-Chevalley Invariance:** For any pullback square in $\mathbf{C}$, the canonical comparison between quantification and substitution commutes.
+
+  <!-- See Note [Categorical Hyperdoctrine Quantifier Adjunctions] [ref:note-hyperdoctrine-adjunctions] -->
+
+  ### 2.2 Streaming SMT-LIB2 Piping & Dual Refutation
+  Interfacing with external solvers avoids foreign function bindings by utilizing streaming POSIX pipes:
+
+  ```
+  ┌─────────────────────┐       formulaToSMTLib        ┌───────────────────────┐
+  │ FirstOrder Formula  │ ───────────────────────────► │ SMT-LIB2 Script       │
+  └─────────────────────┘                              └───────────┬───────────┘
+                                                                   │
+                                                        readProcessWithExitCode
+                                                                   ▼
+  ┌─────────────────────┐        parseZ3Model          ┌───────────────────────┐
+  │ Evidence Witness    │ ◄─────────────────────────── │ Host Z3 stdout/stderr │
+  │ (Counterexample /   │                              │ (sat / unsat)         │
+  │  VerifiedSection)   │                              └───────────────────────┘
+  └─────────────────────┘
+  ```
+
+  - **Dual Refutation:** To verify that formula $\varphi$ is valid, `verifyValidityZ3` tests whether $\neg \varphi$ is unsatisfiable.
+  - **Evidence Soundness:**
+    - $\neg \varphi$ is $\mathrm{UNSAT} \implies \varphi$ holds universally, producing `VerifiedSection`.
+    - $\neg \varphi$ is $\mathrm{SAT} \implies$ Z3 produces a model $\mathcal{M} \models \neg \varphi$. Parsing this model yields a concrete `Counterexample` containing the exact falsifying variable assignments.
+
+  <!-- See Note [Streaming Z3 SMT-LIB2 Piping and Model Extraction] [ref:note-z3-smt-pipe-extraction] -->
+
+  ---
+
+  ## 3. Module Architecture & Repertoire Breadth
+
+  The package exports 4 modules providing complete first-order verification and solver piping:
+
+  | Module | Primary Types & Typeclasses | Architectural Purpose |
+  | :--- | :--- | :--- |
+  | [`Gargamelle.FOL.Z3`](src/Gargamelle/FOL/Z3.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Gargamelle-FOL-Z3.html)) | [`solveZ3Raw`](src/Gargamelle/FOL/Z3.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Gargamelle-FOL-Z3.html#v:solveZ3Raw)), [`checkFormulaZ3`](src/Gargamelle/FOL/Z3.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Gargamelle-FOL-Z3.html#v:checkFormulaZ3)), [`verifyValidityZ3`](src/Gargamelle/FOL/Z3.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Gargamelle-FOL-Z3.html#v:verifyValidityZ3)), [`SMTResult`](src/Gargamelle/FOL/Z3.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Gargamelle-FOL-Z3.html#t:SMTResult)) | Streaming SMT-LIB2 serialization, host Z3 process piping, and model parsing. |
+  | [`FirstOrder`](src/FirstOrder.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/FirstOrder.html)) | [`Formula`](src/FirstOrder.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/FirstOrder.html#t:Formula)), [`Term`](src/FirstOrder.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/FirstOrder.html#t:Term)), [`FOLModel`](src/FirstOrder.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/FirstOrder.html#t:FOLModel)), [`evalFormula`](src/FirstOrder.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/FirstOrder.html#v:evalFormula)) | Core first-order logic syntax, Herbrand model structures, and evaluation. |
+  | [`Hyperdoctrine`](src/Hyperdoctrine.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Hyperdoctrine.html)) | [`Context`](src/Hyperdoctrine.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Hyperdoctrine.html#t:Context)), [`HDCSig`](src/Hyperdoctrine.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Hyperdoctrine.html#t:HDCSig)), [`HDModel`](src/Hyperdoctrine.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/Hyperdoctrine.html#t:HDModel)) | Lawvere hyperdoctrine fibered contexts and categorical institution integration. |
+  | [`RefinementCalculus`](src/RefinementCalculus.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/RefinementCalculus.html)) | [`Spec`](src/RefinementCalculus.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/RefinementCalculus.html#t:Spec)), [`spec`](src/RefinementCalculus.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/RefinementCalculus.html#v:spec)), [`refine`](src/RefinementCalculus.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-fol/docs/RefinementCalculus.html#v:refine)) | Morgan-Back-von Wright refinement calculus specifications and contract preorder. |
+
+  ---
+
+  ## 4. Executable Worked Examples
+
+  ### 4.1 Automated Validity Verification via Z3 Pipe
+  ```haskell
+  {-# LANGUAGE DataKinds #-}
+
+  module ExampleZ3Validity where
+
+  import Data.Proxy (Proxy(..))
+  import FirstOrder (Formula(..))
+  import Gargamelle.FOL.Z3 (verifyValidityZ3)
+  import Gargamelle.Model.Satisfaction (Evidence(..))
+
+  -- Verify the Law of Excluded Middle: (P \/ not P)
+  verifyLEM :: IO ()
+  verifyLEM = do
+    let p = Pred (Proxy @"P") []
+        tautology = Or p (Not p)
+    evidence <- verifyValidityZ3 tautology
+    case evidence of
+      VerifiedSection -> putStrLn "Formally verified: tautology holds across all models."
+      Counterexample sym _witness -> putStrLn $ "Disproved: countermodel found in " ++ sym
+  ```
+
+  ### 4.2 Satisfiability Model Extraction
+  ```haskell
+  {-# LANGUAGE DataKinds #-}
+
+  module ExampleZ3Model where
+
+  import Data.Proxy (Proxy(..))
+  import FirstOrder (Formula(..))
+  import Gargamelle.FOL.Z3 (checkFormulaZ3, SMTResult(..))
+
+  -- Find satisfying model for (P /\ not Q)
+  findWitness :: IO ()
+  findWitness = do
+    let p = Pred (Proxy @"P") []
+        q = Pred (Proxy @"Q") []
+        formula = And p (Not q)
+    result <- checkFormulaZ3 formula
+    case result of
+      Sat model -> putStrLn $ "Satisfying model: " ++ show model
+      Unsat     -> putStrLn "Formula is unsatisfiable."
+      Unknown e -> putStrLn $ "Solver inconclusive: " ++ e
+  ```
+
+  ---
+
+  ## 5. Integration Points & Subsystem Boundaries
+
+  `gargamelle-fol` serves at **Tier 3 (Logic Engine)** of the architecture:
+
+  ```
+  ┌────────────────────────────────────────────────────────┐
+  │               Downstream Consumers                     │
+  │  - gargamelle-workflow: CEGIS Induction & SMT Guidance │
+  │  - gargamelle-persistence: Logging SMT Run Records     │
+  └──────────────────────────▲─────────────────────────────┘
+                             │
+                    [gargamelle-fol]
+                             │
+  ┌──────────────────────────▼─────────────────────────────┐
+  │               Upstream Substrates                      │
+  │  - gargamelle-core: Institutions, Signatures           │
+  │  - gargamelle-model: Evidence, Verifier AST            │
+  │  - Host OS: /usr/bin/z3 executable (POSIX pipe)        │
+  └────────────────────────────────────────────────────────┘
+  ```
+
+  ---
+
+  ## 6. Diagnostic & Troubleshooting Guide
+
+  ### 6.1 `z3` Binary Not Found
+  - **Symptom:** `solveZ3Raw` crashes with `readProcess: z3: does not exist (No such file or directory)`.
+  - **Root Cause:** Host system lacks `z3` on `$PATH`.
+  - **Remedy:** Ensure `z3` is installed via system packages (`apt install z3` or `nix-shell -p z3`).
+
+  ### 6.2 Unknown SMT Results
+  - **Symptom:** `verifyValidityZ3` returns `Counterexample "Z3-Unknown" "..."`.
+  - **Root Cause:** Nonlinear arithmetic, unbounded quantifiers, or timeout limits triggered Z3's incomplete heuristic engine.
+  - **Remedy:** Skolemize existential quantifiers or restrict assertions to decidable SMT fragments (e.g. QF_LIA / QF_UF).
+
+  ---
+
+  *Part of the [Gargamelle Verification Suite](../../README.md).*
+description-type: markdown
+hash: f13fff13c1f04ce16f55ebb44edb49f432ce83c585b23f4c636141afb2032a06
+homepage: https://github.com/NadiaYvette/gargamelle
+latest: 0.1.0.0
+license-name: EUPL-1.2
+maintainer: nadia.yvette.chambers@ik.me
+synopsis: First-order logic institution and streaming Z3 SMT pipe for Gargamelle
+test-bench-deps:
+  base: '>=4.18 && <5'
+  containers: '>=0.6 && <0.9'
+  gargamelle-core: '>=0.1 && <0.2'
+  gargamelle-fol: '>=0'
+  gargamelle-model: '>=0.1 && <0.2'
+  hspec: '>=2.10 && <2.12'
+  process: '>=1.6 && <1.7'

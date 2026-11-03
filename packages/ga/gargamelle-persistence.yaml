@@ -1,0 +1,197 @@
+all-versions:
+- 0.1.0.0
+author: Nadia Yvette Chambers
+basic-deps:
+  base: '>=4.14 && <5'
+  beam-core: '>=0.10 && <0.12'
+  beam-sqlite: '>=0.5 && <0.8'
+  gargamelle-core: '>=0.1 && <0.2'
+  polytropos-core: '>=0.1.0.1 && <0.2'
+  sqlite-simple: '>=0.4 && <0.5'
+  text: '>=2.0 && <2.2'
+changelog: |
+  # Changelog for gargamelle-persistence
+
+  ## 0.1.0.0 — Initial Release
+
+  - Beam SQLite database persistence for evidence and run tracking.
+  - Schema definitions, migrations, and query interfaces.
+  - Transactional persistence of verification proofs and synthesis traces.
+changelog-type: markdown
+description: |
+  # `gargamelle-persistence` — Beam SQLite Relational Persistence, Transactional Locking & Evidence Records
+
+  [![Haskell](https://img.shields.io/badge/Language-Haskell2010-purple.svg)](https://haskell.org)
+  [![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-blue.svg)](https://spdx.org/licenses/EUPL-1.2.html)
+  [![Tier 1 Host Integration](https://img.shields.io/badge/Tier-1%20Substrates%20%26%20Host%20Integration-teal.svg)](../../README.md#architectural-tier-map)
+
+  ---
+
+  ## 1. Executive Summary & Problem Framing
+
+  In autonomous program synthesis, counterexample-guided inductive synthesis (CEGIS), and distributed verification pipelines, engines iteratively propose candidate programs and submit them to automated provers and execution environments. Without a grounded, transactional persistence layer, such systems suffer from three acute failure modes:
+  1. **CEGIS Regression Loops:** Synthesizers lose state across restarts and repeat previously falsified candidate proposals, wasting compute and diverging.
+  2. **Untracked Counterexample Lineage:** Prover counterexamples become disconnected from the exact structural change and signature that elicited the refutation.
+  3. **Database Concurrency Corruption:** Concurrent multi-agent synthesizers simultaneously writing to ad-hoc flat files or unstructured logs incur race conditions, partial writes, and lock contention.
+
+  `gargamelle-persistence` establishes a durable relational foundation for verification:
+  - **Type-Safe Beam ORM Modeling:** Encodes tables using higher-kinded data (`EvidenceRecordT`, `CounterexampleRecordT`, `RunRecordT`), validating schema structure and joins at compile time.
+  - **Relational Lineage Preservation:** Preserves foreign-key links between SMT counterexamples and causal structural changes.
+  - **Serverless ACID Durability:** Powered by SQLite with Write-Ahead Logging (WAL) and atomic transactions for robust multi-process concurrency.
+  - **Run Lifecycle Auditing:** Accurately records start, completion, and exit statuses for long-running autonomous synthesis sessions.
+
+  ---
+
+  ## 2. Mathematical Foundations & Theoretical Invariants
+
+  ### 2.1 Relational Evidence Lineage
+  In grounded verification, an evidence record models a trial $\mathcal{T} = (\Sigma, \Delta, \mathcal{R}, t)$ where:
+  - $\Sigma$ is the active institutional signature.
+  - $\Delta$ is the structural change or synthesis patch.
+  - $\mathcal{R}$ is the reason/outcome (verified section or specific failure category).
+  - $t$ is the physical monotonic timestamp.
+
+  Foreign keys ensure structural integrity across falsification witnesses:
+
+  ```
+  ┌────────────────────────────────────────────────────────┐
+  │                    evidence Table                      │
+  │  - id: INTEGER PRIMARY KEY                             │
+  │  - sig: TEXT                                           │
+  │  - change_rep: TEXT                                    │
+  │  - reason: TEXT                                        │
+  │  - timestamp: INTEGER                                  │
+  └───────────────────────────▲────────────────────────────┘
+                              │ FOREIGN KEY (evidence_ref__id)
+                              │
+  ┌───────────────────────────┴────────────────────────────┐
+  │                counterexamples Table                   │
+  │  - id: INTEGER PRIMARY KEY                             │
+  │  - evidence_ref__id: INTEGER (REFERENCES evidence(id)) │
+  │  - payload: TEXT                                       │
+  └────────────────────────────────────────────────────────┘
+  ```
+
+  - **Referential Invariant:** Every counterexample in the database is causally anchored to an immutable evidence record.
+  - **Regression Prevention:** Synthesizers query `findEvidenceByRep` before evaluating a proposal to determine whether $\Delta$ has already been falsified under $\Sigma$.
+
+  <!-- See Note [Beam SQLite Relational Persistence and Concurrency Locking] [ref:note-beam-sqlite-persistence] -->
+
+  ---
+
+  ## 3. Module Architecture & Repertoire Breadth
+
+  The package exports 3 modules structuring relational persistence:
+
+  | Module | Primary Types & Typeclasses | Architectural Purpose |
+  | :--- | :--- | :--- |
+  | [`Persistence.Schema`](src/Persistence/Schema.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Schema.html)) | [`EvidenceRecordT`](src/Persistence/Schema.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Schema.html#t:EvidenceRecordT)), [`CounterexampleRecordT`](src/Persistence/Schema.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Schema.html#t:CounterexampleRecordT)), [`RunRecordT`](src/Persistence/Schema.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Schema.html#t:RunRecordT)), [`EvidenceDb`](src/Persistence/Schema.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Schema.html#t:EvidenceDb)), [`evidenceDb`](src/Persistence/Schema.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Schema.html#v:evidenceDb)) | Higher-kinded database table definitions and Beam schema specifications. |
+  | [`Persistence.Beam`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html)) | [`initEvidenceDb`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html#v:initEvidenceDb)), [`insertEvidenceRecord`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html#v:insertEvidenceRecord)), [`findEvidenceByRep`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html#v:findEvidenceByRep)), [`listAllEvidence`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html#v:listAllEvidence)), [`insertCounterexample`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html#v:insertCounterexample)), [`findCounterexamplesFor`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html#v:findCounterexamplesFor)), [`startRunRecord`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html#v:startRunRecord)), [`completeRunRecord`](src/Persistence/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Beam.html#v:completeRunRecord)) | SQLite table DDL migration and Beam monadic CRUD operations. |
+  | [`Persistence.Queries`](src/Persistence/Queries.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-persistence/docs/Persistence-Queries.html)) | — | Convenience umbrella re-exporting high-level Beam queries. |
+
+  ---
+
+  ## 4. Executable Worked Examples
+
+  ### 4.1 Inserting and Querying Past Refutations
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module ExamplePersistence where
+
+  import Database.SQLite.Simple (open, close)
+  import Persistence.Beam
+
+  recordFailureWitness :: IO ()
+  recordFailureWitness = do
+    conn <- open "synthesis-evidence.db"
+    initEvidenceDb conn
+
+    -- Record an evidence failure event
+    insertEvidenceRecord conn 101 "FOLSig" "SortPatchV2" "PreconditionViolation" 1700000000
+
+    -- Link the extracted SMT counterexample
+    insertCounterexample conn 1 101 "x = -1, y = 0"
+
+    -- Query prior counterexamples for this patch
+    ces <- findCounterexamplesFor conn 101
+    putStrLn $ "Retrieved counterexamples: " ++ show ces
+    close conn
+  ```
+
+  ### 4.2 Tracking Autonomous Synthesis Session Runs
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module ExampleRunTracking where
+
+  import Database.SQLite.Simple (open, close)
+  import Persistence.Beam
+
+  trackSession :: IO ()
+  trackSession = do
+    conn <- open "synthesis-evidence.db"
+    initEvidenceDb conn
+
+    -- Start session
+    startRunRecord conn 42 "InFlight" 1700000000
+
+    -- Conclude session
+    completeRunRecord conn 42 "CompletedWithEvidence" 1700000120
+    close conn
+  ```
+
+  ---
+
+  ## 5. Integration Points & Subsystem Boundaries
+
+  `gargamelle-persistence` acts at **Tier 1 (Host Integration)** of the architecture:
+
+  ```
+  ┌────────────────────────────────────────────────────────┐
+  │               Downstream Consumers                     │
+  │  - gargamelle-workflow: Grounded CEGIS Loops           │
+  │  - gargamelle-evidence: Persisting Structured Evidence │
+  └──────────────────────────▲─────────────────────────────┘
+                             │
+                  [gargamelle-persistence]
+                             │
+  ┌──────────────────────────▼─────────────────────────────┐
+  │               Upstream Substrates                      │
+  │  - beam-core (>= 0.9): Type-Safe Relational HKD Tables │
+  │  - beam-sqlite: SQLite SQL Generation                  │
+  │  - sqlite-simple: POSIX Database Connection & Locking  │
+  │  - gargamelle-core: Signatures & Institutions          │
+  └────────────────────────────────────────────────────────┘
+  ```
+
+  ---
+
+  ## 6. Diagnostic & Troubleshooting Guide
+
+  ### 6.1 Database Locked Exception
+  - **Symptom:** SQLite throws `SqlError { sqlError = ErrorBusy, sqlErrorDetails = "database is locked" }`.
+  - **Root Cause:** Multiple concurrent processes attempting write transactions without WAL (Write-Ahead Logging) mode enabled.
+  - **Remedy:** Execute `PRAGMA journal_mode=WAL;` and `PRAGMA busy_timeout=5000;` on connection initialization to enable non-blocking concurrent reads and queued writes.
+
+  ### 6.2 Foreign Key Constraint Violation
+  - **Symptom:** `insertCounterexample` fails with foreign key constraint error.
+  - **Root Cause:** Attempting to insert a counterexample referencing a non-existent `evidenceId`.
+  - **Remedy:** Ensure `insertEvidenceRecord` completes successfully before linking dependent counterexamples.
+
+  ---
+
+  *Part of the [Gargamelle Verification Suite](../../README.md).*
+description-type: markdown
+hash: 3a41e660871e2a92df6e00af636f9769e40f0b88d3aa463f5fa2fccea1dc44d8
+homepage: https://github.com/NadiaYvette/gargamelle
+latest: 0.1.0.0
+license-name: EUPL-1.2
+maintainer: nadia.yvette.chambers@ik.me
+synopsis: Beam SQLite database persistence for evidence and run tracking
+test-bench-deps:
+  base: '>=4.14 && <5'
+  gargamelle-persistence: '>=0'
+  hspec: '>=2.10 && <2.12'
+  sqlite-simple: '>=0.4 && <0.5'
+  text: '>=2.0 && <2.2'

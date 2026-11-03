@@ -1,0 +1,264 @@
+all-versions:
+- 0.1.0.0
+author: Nadia Yvette Chambers
+basic-deps:
+  base: '>=4.14 && <5'
+  beam-core: '>=0.10 && <0.12'
+  beam-sqlite: '>=0.5 && <0.8'
+  containers: '>=0.6 && <0.9'
+  directory: '>=1.3 && <1.4'
+  filepath: '>=1.4 && <1.6'
+  gargamelle-core: '>=0.1 && <0.2'
+  gargamelle-persistence: '>=0.1 && <0.2'
+  kan-extensions: '>=5.2 && <5.3'
+  penelope-core: '>=0.1.0.0 && <0.2'
+  penelope-effects: '>=0.1.0.0 && <0.2'
+  penelope-static: '>=0.1.0.0 && <0.2'
+  polytropos-core: '>=0.1.0.1 && <0.2'
+  polytropos-plugin: '>=0.1.0.1 && <0.2'
+  polytropos-profunctors: '>=0.1.0.1 && <0.2'
+  primitive: '>=0.8 && <0.10'
+  process: '>=1.6 && <1.7'
+  profunctors: '>=5.6 && <5.7'
+  sqlite-simple: '>=0.4 && <0.5'
+  text: '>=2.0 && <2.2'
+changelog: |
+  # Changelog for gargamelle-effect
+
+  ## 0.1.0.0 — Initial Release
+
+  - Integrated Penelope polycategorical effect system (`penelope-core`, `penelope-effects`, `penelope-static`) and Polytropos 0.1.0.3.
+  - Arrow Rope effect orchestration layer with Polytropos O(1) jump-table variant routers.
+  - Pure optic dispatch, arrow loop handling, and Coyoneda pipeline fusion.
+  - Integrated beam database and sandbox execution strands.
+changelog-type: markdown
+description: |
+  # `gargamelle-effect` — Arrow Rope Orchestration, $O(1)$ Variant Router & Coyoneda Fusion
+
+  [![Haskell](https://img.shields.io/badge/Language-Haskell2010-purple.svg)](https://haskell.org)
+  [![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-blue.svg)](https://spdx.org/licenses/EUPL-1.2.html)
+  [![Tier 3 Substrate](https://img.shields.io/badge/Tier-3%20Substrate%20%26%20Semantics-teal.svg)](../../README.md#architectural-tier-map)
+
+  ---
+
+  ## 1. Executive Summary & Problem Framing
+
+  Extensible effect systems in modern Haskell typically suffer from three fundamental limitations:
+  1. **$O(N)$ Dynamic Dispatch Overhead:** Conventional extensible effect stacks (such as `freer-simple` or `polysemy`) route effects by walking type-level lists at runtime via `Member eff r` dictionaries, incurring linear traversals, pointer indirection, and heap allocation on the hot path.
+  2. **Coupled Execution and Inability to Fail-Fast:** Monadic effect frameworks interleave computation with interpretation. Workflows cannot statically audit host dependencies (e.g., verifying whether `/usr/bin/bwrap` or SQLite database paths exist) *prior* to executing side effects.
+  3. **Intermediate Arrow Pipeline Allocations:** Chaining pure post-processing transformations onto arrow pipelines introduces intermediate `arr` lifting frames and redundant compositions.
+
+  `gargamelle-effect` solves these challenges by combining the **Kernmantle Arrow Rope** model with **Polytropos $O(1)$ jump-table dispatch**:
+  - **Hardware-Level $O(1)$ Variant Routing:** Dispatches open sum variants through an unboxed array jump-table in $O(1)$ CPU time.
+  - **Pure Profunctor Optics:** Views and updates structural records and variants in-place via `Polytropos.Profunctors`.
+  - **Coyoneda Pipeline Fusion:** Defers and fuses pure post-processing transformations into a single atomic composition step via the Coyoneda lemma.
+  - **Config-Time Environment Auditing:** Inspects required capabilities and verifies physical host prerequisites before executing a single workflow effect.
+
+  ---
+
+  ## 2. Mathematical Foundations & Theoretical Invariants
+
+  ### 2.1 The Arrow Rope Functor
+  A Kernmantle `Rope` separates the computation arrow from the effect interpreter mantle:
+
+  ```
+                    ┌─────────────────────────────────────────┐
+                    │          Handlers core (Mantle)         │
+                    └────────────────────┬────────────────────┘
+                                         │ (Supplied at invocation)
+                                         ▼
+    Input a ════════════════════► [Rope core mantle] ════════════════════► Output b
+                       (Arrow Pipeline Composition: >>>, ***, &&&)
+  ```
+
+  Formally, `Rope` is a reader over the mantle of handlers:
+  $$\operatorname{Rope}(\operatorname{core}, \operatorname{mantle}, a, b) \cong \operatorname{Handlers}(\operatorname{core}) \to \operatorname{core}(a, b)$$
+
+  This guarantees that the pipeline topology is purely structural, allowing the exact same workflow to run under pure in-memory mock handlers during unit tests and production OS sandboxes during execution.
+
+  <!-- See Note [Mantle Decoupling and Config-Time Resource Verification] [ref:note-mantle-static-requirements] -->
+
+  ### 2.2 $O(1)$ Variant Jump-Table Physics
+  In Polytropos, open sums (variants) are represented by an unboxed constructor tag and a flat `SmallArray` of payload slots:
+  $$\operatorname{Rep} = \langle \operatorname{tag} : \operatorname{Int}, \operatorname{slots} : \operatorname{SmallArray} \, \operatorname{Any} \rangle$$
+
+  The `VariantRouter` constructs a contiguous lookup table of handler arrows indexed by tag:
+
+  ```
+  Incoming Variant: [Tag = 1 | Slots = [Any "payload"]]
+                           │
+                           ▼  (O(1) Array Indexing)
+  VariantRouter Table:
+    ┌───┬───────────────────────────────────────────────────────┐
+    │ 0 │ Handler 0: \rep -> Kleisli (handleTag0 (getSlot 0 rep))│
+    ├───┼───────────────────────────────────────────────────────┤
+    │ 1 │ Handler 1: \rep -> Kleisli (handleTag1 (getSlot 0 rep))│ ──► Dispatched in O(1)
+    ├───┼───────────────────────────────────────────────────────┤
+    │ 2 │ Handler 2: \rep -> Kleisli (handleTag2 (getSlot 0 rep))│
+    └───┴───────────────────────────────────────────────────────┘
+  ```
+
+  The CPU executes a single indirect jump:
+  $$\operatorname{handler} = \operatorname{indexSmallArray} \, \operatorname{table} \, \operatorname{tag}$$
+  $$\operatorname{action} = \operatorname{handler}(\operatorname{slots})$$
+
+  Dispatch executes in $O(1)$ time with **zero heap allocation** on the hot path.
+
+  <!-- See Note [O(1) Variant Jump-Table Dispatch Physics] [ref:note-variant-jump-table-physics] -->
+
+  ### 2.3 Coyoneda Pipeline Fusion
+  By the Coyoneda lemma, any functorial or arrow transformation can be accumulated purely:
+  $$\operatorname{Coyoneda}(F, A) \cong \exists B.\, (B \to A) \times F(B)$$
+
+  ```
+    fmap f          fmap g          fmap h
+  (───────►)      (───────►)      (───────►)
+     Coyoneda id r  ──► Coyoneda f r ──► Coyoneda (g . f) r ──► Coyoneda (h . g . f) r
+                                                                      │
+                                                   fuseRope           ▼
+                                                       arr (h . g . f) <<< r
+  ```
+
+  Rather than inserting 3 intermediate `arr` lifting frames, `fuseRope` materializes the accumulated Haskell function composition $(h \circ g \circ f)$ in a single composition step.
+
+  <!-- See Note [Coyoneda Pipeline Fusion] [ref:note-coyoneda-pipeline-fusion] -->
+
+  ---
+
+  ## 3. Module Architecture & Repertoire Breadth
+
+  The package exports 9 modules bridging Kernmantle arrows and Polytropos structural semantics:
+
+  | Module | Primary Types & Typeclasses | Architectural Purpose |
+  | :--- | :--- | :--- |
+  | [`Gargamelle.Effect`](src/Gargamelle/Effect.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect.html)) | — | Main umbrella module re-exporting Rope, Handlers, Router, Optics, and Fusion. |
+  | [`Gargamelle.Effect.Router`](src/Gargamelle/Effect/Router.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Router.html)) | [`VariantRouter`](src/Gargamelle/Effect/Router.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Router.html#t:VariantRouter)), [`makeRouter`](src/Gargamelle/Effect/Router.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Router.html#v:makeRouter)), [`routeVariantRope`](src/Gargamelle/Effect/Router.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Router.html#v:routeVariantRope)) | Upstreamed Polytropos $O(1)$ variant jump-table router for open sum effects. |
+  | [`Gargamelle.Effect.Fusion`](src/Gargamelle/Effect/Fusion.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Fusion.html)) | [`Coyoneda`](src/Gargamelle/Effect/Fusion.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Fusion.html#t:Coyoneda)), [`fuseRope`](src/Gargamelle/Effect/Fusion.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Fusion.html#v:fuseRope)), [`fuseRopeMap`](src/Gargamelle/Effect/Fusion.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Fusion.html#v:fuseRopeMap)) | Defers and fuses pure post-processing transformations onto Arrow Rope pipelines. |
+  | [`Gargamelle.Effect.Optics`](src/Gargamelle/Effect/Optics.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Optics.html)) | [`typedSlotLens`](src/Gargamelle/Effect/Optics.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Optics.html#v:typedSlotLens)), [`typedVariantPrism`](src/Gargamelle/Effect/Optics.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Optics.html#v:typedVariantPrism)) | Re-exports pure profunctor lenses and prisms from `Polytropos.Profunctors`. |
+  | [`Effect.Rope`](src/Effect/Rope.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Rope.html)) | [`Rope`](src/Effect/Rope.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Rope.html#t:Rope)), [`runRope`](src/Effect/Rope.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Rope.html#v:runRope)), [`validateWorkflowResources`](src/Effect/Rope.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Rope.html#v:validateWorkflowResources)) | Core Arrow Rope constructor, strand liftings, and config-time validation. |
+  | [`Effect.Handlers`](src/Effect/Handlers.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Handlers.html)) | [`Handlers`](src/Effect/Handlers.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Handlers.html#t:Handlers)), [`pureMockHandlers`](src/Effect/Handlers.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Handlers.html#v:pureMockHandlers)) | Mantle interpretation records and pure in-memory mock handlers for testing. |
+  | [`Effect.Strand`](src/Effect/Strand.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Strand.html)) | [`LogStrand`](src/Effect/Strand.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Strand.html#t:LogStrand)), [`FileStrand`](src/Effect/Strand.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Strand.html#t:FileStrand)), [`SandboxStrand`](src/Effect/Strand.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Strand.html#t:SandboxStrand)) | Individual effect capability tokens. |
+  | [`Effect.Strand.Beam`](src/Effect/Strand/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Strand-Beam.html)) | [`BeamStrand`](src/Effect/Strand/Beam.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Effect-Strand-Beam.html#t:BeamStrand)) | SQLite Beam evidence persistence strand. |
+  | [`Gargamelle.Effect.Rope`](src/Gargamelle/Effect/Rope.hs) ([Hackage](https://hackage.haskell.org/package/gargamelle-effect/docs/Gargamelle-Effect-Rope.html)) | — | Compatibility re-exports for namespaced imports. |
+
+  ---
+
+  ## 4. Executable Worked Examples
+
+  ### 4.1 Constructing and Running an Arrow Rope Pipeline
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module ExampleRope where
+
+  import Control.Arrow (Kleisli(..))
+  import Control.Category ((.))
+  import Prelude hiding ((.))
+  import Data.Text (Text)
+  import Data.Word (Word64)
+  import Effect.Rope
+  import Effect.Handlers
+
+  -- Compose a sequential effect pipeline: log initialization then fetch random seed
+  samplePipeline :: Rope (Kleisli (Either Text)) mantle () Word64
+  samplePipeline = getRandomWordRope . logInfoRope "Initializing workflow pipeline"
+
+  -- Execute using pure in-memory mock handlers
+  runMock :: Either Text Word64
+  runMock = runKleisli (runRope samplePipeline pureMockHandlers) ()
+  -- Returns: Right 42
+  ```
+
+  ### 4.2 Fusing Pure Post-Processing Transformations via Coyoneda
+  ```haskell
+  module ExampleFusion where
+
+  import Control.Arrow (arr, Kleisli(..))
+  import Data.Text (Text)
+  import Effect.Rope
+  import Effect.Handlers
+  import Gargamelle.Effect.Fusion
+
+  -- Base arrow multiplying input by 2
+  baseArrow :: Rope (Kleisli (Either Text)) mantle Int Int
+  baseArrow = ropeFromCore (arr (* 2))
+
+  -- Fuse pure arithmetic without intermediate arrow frames
+  fusedPipeline :: Rope (Kleisli (Either Text)) mantle Int Int
+  fusedPipeline = fuseRope $
+    fuseRopeMap (+ 10) $
+      fuseRopeMap (+ 5) $
+        liftCoyoneda baseArrow
+
+  -- Executing: ((10 * 2) + 5) + 10 = 35
+  runFusedPipe :: Either Text Int
+  runFusedPipe = runKleisli (runRope fusedPipeline pureMockHandlers) 10
+  -- Returns: Right 35
+  ```
+
+  ---
+
+  ## 5. Integration Points & Subsystem Boundaries
+
+  `gargamelle-effect` sits at **Tier 3 (Substrate & Semantics)** of the architecture:
+
+  ```
+  ┌────────────────────────────────────────────────────────┐
+  │               Downstream Consumers                     │
+  │  - gargamelle-workflow: Sheaf-Gated CEGIS Loop         │
+  │  - gargamelle-sandbox: Bubblewrap Execution Strands    │
+  │  - gargamelle-persistence: Beam SQLite Transactions    │
+  └──────────────────────────▲─────────────────────────────┘
+                             │
+                   [gargamelle-effect]
+                             │
+  ┌──────────────────────────▼─────────────────────────────┐
+  │               Upstream Substrates                      │
+  │  - kernmantle (>= 0.1.0.1): Core Rope Arrow abstraction│
+  │  - polytropos-core (>= 0.1.0.1): Flat SmallArray Rep   │
+  │  - polytropos-profunctors (>= 0.1.0.1): Lenses, Prisms │
+  │  - kan-extensions (>= 5.2): Coyoneda construction      │
+  └────────────────────────────────────────────────────────┘
+  ```
+
+  ---
+
+  ## 6. Diagnostic & Troubleshooting Guide
+
+  ### 6.1 Host Sandbox Binary Missing at Configuration Time
+  - **Symptom:** `validateWorkflowResources` returns `Left ["Sandbox binary missing: /usr/bin/bwrap"]`.
+  - **Root Cause:** Bubblewrap (`bwrap`) is not installed or not in the specified path.
+  - **Remedy:** Ensure Bubblewrap is installed (`sudo apt-get install bubblewrap` or Nix environment `pkgs.bubblewrap`).
+
+  ### 6.2 Variant Router Tag Bounds Overflow
+  - **Symptom:** `indexSmallArray: index out of bounds` during variant routing.
+  - **Root Cause:** A variant with tag $K \ge N$ was routed through a `VariantRouter` built with $N$ handlers.
+  - **Remedy:** Ensure `makeRouter` receives handlers for all possible tags in the open variant row.
+
+  ---
+
+  *Part of the [Gargamelle Verification Suite](../../README.md).*
+description-type: markdown
+hash: 6d270e3a2541ffe7b2d0a694e17f04f4428286fdd2804cac316b50016549e022
+homepage: https://github.com/NadiaYvette/gargamelle
+latest: 0.1.0.0
+license-name: EUPL-1.2
+maintainer: nadia.yvette.chambers@ik.me
+synopsis: Penelope polycategorical effect orchestration with Polytropos routers
+test-bench-deps:
+  base: '>=4.14 && <5'
+  containers: '>=0.6 && <0.9'
+  gargamelle-core: '>=0.1 && <0.2'
+  gargamelle-effect: '>=0'
+  gargamelle-persistence: '>=0.1 && <0.2'
+  hspec: '>=2.10 && <2.12'
+  kan-extensions: '>=5.2 && <5.3'
+  penelope-core: '>=0.1.0.0 && <0.2'
+  penelope-effects: '>=0.1.0.0 && <0.2'
+  penelope-static: '>=0.1.0.0 && <0.2'
+  polytropos-core: '>=0.1.0.1 && <0.2'
+  polytropos-plugin: '>=0.1.0.1 && <0.2'
+  polytropos-profunctors: '>=0.1.0.1 && <0.2'
+  primitive: '>=0.8 && <0.10'
+  profunctors: '>=5.6 && <5.7'
+  text: '>=2.0 && <2.2'
