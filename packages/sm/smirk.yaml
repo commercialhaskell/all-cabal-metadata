@@ -1,0 +1,276 @@
+all-versions:
+- 0.1.0.0
+author: Nadia Yvette Chambers
+basic-deps:
+  base: '>=4.16 && <5'
+  bytestring: '>=0.11 && <1'
+  containers: '>=0.6 && <1'
+  megaparsec: '>=9.0 && <10'
+  mono-traversable: '>=1.0 && <2'
+  parser-combinators: '>=1.3 && <2'
+  template-haskell: '>=2.18 && <3'
+  text: '>=2.0 && <3'
+  vector: '>=0.12 && <1'
+changelog: |
+  # Changelog for `smirk`
+
+  All notable changes to `smirk` will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the Haskell Package Versioning Policy (PVP).
+
+  ## [0.1.0.0] — 2026-10-24
+
+  ### Added
+  - **`Smirk.Core.AST`**: Core abstract syntax tree supporting full PCRE constructs: character literals, character classes, escape sequences, concatenation, alternation, bounded/unbounded repetition (greedy, lazy, possessive), lookaround assertions, and named capture groups.
+  - **`Smirk.Core.Bytecode` & `Smirk.Core.Compiler`**: Bytecode instruction set and non-backtracking VM compilation engine.
+  - **`Smirk.Engine.VM`**: Resumable, step-bounded virtual machine execution model (`Fuel`, `StepBudget`, `OutOfFuel`, `MatchContinuation`). Provides ironclad Regular Expression Denial of Service (ReDoS) defense by enforcing strict upper bounds on thread state transitions.
+  - **`Smirk.Engine.Sequence`**: Sequence polymorphism via `mono-traversable`'s `Element seq ~ Char`, supporting `Data.Text.Text`, `Data.ByteString.ByteString`, `[Char]`, `Data.Sequence.Seq Char`, and `Data.Vector.Vector Char`.
+  - **`Smirk.Core.Quote`**: Compile-time QuasiQuoters:
+    - `[re|...|]`: Static PCRE pattern compilation with stage-1 AST validation.
+    - `[ed|s/foo/bar/g|]`: Sed-style stream editor substitution syntax.
+  - **`Smirk.Glob`**: Native POSIX and Git-style globbing with `compileWildcard` and `[glob|...|]` QuasiQuoter.
+  - Split architecture into modular packages:
+    - `smirk`: Pure core engine and quasiquoters.
+    - `smirk-effectful`: Algebraic effect interface via `effectful`.
+    - `smirk-polysemy`: Extensible effect interface via `polysemy`.
+  - Canonical tooling overlay via `gachi`: Sarutahiko RFC 2822 commit attribution trailers, 5-gate physical verification runner (`bin/smirk-verify`), and comprehensive documentation corpus.
+changelog-type: markdown
+description: |
+  # Smirk (;-P / ;-) — Pure Native Resumable PCRE Engine in Haskell
+
+  **Smirk** is a 100% native Haskell Perl-Compatible Regular Expression (PCRE) engine. It provides high-assurance, pure functional regular expression matching, step-bounded ReDoS immunity, pausable/resumable continuations, sequence polymorphism, and first-class algebraic effect handlers without C dependencies, buffer allocations, or FFI overhead.
+
+  ---
+
+  ## The Name & Emoticon Grounding
+
+  The library's name and symbol—**Smirk** (**;-P** / **;-)**)—express cheeky, playful defiance:
+  - In the security and system reliability world, regular expression engines are notorious for disastrous catastrophic backtracking—the dreaded **ReDoS** (Regular Expression Denial of Service) attack, where a pathological string like `aaaaaaaaaaaaaaaaaaaaaaaaaaaaa!` against `(a+)+$` locks a CPU core in exponential $\mathcal{O}(2^N)$ backtracking for hours or days.
+  - In mainstream Haskell, developers were traditionally forced to link against foreign C libraries (`libpcre` / `libpcre2`) via FFI bindings, compromising memory safety, complicating static linking and cross-compilation, and inviting segmentation faults on unbounded recursion.
+  - **Smirk** smirks at both traps: by executing bytecode over an explicit, heap-allocated Pike-style backtracking state machine under a strict **Fuel / Step Budget**, Smirk guarantees that execution never locks a runtime thread, never overflows the C call stack, and can pause, yield an intact continuation, and resume on demand.
+
+  ---
+
+  ## Core Motivation & Architecture
+
+  ### The Problem with C FFI and Unbounded Backtracking
+
+  1. **Foreign Function Interface (FFI) Vulnerabilities:** Traditional Haskell bindings to C PCRE libraries introduce native build dependencies, cross-compilation obstacles, and potential memory leaks across C string marshalling boundaries.
+  2. **Catastrophic Backtracking (ReDoS):** When processing untrusted user input (e.g. web forms, query filters, search strings), standard regex engines can enter exponential search loops that freeze application threads.
+  3. **Container Inflexibility:** Most regex libraries force data into strict `ByteString` or `Text`, forcing expensive allocations when scanning `[Char]`, finger-tree `Seq Char`, or `Vector Char`.
+  4. **Effect Monolithic Coupling:** Extensible effect users often find regex libraries tightly coupled to a single effect framework, pulling in heavy dependencies.
+
+  ### The Smirk Solution
+
+  `smirk` resolves these challenges through five architectural pillars:
+
+  1. **100% Pure Haskell Pike Virtual Machine:** Patterns are compiled into linear bytecode vectors (`Opcode`), evaluated by a step-stepped virtual machine with an explicit heap-allocated backtracking stack.
+  2. **Fuel-Bounded Execution & ReDoS Defense:** Every instruction execution consumes 1 unit of `Fuel` (`StepBudget !Int`). If the budget is exhausted, the engine yields `OutOfFuel` along with a `MatchContinuation`.
+  3. **Pausable & Resumable Continuations:** Match evaluations can be paused, inspected, serialized, and resumed via `resumeMatch` with an replenished fuel budget.
+  4. **Sequence Polymorphism:** Through the `RegexTarget` abstraction, matching operates zero-copy across `Text`, `ByteString`, `[Char]`, `Seq Char`, and `Vector Char`.
+  5. **Decoupled 3-Package Architecture:** The core engine is completely independent of effect libraries; dedicated packages provide zero-overhead bindings for `effectful` and `polysemy`.
+
+  ---
+
+  ## Multi-Package Catalog
+
+  The repository is structured into four independent, modular Cabal packages:
+
+  | Package | Directory | Description | Hackage Status |
+  | :--- | :--- | :--- | :--- |
+  | **`smirk`** | [`./`](.) | Core engine: Megaparsec PCRE parser, AST, bytecode compiler, Pike VM, sequence polymorphism, glob engine, and QuasiQuoters (`[re|...|]`, `[ed|...|]`, `[glob|...|]`). Zero effect dependencies. | Ready (0.1.0.0) |
+  | **`smirk-effectful`** | [`../smirk-effectful/`](../smirk-effectful/) | First-class algebraic effect (`RegexEngine`) for the `effectful` ecosystem, featuring pure and fuel-bounded interpreters. Depends only on `smirk` and `effectful`. | Ready (0.1.0.0) |
+  | **`smirk-polysemy`** | [`../smirk-polysemy/`](../smirk-polysemy/) | Extensible effect (`RegexEngine`) for the `polysemy` ecosystem, featuring pure and fuel-bounded interpreters. Depends only on `smirk` and `polysemy`. | Ready (0.1.0.0) |
+  | **`smirk-penelope`** | [`../smirk-penelope/`](../smirk-penelope/) | Algebraic effect façade (`RegexEngine`) for the `penelope` effect system, featuring zero-cost vector-dispatched interpreters over flat Polytropos row vectors. | Ready (0.1.0.0) |
+
+  ---
+
+  ## Key Subsystems & Worked Examples
+
+  ### 1. Basic PCRE Matching & Capture Groups
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import Smirk
+
+  main :: IO ()
+  main = do
+    case compileRegex "(?<protocol>https?)://(?<domain>[a-z.]+)" of
+      Left err  -> putStrLn ("Compile error: " ++ show err)
+      Right reg -> do
+        case execMatch reg ("Visit https://haskell.org today!" :: Text) of
+          Nothing  -> putStrLn "No match found"
+          Just res -> do
+            print (matchedSlice res)                -- "https://haskell.org"
+            print (matchOffset res, matchLength res) -- (6, 19)
+            print (namedGroups res)                 -- fromList [("domain","haskell.org"),("protocol","https")]
+  ```
+
+  ### 2. Compile-Time QuasiQuoters (`[re|...|]` & `[ed|...|]`)
+
+  QuasiQuoters validate regex syntax and stream editor templates at compile time:
+
+  ```haskell
+  {-# LANGUAGE QuasiQuotes #-}
+
+  import Smirk
+
+  -- 1. Compile-time verified pattern:
+  let pattern = [re|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b|]
+
+  -- 2. Stream editor find-and-replace:
+  let editor = [ed|foo([0-9]+)///bar${1}|]
+  let replaced = applyEditor editor "foo42 and foo99"
+  -- replaced == "bar42 and bar99"
+  ```
+
+  ### 3. Step-Bounded Execution & ReDoS Defense
+
+  Defend against pathological catastrophic backtracking patterns by enforcing a step budget:
+
+  ```haskell
+  import Smirk
+
+  let pathological = compileRegex "(a+)+$"
+  let target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaa!" :: Text
+
+  case pathological of
+    Right reg ->
+      -- Restrict execution to at most 10,000 VM instruction steps:
+      case execMatchWithFuel reg target (StepBudget 10000) of
+        Matched _        -> putStrLn "Matched"
+        NoMatch          -> putStrLn "Did not match"
+        OutOfFuel cont   -> do
+          putStrLn "ReDoS detected! Step budget exceeded without locking CPU."
+          -- Optionally resume later with additional fuel:
+          case resumeMatch cont (StepBudget 5000) of
+            OutOfFuel _ -> putStrLn "Still out of fuel; safely aborting."
+            _           -> putStrLn "Finished."
+  ```
+
+  ### 4. Sequence Polymorphism across Haskell Containers
+
+  Match uniformly across different sequence representations without converting to `Text`:
+
+  ```haskell
+  import qualified Data.ByteString.Char8 as BS
+  import qualified Data.Sequence as Seq
+  import qualified Data.Vector as V
+  import Smirk
+
+  let reg = [re|[0-9]+|]
+
+  -- Strict ByteString:
+  testMatch reg (BS.pack "port 8080")       -- True
+
+  -- Standard String ([Char]):
+  testMatch reg "port 8080"                  -- True
+
+  -- Data.Sequence.Seq Char:
+  testMatch reg (Seq.fromList "port 8080")   -- True
+
+  -- Data.Vector.Vector Char:
+  testMatch reg (V.fromList "port 8080")     -- True
+  ```
+
+  ### 5. Effectful Integration (`smirk-effectful`)
+
+  ```haskell
+  {-# LANGUAGE DataKinds #-}
+  {-# LANGUAGE QuasiQuotes #-}
+  {-# LANGUAGE TypeApplications #-}
+
+  import Effectful
+  import Smirk (re)
+  import Smirk.Effect.Effectful
+
+  lookupPort :: (RegexEngine :> es) => Text -> Eff es (Maybe Text)
+  lookupPort input = do
+    mMatch <- matchRegex [re|port:([0-9]+)|] input
+    pure (fmap matchedSlice mMatch)
+  ```
+
+  ### 6. Polysemy Integration (`smirk-polysemy`)
+
+  ```haskell
+  {-# LANGUAGE DataKinds #-}
+  {-# LANGUAGE QuasiQuotes #-}
+  {-# LANGUAGE TypeApplications #-}
+
+  import Polysemy
+  import Smirk (re)
+  import Smirk.Effect.Polysemy
+
+  lookupPort :: (Member RegexEngine r) => Text -> Sem r (Maybe Text)
+  lookupPort input = do
+    mMatch <- matchRegex [re|port:([0-9]+)|] input
+    pure (fmap matchedSlice mMatch)
+  ```
+
+  ### 7. Native Filesystem Globbing (`[glob|...|]`)
+
+  ```haskell
+  {-# LANGUAGE QuasiQuotes #-}
+
+  import Smirk
+
+  let g = [glob|src/**/*.{hs,lhs}|]
+  matchGlob g "src/Smirk/Core/AST.hs"   -- True
+  matchGlob g "test/Spec.hs"            -- False
+  ```
+
+  ---
+
+  ## Documentation Corpus & Reading Order
+
+  The technical documentation corpus is structured for progressive disclosure:
+
+  1. [`docs/INDEX.md`](../../docs/INDEX.md) — Comprehensive corpus inventory, audience reading paths, and package catalog.
+  2. [`docs/TUTORIAL.md`](../../docs/TUTORIAL.md) — Detailed hands-on tutorial with worked examples across all 7 subsystems.
+  3. [`docs/NEWBIE_GUIDE.md`](../../docs/NEWBIE_GUIDE.md) — Fast symbol navigation table and 15-minute quickstart.
+  4. [`docs/MAINTAINER_GUIDE.md`](../../docs/MAINTAINER_GUIDE.md) — Architectural invariants (I1–I8), verification gates, and triage runbooks.
+  5. [`docs/notes/SMIRK_DESIGN.md`](../../docs/notes/SMIRK_DESIGN.md) — Canonical design monograph detailing decisions D1–D10.
+  6. [`docs/notes/DOC_STRATEGY.md`](../../docs/notes/DOC_STRATEGY.md) — Documentation strategy, precedence rule, and lifecycle.
+  7. [`docs/notes/COMMIT_ATTRIBUTION.md`](../../docs/notes/COMMIT_ATTRIBUTION.md) — Linux kernel RFC 2822 trailer format standards.
+  8. [`AGENTS.md`](../../AGENTS.md) — Advisory operational rules and navigation funnels for AI coding assistants.
+
+  ---
+
+  ## Physical Verification Discipline
+
+  Before any commit or release, all 5 physical verification gates must pass cleanly:
+
+  ```bash
+  ./bin/smirk-verify
+  ```
+
+  1. **Gate 1: HLint Static Analysis:** Zero hints allowed across all source packages (`.hlint.yaml`).
+  2. **Gate 2: Full Cabal Test Suite:** All test suites pass across all packages (`cabal test all`).
+  3. **Gate 3: Tagref Cross-Reference Gate:** Zero dangling references and zero duplicate tags (`bin/smirk-tagref`).
+  4. **Gate 4: Markdown Link Integrity Gate:** Every relative link and heading anchor resolves (`bin/smirk-linkcheck`).
+  5. **Gate 5: CLOC Comment Density Gate:** Comment density satisfies documentation thresholds (`bin/smirk-cloc`).
+
+  ---
+
+  ## License & Attribution
+
+  - Licensed under the **Apache License 2.0** (`LICENSE`).
+  - Copyright (c) 2026 Nadia Yvette Chambers.
+  - AI assistant contributions follow the RFC 2822 trailer format (`Assisted-by:`). See [`docs/notes/COMMIT_ATTRIBUTION.md`](../../docs/notes/COMMIT_ATTRIBUTION.md).
+description-type: markdown
+hash: 03f5998b4a310f6147ce5deda7ac7ce7dc8c4186989c4d6756eb5a7603151caf
+homepage: https://github.com/NadiaYvette/smirk
+latest: 0.1.0.0
+license-name: Apache-2.0
+maintainer: Nadia Chambers <nadia.yvette.chambers@ik.me>
+synopsis: Pure, effectful, resumable, step-budgeted PCRE interpreter for Haskell
+test-bench-deps:
+  base: '>=4.16 && <5'
+  bytestring: '>=0.11 && <1'
+  containers: '>=0.6 && <1'
+  hspec: '>=2.10 && <3'
+  smirk: '>=0'
+  text: '>=2.0 && <3'
+  vector: '>=0.12 && <1'
