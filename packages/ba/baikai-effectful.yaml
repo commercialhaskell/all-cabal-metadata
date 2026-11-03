@@ -11,9 +11,10 @@ all-versions:
 - 0.4.0.3
 - 0.4.0.4
 - 0.4.0.5
+- 0.5.0.0
 author: Nadeem Bitar
 basic-deps:
-  baikai: ^>=0.10.0
+  baikai: ^>=0.10.1
   base: '>=4.20 && <5'
   effectful-core: ^>=2.7
   streamly-core: '>=0.3 && <0.5'
@@ -28,6 +29,35 @@ changelog: |
   this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   ## [Unreleased]
+
+  ## [baikai 0.10.1.0] - 2026-11-03
+
+  ### Added
+
+  - `Baikai.Trace.withTraceFold` and `withTraceFoldWith` own tracing across the
+    entire consumer fold; `withTraceList` and `withTraceListWith` collect events.
+    A healthy sink receives abort evidence before cancellation propagates,
+    including cancellation between stream steps.
+
+  ### Fixed
+
+  - `withTrace`, `withTraceWith`, and the traced call in `runRequestWith` and
+    `runRequestWithRegistry` now finalize synchronously on cancellation. Cleanup
+    resumes an interrupted terminal drain within the same one-second budget,
+    preserves the original exception, and never duplicates terminal evidence.
+    General-stream abandonment keeps its garbage-collection-eventual contract.
+
+  ## [baikai-effectful 0.5.0.0] - 2026-11-03
+
+  ### Added
+
+  - `streamCollectTraced` delegates traced event collection to core with bounded
+    cleanup on cancellation. Re-export `TraceSink` for operation signatures.
+
+  ### Changed (breaking)
+
+  - `Baikai` gains `StreamCollectTraced`. Third-party interpreters must handle
+    this constructor. The binding requires `baikai ^>=0.10.1`.
 
   ## [baikai 0.10.0.0] - 2026-10-25
 
@@ -130,6 +160,8 @@ changelog: |
 
   - Layered job configuration accepts `thinking "none"` through the shared
     canonical parser, keeping explicit off distinct from an absent preference.
+  - The UTF-8 stdin test runs in a child process under an ASCII locale, avoiding
+    shared-stdin descriptor races with parallel subprocess tests in the tarball.
 
   ### Changed
 
@@ -3046,6 +3078,7 @@ description: |
   data Baikai :: Effect where
     Complete      :: Model -> Context -> Options -> Baikai m Response
     StreamCollect :: Model -> Context -> Options -> Baikai m [AssistantMessageEvent]
+    StreamCollectTraced :: TraceSink -> Model -> Context -> Options -> Baikai m [AssistantMessageEvent]
     StreamEach    :: Model -> Context -> Options -> (AssistantMessageEvent -> m ()) -> Baikai m ()
   ```
 
@@ -3055,10 +3088,40 @@ description: |
   | --------------------------------- | ------------------------------------------------------------- |
   | `complete m c o`                  | Blocking completion → `Response`, including error-shaped responses. |
   | `streamCollect m c o`             | Drain the stream into the full `[AssistantMessageEvent]`.     |
+  | `streamCollectTraced sink m c o` | Collect events with tracing and bounded cleanup on cancellation. |
   | `streamEach m c o k`              | Run callback `k` once per event, in order, inside `Eff`.      |
 
   `streamEach` preserves incrementality (the callback sees events as they arrive); a terminal
   `EventError` appears in-band rather than as a thrown exception, matching baikai.
+
+  ## Evidence on cancellation
+
+  `streamCollectTraced` delegates to core's `withTraceListWith`, which owns the
+  whole fold lifetime. Supply a `TraceSink` and opt in through `Options.evidence`.
+  On success or provider failure the sink's single `CallEvidence` carries exactly
+  the terminal's evidence record, including its `callId`. A strict pre-dispatch
+  refusal retains core's failed evidence and never invokes the provider. Opt-out
+  produces no evidence; providers that omit successful evidence retain core's
+  strict missing-record failure.
+
+  For cancellation before terminal commitment, use a short, nonblocking sink that stores the complete
+  `ModelCallEvidence` in a caller-owned cell before acknowledging it. Read that
+  cell immediately in the caller's exception handler. With a healthy sink the
+  `CallAborted` record is already present and the original exception is unchanged.
+  The sink fold's end action also completes before propagation. Cancellation after
+  terminal commitment retains that terminal's evidence and adds no abort.
+
+  The sink drain budget is one second in total. A blocked or throwing sink still
+  allows cancellation to unwind and reports its failure on stderr; an empty cell
+  means delivery was unconfirmed. A worker abandoned at the bound can deliver
+  later. Exactly-once means Baikai submits one evidence event, not that a failing
+  external destination durably stores it. Keep slow export behind a nonblocking
+  queue.
+
+  Core's `withTraceFold`, `withTraceList`, `withTrace`, and their `With` variants
+  own the same lifetime. Arbitrary abandonment of `withTraceStream` between stream
+  steps still relies on garbage collection. The existing `streamCollect` and
+  `streamEach` operations keep their behavior.
 
   ## Interpreters
 
@@ -3113,9 +3176,9 @@ description: |
   dependency-light while giving any `effectful` program a reusable baikai↔effectful seam — the
   same way `baikai-claude` / `baikai-openai` layer on `baikai`.
 description-type: markdown
-hash: c59e142c137464a22a46ee80035e32a103be466f1fbd7003eca4fba3546ef633
+hash: 48a7963a98a49cd15a49e769f60c7427b0428771f57d6946df165dda484865d3
 homepage: ''
-latest: 0.4.0.5
+latest: 0.5.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: effectful binding for the baikai AI-provider transport
@@ -3129,4 +3192,5 @@ test-bench-deps:
   tasty: '>=0'
   tasty-hunit: '>=0'
   text: '>=0'
+  time: '>=0'
   vector: '>=0'
