@@ -4,6 +4,7 @@ all-versions:
 - 0.5.0.0
 - 0.5.2.0
 - 0.5.5.0
+- 0.6.0.0
 author: hypermemetic
 basic-deps:
   aeson: '>=2.0'
@@ -19,27 +20,312 @@ basic-deps:
   filepath: '>=1.4'
   network: '>=3.1.2'
   resource-pool: '>=0.4'
+  scientific: '>=0.3'
   stm: '>=2.5'
   streaming: '>=0.2'
   text: '>=2.0'
   time: '>=1.9'
   tls: '>=2.1 && <2.5'
   websockets: '>=0.13'
-changelog: ''
-changelog-type: ''
-description: |-
-  Haskell types and a client for Plexus RPC, a streaming JSON-RPC 2.0
-  protocol: stream items and provenance, recursive plugin and method
-  schemas, authentication, and a WebSocket transport. Shared by Synapse
-  and other Plexus RPC clients.
-description-type: haddock
-hash: f92ecff1cdeb27572cb6257eb990d0d030a2048ff0c7f1044d525bb207023c96
+changelog: |
+  # Changelog for plexus-protocol
+
+  ## 0.6.0.0
+
+  The Haskell side of plexus 0.7's schema and envelope. Breaking.
+
+  ### Breaking
+
+  - **Method schemas (`Plexus.Schema.Recursive`).** `MethodSchema` gains
+    `methodReturns` (required), `methodError` and `methodProgress`, and
+    `methodCardinality :: Cardinality` (`CardinalityOne` / `CardinalityMany`).
+    `methodStreaming` is removed. A schema from the published 0.7.0 line (no
+    `cardinality`) is still read, its cardinality taken from the method's own
+    `streaming` flag; cardinality is never guessed otherwise.
+    `psSelfHash` (`self_hash`) and `methodHttpMethod` (`http_method`, default
+    `"POST"`) are read. Absent optional fields encode as omitted, not `null`,
+    as the Rust side writes them.
+  - **Typed remote errors (new `Plexus.RemoteError`).** `RemoteError` is one
+    of `ActivationNotFound`, `MethodNotFound`, `InvalidParams`,
+    `Unauthenticated`, `Forbidden DenyReason` (including `MissingGrant`),
+    `HandleNotSupported`, `Execution`, or an open variant that keeps an
+    unknown kind and all its fields and writes them back as they came.
+    `renderRemoteError` gives the Rust `Display` line.
+  - **Stream items (`Plexus.Types`).** `StreamError` carries
+    `error :: RemoteError` and `recoverable` (was `message`), keeping the
+    server's own message and any refusal fields sent beside it.
+    `StreamProgress` carries `content_type` and `content` (was `message`,
+    `percentage`); a 0.7.0 progress frame is read as a note.
+    `RpcError.errData` is `Maybe RemoteError`; `RpcError` has a `ToJSON`
+    instance. `-32601` is typed as an activation or method not found by its
+    message.
+  - `Plexus.Client` yields a rejection's `RemoteError` as its `StreamError`;
+    the `Transport` and `Schema` helpers render it to `Text` where they used
+    to return the message.
+
+  ### Added
+
+  - **The input half of a call (new `Plexus.Input`, plexus-wire spec/10).**
+    The frames a client sends into a call (`<ns>.input`, `<ns>.end` and the
+    binary frame), the signals the callee sends back (`credit`, `ack`,
+    `input_closed`) and `itemKind`. `Plexus.Client.substrateRpcDuplex` hands a
+    call its `InputPort`; credit, ack and input_closed are taken off before
+    item parsing. `substrateRpcSub` is unchanged for a method without input.
+    `Plexus.Transport` adds `DuplexRoute`, `setDuplexRouter` and
+    `invokeMethodDuplex`.
+  - Test suite `plexus-protocol-test`: the plexus 0.7 conformance fixture
+    parsed and re-encoded.
+changelog-type: markdown
+description: |
+  # plexus-protocol
+
+  **Haskell types for Plexus RPC** — shared between Synapse and other Plexus RPC clients.
+
+  ## Layers
+
+  ```
+  ┌─────────────────────────────────────────┐
+  │  Plexus.Types                           │  Stream items, provenance
+  │  Plexus.Schema.Recursive                │  PluginSchema, MethodSchema
+  ├─────────────────────────────────────────┤
+  │  Substrate.Transport                    │  RPC calls, schema fetching
+  │  Substrate.Client                       │  WebSocket connection
+  └─────────────────────────────────────────┘
+  ```
+
+  **Substrate** = transport layer modules (WebSocket, JSON-RPC)
+  **Plexus** = Plexus RPC protocol types (schemas, stream items)
+
+  ## Usage
+
+  ```haskell
+  import Plexus
+  import qualified Streaming.Prelude as S
+
+  main :: IO ()
+  main = do
+    conn <- connect defaultConfig
+    S.print $ substrateRpc conn "health.check" (object [])
+    disconnect conn
+  ```
+
+  ### wss (SCAFFOLD-21, 0.5.2.0)
+
+  A service behind TLS (a hosted app: `wss://<host>/ws`) is dialed when
+  `substrateTls` is `Just`: the `tls` package over a TCP socket, SNI and the
+  name check against `substrateHost`, the chain against the system's trust
+  store (crypton-x509-system; `SYSTEM_CERTIFICATE_PATH` overrides it) plus each
+  PEM file in `tlsCaFiles`. Verification cannot be turned off. `defaultConfig`
+  is `Nothing` (plain `ws://`), as before; the upgrade's `Host` is `hostHeader`
+  (the host alone on the scheme's default port).
+
+  ```haskell
+  let cfg = (defaultConfig "hostdemo")
+        { substrateHost = "hostdemo.menger.sh", substratePort = 443
+        , substratePath = "/ws", substrateTls = Just defaultTlsOptions }
+  Right items <- rpcCallWith cfg "_info" Null
+  ```
+
+  ### Routing calls (SYNAPSE-28, 0.5.3.0)
+
+  `Plexus.Transport.setCallRouter` sends the calls whose config the router
+  answers `Just` for some other way than this process's pools — synapse uses
+  it to put every call of a run through a connection held between runs, or
+  through one connection the run shares. A route reports failures as
+  `connect` and `substrateRpcWith` do (`LostConnection` with whether the
+  request had gone out; a failed dial as an error call), so everything above
+  it reads them as before. A program that never sets it is unchanged.
+
+  `Plexus.Client.substrateRpcSub` is `substrateRpcWith` telling the caller the
+  subscription's id, and `unsubscribe conn "<backend>.call_unsub" sid` ends a
+  call it no longer reads (a number id is sent as a number) — for a connection
+  shared by many calls, where one abandoned must not keep streaming.
+
+  ### Schema Fetching
+
+  ```haskell
+  import Substrate.Transport
+
+  -- Fetch plugin schema
+  Right schema <- fetchSchemaAt defaultConfig ["echo"]
+  print $ psNamespace schema  -- "echo"
+  print $ psMethods schema    -- [MethodSchema...]
+
+  -- Fetch method schema directly
+  Right method <- fetchMethodSchemaAt defaultConfig ["echo"] "once"
+  print $ methodName method   -- "once"
+  print $ methodParams method -- Just (JSON Schema)
+  ```
+
+  ## Types
+
+  ### Transport Errors (v0.3.0+)
+
+  Strongly-typed errors for transport-layer failures:
+
+  ```haskell
+  data TransportError
+    = ConnectionRefused { transportHost :: Text, transportPort :: Int }
+    | ConnectionTimeout { transportHost :: Text, transportPort :: Int }
+    | ProtocolError     { transportMessage :: Text }
+    | NetworkError      { transportMessage :: Text }
+  ```
+
+  All transport functions return `Either TransportError a` instead of `Either Text a`:
+
+  ```haskell
+  -- Schema fetching
+  fetchSchemaAt :: SubstrateConfig -> [Text] -> IO (Either TransportError PluginSchema)
+
+  -- Method invocation
+  invokeMethod :: SubstrateConfig -> [Text] -> Text -> Value
+               -> IO (Either TransportError [PlexusStreamItem])
+
+  -- Streaming invocation
+  invokeMethodStreaming :: SubstrateConfig -> [Text] -> Text -> Value
+                        -> (PlexusStreamItem -> IO ())
+                        -> IO (Either TransportError ())
+  ```
+
+  **Benefits:**
+  - No string parsing to categorize errors
+  - Structured error information (host, port, message)
+  - Type-safe error handling
+  - Proper exception categorization using `IOException` matching
+
+  **Example:**
+
+  ```haskell
+  result <- fetchSchemaAt cfg ["echo"]
+  case result of
+    Left (ConnectionRefused host port) ->
+      putStrLn $ "Can't connect to " <> host <> ":" <> show port
+    Left (ConnectionTimeout host port) ->
+      putStrLn $ "Timeout connecting to " <> host <> ":" <> show port
+    Left (ProtocolError msg) ->
+      putStrLn $ "Protocol error: " <> msg
+    Left (NetworkError msg) ->
+      putStrLn $ "Network error: " <> msg
+    Right schema ->
+      print schema
+  ```
+
+  ### Stream Items (plexus 0.7)
+
+  ```haskell
+  data PlexusStreamItem
+    = StreamProgress Text Provenance Text Value        -- hash, provenance, content_type, content (the method's progress P)
+    | StreamData     Text Provenance Text Value        -- hash, provenance, content_type, content (T, or {"ok": T} | {"err": E})
+    | StreamGuidance …
+    | StreamError    Text Provenance RemoteError Bool  -- hash, provenance, error, recoverable
+    | StreamRequest  …
+    | StreamDone     Text Provenance
+  ```
+
+  An error frame means the call itself failed, and says why with a
+  `RemoteError` (`Plexus.RemoteError`, mirroring `plexus_client::RemoteError`;
+  `renderRemoteError` is its one-line rendering). A JSON-RPC rejection carries
+  the same type in `errData`. An activation saying no is a data item whose
+  content is `{"err": …}`.
+
+  ```haskell
+  data RemoteError
+    = ActivationNotFound Text            -- activation
+    | MethodNotFound Text Text           -- activation, method
+    | InvalidParams (Maybe Text) ParamProblem
+    | Unauthenticated
+    | Forbidden DenyReason
+    | HandleNotSupported Text            -- activation
+    | Execution Text                     -- message
+
+  data ParamProblem = Missing | Malformed Text
+  data DenyReason   = MissingScope Text | TenantBoundary | NotAccepted
+  ```
+
+  ### Schema Types
+
+  ```haskell
+  data PluginSchema = PluginSchema
+    { psNamespace       :: Text
+    , psVersion         :: Text
+    , psDescription     :: Text
+    , psLongDescription :: Maybe Text
+    , psSelfHash        :: Maybe PluginHash
+    , psHash            :: PluginHash
+    , psMethods         :: [MethodSchema]
+    , psChildren        :: Maybe [ChildSummary]
+    , psDeprecation     :: Maybe DeprecationInfo
+    }
+
+  -- plexus 0.7: a method's contract is T, E?, P? and its cardinality
+  data MethodSchema = MethodSchema
+    { methodName        :: Text
+    , methodDescription :: Text
+    , methodHash        :: PluginHash
+    , methodParams      :: Maybe Value  -- JSON Schema
+    , methodReturns     :: Value        -- JSON Schema of the item type T (required)
+    , methodError       :: Maybe Value  -- JSON Schema of the error type E (fallible methods)
+    , methodProgress    :: Maybe Value  -- JSON Schema of the progress type P
+    , methodCardinality :: Cardinality  -- CardinalityOne | CardinalityMany (required)
+    , …                                 -- bidirectional, http_method, request/response types, deprecation, role
+    }
+
+  data SchemaResult
+    = SchemaPlugin PluginSchema
+    | SchemaMethod MethodSchema
+  ```
+
+  ## Structure
+
+  ```
+  src/
+  ├── Plexus.hs                   # Re-exports
+  ├── Plexus/
+  │   ├── Types.hs                # PlexusStreamItem, Provenance
+  │   ├── Schema.hs               # Schema re-exports
+  │   └── Schema/
+  │       ├── Recursive.hs        # PluginSchema, MethodSchema, SchemaResult
+  │       └── Cache.hs            # Schema caching
+  └── Substrate/
+      ├── Client.hs               # WebSocket connection
+      └── Transport.hs            # RPC calls, schema fetching
+  ```
+
+  ## Build
+
+  ```bash
+  cabal build
+  cabal test                    # test-suite naming-gate
+  scripts/naming-gate.sh        # the naming gate: each line that says the retired word (-c: the count)
+  ```
+
+  A Plexus backend is a *service*, and an activation with children a *parent*
+  (`isParentActivation`; NAMING-9, `~/AGENTS.md` "Naming"). The suite runs the
+  gate, which passes only lines marked `naming-alias`: the deprecated old name of
+  `isParentActivation`, kept until NAMING-18.
+
+  The tests read the plexus 0.7 conformance fixture (RETURNS-7) by sibling
+  path, `../plexus-macros/fixtures/conformance/expected/`: check out
+  plexus-macros next to this repository first.
+
+  ## License
+
+  MIT
+description-type: markdown
+hash: 08050ad57ad401b79c5d5937faeb0e7f6ee86efd6a277d9f17f771c97351f4dc
 homepage: ''
-latest: 0.5.5.0
+latest: 0.6.0.0
 license-name: MIT
 maintainer: hypermemetic@proton.me
 synopsis: Plexus RPC protocol types and client
 test-bench-deps:
+  aeson: '>=0'
   base: '>=4.17 && <5'
+  bytestring: '>=0'
+  containers: '>=0'
+  directory: '>=0'
+  filepath: '>=0'
   hspec: '>=2.10 && <2.12'
+  plexus-protocol: '>=0'
   process: '>=1.6 && <1.7'
+  text: '>=0'
