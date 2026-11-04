@@ -37,6 +37,7 @@ all-versions:
 - 1.5.1
 - 1.6.0
 - 1.7.0
+- 2.0.0
 author: JP Rupp
 basic-deps:
   QuickCheck: '>=2.9.2'
@@ -47,13 +48,109 @@ basic-deps:
   entropy: '>=0.3.8'
   hashable: '>=1.2.6'
   string-conversions: '>=0.4'
-  unliftio-core: '>=0.1.0'
 changelog: |
   # Changelog
   All notable changes to this project will be documented in this file.
 
   The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
   and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+
+  ## [2.0.0] - 2026-11-03
+
+  This release follows a review of the bindings, including the changes of
+  1.8.0. The raw constructors are hidden, the text instances use standard
+  encodings, and more values are validated when they are built. Several
+  changes are breaking; see Changed.
+
+  ### Changed
+
+  - The raw constructors of `SecKey`, `PubKey`, `Sig`, `CompactSig`,
+    `SchnorrSig`, `Msg` and `Tweak`, and the `Ctx` constructor, are no longer
+    exported from `Crypto.Secp256k1`. Build values with `secKey`, `pubKey`,
+    `sig`, `compactSig`, `schnorrSig`, `msg`, `tweak` or the import functions.
+    The `get` field is still exported. The constructors remain available from
+    `Crypto.Secp256k1.Internal.Base`, without validation.
+  - `tweak` rejects numbers not below the curve order. `sig` rejects a zero
+    component. `Read` and `IsString` follow.
+  - `Show`, `Read` and `IsString` for `PubKey` use the compressed SEC1 encoding
+    in hex; `Read` and `IsString` also accept the uncompressed and hybrid
+    encodings. The same instances for `Sig` use the compact encoding in hex.
+    Before, they used the internal representation of libsecp256k1, which is not
+    portable between platforms or library versions.
+  - `normalizeSig` is total: `Ctx -> Sig -> Sig`. It returns the lower-S form of
+    any signature. Before, it returned `Nothing` for a signature that was
+    already in that form.
+  - `importSig` and `importCompactSig` return `Nothing` for a signature with a
+    zero component. libsecp256k1 parses a DER component that is not below the
+    curve order as zero while reporting success, and such a signature can never
+    verify.
+  - `tweakNegate` returns `Just` zero for a zero tweak.
+  - `combinePubKeys` raises an error for a raw key of the wrong length, as every
+    other function does, instead of returning `Nothing`.
+  - `signSchnorr`, `signSchnorrWithAux` and `signSchnorrIO` verify the signature
+    before returning it, as BIP-340 requires, and raise an error if that fails.
+  - The package requires libsecp256k1 0.2.0 or later through `pkg-config`. The
+    Schnorr bindings of 1.8.0 already needed that version to link.
+
+  ### Added
+
+  - ECDSA public key recovery, in the new module `Crypto.Secp256k1.Recovery`:
+    `RecSig`, `recSig`, `signRecMsg`, `recover`, `convertRecSig`,
+    `importCompactRecSig` and `exportCompactRecSig`, bound to the `recovery`
+    module of libsecp256k1. `signRecMsg` gives the signatures of Bitcoin Core's
+    message signing, and `recover` is what its message verification does. The
+    package flag `recovery`, on by default, builds the module; turn it off for a
+    libsecp256k1 built without `--enable-module-recovery`.
+  - `signMsgLowR` grinds the nonce until r is below 2^255, with the same extra
+    nonce data as Bitcoin Core, so DER signatures are at most 70 bytes and are
+    byte-for-byte the same as Bitcoin Core's.
+  - `isLowS` and `isLowR`.
+  - `Show`, `Read` and `IsString` instances for `CompactSig`.
+  - `Arbitrary` instance for `Tweak`.
+  - Documentation of the thread-safety rule of `randomizeContext`, of what
+    `Show` prints for a `SecKey`, of the memory handling of secret keys, of the
+    lower-S requirement of `verifySig`, of the x-only representation of BIP-340
+    keys, and of the differences from Bitcoin Core.
+
+  ### Fixed
+
+  - `importPubKey` and `exportPubKey` were documented as DER. The format is
+    SEC1.
+  - `tweakMulPubKey` was documented as adding a multiple of the generator.
+  - Removed the unused `unliftio-core` dependency and unused imports. The
+    library and the tests build with `-Wall` without warnings.
+
+  ## [1.8.0] - 2026-11-03
+
+  ### Added
+
+  - BIP-340 Schnorr signatures, built on the `schnorrsig` and `extrakeys`
+    modules of libsecp256k1, which it enables by default since version 0.2.0:
+    `SchnorrSig`, `schnorrSig`, `signSchnorr`, `signSchnorrWithAux`,
+    `signSchnorrIO` and `verifySchnorr`. No build flag is needed.
+  - `importXOnlyPubKey` and `exportXOnlyPubKey` convert between `PubKey` and
+    32-byte BIP-340 x-only public keys.
+  - `tweakAddXOnlyPubKey` and `tweakAddXOnlySecKey` add a BIP-341 Taproot tweak
+    to a public key and to its secret key.
+
+  ### Fixed
+
+  - `secKey` rejects zero and numbers not lower than the curve order, as
+    `secp256k1_ec_seckey_verify` does. `Read` and `IsString` for `SecKey` follow.
+  - `pubKey` and `sig` reject bytes that are not a canonical internal
+    representation of a point on the curve or of a signature with both
+    components below the order. `Read` and `IsString` follow.
+  - An illegal argument no longer aborts the program. Contexts get a callback
+    that makes libsecp256k1 return failure, so a zero `PubKey` built with the
+    raw constructor gives `False`, `Nothing` or an exception.
+  - Functions raise an error for a `SecKey`, `PubKey`, `Sig`, `CompactSig`,
+    `Msg` or `Tweak` of the wrong length built with the raw constructor, instead
+    of letting libsecp256k1 read past the end of the buffer.
+  - `combinePubKeys` passes the key count as `size_t`, as the C function expects,
+    and returns `Nothing` when a key is not a valid point, since
+    `secp256k1_ec_pubkey_combine` does not check.
+  - Tweak functions write to a fresh buffer instead of mutating a `ByteString`
+    in place.
 
   ## [1.7.0] - 2026-10-31
 
@@ -324,9 +421,9 @@ changelog: |
 changelog-type: markdown
 description: Sign and verify signatures using the secp256k1 library.
 description-type: haddock
-hash: b235f096b362c8d18d0b1894d17aa4a35b1e8d851892605d0536ebdefe393593
+hash: 3ab1622f95127f9545b6a5c28acd7d57c9744c53d71a6d42a4777b79ca54c4c0
 homepage: http://github.com/jprupp/secp256k1-haskell#readme
-latest: 1.7.0
+latest: 2.0.0
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Bindings for secp256k1
@@ -344,4 +441,3 @@ test-bench-deps:
   mtl: '>=0'
   secp256k1-haskell: '>=0'
   string-conversions: '>=0.4'
-  unliftio-core: '>=0.1.0'
