@@ -4,34 +4,188 @@ all-versions:
 - 0.1.0.3
 - 0.1.0.4
 - 0.1.0.5
-author: Nadia Chambers
+- 0.1.0.6
+author: Nadia Yvette Chambers
 basic-deps:
-  base: '>=4.22 && <5'
+  base: '>=4.18 && <5'
   deepseq: '>=1.4 && <2'
   ghc-prim: <1
   linear: '>=1.21 && <2'
   massiv: '>=1.0 && <2'
   primitive: '>=0.7 && <1'
   vector: '>=0.12 && <1'
-changelog: ''
-changelog-type: ''
-description: |-
-  Native Haskell implementations of algorithms from Golub & Van Loan's
-  "Matrix Computations" (4th ed.) using massiv arrays as the backing store,
-  with compile-time dimensional conformance via GHC type-level naturals.
-  Extends the linear library's typeclasses for integration with existing code.
-  .
-  Co-authored by Claude Opus (Anthropic). This code should be considered a
-  derived work of the various algorithmic examples and reference
-  implementations drawn upon during development, including but not limited
-  to LAPACK, OpenBLAS, and GVL4.
-description-type: haddock
-hash: db8debb498d97f3c7d4dbced598c0f1cab9a308e4763b051cac9133b37111d28
+changelog: |
+  # Revision history for linear-massiv
+
+  ## 0.1.0.6 — 2026-11-05
+
+  ### Multi-Package Migration & Constellation Standards
+  * Restructured codebase into `packages/linear-massiv/` conforming to the Cellarius project constellation conventions.
+  * Added standard Gachi repository scaffolding (`AGENTS.md`, `CLAUDE.md`, `PLAN.md`, `STATE.md`, CI workflows, verification scripts).
+
+  ### Dual-Mode Execution & SIMD Cleanliness
+  * Strict SIMD isolation: all GHC `DoubleX4#` SIMD primops and vector operations are strictly confined to `Numeric.LinearAlgebra.Massiv.Internal.Kernel` behind `#ifdef USE_SIMD`.
+  * Portable unboxed pure scalar fallback: implemented full scalar kernel fallbacks across all BLAS, solver, and decomposition operations, enabling zero-configuration builds on all CPU architectures (x86_64, ARM64 / Apple Silicon, RISC-V).
+  * Zero NCG panics: eliminated Native Code Generator vector extract panics on GHC 9.14 by defaulting `simd` flag to `False`.
+  * Multi-GHC portability: verified compatibility across GHC 9.6.7, 9.8.4, 9.10.3, 9.12.4, and 9.14.1 (`base >= 4.18 && < 5`).
+  * Optional SIMD acceleration: AVX2 SIMD vectorisation enabled via `cabal build --flags=simd --ghc-options="-fllvm -pgmlo opt-17 -pgmlc llc-17 -mavx2 -mfma"`.
+
+  ### Test Suite Additions
+  * Added `Test.Linear` covering `Linear.V` roundtrip conversions, `fromV2`, `fromV3`, `fromV4` indexing, and `toListMatrix`/`fromListMatrix` dimension checking.
+  * Added `Test.Banded` covering `bandLU`, `bandForwardSub`, `bandBackSub`, `bandCholesky` (for bandwidths $p=1$ and $p=2$), and `tridiagSolve`.
+  * Extended `Test.Eigen` with test cases for `inverseIteration` and `rayleighQuotient`.
+
+  ### Documentation & Performance Framing
+  * Fully overhauled `README.md` and package documentation with honest Golub & Van Loan algorithmic framing.
+  * Retracted universal "faster than BLAS/LAPACK" benchmark claims in favour of transparent runtime overhead discussion and unboxed kernel engineering.
+  * Fixed Haddock identifier resolution warnings across `Numeric.LinearAlgebra.Massiv.Linear` and `Numeric.LinearAlgebra.Massiv.Eigen.SVD`.
+
+  ### Licensing Modernisation
+  * Re-licensed to EUPL-1.2 OR Apache-2.0 dual license for compliance with German and broader EU software procurement standards, matching the Cellarius constellation policy.
+changelog-type: markdown
+description: |
+  # linear-massiv
+
+  **Pure Haskell numerical linear algebra implementing Golub & Van Loan.**
+
+  `linear-massiv` provides type-safe matrix and vector operations backed by
+  [massiv](https://hackage.haskell.org/package/massiv) arrays, with
+  compile-time dimension checking via GHC's type-level naturals (`KnownNat`).
+  It requires no foreign FFI, no C dependencies, and no Fortran libraries —
+  every algorithm is implemented in Haskell, from the GEMM micro-kernel to the
+  divide-and-conquer SVD.
+
+  ## Dual-Mode Execution Architecture
+
+  To balance portability across compiler versions and architectures with high-throughput execution on vector hardware, `linear-massiv` employs a dual-mode execution architecture isolated behind an unboxed kernel interface:
+
+  1. **Portable Unboxed Scalar Mode (Default):**
+     - High-performance scalar kernels written in pure Haskell over unboxed `ByteArray#` and `MutableByteArray#` buffers.
+     - Fully portable across CPU architectures (x86_64, AArch64 / ARM64, Apple Silicon, RISC-V).
+     - Compatible across GHC versions (9.6, 9.8, 9.10, 9.12, 9.14) without requiring LLVM or specific instruction set extensions.
+     - Zero compilation panics with GHC Native Code Generator (NCG).
+
+  2. **AVX2 SIMD Mode (Optional, flag `+simd`):**
+     - Vectorised kernels leveraging GHC 9.14's native `DoubleX4#` SIMD primops.
+     - Requires compilation via LLVM (`-fllvm -pgmlo opt-17 -pgmlc llc-17 -mavx2 -mfma`).
+     - Hardware accelerated on AVX2 + FMA capable x86_64 processors (Intel Haswell / AMD Zen or later).
+
+  All low-level kernel primops are strictly encapsulated within `Numeric.LinearAlgebra.Massiv.Internal.Kernel`, ensuring zero contamination of calling modules.
+
+  ## Performance and Algorithmic Framing
+
+  `linear-massiv` is designed as a transparent, auditable Haskell implementation of the standard algorithms presented in Golub & Van Loan's *Matrix Computations* (4th ed.).
+
+  Rather than competing against heavily tuned vendor libraries (OpenBLAS, Intel MKL, Apple Accelerate) which employ architecture-specific assembly heuristics and dynamic thread management, `linear-massiv` focuses on:
+  - Eliminating Haskell runtime and array indexing overhead in inner loops via unboxed memory buffers (`ByteArray#`).
+  - Cache-conscious panel factorisations (LU, Cholesky, QR).
+  - Exact compile-time dimension safety via type-level naturals.
+  - Complete algorithmic transparency without leaving the Haskell language.
+
+  ## Quick Start
+
+  ```haskell
+  import Numeric.LinearAlgebra.Massiv
+  import qualified Data.Massiv.Array as M
+
+  -- Create a 3x3 matrix (Primitive representation, Double elements)
+  let a = makeMatrix @3 @3 @M.P $ \i j ->
+            fromIntegral (i * 3 + j + 1) :: Double
+
+  -- QR factorisation
+  let (q, r) = qr a
+
+  -- Solve Ax = b via LU
+  let b = makeVector @3 @M.P $ \i -> fromIntegral (i + 1) :: Double
+  let x = luSolve a b
+
+  -- Symmetric eigenvalue decomposition
+  let (eigenvalues, eigenvectors) = symmetricEigen a
+
+  -- Singular value decomposition
+  let (u, sigma, vt) = svd a
+  ```
+
+  ## Requirements & Portability
+
+  - **Compilers:** GHC 9.6.7, 9.8.4, 9.10.3, 9.12.4, 9.14.1
+  - **Build tool:** Cabal 3.10+
+  - **Default build:** Pure scalar kernels (works on any platform with standard GHC)
+    ```bash
+    cabal build packages/linear-massiv
+    cabal test packages/linear-massiv
+    ```
+  - **Optional SIMD acceleration:** Requires GHC 9.14+ with LLVM 17 and an AVX2-capable CPU
+    ```bash
+    cabal build packages/linear-massiv --flags=simd --ghc-options="-fllvm -pgmlo opt-17 -pgmlc llc-17 -mavx2 -mfma"
+    ```
+
+  ## Operations
+
+  ### BLAS-equivalent (GVL4 Ch. 1)
+
+  - **Level 1:** `dot`, `axpy`, `scal`, `nrm2`, `asum`
+  - **Level 2:** matrix-vector multiply (`matvec`), outer product (`ger`)
+  - **Level 3:** matrix multiply (`matMul`), transpose, matrix add/sub/scale — with register-blocked kernels, cache-blocked tiling, and micro-panel packing
+
+  ### Direct Solvers (GVL4 Chs. 3-4)
+
+  - **LU:** outer product LU with partial pivoting, panel factorisation, `luSolve`
+  - **Cholesky:** symmetric positive definite factorisation, gaxpy and outer-product variants, `choleskySolve`
+  - **Banded and Tridiagonal:** `bandLU`, `bandForwardSub`, `bandBackSub`, `bandCholesky`, and `tridiagSolve`
+  - **Triangular solvers:** forward substitution (`forwardSub`, `forwardSubUnit`), back substitution (`backSub`)
+
+  ### Orthogonal Factorisations (GVL4 Ch. 5)
+
+  - **QR:** Householder reflections with blocked WY accumulation (`qr`)
+  - **Givens rotations:** single and multi-column Givens elimination
+  - **Least squares:** linear least squares solving via QR factorisation
+
+  ### Eigenvalue Problems and SVD (GVL4 Chs. 7-8)
+
+  - **Symmetric eigendecomposition:** panel tridiagonalisation, QR iteration with aggressive early deflation, divide-and-conquer with secular equation solver
+  - **SVD:**
+    - `svd` / `svdAtAP`: $A^T A$ eigendecomposition path with D&C eigensolver and pre-scaled recovery
+    - `svdGKP`: Golub-Kahan bidiagonalisation with panel blocking and D&C bidiagonal SVD
+  - **General eigenvalue:** Hessenberg reduction, Schur decomposition
+  - **Iterative methods:** power method (`powerMethod`), inverse iteration (`inverseIteration`), Rayleigh quotient iteration (`rayleighQuotient`)
+
+  ### Norms (GVL4 Ch. 2)
+
+  - Vector norms: Euclidean ($L_2$), Manhattan ($L_1$), Chebyshev ($L_\infty$)
+  - Matrix norms: Frobenius (`normFrob`), 1-norm (`norm1`), $\infty$-norm (`normInf`), spectral 2-norm
+
+  ## Integration with the `linear` Library
+
+  Conversion functions are provided for interoperability with Edward Kmett's [linear](https://hackage.haskell.org/package/linear) library:
+
+  ```haskell
+  import Numeric.LinearAlgebra.Massiv.Linear
+
+  -- Convert from linear's V3
+  let v = fromV3 @M.P (V3 1.0 2.0 3.0)
+
+  -- Convert from linear's V n
+  let w = fromLinearV @5 @M.B someLinearVector
+  ```
+
+  ## Algorithmic References
+
+  The implementations follow:
+
+  - Golub, G. H. & Van Loan, C. F. (2013). *Matrix Computations* (4th ed.). Johns Hopkins University Press. (**GVL4**)
+  - Higham, N. J. (2002). *Accuracy and Stability of Numerical Algorithms* (2nd ed.). SIAM.
+
+  ## License
+
+  EUPL-1.2 OR Apache-2.0 (see `LICENSE`).
+description-type: markdown
+hash: 7ada60f14ce9ccb7389c380364b66b4ce819bfacde3a0685fd2a219dbce1be46
 homepage: ''
-latest: 0.1.0.5
-license-name: BSD-3-Clause
-maintainer: Nadia Yvette Chambers <nadia.yvette.chambers@gmail.com>
-synopsis: Type-safe numerical linear algebra backed by massiv arrays
+latest: 0.1.0.6
+license-name: (EUPL-1.2 OR Apache-2.0)
+maintainer: Nadia Yvette Chambers <nadia.yvette.chambers@ik.me>
+synopsis: Pure Haskell numerical linear algebra implementing Golub & Van Loan
 test-bench-deps:
   QuickCheck: '>=2.14'
   base: '>=0'
