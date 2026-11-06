@@ -68,6 +68,7 @@ all-versions:
 - 1.4.0
 - 1.5.0
 - 1.5.1
+- 1.6.0
 author: JP Rupp
 basic-deps:
   QuickCheck: '>=2.13.2'
@@ -100,6 +101,7 @@ basic-deps:
   text: '>=1.2.3.0'
   time: '>=1.9.3'
   transformers: '>=0.5.6.2'
+  unicode-data: '>=0.2'
   unicode-transforms: '>=0.4'
   unordered-containers: '>=0.2.10.0'
   vector: '>=0.12.1.2'
@@ -110,6 +112,138 @@ changelog: |
 
   The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
   and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+
+  ## [1.6.0] - 2026-11-06
+
+  ### Added
+
+  - `Haskoin.Crypto.Keys.Slip39`: Shamir's secret-sharing for mnemonic codes, SLIP-0039, as a standalone module. `generateMnemonics` splits a master secret, encrypted with a passphrase, into share mnemonics under a two-level scheme of groups and members, and `combineMnemonics` rebuilds it from a threshold of them. `generateShares` and `generateMnemonics` draw their random bytes from the operating system, through `getEntropy` of the entropy package; `generateSharesFrom` takes the source of random bytes as an argument, and `generateSharesWith` the identifier and the random values themselves, so that a split can be reproduced. `encodeShare` and `decodeShare` read and write one share, with its checksum, padding and ranges checked as the specification requires; a share has at most 1023 words, the length the checksum covers, which is a value of 1270 bytes. `encryptMasterSecret` and `decryptMasterSecret` are the passphrase step, and both refuse a passphrase outside printable ASCII, as the specification requires; `decryptMasterSecretBytes` takes the passphrase as unchecked bytes, to recover shares of software that allowed other characters. `splitSecret`, `recoverSecret` and `interpolate` are the sharing over GF(256), and `rs1024Checksum` the checksum. No error text and no `Show` instance holds a word or a value of a share: an unknown word is named by its position. The 45 vectors of the reference implementation, a share set of Sparrow's library, and split cases with fixed random values made by an independent Python implementation of the specification, `test/Haskoin/Crypto/Keys/slip39_verify.py`, check it. The word list is `data/slip39_wordlist.txt`, the file of the specification, and its SHA-256 is checked.
+  - `tryDerivePath` and `tryDerivePubPath` in `Haskoin.Crypto.Keys.Extended` derive along a path and return an error value when the path cannot be followed. Use them for a path that comes from outside, such as the path of a PSBT record. `derivePath` and `derivePubPath` throw `DerivationException` in that case, as before.
+  - `maxRedeemScriptSize` (520) and `maxWitnessScriptSize` (10,000) in `Haskoin.Script.Standard` are the largest scripts that a pay-to-script-hash and a pay-to-witness-script-hash output can commit to and still be spent: `MAX_SCRIPT_ELEMENT_SIZE` and `MAX_SCRIPT_SIZE` of Bitcoin Core. `p2shScriptHash` and `p2wshScriptHash` give the hash of a script for those outputs, and fail above the limit.
+  - `p2shP2wpkhAddr` in `Haskoin.Address` is the P2SH-P2WPKH address of a public key hash.
+  - `SigHashFlag` has a `Bounded` instance.
+  - `decodeTx` in `Haskoin.Transaction.Common` reads a transaction from bytes that hold the transaction and nothing else, as `DecodeHexTx` requires in Bitcoin Core. `deserialize` reads a transaction from the front of a longer input, as a block needs it to, and does not notice bytes that follow. Use `decodeTx` for a transaction that arrives on its own.
+  - `dustThreshold` in `Haskoin.Transaction.Builder` gives the amount below which nodes do not relay an output of a kind, as `GetDustThreshold` computes it in Bitcoin Core at the default dust relay fee: 546 satoshi for pay-to-public-key-hash, 294 for pay-to-witness-public-key-hash, 330 for pay-to-witness-script-hash and Taproot. `chooseCoins` can return a change below it, and its documentation now says to leave such a change to the fee.
+  - `maxStandardTxWeight` (400,000) in `Haskoin.Transaction.Builder` is the weight above which nodes do not relay a transaction: `MAX_STANDARD_TX_WEIGHT` of Bitcoin Core, and the 100,000 bytes of `MAX_STANDARD_TX_SIZE` of Bitcoin Cash Node.
+  - `data/core_signed_txs.json` holds 97 transactions that Bitcoin Core 32.1 signed on regtest, one for each of 16 kinds of coin and each hash type. The tests verify them with `verifyStdTx`, so that the verifier is checked against signatures the library did not make.
+  - `arbitraryKeyPairC` generates a key pair in compressed form.
+  - `maxPayloadSize` in `Haskoin.Network.Message` gives the largest payload a message of a command may have on a network, and `getMessage` applies it. On Bitcoin Cash every message but `block`, `cmpctblock` and `blocktxn` is limited to 2 MiB, the new `maxProtocolMessageSize` of `Network`, as `CMessageHeader::IsOversized` does in Bitcoin Cash Node. The limit was 64 MB for every message, and one 33.5 MB `getblocktxn` took 19 seconds and 5.7 GiB to parse. A node should use `maxPayloadSize` on the message header before it buffers a payload.
+  - `getCompactBlock`, `getGetBlockTxn` and `getBlockTxn` in `Haskoin.Network.CompactBlock` read the compact block messages of a network. On Bitcoin a transaction position above 65535, the new `maxCompactBlockIndex` of `Network`, fails the parse, and so does a compact block of more than 65535 transactions, as in BIP 152 and Bitcoin Core. Bitcoin Cash keeps 32 bits, as Bitcoin Cash Node. `getMessage` uses them.
+  - `getNetworkTx` in `Haskoin.Network.Data` reads a transaction as a peer of the network sends it: without the SegWit format on a network that has no SegWit. `getMessage` uses it for `tx`, `block`, `blocktxn` and `cmpctblock`.
+  - `minimumChainWork` in `Network` is the `nMinimumChainWork` of Bitcoin Core 32.1 and of Bitcoin Cash Node. Once the best block has that work, `connectBlock` and `connectBlocks` refuse a new header whose chain has less, which bounds cheap forks from far below the tip. A node that is still syncing below that work is not protected by this.
+  - `getVarIntListMax`, and the limits `maxInvSize` (50000), `maxAddrSize` (1000), `maxHeadersSize` (2000), `maxLocatorSize` (101) and `maxFilterHashes` (2000) in `Haskoin.Network.Common`. The parsers of `inv`, `getdata`, `addr`, `addrv2`, `headers`, `getheaders`, `getblocks` and `cfheaders` fail above them, as soon as the count is read.
+  - `extractIndexedMatches` and `merkleBlockIndexedTxs` in `Haskoin.Block.Merkle` give the position of each matching transaction of a partial Merkle tree. `maxMerkleFlagBits` is the number of flag bits a valid proof can use.
+  - `leafHashBytes` in `Haskoin.Transaction.Taproot` is the tapleaf hash of a script given as bytes, for a script that is not a list of opcodes. `checkTapTree` tells whether every leaf of a script tree can be spent: it fails for a node deeper than 128, which no control block can prove, and for a leaf version that is odd or is `0x50`. Run it on a tree before you give out its address. `scriptPathScriptBytes` gives the script bytes of a script path spend as they are in the witness. `taprootSignature` builds a `TaprootSignature` and fails for a hash type that Taproot does not define.
+  - `data/taproot_mainnet_spends.json` holds 24 Taproot script path spends from Bitcoin mainnet blocks 840000 and 900000, with scripts of 34 to 635 bytes. The tests check that each one is read and that its script and control block commit to the output key of the coin it spends.
+  - `requirePreviousTx` on a PSBT `Signer`. With it, the signer refuses a SegWit version 0 coin that is known from its witness output only, since the amount of such a coin is a claim of whoever wrote the PSBT (CVE-2020-14199). `keySigner` and `xPrvSigner` set it.
+  - `inputCoins` and `psbtFee`: the coin of each PSBT input with whether it comes from the previous transaction, and the fee when every coin does.
+  - `psbtPartialTransaction`: the transaction of a PSBT that is still being signed.
+  - `data/psbt_complex_core32.json`: nine coins of every kind, signed by Bitcoin Core 32.1 without finalizing.
+
+  ### Changed
+
+  - `unmarshal` and `unmarshalLazy` fail when bytes are left over after the value. They used to read a value from the start of the input and ignore the rest, so two different byte strings could read as the same public key, signature or extended key. Code that reads a value from the start of a longer stream must run `marshalGet` itself.
+  - The binary form of `XPubKey` holds a compressed public key in exactly 33 bytes, as BIP 32 defines it and as `xPubImport` already required. A key in the 65-byte form used to be read.
+  - `decodeStrictSig`, and with it the binary and JSON forms of `Sig`, apply the encoding rule of BIP 66 and nothing more. A signature with a high S value is now read. Low S is a relay rule of Bitcoin Core (`SCRIPT_VERIFY_LOW_S`), not a consensus rule, and blocks hold signatures with a high S. `isCanonicalHalfOrder` tests the relay rule. The form of a transaction signature, `TxSignature`, still applies it. The signers make low-S signatures, as before.
+  - `makeXPrvKey` throws `DerivationException` for a seed that is not 16 to 64 bytes long, the range that BIP 32 gives and that Bitcoin Core enforces. A seed of any length used to give a master key, the empty string included, and anyone can compute the keys of such a wallet. A wallet that was made from a seed of another length can still be opened without this function: its master key is `XPrvKey 0 "00000000" 0 chain key`, where `key` and `chain` are the two halves of `hmac512 "Bitcoin seed" seed`.
+  - `applyPath` returns `Left` for a path that leads below depth 255, which no key can have. It used to throw `DerivationException`, although its type promises an error value.
+  - The path constructors `:|` and `:/` throw `DerivationException` for an index of 2^31 or more. Such a path could be built before, but its text and binary forms did not read back to the same path, and deriving along it threw. The two constructors are now pattern synonyms. Code that builds and matches paths with them compiles as before.
+  - `fromMiniKey` requires a mini key to start with the letter `S` and to hold only characters of the Base58 alphabet, as the format defines. One arbitrary string of 22 or 30 characters in 256 used to be read as a private key.
+  - `getInteger` reads only the encoding that `putInteger` writes: a tag byte of 0 or 1, a sign byte of 0x01 or 0xff, and the shortest bytes that hold the number. Several other byte strings used to read as the same number. Data written by `putInteger` reads as before. The reader also takes close to linear time now. A number of 400 KB used to take 54 seconds.
+  - `getIntMap` refuses keys that are not in ascending order, which is how `putIntMap` writes them. A key given twice used to be read, and its second element silently replaced the first.
+  - `convertBits` returns `Nothing` for a width that is zero or negative, where it used to loop forever, and for a digit that does not fit the width it is converted from, whose high bits it used to drop.
+  - `bech32Encode` returns `Nothing` for a five-bit word above 31. It used to raise an array index error.
+  - The JSON parser of `Sig` no longer copies the text it refuses into its error message.
+  - `data/key_io_valid.json` and `data/key_io_invalid.json` are the files of Bitcoin Core 32.1, with its Bech32m and testnet4 vectors. The tests run every vector through `textToAddr` and `fromWif`, as `key_io_tests.cpp` does.
+  - `payToScriptAddress`, `payToWitnessScriptAddress` and `payToNestedScriptAddress` return `Either String Address`, and `toP2SH` and `toP2WSH` return `Either String ScriptOutput`. They fail for a redeem script above 520 bytes and for a witness script above 10,000 bytes. A pay-to-script-hash redeem script is a push of the spending input, and consensus limits a push to 520 bytes, so coins sent to the hash of a longer script can never be spent. `payToScriptAddress` used to give an address for a multisig of 16 to 20 compressed keys (547 to 684 bytes), or of 8 or more uncompressed keys, and Bitcoin Core rejects every spend of such a coin with "Push value size limit exceeded". Fifteen compressed keys fit, and twenty still fit a pay-to-witness-script-hash output. These functions also return the failure of `encodeOutput` for a multisig that no script can express, where `payToScriptAddress` used to raise an `error` call.
+  - `deriveMSAddr` and `derivePathMSAddr` return `Either String (Address, RedeemScript)`, and `deriveMSAddrs` and `derivePathMSAddrs` return `Either String` of their list. They fail for more than 15 keys, whose address would be unspendable as described above, and for a number of required signatures that is not between 1 and the number of keys, which used to raise an `error` call when the address was forced. Coins that were sent to an address these functions gave for 16 to 20 keys are lost: no spend of them is valid.
+  - `scriptToAddress`, `scriptToAddressBS` and `outputAddress` take the `Network` as their first argument and give an address only for an output kind that the network has. A witness program has no address on Bitcoin Cash, and a 256-bit script hash (`OP_HASH256 <32 bytes> OP_EQUAL`) has none on Bitcoin, where Bitcoin Core reports that script as non-standard. Without the network these functions returned an address that has no text form on the chain it came from, and the JSON encoder of `Address` throws for such an address. One such output is in Bitcoin block 211997 (transaction `a4bfa8ab6435ae5f25dae9d89e4eb67dfa94283ca751f393c1ddc5a837bbc31b`, output 0), so an indexer that encoded the addresses of outputs failed on that transaction. Every address these functions return now has a text form on the network.
+  - `decodeInput` only reads a pay-to-script-hash input whose redeem script is in the form `encodeOutput` writes. A multisig redeem script whose keys are pushed with `OP_PUSHDATA1` used to decode, and `inputAddress` then gave the hash of the re-encoded script, an address that never held the coin. Such an input now fails to decode, so `inputAddress` is always the hash of the redeem script bytes of the input, and encoding a decoded input never rewrites its redeem script. Spending such a script breaks the `MINIMALDATA` rule of the relay policy, so standard transactions are not affected.
+  - `decodeInput` reads a `NestedWitnessInput` only when the witness program is a direct push, as BIP 141 requires ("the scriptSig must be exactly a push of the BIP16 redeemScript"). A program pushed with `OP_PUSHDATA1` used to decode, although such an input is invalid by consensus.
+  - `inputAddress` gives no address for a redeem script above 520 bytes.
+  - `txSigHashForkId` writes the hash type as four bytes on a network without a fork id, as `SignatureHash` of Bitcoin Core does for a SegWit input. It used to keep the low byte only, while `txSigHash` wrote all four. Nothing changes for a hash type that fits in one byte, which is every hash type a signature can carry.
+  - `cashAddrDecode`, and with it `textToAddr` and the JSON parser of `Address` on Bitcoin Cash networks, refuse a string longer than the prefix of the network, the colon and 112 characters before any other work. No valid address is longer, since the largest hash of the format is 64 bytes. A string of 1 MB used to take 1.5 seconds and several hundred megabytes of memory, and now takes less than a millisecond.
+  - `cash32decode` and `cash32decodeType` refuse a prefix that is not made of letters only, as the decoder of Bitcoin Cash Node does. A digit or a second colon in the prefix used to be read.
+  - `cash32encode` returns `Maybe Cash32`. It fails for a prefix that is empty or not made of ASCII letters, and it writes an uppercase prefix in lowercase. It used to write strings that `cash32decode` refuses: with an empty prefix, a digit, a colon, or a prefix of another case than the data.
+  - The `Read` instance of `Address` goes through `witnessAddress` and `cashAddress` for the two generic kinds. The derived instance read a witness version above 16, a program of any length and a CashAddr type above 15, which no other function builds.
+  - `enumFrom`, `enumFromTo`, `enumFromThen`, `enumFromThenTo`, `succ` and `pred` of `SigHashFlag` walk the five flags in the order of their constructors. `[SIGHASH_ALL ..]` and `succ SIGHASH_SINGLE` used to raise "Not a valid sighash flag", because the values of the flags are not consecutive.
+  - The generators `arbitraryMulSigSHInput`, `arbitraryMulSigSHInputC`, `arbitraryMulSigSHInputFull` and `arbitraryMulSigSHInputFullC` draw a redeem script of at most 520 bytes. More than half of the inputs they drew could not exist. `arbitraryP2SHMSParam`, `arbitraryP2SHMSParamC`, `arbitraryP2SHMSOutput` and `arbitraryP2SHMSOutputC` are the new generators behind them. `arbitrarySHSigInput` and `arbitraryPartialTxs` use at most 7 keys for the same reason.
+  - `arbitraryScriptOutput` draws a 256-bit script hash output on networks that have CashAddr, and `arbitraryScriptInput` draws a nested witness input only on networks that have SegWit. `arbitraryBitcoinAddress` draws a Taproot address one time in six, through the new `arbitraryTaprootAddress`, and `arbitraryBitcoinCashAddress` a payable token-aware address one time in five, through the new `arbitraryTokenAddress`.
+  - `makeSignature`, and with it `signTx`, `signInput`, `signNestedWitnessTx` and `signPsbt`, refuse a hash type that no node accepts, with the reason: one that is not `SIGHASH_ALL`, `SIGHASH_NONE` or `SIGHASH_SINGLE` with or without `SIGHASH_ANYONECANPAY` (the test of `IsDefinedHashtypeSignature` in Bitcoin Core), the fork id flag on a network without a fork id, and a value that does not fit in the one byte a signature carries. On Bitcoin Cash this refuses `SIGHASH_UTXOS` (0x20), whose digest the library does not compute. The types 0x00, 0x04, 0x21, 0x41 and 0x80 used to be signed, and the result was a transaction that nodes do not relay. A type with upper bytes set, such as 0x101, gave a signature that does not verify. `signTx` still signs `SIGHASH_NONE` and `SIGHASH_SINGLE` when the `SigInput` asks for them: check the hash type of a `SigInput` that comes from someone else.
+  - `makeSignature` refuses a pay-to-script-hash coin without its redeem script, with a redeem script above 520 bytes, or with one that does not hash to the coin, and the same for a pay-to-witness-script-hash coin and its witness script, above 10,000 bytes. It used to sign whatever script it was given, and the output script itself when it was given none. Such a signature spends nothing.
+  - `makeSignature` refuses a SegWit coin, and `signTx` a Taproot coin, on a network without SegWit. `signTx bch` used to return a transaction with a witness, which no Bitcoin Cash node reads.
+  - `signTx`, `signNestedWitnessTx` and `sigKeys` refuse to sign a SegWit version 0 coin with an uncompressed key, whether the coin pays to the hash of the key or to a witness script that holds it. Nodes do not relay such a spend (`SCRIPT_VERIFY_WITNESS_PUBKEYTYPE` in Bitcoin Core), so the transaction they returned could not be broadcast. A block may still hold the spend. To make it on purpose, call `signInput` with the `PrivateKey` in its uncompressed form.
+  - `signInput` and `signNestedInput` refuse a key that is not a key of the coin: the key of a pay-to-public-key coin, the key whose hash the coin pays to, or a key of its multisig. They used to return an input that no node accepts.
+  - `signTaprootInput` refuses a secret key whose x-only public key is not the output key of the coin, and a spent output that is not a Taproot output. Passing the internal key in place of its tweak used to give a signature that does not verify.
+  - `verifyStdInput` and `verifyStdTx` require a multisig input to hold exactly as many signatures as its script requires, and no other item. `OP_CHECKMULTISIG` takes that many items as signatures, and the item below them must be empty (BIP 147), so no block can contain an input with an item after its signatures or with an empty item among them. They used to answer `True` for both, in bare, pay-to-script-hash and pay-to-witness-script-hash form. An empty item before the signatures is refused too: nodes do not relay it, and in a witness it is invalid.
+  - `verifyStdTx` refuses a transaction in which two inputs spend the same outpoint, as `CheckTransaction` does in Bitcoin Core (`bad-txns-inputs-duplicate`).
+  - `verifyStdInput` and `verifyStdTx` refuse a SegWit or Taproot input on a network without SegWit, and compare the input script of a nested SegWit input with the push of its program byte for byte.
+  - `verifyStdTx` looks up the coins once for the whole transaction. It used to walk the list of coins for every input, and to rebuild the list of spent outputs for every Taproot input, so its time grew with the cube of the number of Taproot inputs: 400 of them took 1.6 s and now take 0.14 s.
+  - `signTx` derives the public keys of its secret keys once for the whole transaction, not once per input. 400 Taproot inputs with 400 keys took 11.7 s and now take 0.2 s.
+  - `guessTxFee` returns `Either String Word64`. It fails when the fee does not fit in 64 bits, where it used to wrap around: 192 bytes at 2^58 satoshi per byte gave a fee of 0. It also fails for a kind of input or output that cannot exist, such as `InputMulSig 16 16`, whose redeem script would be 547 bytes, or a multisig of 3 of 2.
+  - `chooseCoins` and `chooseCoinsSink` add amounts as unbounded integers. A target near 2^64 used to wrap around with its fee, so that a coin of 1,000 satoshi "covered" a target of 2^64 - 101. They fail for a kind of input or output that cannot exist, and they stop with an error when the transaction would weigh more than `maxStandardTxWeight`. They keep the sums of the selection as coins are added: selecting 1,400 coins took 0.11 s and now takes under a millisecond.
+  - `greedyAddSink` adds amounts as unbounded integers as well. `chooseCoinsSink` no longer uses it.
+  - `mergeTxs` and `mergeTxInput` keep the witness of the transaction. They used to remove it, so a SegWit input that was signed before the multisig signers took their copies lost its signature. `mergeTxs` now answers "Transactions do not match" for copies whose witnesses differ, since it does not merge witnesses. `mergeTxInput` returns `Left` for an input index that one of the transactions does not have. It used to raise an error.
+  - `hasWitness` looks only at the stacks of the inputs. A witness item in a stack beyond the inputs used to turn the witness format on, which gave bytes with the marker and no witness item, a wrong weight and a wrong witness transaction id. Neither Bitcoin Core nor this library reads those bytes.
+  - The JSON form of `Tx` requires one witness stack per input, or none.
+  - `buildAddrTx` refuses an amount above the `maxSatoshi` of the network, as `createrawtransaction` refuses an amount out of range in Bitcoin Core.
+  - The generators of `Haskoin.Util.Arbitrary.Transaction` draw compressed keys for SegWit signing data, a pay-to-script-hash multisig `InputKind` of at most 15 keys, SegWit and Taproot signing data only on networks that have SegWit, and amounts of which a third are below 10,000 satoshi.
+  - `fromMnemonic` and `mnemonicToSeed` no longer put words of the sentence or checksum values into their error text. An unknown word is named by its position, as in `fromMnemonic: words 3 and 7 are not in the list`, and a failed checksum is `fromMnemonic: checksum failed`. A sentence typed in capitals used to be echoed whole, and the text of a `Left` ends up in logs.
+  - `fromMnemonic` and `mnemonicToSeed` do a bounded amount of work on text from an untrusted source. The sentence is split into words before anything is normalised, and a word longer than the eight letters of the longest list word is refused as it is. `mnemonicToSeed` refuses a passphrase whose NFKD form would hold more than 30 combining characters in a row, the limit of the Stream-Safe Text Format of Unicode (UAX #15), which no real text passes. 32 KB of combining characters used to take half a minute, and the time grew with the square of the length. Every sentence and passphrase that was accepted before, other than such a passphrase, gives the same seed. This adds a direct dependency on `unicode-data`, which `unicode-transforms` already used.
+  - The parser of `MerkleBlock` refuses more hashes than transactions and more flag bytes than the tree can use, before it reads them. A `merkleblock` message used to cost about 95 bytes of memory per flag byte, 1.5 GB for a 16 MB message. Proofs that verify are not affected.
+  - An empty witness item, and any empty byte string of the wire format, costs one list cell. A `tx` message with four million empty witness items kept 356 MB and now keeps 100 MB, as much as Bitcoin Core.
+  - `bloomRelevantUpdate` matches a transaction as BIP 37 and `IsRelevantAndUpdate` of Bitcoin Core do: by its hash, by the data of its output scripts, by the outpoints it spends and by the data of its input scripts. It only looked at outputs, so a transaction that spends a watched coin was not matched. Pay-to-pubkey and multisig outputs are told by the shape of the script, as `Solver` does, so a hybrid key or a key that is not on the curve counts. The `Ctx` argument is no longer used.
+  - The `version`, `timestamp` and `startHeight` fields of `Version` are `Int32`, `Int64` and `Int32`, signed as in Bitcoin Core. A peer that sent version ffffffff appeared to have version 4294967295.
+  - `validVersion` applies its three conditions independently, as `ContextualCheckBlockHeader` does. It accepted old block versions on networks whose activation heights are not in the order BIP 34, BIP 66, BIP 65, which are Bitcoin Cash regtest and testnet4.
+  - `chooseBest` keeps the first block when two have the same work, whatever their heights, as Bitcoin Core does. It preferred the higher one.
+  - `connectBlock` and `connectBlocks` return the stored node of a header that is already in the store, as `AcceptBlockHeader` does in Bitcoin Core. A known header at or below a checkpoint used to be refused as "Rewriting pre-checkpoint chain".
+  - The memory header store returns a node only for the hash that was asked for. It returned any node whose hash shared the first eight bytes.
+  - `calcHash` returns `Maybe Hash256` and no longer calls `error` outside the tree. `splitIn` with a length below one returns the list as one chunk and no longer loops. `Hashable BlockNode` hashes the header only, like `Eq`.
+  - An `addrv2` entry of the Tor v2 network is read whatever its length, since BIP 155 says to ignore such entries, and no longer fails the message. `fromNetworkAddressV2` gives `Nothing` for an IPv6 entry that holds an IPv4-mapped or an OnionCat address. `toNetworkAddressV2` gives a Tor v2 entry for an OnionCat address.
+  - `getMessage` checks the magic bytes before the command name.
+  - `bloomCreate` picks the number of hash functions with the integer division of Bitcoin Core.
+  - `Read MessageCommand` reads what `Show` writes for any bytes.
+  - `btcRegTest` has a target timespan of one day, as Bitcoin Core regtest, and `btcTest4` pins no BIP 34 block hash, as Bitcoin Core testnet4.
+  - The reader of `BlockNode` refuses a chain work that is negative or does not fit 256 bits.
+  - The generators `arbitraryMerkleBlock`, `arbitraryBlock`, `arbitraryBlockNode`, `arbitraryVarInt`, `arbitraryReject`, `arbitrarySendCompact`, `arbitraryCompactBlock` and `arbitraryBlockTxn` cover more cases, and `arbitraryNetworkTx`, `arbitraryNetworkGetBlockTxn` and `arbitraryPositionsUpTo` are new.
+  - A `TaprootSignature` only holds a hash type that `isTaprootSigHash` accepts. Its constructor is now a pattern that only matches. Build a value with `taprootSignature` or `decodeTaprootSig`; the fields `sig` and `hash` are read as before and cannot be updated. `encodeTaprootSig` used to cut any hash type to one byte, so `0x100` was written as a 65-byte signature ending in `00`, which BIP 341 forbids, and `0x101` as `SIGHASH_ALL`.
+  - `ScriptPathData` has a new last field, `opaqueScript`: the bytes of the script when they are not a list of opcodes, in which case `script` is empty. `viewTaprootWitness` now reads a script path spend whatever its script bytes are. It used to return `Nothing` for a Tapscript with an `OP_SUCCESSx` opcode followed by bytes that do not decode, and for a leaf of another version, although such spends can be valid. `verifyScriptPathData` takes the leaf hash on the script bytes of the witness, and is `False` for a proof of more than 128 hashes.
+  - `encodeTaprootWitness` returns `Either String WitnessStack`. It fails for an annex that is empty or does not start with `0x50`, for a proof of more than 128 hashes, and for a leaf version that is odd or is `0x50`. It used to write a witness that reads back as another spend, or that every node refuses.
+  - `taprootSigHash` fails for an annex that is empty or does not start with `0x50`. No node takes such an item for an annex, so no node computes that digest.
+  - `data/bip341.json` is the file of the BIPs repository, whose key is `fullySignedTx`.
+  - `Signer` has a fourth field, `requirePreviousTx`.
+  - `keySigner` and `xPrvSigner` refuse a SegWit version 0 coin without its previous transaction. Attach the previous transaction, or set `requirePreviousTx = False` to trust the PSBT writer.
+  - `psbtTransaction` refuses a PSBT with an input that is not final. Use `psbtPartialTransaction` for the old behaviour.
+  - `decodePsbt` refuses what Bitcoin Core refuses: a key type that is not a compact size in its shortest form, a public key that is not on the curve, a partial signature that is not in the encoding of BIP 66 with a defined sighash byte, a previous transaction that the input does not spend, and a script tree that is not whole.
+  - `signPsbt` and `finalizePsbt` leave alone an input whose redeem or witness script is not a standard template, instead of failing the whole PSBT.
+  - `signPsbt` signs only for keys that the signed script names. It adds no signature to a script-hash coin whose script is missing, and signs a Taproot leaf only when its control block commits it to the coin.
+  - `signPsbt` and `finalizePsbt` refuse an uncompressed key on a SegWit version 0 coin.
+  - `finalizePsbt` verifies only the signatures of keys the script names, against one digest per input.
+  - `finalizePsbt` refuses a signature that is not `SIGHASH_ALL` (`SIGHASH_DEFAULT` for Taproot) when the input names no sighash type, and leaves alone a legacy coin known from its witness output only.
+  - `addInput` and `addOutput` check the map they are given.
+  - A PSBT error names at most 40 bytes of a key.
+
+  ### Fixed
+
+  - The documentation of the hardened markers, of the depth limit and of `decodeSecKey` no longer describes old behaviour of Bitcoin Core and of the secp256k1 binding. The documentation of `PrivateKey` and `XPrvKey` says that the `Show` instance of the `SecKey` inside them prints the secret.
+  - The documentation of `TxSignature`, `decodeTxSig` and `decodeInput` lists the rules they apply: strict DER, a low S and a defined hash type, the three signature rules of the relay policy of Bitcoin Core. A signature that only consensus accepts does not decode, so an input of an old block can fail to decode. The documentation also says that a Schnorr signature of Bitcoin Cash does not decode.
+  - The documentation of `decodeOutput` says that a multisig whose keys are not direct pushes, and a data carrier whose pushes are not the shortest, come back from `encodeOutput` as other bytes, and lists the scripts that the `Solver` of Bitcoin Core classifies and this function does not: a key in hybrid form or off the curve, and `OP_RETURN OP_RESERVED`.
+  - The documentation of `txSigHash` names `SerializeScriptCode` of Bitcoin Core for the removal of `OP_CODESEPARATOR`, and says that the pushes of the signature are not removed from the script, which `FindAndDelete` does in Bitcoin Core. The documentation of `txSigHashForkId` lists what is not supported on Bitcoin Cash: `SIGHASH_UTXOS`, coins that hold tokens, and Schnorr signatures.
+  - The documentation of `Address` says that a token-aware CashAddr and its plain form are different values that pay the same script, and that a value built with a constructor or read from the binary form is not checked against a network. The documentation of `textToAddr` says that white space around an address is refused and that some CashAddr kinds decode without being payable. The documentation of `addressToOutput` says that it does not know the network.
+  - The documentation of `maxMultisigKeys` says that 20 keys fit a bare and a pay-to-witness-script-hash multisig only.
+  - The documentation of `verifyStdTx` and `verifyStdInput` says what they check and what they do not: they are not a script interpreter, they never answer `True` for an input of the kinds they know that no block can contain, and they answer `False` for some inputs that a block may hold but nodes do not relay.
+  - The documentation of `SigInput` says that the value of a legacy coin is not committed to by its signature, so that a signer cannot check it without the previous transaction.
+  - The documentation of `guessTxSize` and `txVirtualSize` says that they do not count signature operations, which Bitcoin Core charges for in a transaction that is dense in them.
+  - The documentation of `InputKind` gives the ranges of a multisig kind, and that of `buildTx` and `buildAddrTx` says what they do not check.
+  - `leafHash`, and with it `mastCommitment`, `taprootOutputKey`, `taprootScriptOutput`, `getMerkleProofs` and `verifyScriptPathData`, write the script length of a Taproot leaf as a CompactSize, as BIP 341 defines the tapleaf hash and as `ComputeTapleafHash` does in Bitcoin Core. They wrote a base-128 varint, which is the same byte below 128 only. A leaf script of 128 bytes or more, such as a `multi_a` of four keys, therefore got a leaf hash, an output key and an address that no other software derives, and that leaf could not be spent. **The address of every script tree with such a leaf changes.** Trees whose leaf scripts are all shorter than 128 bytes, and outputs without a tree, are not affected. Coins at an address that version 1.5.1 or earlier made from such a tree can still move by the key path, or by the script path of a leaf shorter than 128 bytes. To rebuild the old output, put the old hash of each long leaf in the tree as a `MASTCommitment`. The old hash is the tagged hash `TapLeaf` of the leaf version, the script length as `Data.Bytes.VarInt.VarInt` of the bytes package, and the script bytes. `taprootOutputKey` and `taprootOutputSecKey` then give the old output key and the secret key of its key path, and `getMerkleProofs` gives the proofs of the short leaves. The long leaves of such an output can never be spent. The test "An output made by versions up to 1.5.1 with a leaf of 128 bytes or more" in `TaprootSpec.hs` has the code.
+  - `getMerkleProofs` lists the hashes of a proof from the leaf up to the root for a leaf at any depth, as BIP 341 and Bitcoin Core do. From depth 3 the order was wrong, and every node refused the control block built from it. It also hashes each subtree once instead of once per level.
+  - The JSON form of `XOnlyPubKey` reads the hex of 32 bytes only. It used to read the first 32 bytes of a longer value, so a 33-byte compressed key was taken for another key.
+  - `tapTreeLeaves` returns `Nothing` for a tree with a leaf deeper than 128, and no longer wraps the depth at 256.
+  - `xPrvSigner` no longer throws for a derivation path of more than 255 steps. The input stays unsigned.
+  - `signPsbt` signs a P2SH-P2WPKH coin by the hash of its key, without a derivation record.
+  - `signPsbt` and `finalizePsbt` use `SIGHASH_ALL` with the fork id flag on Bitcoin Cash when an input names no sighash type.
+  - `signPsbt` signs a Taproot key path when the record of the internal key lists a leaf.
+  - The PSBT scripts under `scripts/` run again, against Bitcoin Core 32.1.
 
   ## [1.5.1] - 2026-11-04
 
@@ -139,7 +273,7 @@ changelog: |
   - `addrToBase58`, `addrToBech32` and `addrToCash` encode an address in one chosen format. `addrToBase58` gives the legacy form of a Bitcoin Cash address.
   - Token-aware CashAddr addresses (types 2 and 3) can be paid. `addressToOutput`, `addressHash160` and `addressHash256` treat them like their plain P2PKH, P2SH and P2SH32 counterparts.
   - `decodeSecKey` in `Haskoin.Crypto.Keys.Common` builds a secret key from 32 bytes and refuses zero and values at or above the curve order. `fromWif`, `fromMiniKey`, `xPrvImport`, `makeXPrvKey` and the binary form of `PrivateKey` use it. The `secKey` of secp256k1-haskell 1.7.0 only checks the length, so such keys used to import and then crash `derivePubKey` and `signMsg` with an error call.
-  - Derivation paths accept `h` and `H` as hardened markers, as Bitcoin Core does, so `m/84h/0h/0h` parses.
+  - Derivation paths accept `h` and `H` as hardened markers, so `m/84h/0h/0h` parses. Bitcoin Core and BIP 380 write `'` or `h`, and BIP 32 writes a subscript H.
   - Tests for BIP32 test vectors 4 and 5, for a BIP39 passphrase with accented letters, and for every function of the `Haskoin.Crypto` modules.
   - The P2P messages added since 2016: `addrv2` and `sendaddrv2` (BIP 155) with `AddrV2`, `NetworkAddressV2` and conversions from and to `addr` entries; `feefilter` (BIP 133); `sendcmpct`, `cmpctblock`, `getblocktxn` and `blocktxn` (BIP 152) in `Haskoin.Network.CompactBlock`; `getcfilters`, `cfilter`, `getcfheaders`, `cfheaders`, `getcfcheckpt` and `cfcheckpt` (BIP 157) in `Haskoin.Network.BlockFilter`; `wtxidrelay` (BIP 339) and `sendtxrcncl` (BIP 330). The inventory types `InvCompactBlock` and `InvWTx`, and the service bits `nodeCompactFilters`, `nodeNetworkLimited` and `nodeP2PV2`.
   - `maxMessageSize` in `Network` bounds the payload `getMessage` reads: 4,000,000 bytes on Bitcoin, as in Bitcoin Core, and twice the block size on Bitcoin Cash.
@@ -774,29 +908,846 @@ changelog-type: markdown
 description: |
   # Haskoin Core
 
-  Haskoin Core is a library of Bitcoin and Bitcoin Cash functions written in Haskell featuring:
+  [![Hackage](https://img.shields.io/hackage/v/haskoin-core.svg)](https://hackage.haskell.org/package/haskoin-core)
+  [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jprupp/haskoin-core/blob/master/LICENSE)
 
-  - Hashing functions (SHA-256, RIPEMD-160)
-  - Base58 support
-  - CashAddr support
-  - Bech32 suport
-  - BIP32 extended key derivation and parsing (m/1'/2/3)
-  - BIP39 mnemonic keys
-  - ECDSA secp256k1 cryptographic primitives
-  - Script parsing
-  - Building and signing of standard transactions (regular, multisig, p2sh, segwit)
-  - Parsing and manipulation of all Bitcoin and Bitcoin Cash protocol messages
-  - Bloom filters and partial merkle trees (used in SPV wallets)
-  - Comprehensive test suite
+  Haskoin Core is a Bitcoin and Bitcoin Cash library for Haskell. It covers keys,
+  addresses, scripts, transactions, PSBTs, block headers and the peer-to-peer
+  message format.
 
-  ## Contributing
+  It does no I/O of its own. It never opens a socket or writes a file. You can use
+  it in a wallet, a block explorer or a node, and bring your own networking and
+  storage.
 
-  All code is formatted with [Ormolu](https://github.com/tweag/ormolu).
-  Convenience formatting script available at [scripts/format](scripts/format)
+  - [API documentation](https://hackage.haskell.org/package/haskoin-core)
+  - [Changelog](https://github.com/jprupp/haskoin-core/blob/master/CHANGELOG.md)
+  - [Report a bug](https://github.com/jprupp/haskoin-core/issues)
+
+  ## Contents
+
+  - [Features](#features)
+  - [Installation](#installation)
+  - [Quick start](#quick-start)
+  - [Concepts](#concepts)
+  - [Usage guide](#usage-guide)
+  - [Module overview](#module-overview)
+  - [Security notes](#security-notes)
+  - [Development](#development)
+  - [Related projects](#related-projects)
+  - [License](#license)
+
+  ## Features
+
+  | Area         | What you get                                                                                                         |
+  | ------------ | -------------------------------------------------------------------------------------------------------------------- |
+  | Networks     | Bitcoin and Bitcoin Cash: mainnet, testnet3, testnet4 and regtest                                                    |
+  | Keys         | secp256k1 keys, WIF, BIP-32 extended keys and paths, BIP-39 mnemonics, SLIP-39 Shamir shares                         |
+  | Signatures   | Deterministic ECDSA (RFC 6979) and BIP-340 Schnorr                                                                   |
+  | Addresses    | Base58, Bech32, Bech32m and CashAddr, including token-aware CashAddr types                                           |
+  | Scripts      | Script parsing and serialization, standard input and output templates, BIP-67 sorted multisig                        |
+  | Transactions | Building, signing and verifying P2PK, P2PKH, P2SH, multisig, P2WPKH, P2WSH, nested SegWit and Taproot key path spends |
+  | Wallet tools | Coin selection, and weight, size and fee estimates                                                                   |
+  | PSBT         | Versions 0 and 2, with the Taproot fields (BIP-174, BIP-370, BIP-371)                                                |
+  | Taproot      | Script trees, output keys, witnesses, control blocks and signature hashes (BIP-341, BIP-342)                         |
+  | Blocks       | Header validation, proof of work, the difficulty rules of both chains, Merkle trees and an in-memory header chain    |
+  | Peer-to-peer | Message encoding, including `addrv2`, compact blocks and compact filter messages, and BIP-37 Bloom filters           |
+  | Testing      | QuickCheck generators for the library's types                                                                        |
+
+  ### What is not included
+
+  - **Peer connections and chain sync.** Use
+    [haskoin-node](https://github.com/jprupp/haskoin-node).
+  - **Address and transaction indexing.** Use
+    [haskoin-store](https://github.com/jprupp/haskoin-store).
+  - **A script interpreter.** `verifyStdTx` recognises the standard templates. It
+    is not a consensus check.
+  - **Signet, output descriptors, Miniscript and MuSig2.**
+  - **Schnorr transaction signatures, `SIGHASH_UTXOS` and token outputs of Bitcoin
+    Cash.** An input or an output that uses them does not decode or verify.
+  - **BIP-324 encrypted transport.**
+  - **BIP-39 word lists other than English.**
+
+  ## Installation
+
+  ### System library
+
+  Haskoin Core needs [libsecp256k1](https://github.com/bitcoin-core/secp256k1)
+  0.2.0 or later, and `pkg-config` to find it.
+
+  ```sh
+  # Debian and Ubuntu
+  sudo apt-get install libsecp256k1-dev pkg-config
+
+  # macOS with Homebrew
+  brew install secp256k1 pkg-config
+
+  # Nix
+  nix-shell -p secp256k1 pkg-config
+  ```
+
+  Check what you have with `pkg-config --modversion libsecp256k1`. Debian 11 and
+  other older systems ship a version below 0.2.0. On those, build the library from
+  source and enable its recovery module with `./configure --enable-module-recovery`.
+
+  ### Compiler
+
+  The library is tested with GHC 9.10 and 9.12. It cannot build below GHC 9.2,
+  because it uses `OverloadedRecordDot`.
+
+  ### With Cabal
+
+  Add the packages to your `.cabal` file:
+
+  ```cabal
+  build-depends:
+      base
+    , bytes
+    , haskoin-core
+    , text
+  ```
+
+  You need `bytes` to serialize values with `runPutS` and `serialize`.
+
+  Run `cabal update` first. Haskoin Core needs a recent secp256k1-haskell, and a
+  stale package index makes the build fail with a dependency error.
+
+  ### With Stack
+
+  Haskoin Core is not in Stackage, so add it to `stack.yaml` as an extra
+  dependency. Use the [latest version from Hackage](https://hackage.haskell.org/package/haskoin-core).
+
+  ```yaml
+  resolver: nightly-2026-10-28
+  extra-deps:
+    - haskoin-core-1.6.0
+    - base16-2.0
+    - secp256k1-haskell-2.0.0
+  ```
+
+  ## Quick start
+
+  This program turns a mnemonic into the first receiving address of a BIP-84
+  wallet.
+
+  ```haskell
+  {-# LANGUAGE OverloadedRecordDot #-}
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module Main (main) where
+
+  import Data.Text (Text)
+  import Haskoin
+
+  -- This is the public BIP-39 test mnemonic. Never send coins to it.
+  mnemonic :: Text
+  mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+  main :: IO ()
+  main = withContext $ \ctx -> do
+    seed <- either fail pure (mnemonicToSeed "" mnemonic)
+    let master = makeXPrvKey seed
+        -- Hardened steps need the private key.
+        account = derivePath ctx ("m/84'/0'/0'" :: HardPath) master
+        accountPub = deriveXPubKey ctx account
+        -- The remaining steps only need the public key.
+        receiving = derivePubPath ctx ("m/0" :: SoftPath) accountPub
+        (address, _publicKey) = deriveWitnessAddr ctx receiving 0
+    print (addrToText btc address)
+    -- => Just "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+  ```
+
+  The address is the one that [BIP-84](https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki)
+  publishes for this mnemonic.
+
+  ## Concepts
+
+  A few conventions apply across the whole library. Reading this section first
+  will save you time.
+
+  ### The context
+
+  Most cryptographic functions take a `Ctx`, a secp256k1 context. Create one when
+  your program starts, with `withContext` or `createContext`. Then pass it around.
+  You can share it between threads.
+
+  ### Networks
+
+  A `Network` is a record of the parameters of one chain. Functions that depend on
+  the chain take one as an argument. Functions that need both take the `Network`
+  first and the `Ctx` second.
+
+  | Value        | Chain                 | Name for `netByName` |
+  | ------------ | --------------------- | -------------------- |
+  | `btc`        | Bitcoin mainnet       | `btc`                |
+  | `btcTest`    | Bitcoin testnet3      | `btctest`            |
+  | `btcTest4`   | Bitcoin testnet4      | `btctest4`           |
+  | `btcRegTest` | Bitcoin regtest       | `btcreg`             |
+  | `bch`        | Bitcoin Cash mainnet  | `bch`                |
+  | `bchTest`    | Bitcoin Cash testnet3 | `bchtest`            |
+  | `bchTest4`   | Bitcoin Cash testnet4 | `bchtest4`           |
+  | `bchRegTest` | Bitcoin Cash regtest  | `bchreg`             |
+
+  ### Record fields
+
+  The library is built with `NoFieldSelectors`, so record fields are not functions.
+  Turn on `OverloadedRecordDot` in your modules and read fields with a dot.
+
+  ```haskell
+  print btc.defaultPort
+  -- => 8333
+  print (map (.value) btc.genesisTx.outputs)
+  -- => [5000000000]
+  ```
+
+  Many records share field names. `Tx` and `Psbt` both have `inputs`, for example.
+  To update such a field, import the module qualified and name the field through
+  it, as the [PSBT example](#psbt) does.
+
+  ### Errors
+
+  Functions that can fail return `Maybe` or `Either String`. The examples below
+  turn those into `IO` failures with `either fail pure`.
+
+  Hashes, paths and public keys have `IsString` instances, so you can write them as
+  literals. Those instances call `error` on bad input. For input you do not control,
+  use `hexToTxHash`, `hexToBlockHash`, `parsePath` and `textToAddr`.
+
+  ### Amounts
+
+  Amounts are satoshi, as `Word64`.
+
+  ### Serialization
+
+  Most types have `Serial` instances, from the
+  [bytes](https://hackage.haskell.org/package/bytes) package, and also `Binary` and
+  `Serialize` instances. Some types need a context or a network to encode, so they
+  have `Marshal` or `MarshalJSON` instances instead.
+
+  | Task                | Encode                     | Decode                       |
+  | ------------------- | -------------------------- | ---------------------------- |
+  | Binary              | `runPutS (serialize x)`    | `runGetS deserialize bytes`  |
+  | Binary with context | `marshal ctx x`            | `unmarshal ctx bytes`        |
+  | Hexadecimal         | `encodeHex bytes`          | `decodeHex text`             |
+  | JSON                | `toJSON x`                 | `parseJSON value`            |
+  | JSON with context   | `marshalJSON ctx x`        | `unmarshalJSON ctx json`     |
+
+  The first argument depends on the type. For example, it is a `Ctx` for
+  `PublicKey`, a `Network` for `XPrvKey` and a `(Network, Ctx)` pair for `XPubKey`.
+
+  `unmarshal` fails when bytes are left over after the value, and `decodeTx` does
+  the same for a transaction. `runGetS deserialize` reads a value from the start of
+  the bytes and ignores the rest.
+
+  ### Hash byte order
+
+  `TxHash` and `BlockHash` show as hexadecimal in reversed byte order. This is the
+  form that Bitcoin Core and block explorers display, so you can paste those values
+  straight in. The serialized bytes keep the internal order.
+
+  ## Usage guide
+
+  The examples below are fragments of `main` in this program. Paste one in place of
+  the comment to run it. If an example starts with `import` lines, add them to the
+  top of the file. A `-- =>` comment shows what the line above it prints.
+
+  ```haskell
+  {-# LANGUAGE OverloadedRecordDot #-}
+  {-# LANGUAGE OverloadedStrings #-}
+
+  module Main (main) where
+
+  import Data.Bytes.Put (runPutS)
+  import Data.Bytes.Serial (serialize)
+  import Haskoin
+
+  main :: IO ()
+  main = withContext $ \ctx -> do
+    -- This is the public BIP-39 test mnemonic. Never send coins to it.
+    seed <-
+      either fail pure $
+        mnemonicToSeed "" "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    let master = makeXPrvKey seed
+    -- Paste an example here.
+    pure ()
+  ```
+
+  ### Mnemonics
+
+  Generate entropy with a cryptographic source. This example uses the
+  [entropy](https://hackage.haskell.org/package/entropy) package.
+
+  ```haskell
+  import qualified Data.ByteString as B
+  import System.Entropy (getEntropy)
+
+  -- 16 bytes of entropy give 12 words. 32 bytes give 24 words.
+  entropy <- getEntropy 16
+  words12 <- either fail pure (toMnemonic entropy)
+
+  -- The passphrase is optional. Use "" for none.
+  newSeed <- either fail pure (mnemonicToSeed "my passphrase" words12)
+  print (B.length newSeed)
+  -- => 64
+  ```
+
+  `mnemonicToSeed` checks the words and the checksum. `fromMnemonic` gives the
+  entropy back.
+
+  ### Keys and signatures
+
+  ```haskell
+  -- A secret key is 32 bytes. decodeSecKey refuses zero and values at or above
+  -- the curve order.
+  bytes <- maybe (fail "bad hex") pure (decodeHex "0000000000000000000000000000000000000000000000000000000000000001")
+  secret <- maybe (fail "bad key") pure (decodeSecKey bytes)
+
+  -- True asks for the compressed form of the public key.
+  let private = wrapSecKey True secret
+      public = derivePublicKey ctx private
+
+  print private
+  -- => PrivateKey {key = <redacted>, compress = True}
+  print (toWif btc private)
+  -- => "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn"
+  print (encodeHex (marshal ctx public))
+  -- => "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+  print (addrToText btc (pubKeyAddr ctx public))
+  -- => Just "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"
+
+  -- Sign and verify a hash.
+  let digest = doubleSHA256 bytes
+      signature = signHash ctx secret digest
+  print (verifyHashSig ctx digest signature public.point)
+  -- => True
+  ```
+
+  `fromWif btc text` reads a WIF key back. `Haskoin` also re-exports the
+  [secp256k1-haskell](https://hackage.haskell.org/package/secp256k1-haskell) API,
+  which has the Schnorr functions such as `signSchnorr` and `verifySchnorr`.
+
+  ### Extended keys
+
+  Paths have three types. A `HardPath` has only hardened steps. A `SoftPath` has
+  only normal steps, which a public key can derive. A `DerivPath` can mix both.
+  Hardened steps can be written `'`, `h` or `H`.
+
+  ```haskell
+  let account = derivePath ctx ("m/84'/0'/0'" :: HardPath) master
+      accountPub = deriveXPubKey ctx account
+
+  print (xPubExport btc ctx accountPub)
+  -- => "xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V"
+
+  -- The account's public key derives all its receiving addresses.
+  let receiving = derivePubPath ctx ("m/0" :: SoftPath) accountPub
+      addresses = [address | (address, _, _) <- deriveWitnessAddrs ctx receiving 0]
+  print (map (addrToText btc) (take 2 addresses))
+  -- => [Just "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",Just "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g"]
+  ```
+
+  Pick the address function that matches the wallet standard:
+
+  | Standard | Address type        | Path          | One address               | Endless list               |
+  | -------- | ------------------- | ------------- | ------------------------- | -------------------------- |
+  | BIP-44   | P2PKH               | `m/44'/0'/0'` | `deriveAddr`              | `deriveAddrs`              |
+  | BIP-49   | P2WPKH nested in P2SH | `m/49'/0'/0'` | `deriveCompatWitnessAddr` | `deriveCompatWitnessAddrs` |
+  | BIP-84   | P2WPKH              | `m/84'/0'/0'` | `deriveWitnessAddr`       | `deriveWitnessAddrs`       |
+  | BIP-86   | Taproot             | `m/86'/0'/0'` | See [Taproot](#taproot)   |                            |
+
+  `xPrvExport` and `xPubExport` write the standard `xprv` and `xpub` forms.
+  `xPrvImport` and `xPubImport` read them back. The `ypub` and `zpub` prefixes are
+  not supported.
+
+  `parsePath` reads a path at run time. It returns a `ParsedPath`, which
+  `applyPath` applies to a private or a public key.
+
+  ### Addresses
+
+  ```haskell
+  let text = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+
+  print (textToAddr btc text)
+  -- => Just (WitnessPubKeyAddress {hash160 = "c0cebcd6c3d3ca8c75dc5ec62ebe55330ef910e2"})
+
+  -- An address of another network is refused.
+  print (textToAddr bch text)
+  -- => Nothing
+
+  -- The output script an address pays to.
+  print (encodeHex <$> (addressToScriptBS ctx =<< textToAddr btc text))
+  -- => Just "0014c0cebcd6c3d3ca8c75dc5ec62ebe55330ef910e2"
+  ```
+
+  `textToAddr` and `addrToText` handle every address format of a network.
+  `addrToBase58`, `addrToBech32` and `addrToCash` each write one chosen format.
+
+  ### Scripts
+
+  `ScriptOutput` is a standard output script. Its constructors are `PayPK`,
+  `PayPKHash`, `PayMulSig`, `PayScriptHash`, `PayWitnessPKHash`,
+  `PayWitnessScriptHash`, `PayWitness`, `PayScript32Hash` and `DataCarrier`.
+
+  ```haskell
+  let keyA = wrapPubKey True "02ff12471208c14bd580709cb2358d98975247d8765f92bc25eab3b2763ed605f8"
+      keyB = wrapPubKey True "02fe6f0a5a297eb38c391581c4413e084773ea23954d93f7753db7dc0adc188b2f"
+      -- BIP-67 sorts the keys, so that all signers build the same script.
+      multisig = sortMulSig ctx (PayMulSig [keyA, keyB] 2)
+
+  -- The address can fail, because a P2SH redeem script holds at most 520 bytes.
+  print (addrToText btc <$> payToScriptAddress ctx multisig)
+  -- => Right (Just "39bgKC7RFbpoCRbtD5KEdkYKtNyhpsNa3Z")
+
+  -- OP_RETURN is 6a, then the push of 5 bytes, then "hello".
+  print (encodeHex (marshal ctx (DataCarrier ["hello"])))
+  -- => "6a0568656c6c6f"
+
+  -- Read the same bytes back.
+  script <- maybe (fail "bad hex") pure (decodeHex "6a0568656c6c6f")
+  print (unmarshal ctx script :: Either String ScriptOutput)
+  -- => Right (DataCarrier {pushes = ["hello"]})
+  ```
+
+  Decoding a `ScriptOutput` fails for a script that matches no template. A `Script`
+  holds any script, as a list of `ScriptOp` values, so use that type for the others.
+  `encodeOutput` and `decodeOutput` convert between `ScriptOutput` and `Script`.
+
+  `payToWitnessScriptAddress` and `payToNestedScriptAddress` give the P2WSH and
+  P2SH-P2WSH addresses of a script.
+
+  The three functions return `Either`. A P2SH redeem script holds at most 520
+  bytes, which is a multisig of 15 compressed keys. Coins sent to a longer script
+  could never be spent, so `payToScriptAddress` refuses it. A P2WSH script holds up
+  to 10,000 bytes, so a multisig of 16 to 20 keys needs P2WSH.
+
+  ### Building and signing a transaction
+
+  ```haskell
+  -- The key at m/84'/0'/0'/0/0 and its address.
+  let key = derivePath ctx ("m/84'/0'/0'/0/0" :: DerivPath) master
+      address = xPubWitnessAddr ctx (deriveXPubKey ctx key)
+
+  -- The coin to spend, and the transaction that paid it. Both are made up.
+  -- The coin holds 100,000 satoshi.
+  coinScript <- maybe (fail "no output script") pure (addressToOutput address)
+  let amount = 100000
+      fundingInput = TxIn (OutPoint "1111111111111111111111111111111111111111111111111111111111111111" 0) "" 0xffffffff
+      funding = Tx 2 [fundingInput] [TxOut amount (marshal ctx coinScript)] [] 0
+      coin = OutPoint (txHash funding) 0
+
+  -- Pay 99,000 satoshi. The 1,000 satoshi left over are the fee.
+  unsigned <-
+    either fail pure $
+      buildAddrTx btc ctx [coin] [("bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g", 99000)]
+
+  -- SigInput describes the coin. The last argument is the redeem script.
+  signed <-
+    either fail pure $
+      signTx btc ctx unsigned [SigInput coinScript amount coin sigHashAll Nothing] [key.key]
+
+  print (verifyStdTx btc ctx signed [(coinScript, amount, coin)])
+  -- => True
+  print (txVirtualSize signed)
+  -- => 110
+  print (txHash signed)
+  -- => "9a079e6b7939909415b7b027a19e093bc539dac5a2ed50df8beb0942ec821848"
+
+  -- This hexadecimal form is what you broadcast.
+  print (encodeHex (runPutS (serialize signed)))
+  -- => "01000000000101..."
+  ```
+
+  `buildAddrTx` adds no change output. Whatever the outputs do not spend goes to the
+  miners as a fee, so list your change output along with the payments.
+
+  Fill in `SigInput` and pick the signing function by the type of the coin:
+
+  | Coin             | `script`               | `redeem`                 | Function              |
+  | ---------------- | ---------------------- | ------------------------ | --------------------- |
+  | P2PKH            | `PayPKHash`            | `Nothing`                | `signTx`              |
+  | P2SH multisig    | `PayScriptHash`        | `Just (PayMulSig ks m)`  | `signTx`              |
+  | P2WPKH           | `PayWitnessPKHash`     | `Nothing`                | `signTx`              |
+  | P2WSH            | `PayWitnessScriptHash` | `Just script`            | `signTx`              |
+  | P2SH-P2WPKH      | `PayWitnessPKHash`     | `Nothing`                | `signNestedWitnessTx` |
+  | P2SH-P2WSH       | `PayWitnessScriptHash` | `Just script`            | `signNestedWitnessTx` |
+  | Taproot key path | `PayWitness 1 key`     | `Nothing`                | `signTx`              |
+
+  For multisig, each signer can call `signTx` with their own keys. `mergeTxs`
+  combines the results for legacy inputs. For SegWit multisig, use a [PSBT](#psbt).
+
+  ### Coin selection and fees
+
+  Make your coin type an instance of `Coin`. The library then picks coins and
+  estimates the fee from the kinds of the inputs and outputs. This example is a
+  complete program.
+
+  ```haskell
+  {-# LANGUAGE OverloadedRecordDot #-}
+
+  module Main (main) where
+
+  import Data.Word (Word64)
+  import Haskoin
+
+  newtype Utxo = Utxo {amount :: Word64}
+
+  instance Coin Utxo where
+    coinValue utxo = utxo.amount
+    coinInputKind _ = InputWitnessPKHash
+
+  main :: IO ()
+  main = do
+    let outputs = [OutputWitnessPKHash, OutputWitnessPKHash]
+        coins = [Utxo 50000, Utxo 120000, Utxo 300000]
+        target = 150000
+        feeRate = 5
+
+    -- The size is in virtual bytes, and the fee rate in satoshi per virtual byte.
+    print (guessTxSize [InputWitnessPKHash] outputs)
+    -- => 141
+    print (guessTxFee feeRate [InputWitnessPKHash] outputs)
+    -- => Right 705
+
+    -- The result is the chosen coins and the change to send back to yourself.
+    -- True keeps searching the rest of the list for a smaller solution.
+    case chooseCoins target feeRate outputs True coins of
+      Left err -> putStrLn err
+      Right (chosen, change) -> print (map (.amount) chosen, change)
+    -- => ([120000,50000],18955)
+  ```
+
+  The change here is 170,000 - 150,000 - 1,045, where 1,045 is the fee for two
+  inputs and two outputs.
+
+  `chooseCoins` takes the coins in the order of the list, so sort them the way you
+  prefer first. The output list must include the change output.
+
+  The change can be smaller than the `dustThreshold` of its output kind, down to
+  one satoshi. Nodes do not relay such an output, so leave that change to the fee.
+  `chooseCoins` refuses a selection above `maxStandardTxWeight`, which nodes do not
+  relay either.
+
+  The estimates are upper bounds, because they count 72 bytes per signature. The
+  kinds include `InputPKHash`, `InputWitnessPKHash` and `InputTaproot`. See
+  `InputKind` and `OutputKind` in `Haskoin.Transaction.Builder` for all of them.
+
+  ### PSBT
+
+  Use a PSBT when several parties or devices sign a transaction. This example
+  continues the one in [Building and signing](#building-and-signing-a-transaction).
+
+  ```haskell
+  -- Continues the example above.
+  import qualified Haskoin.Transaction.Psbt as Psbt
+
+  -- Creator: start from the unsigned transaction.
+  let created = psbtOf unsigned
+
+  -- Updater: attach the transaction that paid each coin. The signer checks the
+  -- amount of the coin against it.
+      updated = created {Psbt.inputs = map (insertNonWitnessUtxo funding) created.inputs}
+
+  -- This base64 text is what you pass to the signers.
+  let shared = encodePsbtBase64 updated
+
+  -- Signer: read the text, and sign every input the keys can sign.
+  received <- either fail pure (decodePsbtBase64 shared)
+  signedPsbt <- either fail pure (signPsbt btc ctx (keySigner ctx key.key) received)
+
+  -- Finalizer and extractor: check the signatures and build the transaction.
+  finalized <- either fail pure (finalizePsbt btc ctx signedPsbt)
+  extracted <- either fail pure (psbtTransaction finalized)
+
+  -- RFC 6979 signatures are deterministic, so this is the same transaction.
+  print (extracted == signed)
+  -- => True
+  ```
+
+  Some other useful functions:
+
+  - `xPrvSigner` signs from an extended private key, following the derivation
+    records of the inputs.
+  - `combinePsbt` merges the copies that different signers return.
+  - `insertWitnessUtxo` attaches a coin without the transaction that paid it. That
+    is enough for a Taproot coin. For a SegWit version 0 coin, the amount is then a
+    claim that the signature does not cover for the other inputs, and a signer can
+    be led to burn coins as fee (CVE-2020-14199). `keySigner` and `xPrvSigner`
+    therefore refuse such a coin. Set `requirePreviousTx = False` on the `Signer`
+    to accept it.
+  - `psbtFee` and `inputCoins` give the fee and the coins as the signer checks
+    them. Show those to the user, not amounts read from the fields yourself.
+  - `psbtTransaction` refuses a PSBT whose inputs are not all final.
+    `psbtPartialTransaction` gives the transaction of a PSBT that is still being
+    signed.
+  - `insertInputRedeemScript` and `insertInputWitnessScript` attach the scripts of
+    P2SH and P2WSH coins.
+  - `withVersion Version2` converts a PSBT to version 2. `addInput` and `addOutput`
+    then extend it.
+
+  ### Taproot
+
+  ```haskell
+  let key = derivePath ctx ("m/86'/0'/0'/0/0" :: DerivPath) master
+      internalKey = (deriveXPubKey ctx key).key
+      -- Nothing means that the output has no script tree.
+      output = taprootScriptOutput ctx (TaprootOutput internalKey Nothing)
+
+  print (addrToText btc =<< outputAddress btc ctx output)
+  -- => Just "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
+
+  -- Spend a made-up coin of 100,000 satoshi by its key path.
+  let coin = OutPoint "1111111111111111111111111111111111111111111111111111111111111111" 0
+      unsigned = buildTx ctx [coin] [(output, 99000)]
+
+  signed <-
+    either fail pure $
+      signTx btc ctx unsigned [SigInput output 100000 coin sigHashDefault Nothing] [key.key]
+
+  print (verifyStdTx btc ctx signed [(output, 100000, coin)])
+  -- => True
+  ```
+
+  The signature commits to every coin the transaction spends. `signTx` therefore
+  needs a `SigInput` for every input of a Taproot transaction.
+
+  To commit to scripts, pass a `MAST` in place of `Nothing`. `signTx` only signs key
+  path spends. `signPsbt` also signs a script path when the leaf is a single key
+  check, `<key> OP_CHECKSIG`. For other scripts, build the witness yourself with
+  `taprootSigHash` and `encodeTaprootWitness`.
+
+  `checkTapTree` tells whether every leaf of a tree can be spent. A leaf can be at
+  most 128 levels deep, and its version must be one that BIP 341 allows.
+
+  ### SLIP-39 secret sharing
+
+  [SLIP-39](https://github.com/satoshilabs/slips/blob/master/slip-0039.md) splits a
+  secret into mnemonic shares, and a threshold of shares rebuilds it. It is
+  available from version 1.6.0. The `Haskoin` module does not re-export it, so
+  import it yourself.
+
+  ```haskell
+  import qualified Haskoin.Crypto.Keys.Slip39 as Slip39
+
+  -- One group of 3 members, of which 2 rebuild the secret.
+  let scheme = Slip39.Scheme 1 [(2, 3)]
+      -- A secret has at least 16 bytes, and an even number of them.
+      -- Use random bytes in practice.
+      secret = "0123456789abcdef"
+
+  -- True makes the shares extendable. 1 sets the cost of the encryption.
+  groups <- either fail pure =<< Slip39.generateMnemonics scheme True 1 "passphrase" secret
+  let shares = concat groups
+
+  print (length shares)
+  -- => 3
+  print (Slip39.combineMnemonics "passphrase" (take 2 shares))
+  -- => Right "0123456789abcdef"
+  print (Slip39.combineMnemonics "passphrase" (take 1 shares))
+  -- => Left "Group 0 has 1 share, but its member threshold is 2"
+  ```
+
+  A wrong passphrase is not an error. It returns a different secret, as the
+  specification requires. The passphrase must be printable ASCII, which the
+  specification requires too. A SLIP-39 share is not a BIP-39 mnemonic, and one
+  cannot be converted into the other.
+
+  `Scheme` can also describe two levels. For example, `Scheme 2 [(1, 1), (2, 3),
+  (3, 5)]` needs two of the three groups, each with its own member threshold.
+
+  ### Bitcoin Cash
+
+  Pass `bch` wherever the examples above pass `btc`. A few things differ.
+
+  ```haskell
+  -- The BIP-44 coin type of Bitcoin Cash is 145.
+  let key = derivePath ctx ("m/44'/145'/0'/0/0" :: DerivPath) master
+      address = xPubAddr ctx (deriveXPubKey ctx key)
+
+  -- addrToText writes CashAddr on Bitcoin Cash.
+  print (addrToText bch address)
+  -- => Just "bitcoincash:qqyx49mu0kkn9ftfj6hje6g2wfer34yfnq5tahq3q6"
+  print (addrToBase58 bch address)
+  -- => Just "1mW6fDEMjKrDHvLvoEsaeLxSCzZBf3Bfg"
+
+  -- textToAddr reads both forms.
+  print ((== Just address) (textToAddr bch "1mW6fDEMjKrDHvLvoEsaeLxSCzZBf3Bfg"))
+  -- => True
+
+  -- SegWit addresses do not exist on Bitcoin Cash.
+  print (addrToText bch (xPubWitnessAddr ctx (deriveXPubKey ctx key)))
+  -- => Nothing
+  ```
+
+  `signTx` sets the fork id flag of the signature hash when the network needs it.
+  Pass `sigHashAll` as usual.
+
+  ### Blocks and headers
+
+  ```haskell
+  print (headerHash btc.genesisHeader)
+  -- => "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+  print (isValidPOW btc btc.genesisHeader)
+  -- => True
+
+  -- 3.125 BTC since the halving at this height.
+  print (computeSubsidy btc 840000)
+  -- => 312500000
+  ```
+
+  `connectBlocks` validates headers and adds them to a chain. This covers proof of
+  work, difficulty, timestamps, versions and checkpoints. It runs in any monad with
+  a `BlockHeaders` instance. `StateT HeaderMemory` is the in-memory one. Write your
+  own instance to keep headers in a database.
+
+  Once the best block has the `minimumChainWork` of the network, a fork with less
+  work is refused. Below that work nothing bounds the side chains a peer can send,
+  so a node that is still syncing should not keep headers from a peer it does not
+  trust.
+
+  This example needs the [mtl](https://hackage.haskell.org/package/mtl) package.
+
+  ```haskell
+  import Control.Monad.State.Strict (runStateT)
+
+  -- Mine three regtest headers on top of the genesis block.
+  let net = btcRegTest
+      headers = appendBlocks net 7 net.genesisHeader 3
+      now = net.genesisHeader.timestamp + 3600
+
+  (result, chain) <- runStateT (connectBlocks net now headers) (initialChain net)
+  nodes <- either fail pure result
+
+  -- The nodes come back with the highest one first.
+  print (map (.height) nodes)
+  -- => [3,2,1]
+  print chain.best.height
+  -- => 3
+  ```
+
+  `buildMerkleRoot` and `buildPartialMerkle` compute Merkle trees.
+  `extractMatches` checks a partial tree from a `merkleblock` message against its
+  Merkle root. The header and the number of transactions are claims of the sender,
+  which the caller must check.
+
+  ### Peer-to-peer messages
+
+  The library encodes and decodes messages. Moving the bytes is up to you.
+
+  ```haskell
+  import Data.Bytes.Get (runGetS)
+
+  let bytes = runPutS (putMessage btc MVerAck)
+
+  print (encodeHex bytes)
+  -- => "f9beb4d976657261636b000000000000000000005df6e0e2"
+  print (runGetS (getMessage btc) bytes)
+  -- => Right MVerAck
+  ```
+
+  `getMessage` checks the network magic and the checksum, and bounds the payload by
+  the `maxPayloadSize` of its command. Read the 24-byte `MessageHeader` first to
+  learn how many more bytes to take from the socket, and refuse a length above
+  `maxPayloadSize net command` before you read them.
+
+  `Message` has a constructor for each message type. `bloomCreate`, `bloomInsert`
+  and `bloomContains` build BIP-37 filters for `filterload`.
+
+  ## Module overview
+
+  `import Haskoin` brings in everything below except the two modules marked as
+  separate. It exports many short names, so you may prefer to import only the
+  modules you need, or to import it qualified.
+
+  | Module                        | Contents                                                             |
+  | ----------------------------- | -------------------------------------------------------------------- |
+  | `Haskoin.Address`             | Address types and Base58, Bech32 and CashAddr encoding               |
+  | `Haskoin.Block`               | Block types, header chain, validation, difficulty and Merkle trees   |
+  | `Haskoin.Crypto`              | Hashes, keys, signatures and the `Crypto.Secp256k1` API              |
+  | `Haskoin.Crypto.Keys.Slip39`  | SLIP-39 secret sharing (separate import)                             |
+  | `Haskoin.Network`             | Network constants, P2P messages, Bloom filters                       |
+  | `Haskoin.Script`              | Scripts, standard templates and signature hashes                     |
+  | `Haskoin.Transaction`         | Transaction types, builder, signing, SegWit, Taproot and PSBT        |
+  | `Haskoin.Util`                | Hexadecimal helpers, `Marshal` and small utilities                   |
+  | `Haskoin.Util.Arbitrary`      | QuickCheck generators such as `arbitraryTx` (separate import)        |
+
+  ## Security notes
+
+  Bugs in code that handles keys can lose money. Try your program on regtest or a
+  test network before you use it on mainnet.
+
+  - **Randomness.** Create keys and mnemonics with a cryptographic source, such as
+    `getEntropy` from the entropy package. Never use `System.Random`.
+  - **Secrets in logs.** `PrivateKey` and `XPrvKey` show as `<redacted>` and have no
+    `Read` instance. `toWif` and `xPrvExport` write a key out on purpose. A bare
+    `SecKey`, such as the `key` field of a `PrivateKey`, still shows its bytes. The
+    errors of `fromMnemonic` and `mnemonicToSeed` name the position of a bad word,
+    never the word.
+  - **Secrets in memory.** Keys live in the GHC heap. The library cannot wipe them,
+    and the garbage collector can copy them.
+  - **Review before you sign.** `signPsbt` checks that a PSBT is sound, but not that
+    it pays who you expect. Show the outputs and `psbtFee` to the user first. By
+    default the signer wants the previous transaction of every SegWit version 0
+    coin, because an amount in a witness output alone is a claim.
+  - **Signature hash types.** By default `signPsbt` signs only `SIGHASH_ALL` and
+    `SIGHASH_DEFAULT`, because the other types leave part of the transaction
+    unsigned. To accept others, set `acceptedSigHashes` on the `Signer`.
+  - **Verification.** `verifyStdTx` checks the signatures of the standard templates
+    by the rules that nodes relay by, and that outputs do not exceed inputs. It is
+    not a script interpreter and does not apply every consensus rule.
+  - **Untrusted text.** The cost of `decodeBase58` and `decodeBase58Check` grows
+    with the square of the input length. Limit the length of input you pass to them
+    directly. The address and key decoders of the library already do.
+
+  ## Development
+
+  ```sh
+  git clone https://github.com/jprupp/haskoin-core.git
+  cd haskoin-core
+
+  stack build                                         # build the library
+  stack test                                          # run all the tests
+  stack test --test-arguments='--match "Slip39"'      # run the tests of one module
+  stack haddock --no-haddock-deps                     # build the API documentation
+  ```
+
+  `cabal build` and `cabal test` work too. On NixOS, or with `stack --nix`, the
+  `nix` section of `stack.yaml` provides libsecp256k1.
+
+  `package.yaml` is the source of the package description. Change it rather than
+  `haskoin-core.cabal`, which [hpack](https://github.com/sol/hpack) generates. Stack
+  regenerates the file whenever it builds.
+
+  The tests are in `test/` and use [hspec](https://hspec.github.io/). The test
+  vectors from the BIPs, Bitcoin Core and other implementations are in `data/`.
+
+  ### Contributing
+
+  Pull requests are welcome.
+
+  - Format the code with [Ormolu](https://github.com/tweag/ormolu). The script
+    [scripts/format](https://github.com/jprupp/haskoin-core/blob/master/scripts/format)
+    does this for all the sources.
+  - Add tests for the behaviour you change.
+  - Describe the change under `[Unreleased]` in `CHANGELOG.md`. The file follows
+    [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and versions follow
+    [Semantic Versioning](https://semver.org/).
+
+  ## Related projects
+
+  - [haskoin-node](https://github.com/jprupp/haskoin-node) connects to peers and
+    syncs headers and blocks.
+  - [haskoin-store](https://github.com/jprupp/haskoin-store) indexes the block chain
+    and serves it over a REST API.
+  - [secp256k1-haskell](https://github.com/jprupp/secp256k1-haskell) is the binding
+    to libsecp256k1 that this library uses.
+
+  ## License
+
+  Haskoin Core is released under the
+  [MIT License](https://github.com/jprupp/haskoin-core/blob/master/LICENSE).
 description-type: markdown
-hash: 75886a86e8d6382da1f6e42aef65cfbf6cd8f01400a688b229b0d8fb3f880d19
+hash: f7bc0fe84aefa0dd92502f5b6fd541c6bde8ba280b036bc363a32aad9c081a4b
 homepage: http://github.com/jprupp/haskoin-core#readme
-latest: 1.5.1
+latest: 1.6.0
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Bitcoin & Bitcoin Cash library for Haskell
@@ -835,6 +1786,7 @@ test-bench-deps:
   text: '>=1.2.3.0'
   time: '>=1.9.3'
   transformers: '>=0.5.6.2'
+  unicode-data: '>=0.2'
   unicode-transforms: '>=0.4'
   unordered-containers: '>=0.2.10.0'
   vector: '>=0.12.1.2'
