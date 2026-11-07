@@ -14,6 +14,7 @@ all-versions:
 - 0.4.3
 - 0.5.0
 - 0.6.0
+- 0.6.1
 author: JP Rupp
 basic-deps:
   base: '>=4.7 && <5'
@@ -27,6 +28,13 @@ changelog: |
 
   The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
   and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+
+  ## 0.6.1
+  ### Changed
+  - Documentation: the README explains the purpose and design of the library,
+    with installation steps and a tutorial on modelling a schema, and the
+    Haddock of every function says why it works the way it does.
+  - Build against rocksdb-haskell-jprupp 2.6.1 and Stackage nightly-2026-11-07.
 
   ## 0.6.0
   ### Changed
@@ -91,13 +99,422 @@ changelog: |
   - Fuunctions for streaming records.
 changelog-type: markdown
 description: |
-  # RocksDB Query
+  # rocksdb-query
 
-  Helper functions to perform queries on RocksDB databases using serialized Haskell datatypes.
+  [![Hackage](https://img.shields.io/hackage/v/rocksdb-query.svg)](https://hackage.haskell.org/package/rocksdb-query)
+  [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jprupp/rocksdb-query/blob/master/LICENSE)
+
+  rocksdb-query stores and queries Haskell data types in
+  [RocksDB](https://rocksdb.org). It sits on top of
+  [rocksdb-haskell-jprupp](https://github.com/jprupp/rocksdb-haskell) and adds
+  three things:
+
+  - Keys and values are any types with a
+    [cereal](https://hackage.haskell.org/package/cereal) `Serialize` instance.
+  - Empty type classes tie each key type to its value type, so the compiler stops
+    you from reading a value of the wrong type.
+  - Prefix queries fetch every record whose key starts with a short key, as a list
+    or as a [conduit](https://hackage.haskell.org/package/conduit) stream.
+
+  - [API documentation](https://hackage.haskell.org/package/rocksdb-query)
+  - [Changelog](https://github.com/jprupp/rocksdb-query/blob/master/CHANGELOG.md)
+  - [Report a bug](https://github.com/jprupp/rocksdb-query/issues)
+
+  ## Contents
+
+  - [Why rocksdb-query](#why-rocksdb-query)
+  - [Design principles](#design-principles)
+  - [Installation](#installation)
+  - [Quick start](#quick-start)
+  - [Tutorial: modelling a schema](#tutorial-modelling-a-schema)
+  - [Concepts](#concepts)
+  - [Usage guide](#usage-guide)
+  - [API overview](#api-overview)
+  - [Designing keys](#designing-keys)
+  - [Development](#development)
+  - [Related projects](#related-projects)
+  - [License](#license)
+
+  ## Why rocksdb-query
+
+  RocksDB is a key-value store of bytes. Real programs store records, and the code
+  in between is repetitive: encode the key, call `get`, decode the value, and
+  remember which kind of value lives under which kind of key. That last part is
+  where bugs hide. If you read a key as the wrong type, the bytes may still
+  decode, into nonsense, and you find out much later.
+
+  rocksdb-query turns that knowledge into types. You declare once that orders live
+  under order keys, and from then on the compiler checks every read and write.
+  It also gives you prefix queries, which is how a key-value store answers
+  questions like "all the orders of this customer" without a query language.
+
+  It was written for [Haskoin](https://github.com/jprupp/haskoin-store), whose
+  indices of the Bitcoin block chain are all modelled this way. It is small on
+  purpose: about thirty functions, all thin wrappers over
+  [rocksdb-haskell-jprupp](https://github.com/jprupp/rocksdb-haskell).
+
+  ## Design principles
+
+  - **The schema is in the types.** A `KeyValue key value` instance says what is
+    stored under a key type. Reads and writes that disagree do not compile.
+  - **You own the bytes.** Serialization is a `Serialize` instance that you
+    control. That matters, because the byte order of keys decides what a prefix
+    query returns and in which order.
+  - **Sorted keys instead of indices.** RocksDB has no secondary indices. A key
+    that starts with what you look records up by turns a lookup into a seek and a
+    short scan. Prefix queries make that pattern a one-liner.
+  - **Corrupt data is a bug.** If your program cannot decode data it wrote, it
+    stops with `error` instead of handing you a `Left` to ignore. Carrying on
+    would only spread the damage.
+  - **Stay thin.** Opening, tuning, snapshots and iterators remain
+    `rocksdb-haskell-jprupp`'s job. This library adds types, not a new way to use
+    RocksDB.
+
+  ## Installation
+
+  ### System library
+
+  You need the RocksDB C library, as for
+  [rocksdb-haskell-jprupp](https://github.com/jprupp/rocksdb-haskell#system-library):
+
+  ```sh
+  sudo apt-get install librocksdb-dev   # Debian and Ubuntu
+  sudo dnf install rocksdb-devel        # Fedora
+  brew install rocksdb                  # macOS with Homebrew
+  ```
+
+  ### Step by step with Stack
+
+  1. Install [Stack](https://docs.haskellstack.org/) and RocksDB (above).
+  2. Create a project and enter it:
+
+     ```sh
+     stack new orders simple
+     cd orders
+     ```
+
+  3. Add `cereal`, `data-default`, `rocksdb-haskell-jprupp` and `rocksdb-query`
+     to `build-depends` in `orders.cabal`.
+  4. Put the [quick start](#quick-start) program in `src/Main.hs` and run it with
+     `stack run`. It creates a database in `/tmp/orders` and prints the records it
+     reads back.
+
+  ### With Cabal
+
+  ```cabal
+  build-depends:
+      base
+    , cereal
+    , data-default
+    , rocksdb-haskell-jprupp
+    , rocksdb-query
+  ```
+
+  You open and close the database with `rocksdb-haskell-jprupp`, and write the
+  `Serialize` instances with `cereal`.
+
+  ### With Stack
+
+  The package is in Stackage nightly snapshots. Otherwise add it to `stack.yaml`:
+
+  ```yaml
+  extra-deps:
+    - rocksdb-query-0.6.1
+    - rocksdb-haskell-jprupp-2.6.1
+  ```
+
+  ## Quick start
+
+  Orders keyed by customer, then by order number:
+
+  ```haskell
+  {-# LANGUAGE DeriveGeneric #-}
+  {-# LANGUAGE MultiParamTypeClasses #-}
+
+  import Data.Default (def)
+  import Data.Serialize (Serialize (..))
+  import Data.Word (Word32)
+  import Database.RocksDB (Config (..), withDB)
+  import Database.RocksDB.Query
+  import GHC.Generics (Generic)
+
+  data OrderKey
+    = OrderKey Word32 Word32 -- customer, order
+    | OrderKeyS Word32 -- customer only: a prefix of OrderKey
+    deriving (Show, Generic)
+
+  data Order = Order {item :: String, qty :: Int}
+    deriving (Show, Generic)
+
+  instance Serialize Order
+
+  -- The short key must serialize to a prefix of the full key, so write this
+  -- instance by hand instead of deriving it.
+  instance Serialize OrderKey where
+    put (OrderKey c o) = put c >> put o
+    put (OrderKeyS c) = put c
+    get = OrderKey <$> get <*> get
+
+  instance Key OrderKey
+
+  instance KeyValue OrderKey Order
+
+  main :: IO ()
+  main = withDB "/tmp/orders" def {createIfMissing = True} $ \db -> do
+    insert db (OrderKey 1 100) (Order "apple" 3)
+    writeBatch
+      db
+      [ insertOp (OrderKey 1 101) (Order "pear" 1),
+        insertOp (OrderKey 2 200) (Order "plum" 7)
+      ]
+
+    retrieve db (OrderKey 1 100) >>= print
+    -- Just (Order {item = "apple", qty = 3})
+
+    matchingAsList db (OrderKeyS 1) >>= mapM_ print
+    -- (OrderKey 1 100,Order {item = "apple", qty = 3})
+    -- (OrderKey 1 101,Order {item = "pear", qty = 1})
+
+    remove db (OrderKey 2 200)
+  ```
+
+  ## Tutorial: modelling a schema
+
+  A small library system stores books and loans. This tutorial goes through the
+  decisions behind its keys.
+
+  ### 1. List the questions
+
+  Before writing any type, list how the data will be read:
+
+  - get a book by its id;
+  - list the loans of a member, newest first;
+  - list every book on a shelf.
+
+  Each question becomes a key whose leading fields are what you look things up
+  by.
+
+  ### 2. One tag byte per key type
+
+  The keys share one column family, so each type starts with its own byte, which
+  guarantees that a prefix of one type never matches keys of another:
+
+  ```haskell
+  data BookKey = BookKey Word32 -- book id
+
+  instance Serialize BookKey where
+    put (BookKey b) = putWord8 0x01 >> put b
+    get = getWord8 >>= guard . (== 0x01) >> BookKey <$> get
+
+  instance Key BookKey
+  instance KeyValue BookKey Book
+  ```
+
+  ### 3. Keys that sort the way you read
+
+  Loans are listed per member, newest first. The key starts with the member, then
+  an inverted time, so that a larger time sorts first:
+
+  ```haskell
+  data LoanKey
+    = LoanKey Word32 Word64 Word32 -- member, maxBound - time, book
+    | LoanKeyS Word32 -- member only
+
+  instance Serialize LoanKey where
+    put (LoanKey m t b) = putWord8 0x02 >> put m >> put t >> put b
+    put (LoanKeyS m) = putWord8 0x02 >> put m
+    get = getWord8 >>= guard . (== 0x02) >> LoanKey <$> get <*> get <*> get
+
+  instance Key LoanKey
+  instance KeyValue LoanKey ()
+  ```
+
+  The value is `()`: everything is in the key. That is common for indices.
+
+  ### 4. Keep data and indices in step
+
+  A loan changes the book and adds an index entry. Write both in one batch, so a
+  crash can never leave one without the other:
+
+  ```haskell
+  lend :: DB -> Word32 -> Word32 -> Word64 -> Book -> IO ()
+  lend db member book now b =
+    writeBatch db
+      [ insertOp (BookKey book) b {onLoan = True},
+        insertOp (LoanKey member (maxBound - now) book) ()
+      ]
+  ```
+
+  ### 5. Read
+
+  ```haskell
+  loans <- matchingAsList db (LoanKeyS member)    -- newest first
+  page2 <- take 20 <$> matchingSkipAsList db (LoanKeyS member) lastKey
+  ```
+
+  The same approach answers the shelf question with a `ShelfKey shelf book`
+  index.
+
+  ## Concepts
+
+  ### Typed keys
+
+  `Key` and `KeyValue` have no methods. They are declarations:
+
+  ```haskell
+  instance Key OrderKey             -- OrderKey can be deleted
+  instance KeyValue OrderKey Order  -- values under OrderKey are Orders
+  ```
+
+  `retrieve`, `insert` and the queries need `KeyValue`; `remove` and `deleteOp`
+  need only `Key`. Reading a key as a value type you did not declare for it is
+  a type error, rather than a decoding failure at run time.
+
+  ### Prefix queries
+
+  RocksDB keeps keys sorted by their bytes, so all keys that start with the same
+  bytes sit next to each other. A query with a short key seeks to the first key
+  at or after its encoding and reads until a key no longer starts with it.
+
+  cereal encodes unsigned integers (`Word32`, `Word64`) in big-endian order, so
+  those key parts sort in numeric order. Signed integers do not: negative numbers
+  sort after positive ones.
+
+  ### Decoding errors
+
+  If a key or value in the database cannot be decoded, these functions call
+  `error`. That means the instance used to read disagrees with the one used to
+  write, or two key types share the same prefix.
+
+  ## Usage guide
+
+  ### Reading and writing
+
+  ```haskell
+  insert db key value
+  mvalue <- retrieve db key
+  remove db key
+  ```
+
+  ### Batches
+
+  All the operations in a batch are applied atomically:
+
+  ```haskell
+  writeBatch db [insertOp k1 v1, insertOp k2 v2, deleteOp k3]
+  ```
+
+  ### Prefix queries
+
+  | Function            | Returns                                      |
+  | ------------------- | -------------------------------------------- |
+  | `matchingAsList`    | every match, as a list                       |
+  | `firstMatching`     | the first match                              |
+  | `matching`          | every match, as a conduit, on your iterator  |
+
+  The conduit version reads lazily, so it suits prefixes with many matches:
+
+  ```haskell
+  import Conduit
+  import Database.RocksDB (withIter)
+
+  total <- withIter db $ \it ->
+    runConduit $ matching it (OrderKeyS 1) .| mapC (qty . snd) .| sumC
+  ```
+
+  ### Pagination
+
+  The `Skip` variants start inside the prefix at a given key, or the next one
+  after it:
+
+  ```haskell
+  page2 <- take 20 <$> matchingSkipAsList db (OrderKeyS 1) (OrderKey 1 lastSeen)
+  ```
+
+  ### Column families
+
+  Each function has a `CF` variant that takes a `ColumnFamily`:
+
+  ```haskell
+  withDBCF dir cfg [("orders", cfg)] $ \db -> do
+    let [orders] = columnFamilies db
+    insertCF db orders (OrderKey 1 100) (Order "apple" 3)
+    matchingAsListCF db orders (OrderKeyS 1)
+  ```
+
+  ## API overview
+
+  | Default column family                  | Column family variant                      |
+  | -------------------------------------- | ------------------------------------------ |
+  | `retrieve`                             | `retrieveCF`                               |
+  | `insert`, `remove`                     | `insertCF`, `removeCF`                     |
+  | `insertOp`, `deleteOp`                 | `insertOpCF`, `deleteOpCF`                 |
+  | `matchingAsList`, `matchingSkipAsList` | `matchingAsListCF`, `matchingSkipAsListCF` |
+  | `firstMatching`, `firstMatchingSkip`   | `firstMatchingCF`, `firstMatchingSkipCF`   |
+  | `matching`, `matchingSkip`             | use an iterator from `withIterCF`          |
+
+  `writeBatch` takes operations for any column family. Everything is in
+  `Database.RocksDB.Query`.
+
+  ## Designing keys
+
+  - Start every key type with a distinct tag byte when several types share a
+    column family, so that their prefixes never overlap:
+
+    ```haskell
+    put (OrderKey c o) = putWord8 0x01 >> put c >> put o
+    put (OrderKeyS c) = putWord8 0x01 >> put c
+    ```
+
+  - Give the short key the same leading fields, in the same order, as the full
+    key. `get` only needs to decode the full key.
+  - Use fixed-width, big-endian numbers (`Word32`, `Word64`) for parts you sort
+    or range over. Variable-length encodings do not sort numerically.
+  - To read newest first, store an inverted value, such as `maxBound - time`.
+
+  ## Development
+
+  ```sh
+  git clone https://github.com/jprupp/rocksdb-query.git
+  cd rocksdb-query
+
+  stack build                        # build the library
+  stack test                         # run the tests
+  stack haddock --no-haddock-deps    # build the API documentation
+  ```
+
+  With `stack --nix`, the `nix` section of `stack.yaml` provides RocksDB.
+
+  `package.yaml` is the source of the package description. Change it rather than
+  `rocksdb-query.cabal`, which [hpack](https://github.com/sol/hpack) generates.
+
+  The tests are in `test/Spec.hs` and use [hspec](https://hspec.github.io/).
+
+  ### Contributing
+
+  Pull requests are welcome.
+
+  - Keep the style of the code around your change.
+  - Add tests for the behaviour you change.
+  - Describe the change in `CHANGELOG.md`, which follows
+    [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+  ## Related projects
+
+  - [rocksdb-haskell-jprupp](https://github.com/jprupp/rocksdb-haskell) is the
+    RocksDB binding underneath.
+  - [haskoin-node](https://github.com/jprupp/haskoin-node) and
+    [haskoin-store](https://github.com/jprupp/haskoin-store) store their headers
+    and indices with this library.
+
+  ## License
+
+  rocksdb-query is released under the
+  [MIT License](https://github.com/jprupp/rocksdb-query/blob/master/LICENSE).
 description-type: markdown
-hash: d312b7e8b351f7aef5028718868f4aaa65406cb828367309a7f4cfa222b3d593
+hash: 46918664cceca0e69a91828eccc214f1f0ae88aa29825c31f8fc4d6b2b298496
 homepage: https://github.com/jprupp/rocksdb-query#readme
-latest: 0.6.0
+latest: 0.6.1
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: RocksDB database querying library for Haskell
