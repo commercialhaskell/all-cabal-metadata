@@ -10,6 +10,7 @@ all-versions:
 - 0.3.0.0
 - 0.3.0.1
 - 0.3.1.0
+- 0.4.0.0
 author: IC Rainbow
 basic-deps:
   base: '>=4.7 && <5'
@@ -24,6 +25,63 @@ basic-deps:
   webcolor-labels: '>=0'
 changelog: |
   # Changelog for geomancy
+
+  ## 0.4.0.0
+
+  A generally safe upgrade, but quite a bit of changes across the board.
+
+  - Added double-precision `DVec2`, `DVec3` (with `Packed`), `DVec4`, `DMat4` and `DQuaternion`.
+    Includes SSE2/NEON kernels for `DMat4` products and `DMat4 !* DVec4`.
+  - Added `DTransform` (with `DTransform.Tree`), `Vulkan.DProjection` and `Vulkan.DView`.
+    Compose in double and convert with `fromTransform`/`toTransform` to keep precision far from the origin.
+  - Added `DPoint2`, `DPoint3`, `DPoint3P` and `DPoint4`.
+    `Point`'s `AffineSpace`, `qd`, `distance` and `lerp` now work over any scalar, not just `Float`.
+  - Added 64-bit integer vectors `I64Vec2`, `I64Vec3` (with `Packed`), `I64Vec4`,
+    `U64Vec2`, `U64Vec3` (with `Packed`), `U64Vec4`.
+  - Added `fromVecN`/`toVecN`, `fromMat4`/`toMat4` and `fromQuaternion`/`toQuaternion`
+    for single-precision conversions.
+  - Added `HasField` instances for the lanes of every vector type, for `v.x`, `v.y`, `v.z`, `v.w` with `OverloadedRecordDot`.
+    * `Packed` vectors have them too, and a `Point` forwards each lane to the vector it wraps.
+    * Optimized code is the same as with `withVecN`: one unpack, and only the lanes used get read.
+  - Added rewrite rules that fuse `Vec4` and `DVec4` producers into their consumers.
+    * Intermediate vectors in expressions like `dot (a + b) c`, `lerp t a b` or `(a + b) * c - d` are no longer allocated.
+    * Folds over such expressions got 20-30% faster.
+    * When the rules fire, only the lanes the consumer uses are evaluated, so a fused expression may avoid forcing an undefined lane.
+  - Added `HasField` swizzles for every vector family, in `Geomancy.Swizzle.<Family>.Shuffle`, `.Down` and `.Up`
+    (families: `Vec`, `DVec`, `IVec`, `UVec`, `I64Vec`, `U64Vec`).
+    * `Shuffle` keeps the size (`v.zyx`, and the identity `v.xyz`), `Down` narrows (`v.xy` of a `Vec4`), `Up` widens (`v.xyxy` of a `Vec2`).
+    * The instances are orphans. `import Geomancy.Swizzle ()` brings all of them,
+      or import just the modules you need, like `import Geomancy.Swizzle.Vec.Down ()`.
+    * Chains like `v.wzyx.zyx.yx.y` compile to a single lane read.
+  - Added `Extend` swizzles that widen a vector with constant lanes, in `Geomancy.Swizzle.<Family>.Extend`.
+    * The source lanes stay in order and get `0` or `1` appended: `flatPos.xy01`, `pos.xyz1`, `uv.xy0`.
+    * Masks compose from extending and narrowing: `white.xyz0.wyz` is `(0, y, z)`.
+  - Changed `Geomancy.Swizzle` labels to use the `HasField` swizzles, so `v .@ #xzy` works for every family.
+
+  - Modified Quaternion rotation to use a unit shortcut.
+    * The contract was already "use normalized" quaternions for rotations.
+    * Float got a modest speedup, Double is twice-ish as fast. Both are faster than Linear.
+
+  - Added `Eq` for `Mat4`, `DMat4`, `Transform` and `DTransform`.
+    Elements are compared pointwise with IEEE semantics, like the derived `Eq` of `Vec3`:
+    `0 == -0` and a matrix containing `NaN` is not equal to itself.
+  - Changed `Eq` and `Ord` for `Vec4` from bytewise to pointwise, matching `Vec3`.
+    * `Ord` is now lexicographic over x, y, z, w. Previously it compared the raw bytes, which is not a numeric order.
+    * `Map`/`Set` keyed by `Vec4` will order differently, and keys differing only in the sign of zero now collapse.
+      + Keys containing `NaN` are no longer found by lookups, since `Ord` is no longer total for them.
+      + Basically, don't use floats for keys.
+
+  - Fixed `abs` for `IVec3` and `IVec4`, which returned the vector unchanged.
+  - Fixed `Block` layout for `IVec3.Packed`, whose `alignment140` and `sizeOf140` were swapped in 0.3.1.0 (now 16 and 12).
+  - Fixed `peek` for `Vec4` and `Mat4` returning the wrong element under optimization.
+    * `Data.Vector.Storable` indexing runs `peek` with a shared `realWorld#` token, which let GHC merge the
+      buffer allocations of neighbouring reads, so every read in a strict context got the last element.
+    * `peek` now loads on the caller's token and builds the value in a private buffer.
+    * `Vec4` `peek` and `poke` are about twice as fast, since the 16-byte copies they replace were done bytewise.
+
+  - Changed `Vec4` and `Mat4` storage from aligned pinned to regular unpinned byte arrays, like the new `DVec4` and `DMat4`.
+    * SIMD kernels now use unaligned loads and stores.
+    * Code reaching into the exported constructors must not take `byteArrayContents#` or pass the array to `safe` foreign calls, since the GC may now move it.
 
   ## 0.3.1.0
 
@@ -190,56 +248,54 @@ description: |
 
   ## The Numbers
 
-  Storing a list of 1000 transformations (e.g. rendering instance data):
+  Storing a list of transformations (e.g. rendering instance data):
 
   ```
-  benchmarking 4x4 poke/1000/geomancy
-  time                 11.76 μs   (11.66 μs .. 11.92 μs)
-                       0.999 R²   (0.998 R² .. 1.000 R²)
-  mean                 11.75 μs   (11.69 μs .. 11.86 μs)
-  std dev              283.4 ns   (199.0 ns .. 399.0 ns)
-  variance introduced by outliers: 26% (moderately inflated)
+      poke
+        10
+          geomancy: OK
+            42.3 ns ± 1.4 ns, 0.47x
+          linear:   OK
+            90.5 ns ± 3.1 ns
+          linear/T: OK
+            81.6 ns ± 2.7 ns
+  ...
+        1000
+          geomancy: OK
+            2.85 μs ±  37 ns, 0.36x
+          linear:   OK
+            7.93 μs ± 132 ns
+          linear/T: OK
+            7.08 μs ± 348 ns
   ```
 
-  If you're willing to adjust your shaders, it's only 2.4 times slower.
+  Folding down a `gloss`-style scene tree is where it is all started:
 
   ```
-  benchmarking 4x4 poke/1000/linear
-  time                 28.29 μs   (28.21 μs .. 28.38 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 28.40 μs   (28.34 μs .. 28.50 μs)
-  std dev              267.4 ns   (145.5 ns .. 419.9 ns)
-  ```
-
-  Keeping your shaders straight make the affair 6.1x slower.
-
-  ```
-  benchmarking 4x4 poke/1000/linear/T
-  time                 73.70 μs   (73.06 μs .. 74.49 μs)
-                       1.000 R²   (0.999 R² .. 1.000 R²)
-  mean                 72.77 μs   (72.50 μs .. 73.22 μs)
-  std dev              1.129 μs   (793.5 ns .. 1.580 μs)
-  ```
-
-  Folding down a `gloss`-style scene graph is where it is all started:
-
-  ```
-  benchmarking 4x4 multiply/1000/geomancy
-  time                 20.79 μs   (20.77 μs .. 20.83 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 20.80 μs   (20.78 μs .. 20.83 μs)
-  std dev              76.71 ns   (60.01 ns .. 99.06 ns)
-
-  benchmarking 4x4 multiply/1000/linear
-  time                 173.9 μs   (173.6 μs .. 174.4 μs)
-                       1.000 R²   (1.000 R² .. 1.000 R²)
-  mean                 173.5 μs   (173.2 μs .. 174.4 μs)
-  std dev              1.733 μs   (727.8 ns .. 3.422 μs)
+      multiply
+        2
+          geomancy: OK
+            12.3 ns ± 164 ps, 0.34x
+          linear:   OK
+            36.1 ns ± 1.3 ns
+  ...
+        1000
+          geomancy: OK
+            7.71 μs ±  93 ns, 0.23x
+          linear:   OK
+            34.0 μs ± 1.3 μs
   ```
 
   Add that time to the poking that'll follow.
 
   Sure, it is in the lower microseconds range, but this budget can be used elsewhere.
+
+  ### Benchmarking and comparing
+
+  ```sh
+  stack bench --ba '--csv baseline.csv --stdev 2 --timeout 120'
+  stack bench --ba '--baseline baseline.csv --fail-if-slower 5'
+  ```
 
   ## Conventions
 
@@ -283,17 +339,21 @@ description: |
 
   To further facilitate conversion between the host and shader code `Geomancy.Gl.Funs` provides common functions like `glFract` and `smoothstep`.
 description-type: markdown
-hash: 21917ccdecebed3034b3b34a9f2f1efa89e1bafc51466dbf1c1d4d37940708ea
+hash: 30270e8b509b93a77fbd6d60b63d5b9ddab9d7fc942a086ab9b955254a8d67e4
 homepage: ''
-latest: 0.3.1.0
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: aenor.realm@gmail.com
 synopsis: Vectors and matrix manipulation
 test-bench-deps:
   base: '>=4.7 && <5'
-  criterion: '>=0'
   deepseq: '>=0'
   geomancy: '>=0'
+  gl-block: '>=0'
   hedgehog: '>=0'
   linear: '>=0'
   simple-affine-space: '>=0'
+  tasty: '>=0'
+  tasty-bench: '>=0'
+  tasty-hedgehog: '>=0'
+  vector: '>=0'
