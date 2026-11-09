@@ -1,0 +1,157 @@
+all-versions:
+- 1.0.0
+author: Koz Ross
+basic-deps:
+  QuickCheck: ^>=2.18.0.0
+  base: '>=4.19.0.0 && <5'
+changelog: |
+  # Changelog for `quickcheck-helpers`
+
+  ## 1.0.0
+
+  First release.
+changelog-type: markdown
+description: |
+  # `quickcheck-helpers`
+
+  ## What is this?
+
+  Consider a typical product type:
+
+  ```haskell
+  data Pair a = Pair a a
+  ```
+
+  To use `Pair` in QuickCheck tests, you need an `Arbitrary` instance. For product
+  types, the `arbitrary` method is easy to define:
+
+  ```haskell
+  instance Arbitrary a => Arbitrary (Pair a) where
+      arbitrary = Pair <$> arbitrary <*> arbitrary
+  ```
+
+  However, if we try to define `shrink` similarly, we will get serious issues:
+
+  ```haskell
+  instance Arbitrary a => Arbitrary (Pair a) where
+      -- Fine
+      arbitrary = Pair <$> arbitrary <*> arbitrary
+      -- Very not fine
+      shrink (Pair x y) = Pair <$> shrink x <*> shrink y
+  ```
+
+  Why? Consider `Pair 0 6 :: Pair Int`. We expect that this should still shrink:
+  even though the first field is not shrinkable, the second one still is. If we
+  try to shrink, however, we get an unpleasant surprise:
+
+  ```
+  >>> shrink (Pair 0 6 :: Pair Int)
+  []
+  ```
+
+  In general, if we define shrinkers for product types in the way shown above,
+  shrinking will stop when _any_ field is non-shrinkable. This is not a
+  consequence of the syntax per se: even if we rewrite it monadically, this still
+  happens.
+
+  To avoid this, we have two options. One is to manually write the shrinker in a
+  very specific way:
+
+  ```haskell
+  instance Arbitrary a => Arbitrary (Pair a) where
+      -- No change
+      arbitrary = Pair <$> arbitrary <*> arbitrary
+      -- Fix, but at what cost?
+      shrink (Pair x y) = (Pair <$> pure x <*> shrink y) <|>
+                          (Pair <$> shrink x <*> pure y)
+  ```
+
+  This will solve the problem, but it's tedious, error-prone and very long.
+
+  Another option is to derive `Generic` for your type, then use `genericShrink`
+  from QuickCheck:
+
+  ```haskell
+  data Pair a = Pair a a
+      deriving stock (Generic)
+
+  instance Arbitrary a => Arbitrary (Pair a) where
+      -- No change
+      arbitrary = Pair <$> arbitrary <*> arbitrary
+      shrink = genericShrink
+  ```
+
+  This will also solve the problem, but comes at significant costs in compile-time
+  performance, run-time performance and a complete and utter lack of clarity about
+  what actual code gets generated. These are all problems typical of `Generic`
+  use. However, there is also a deeper problem with this solution. Consider the
+  following data type:
+
+  ```haskell
+  data CountedList a = CountedList Int [a]
+      deriving stock (Generic)
+  ```
+
+  This data type requires maintaining a _non-structural_ invariant about the `Int`
+  field. Specifically, the `Int` field must be exactly the length of the `[a]`
+  field. However, if we attempt to use `genericShrink` with this type:
+
+  ```haskell
+  instance Arbitrary a => Arbitrary (CountedList a) where
+      arbitrary = do
+          NonNegative len <- arbitrary
+          CountedList len <$> vectorOf len
+      shrink = genericShrink
+  ```
+
+  you will end up with many nonsensical shrinks:
+
+  ```
+  shrink (CountedList 2 [1, 3] :: CountedList Int)
+  >>> [CountedList 0 [1,3],CountedList 1 [1,3],CountedList 2 [],CountedList 2 [3],CountedList 2 [1],CountedList 2 [0,3],CountedList 2 [1,0],CountedList 2 [1,2]]
+  ```
+
+  Thus, both solutions are in some way inadequate.
+
+  `quickcheck-helpers` solves this problem, allowing both concise definitions of
+  `shrink` for product types (mirroring `arbitrary`) while also giving full
+  control if necessary.
+
+  ## How do I use it?
+
+  For the `Pair` example above:
+
+  ```
+  import Test.QuickCheck.Helpers (toShrink, neShrink)
+
+  data Pair a = Pair a a
+
+  instance Arbitrary a => Arbitrary (Pair a) where
+      -- No change
+      arbitrary = Pair <$> arbitrary <*> arbitrary
+      -- Using the new functionality
+      shrink (Pair x y) = toShrink (Pair <$> neShrink x <*> neShrink y)
+  ```
+
+  This solution has both the conciseness of the original (and wrong) shrinkers,
+  while also giving the improved shrinks of either of the naive solutions, without
+  the downsides.
+
+  ## What can I do with this?
+
+  This library is licensed under the MIT license. See the `LICENSE.md` file for
+  details.
+description-type: markdown
+hash: 0ee0d80a2d2aa2a16cfda64e8c5e96325354b9a174cd24af672df4102b77083c
+homepage: ''
+latest: 1.0.0
+license-name: MIT
+maintainer: koz@mlabs.city
+synopsis: Helpers for writing shrinkers.
+test-bench-deps:
+  QuickCheck: '>=0'
+  base: '>=4.19.0.0 && <5'
+  quickcheck-helpers: '>=0'
+  tasty: ^>=1.5.5
+  tasty-quickcheck: ^>=0.11.1
+  tasty-quickcheck-laws: ^>=0.0.3
