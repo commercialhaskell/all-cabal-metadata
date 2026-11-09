@@ -1,0 +1,137 @@
+all-versions:
+- '1.0'
+author: IC Rainbow
+basic-deps:
+  base: '>=4.7 && <5'
+changelog: |
+  # Changelog for `croaring-ffi`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## Unreleased
+
+  ## 1.0 - 2026-11-06
+
+  - Raw bindings to CRoaring 5.5.5: 32- and 64-bit bitmaps, their iterators, and `bitset_t`.
+  - Scoped `with` helpers, validated loaders and views, exception-safe callbacks, `getStatistics`, and the memory hook.
+  - In-place operations and `overwrite` accept the same handle on both sides.
+changelog-type: markdown
+description: |
+  # croaring-ffi
+
+  Raw Haskell bindings to a bundled copy of [CRoaring](https://github.com/RoaringBitmap/CRoaring), the C implementation of [Roaring bitmaps](https://roaringbitmap.org/).
+
+  ## Usage
+
+  ```haskell
+  import Data.Bitmap.Roaring.FFI.Bitmap qualified as Bitmap
+  import Foreign.Marshal.Array (withArrayLen)
+
+  main :: IO ()
+  main =
+    Bitmap.with create $ \bitmap -> do
+      Bitmap.addRange bitmap 10 20
+      Bitmap.contains bitmap 15 >>= print
+      Bitmap.getCardinality bitmap >>= print
+      Bitmap.rank bitmap 100 >>= print
+    where
+      create = withArrayLen [1, 2, 3, 1000000] $ \count values ->
+        Bitmap.ofPtr (fromIntegral count) values
+  ```
+
+  Bindings are named after their C functions without the type prefixes.
+  For example, `roaring_bitmap_add_range` is `Bitmap.addRange`.
+  The [upstream documentation](https://github.com/RoaringBitmap/CRoaring/blob/master/include/roaring/roaring.h) describes what each function does.
+  The `_safe` loaders are named `*Bounded` because they only bound how far they read.
+
+  `Bitmap.with` frees the bitmap when the action ends.
+  If the constructor returns NULL, `Bitmap.with` throws `NullHandle`.
+  To let the garbage collector free a bitmap instead, wrap its pointer with `newForeignPtr Bitmap.finalizerFree`.
+
+  Use `portableDeserializeValidated` for bytes from outside the program.
+  It reads no more than the given size, and returns `Nothing` unless the bytes hold a valid bitmap:
+
+  ```haskell
+  import Data.Bitmap.Roaring.FFI.Bitmap qualified as Bitmap
+  import Data.ByteString qualified as ByteString
+
+  main :: IO ()
+  main = do
+    bytes <- ByteString.readFile "bitmap.roaring"
+    loaded <- ByteString.useAsCStringLen bytes $ \(buffer, size) ->
+      Bitmap.portableDeserializeValidated buffer $ fromIntegral size
+    case loaded of
+      Nothing -> putStrLn "not a valid bitmap"
+      Just bitmap -> do
+        Bitmap.getCardinality bitmap >>= print
+        Bitmap.free bitmap
+  ```
+
+  ## Performance
+
+  At a million sparse elements, both Roaring bitmaps beat `Data.IntSet` at every operation by 1.5 to 7 times.
+  They count elements 110 to 140 times faster ([numbers](https://gitlab.com/dpwiz/croaring-ffi/-/blob/main/bench/results.csv)):
+
+  ![Time of 32-bit and 64-bit Roaring bitmaps relative to Data.IntSet for six operations on 1M sparse elements](https://gitlab.com/dpwiz/croaring-ffi/-/raw/main/bench/sparse.svg)
+
+  In smaller sparse sets, most elements are alone in their block of 65,536 values.
+  So `IntSet` combines and iterates faster until the set grows to between a hundred thousand and a million elements.
+  Roaring still counts faster at every size, and looks up elements faster from a few thousand elements:
+
+  ![Time per operation against set size for Data.IntSet and 32-bit and 64-bit Roaring bitmaps on sparse elements](https://gitlab.com/dpwiz/croaring-ffi/-/raw/main/bench/scaling.svg)
+
+  Much of that small-set cost is allocation.
+  CRoaring allocates every block separately.
+  Under GHC, glibc's `malloc` always runs in its slower multi-threaded mode, because the runtime keeps a timer thread.
+
+  Set `GLIBC_TUNABLES=glibc.malloc.tcache_count=65535` to make small-set unions about 3.4 times faster and construction about twice as fast.
+
+  In a small range, plain bit arrays (CRoaring's `bitset_t` and [bitvec](https://hackage.haskell.org/package/bitvec)) build, look up and combine scattered elements fastest.
+  Roaring bitmaps count 70 to 810 times faster than them, and combine a completely filled range fastest:
+
+  ![Time of Roaring bitmaps, CRoaring bitset_t and bitvec relative to Data.IntSet for six operations on two dense datasets](https://gitlab.com/dpwiz/croaring-ffi/-/raw/main/bench/dense.svg)
+
+  Some comparisons are unfair to `IntSet`.
+  It has no rank, range count, allocation-free intersection size or zero-copy loading, so it walks, rebuilds or decodes the set instead.
+  Here Roaring is 1.4 to 2,500 times faster on sparse elements, and 10 to 560,000 times faster on dense ones:
+
+  ![Time of 32-bit and 64-bit Roaring bitmaps relative to Data.IntSet for ten operations IntSet has no direct primitive for](https://gitlab.com/dpwiz/croaring-ffi/-/raw/main/bench/unfair.svg)
+
+  Roaring also takes far less space.
+  In memory, it needs 5 to 6.5 bytes per element on sparse data, where `IntSet` needs 64.
+  Within a small range it needs about 2, like the plain bit arrays.
+  A completely filled million-element range takes one to two kilobytes, where `IntSet` needs a megabyte.
+  Serialized, Roaring needs at most about 2.5 bytes per element, where `Data.Binary` needs 8 ([numbers](https://gitlab.com/dpwiz/croaring-ffi/-/blob/main/bench/sizes.csv)):
+
+  ![Bytes per element in memory and serialized for Data.IntSet, Roaring bitmaps, CRoaring bitset_t and bitvec on three datasets](https://gitlab.com/dpwiz/croaring-ffi/-/raw/main/bench/sizes.svg)
+
+  Reading elements back in chunks costs about a nanosecond each, while a Haskell callback per element costs about a hundred:
+
+  ![Nanoseconds per element for four ways of reading 1M elements out of a 32-bit Roaring bitmap from Haskell](https://gitlab.com/dpwiz/croaring-ffi/-/raw/main/bench/traversal.svg)
+description-type: markdown
+hash: 1278424ecea283fd2c9097d2f6dd130d0f14f9be9336b7c0b9c943c5b1d7ad6e
+homepage: https://gitlab.com/dpwiz/croaring-ffi
+latest: '1.0'
+license-name: BSD-3-Clause AND (Apache-2.0 OR MIT)
+maintainer: aenor.realm@gmail.com
+synopsis: Raw FFI bindings to CRoaring compressed bitmaps
+test-bench-deps:
+  base: '>=4.7 && <5'
+  binary: '>=0'
+  bitvec: '>=0'
+  bytestring: '>=0'
+  containers: '>=0'
+  croaring-ffi: '>=0'
+  deepseq: '>=0'
+  ghc-compact: '>=0'
+  hedgehog: '>=0'
+  mmorph: '>=0'
+  resourcet: '>=0'
+  tasty: '>=0'
+  tasty-bench: '>=0'
+  tasty-hedgehog: '>=0'
+  vector: '>=0'
