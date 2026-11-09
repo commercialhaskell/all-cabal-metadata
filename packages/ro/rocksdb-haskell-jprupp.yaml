@@ -15,24 +15,47 @@ all-versions:
 - 2.5.0
 - 2.6.0
 - 2.6.1
+- 2.6.2
 author: ''
 basic-deps:
   base: '>=4.9 && <5'
   bytestring: '>=0'
   data-default: '>=0'
   directory: '>=0'
-changelog: "## 2.6.1\n\n * Documentation, lots of it, with detailed explanations.\n\n##
-  2.6.0\n\n * Add `multiGet` and `multiGetCF`, which read the values of many keys
-  in\n   one call to RocksDB's `MultiGet`.\n * Add `blockCacheSize` to `Config`: the
-  bytes of a least-recently-used block\n   cache shared by the database and all its
-  column families. Without it\n   RocksDB gives each column family its own default
-  cache, of 32 MiB in\n   RocksDB 8.\n * Add `cacheIndexAndFilterBlocks` to `Config`,
-  to keep the index and filter\n   blocks of a column family in the block cache, at
-  high priority, with\n   those of level 0 pinned, instead of in memory outside the
-  cache for every\n   open file.\n * Stop leaking the block-based table options of
-  every database and column\n   family opened with a Bloom filter.\n\n## 2.5.0\n\n
-  * Add the `EstimateTableReadersMem`, `CurSizeAllMemTables` and\n   `BlockCacheUsage`
-  properties, and `PropertyName` for any other property by\n   its name.\n * Add `getPropertyCF`
+changelog: "## 2.6.2\n\n * Build the Bloom filters that `bloomFilter` asks for. The
+  bits per key were\n   passed to `rocksdb_filterpolicy_create_bloom_full` as an integer,
+  which is\n   what RocksDB took until 6.23; since 6.24 the function takes a `double`.
+  An\n   integer and a `double` travel in different registers, so RocksDB read\n   something
+  else as the bits per key and built no filters: table files had\n   `filter block
+  size=0`, and a lookup of an absent key read a data block in\n   every file that
+  could hold it. Nothing failed, and no test noticed. In a\n   measurement with 2,600,000
+  keys, such a lookup took about 5.5 microseconds\n   without the filters and 1.5
+  with them.\n\n   The function is now imported with the `capi` calling convention,
+  through a\n   stub compiled against `rocksdb/c.h`, so the C compiler passes the
+  argument\n   as the installed RocksDB declares it, before or after 6.24. The headers\n
+  \  were already needed to install RocksDB for development; they are now\n   needed
+  to build this package too.\n\n   Databases opened with `bloomFilter` start building
+  filters when they are\n   opened with this version: for the table files written
+  from then on, at\n   about 1.25 bytes per key. Files written before have none until
+  compaction\n   rewrites them.\n * Pass the error pointer that `rocksdb_approximate_sizes`
+  takes since RocksDB\n   6.16. `approximateSize` called it with one argument too
+  few, leaving RocksDB\n   to read a pointer that was never passed, and to write an
+  error message\n   through it if the call failed. It now throws an `IOError` on failure.\n
+  * Both were found by comparing every foreign import with the `rocksdb/c.h` of\n
+  \  RocksDB 11.1: the other 70 match.\n * Tests that table files have filters when
+  asked for and not otherwise, and\n   of `approximateSize`, which had none.\n\n##
+  2.6.1\n\n * Documentation, lots of it, with detailed explanations.\n\n## 2.6.0\n\n
+  * Add `multiGet` and `multiGetCF`, which read the values of many keys in\n   one
+  call to RocksDB's `MultiGet`.\n * Add `blockCacheSize` to `Config`: the bytes of
+  a least-recently-used block\n   cache shared by the database and all its column
+  families. Without it\n   RocksDB gives each column family its own default cache,
+  of 32 MiB in\n   RocksDB 8.\n * Add `cacheIndexAndFilterBlocks` to `Config`, to
+  keep the index and filter\n   blocks of a column family in the block cache, at high
+  priority, with\n   those of level 0 pinned, instead of in memory outside the cache
+  for every\n   open file.\n * Stop leaking the block-based table options of every
+  database and column\n   family opened with a Bloom filter.\n\n## 2.5.0\n\n * Add
+  the `EstimateTableReadersMem`, `CurSizeAllMemTables` and\n   `BlockCacheUsage` properties,
+  and `PropertyName` for any other property by\n   its name.\n * Add `getPropertyCF`
   to read a property of a column family.\n * Add `maxTotalWalSize` (`max_total_wal_size`)
   to `Config`, to bound the\n   write-ahead log.\n * Add `createMissingColumnFamilies`
   (`create_missing_column_families`) to\n   `Config`, to add column families to an
@@ -66,8 +89,13 @@ changelog-type: markdown
 description: |
   # rocksdb-haskell-jprupp
 
-  [![Hackage](https://img.shields.io/hackage/v/rocksdb-haskell-jprupp.svg)](https://hackage.haskell.org/package/rocksdb-haskell-jprupp)
-  [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://github.com/jprupp/rocksdb-haskell/blob/master/LICENSE)
+  [![Hackage][hackage-badge]][hackage]
+  [![License: BSD-3-Clause][license-badge]][license]
+
+  [hackage]: https://hackage.haskell.org/package/rocksdb-haskell-jprupp
+  [hackage-badge]: https://img.shields.io/hackage/v/rocksdb-haskell-jprupp.svg
+  [license]: https://github.com/jprupp/rocksdb-haskell/blob/master/LICENSE
+  [license-badge]: https://img.shields.io/badge/license-BSD--3--Clause-blue.svg
 
   Haskell bindings to [RocksDB](https://rocksdb.org), the embedded persistent
   key-value store. The package on Hackage is `rocksdb-haskell-jprupp`; the module
@@ -150,7 +178,8 @@ description: |
   | Column families| Open a database with several independent key spaces; add new ones on open     |
   | Snapshots      | Consistent point-in-time reads across many queries and iterators               |
   | Iterators      | Ordered scans, forwards and backwards, optionally pinned to a snapshot         |
-  | Tuning         | Bloom filters, fixed-length prefix extractor, shared LRU block cache, memtable and WAL limits, open file limit |
+  | Tuning         | Bloom filters, fixed-length prefix extractor, shared LRU block cache           |
+  | Limits         | Memtable and WAL size limits, open file limit                                  |
   | Administration | Properties (memory use, statistics, SST files), approximate sizes, destroy, repair |
 
   ### What is not included
@@ -185,6 +214,10 @@ description: |
   The library links against `-lrocksdb`. If RocksDB is installed in a
   non-standard place, pass its directories with `--extra-include-dirs` and
   `--extra-lib-dirs` (Cabal or Stack).
+
+  The headers are needed to build, not only the library: the binding of the
+  Bloom filter policy is compiled against `rocksdb/c.h`, because RocksDB changed
+  the type of its argument in 6.24 and the header says which one is installed.
 
   ### Check the library is found
 
@@ -237,7 +270,7 @@ description: |
 
   ```yaml
   extra-deps:
-    - rocksdb-haskell-jprupp-2.6.0
+    - rocksdb-haskell-jprupp-2.6.2
   ```
 
   With `stack --nix`, add RocksDB to the Nix packages:
@@ -503,7 +536,11 @@ description: |
   hundred megabytes to a few gigabytes, `cacheIndexAndFilterBlocks = True`,
   `maxFiles` of a few thousand, and `dbWriteBufferSize` of a few hundred
   megabytes. Enable `bloomFilter` when most reads are point lookups of keys that
-  may not exist.
+  may not exist. A filter takes about 1.25 bytes per key, held with the index
+  blocks: in the block cache with `cacheIndexAndFilterBlocks`, in memory outside
+  it otherwise. A filter belongs to a table file and is written with it, so
+  turning `bloomFilter` on for an existing database only covers the files
+  written from then on; the others get a filter when compaction rewrites them.
 
   For a large database, setting `maxFiles`, `blockCacheSize`,
   `cacheIndexAndFilterBlocks` and `dbWriteBufferSize` puts a ceiling on the memory
@@ -520,7 +557,9 @@ description: |
   | Opening                  | `withDB`, `withDBCF`                                           |
   | Reading and writing      | `get`, `getCF`, `multiGet`, `multiGetCF`, `put`, `putCF`, `delete`, `deleteCF`, `write` |
   | Snapshots                | `withSnapshot`, `createSnapshot`, `releaseSnapshot`            |
-  | Iteration                | `withIter`, `withIterCF`, `withIterSnap`, `withIterSnapCF`, `iterSeek`, `iterFirst`, `iterLast`, `iterNext`, `iterPrev`, `iterKey`, `iterValue`, `iterEntry`, `iterValid`, `iterGetError` |
+  | Creating iterators       | `withIter`, `withIterCF`, `withIterSnap`, `withIterSnapCF`     |
+  | Moving iterators         | `iterSeek`, `iterFirst`, `iterLast`, `iterNext`, `iterPrev`    |
+  | Reading from iterators   | `iterKey`, `iterValue`, `iterEntry`, `iterValid`, `iterGetError` |
   | Administration           | `getProperty`, `getPropertyCF`, `approximateSize`, `destroy`, `repair` |
 
   The FFI bindings (`Database.RocksDB.C`) and helpers (`Database.RocksDB.Internal`)
@@ -538,6 +577,16 @@ description: |
     reached the end. Check `iterGetError`.
   - Calls into RocksDB are `safe` foreign calls, so they do not block other
     Haskell threads, but each one costs a little more than an `unsafe` call.
+  - Releases before 2.6.2 built no Bloom filters on RocksDB 6.24 or later,
+    whatever `bloomFilter` said: they passed the bits per key as an integer to a
+    function that had come to take a `double`. A database written by one of them
+    has no filters in its table files. After upgrading, files get them as they
+    are written, and the memory the filters need comes with them. The size of
+    the filters of a column family is in the `rocksdb.aggregated-table-properties`
+    property, as `filter block size`.
+  - The compiler does not check a foreign import against RocksDB's header. A
+    binding with the wrong type builds and runs, with garbage in place of the
+    argument; the two fixed in 2.6.2 went unnoticed for years.
 
   ## Development
 
@@ -578,6 +627,10 @@ description: |
 
   - Format new code with fourmolu, which the Nix shell provides.
   - Add tests for the behaviour you change.
+  - When you add or change a binding in `Database.RocksDB.C`, read the
+    prototype in `rocksdb/c.h` argument by argument: nothing else checks the
+    Haskell type against it. If the type of an argument differs between
+    versions of RocksDB, import the function with `capi`.
   - Describe the change in `CHANGELOG.md`. Versions follow the
     [Haskell Package Versioning Policy](https://pvp.haskell.org/).
 
@@ -597,9 +650,9 @@ description: |
   rocksdb-haskell-jprupp is released under the
   [BSD 3-Clause License](https://github.com/jprupp/rocksdb-haskell/blob/master/LICENSE).
 description-type: markdown
-hash: b97e92f311865e12242868ec8dcc53a66a96da489b4cd9996be3b5893c9d5e6a
+hash: 30d57042bb27a79d1731cceb310076e3810de8e2a730b6586288f1c9b97d35bb
 homepage: https://github.com/jprupp/rocksdb-haskell#readme
-latest: 2.6.1
+latest: 2.6.2
 license-name: BSD-3-Clause
 maintainer: JP Rupp <jprupp@protonmail.ch>
 synopsis: Haskell bindings for RocksDB
