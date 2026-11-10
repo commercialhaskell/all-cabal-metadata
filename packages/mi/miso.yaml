@@ -6,6 +6,7 @@ all-versions:
 - 1.12.0.0
 - 1.13.0.0
 - 1.14.0.0
+- 1.15.0.0
 author: David M. Johnson <code@dmj.io>
 basic-deps:
   base: <5
@@ -15,15 +16,213 @@ basic-deps:
   text: <2.2
   transformers: <0.7
 changelog: "# Changelog\n\nAll notable changes to `miso` are documented here.\n\n##
-  1.14.0.0\n\n### Added\n\n- **`VModel` / `vmodel` / `withModel`.** The `model` counterpart
-  of\n  `VProps`: an ambient accessor (not a node) wrapping a\n  `model -> View context
-  props model action` function, so a helper deep in a\n  view tree can read the enclosing
-  component's `model` without needing it\n  threaded through as an explicit argument.
-  Resolved against the mounting\n  component's current `model` whenever the enclosing
-  `View` is built, and\n  against its initial (or hydrated) `model` when rendered
-  with `toHtml`.\n  `withModel` is a synonym for `vmodel`.\n- **`svgWith_`** (`Miso.Native.X.Element.Svg`).
-  Native inline SVG content\n  that reads the enclosing component's `context` / `props`
-  / `model`:\n  `svgWith_ attrs content` is an `<svg>` that obtains all three ambiently
+  1.15.0.0\n\n### Added\n\n- **`rAFLoop`** (`Miso.Subscription.Util`). A self re-scheduling\n
+  \ `requestAnimationFrame` loop as a `Sub`, with one callback for the whole\n  loop:
+  `rAFLoop :: IO (Double -> IO ()) -> Sub model action`. The `IO`\n  action runs once
+  at start and builds the per-frame handler, so it is the\n  place to acquire what
+  the handler needs. `rAFSub`, `rAFSubElapsed` and\n  `canvasSub` are now built on
+  it.\n\n- **`Functor` instances for `View` and `Attribute` (non-`native` builds).**\n
+  \ `fmap` / `<$>` / `<$` map the `action` a view or attribute produces, so a\n  sub-view
+  written against one `action` type can be embedded in another\n  (`ChildAction <$>
+  Child.view m`). These existed before 1.13.0.0 and were\n  dropped when the Lynx
+  dual-thread runtime landed. Mapping stops at component\n  boundaries (`VComp` /
+  `VCompStatic` keep their own `action`), and passes\n  through the ambient accessors
+  `VContext` / `VProps` / `VModel`. **Not\n  available under the `native` flag**:
+  a main-thread (`OnStatic`) handler\n  crosses threads as a bare `StaticKey` that
+  the main thread re-dispatches at\n  the owning component's `action` type, and an
+  arbitrary mapping function\n  can't travel with it. See `Note [Functor View]` in
+  `Miso.Types`.\n\n- **`Miso.UUID`.** A `UUID` type backed by `MisoString`, with an
+  API that\n  mirrors `Data.UUID` from the `uuid` package: `toString` / `fromString`,\n
+  \ `toText` / `fromText`, strict and lazy ASCII `ByteString` conversions,\n  `toByteString`
+  / `fromByteString` (16 bytes, network order), `toWords` /\n  `fromWords`, `toWords64`
+  / `fromWords64`, `nil` and `null`. `nextRandom`\n  generates a v4 UUID with the
+  browser's `crypto.randomUUID()`, which is only\n  available in secure contexts (HTTPS
+  or `localhost`). Parsing accepts the\n  `8-4-4-4-12` form in either case and normalizes
+  it to lowercase; `Show` and\n  `Read` use the unquoted form, like `Data.UUID`. Instances
+  are provided for\n  `ToMisoString` / `FromMisoString`, `ToJSON` / `FromJSON`, `ToJSVal`
+  /\n  `FromJSVal`, and `Router` (as a route capture).\n\n- **MicroHs backend (alpha).**
+  miso compiles with\n  [MicroHs](https://github.com/augustss/MicroHs), to WebAssembly
+  or\n  JavaScript through emscripten, and passes the integration test suite on\n
+  \ both. The flake provides MicroHs with miso installed (`nix develop .#mhs`),\n
+  \ and the [`miso` CLI](https://github.com/haskell-miso/cli) builds miso\n  applications
+  with it without GHC or Nix.\n\n- **`CSS.content`** (`Miso.CSS`). The\n  [`content`](https://developer.mozilla.org/en-US/docs/Web/CSS/content)\n
+  \ property: `content :: MisoString -> Style`.\n\n### Removed\n\n- **Breaking: `mountStaticWithProps`.**
+  It was a deprecated synonym for\n  `mountStatic` since 1.14.0.0, when `mountStatic`
+  began accepting components\n  with `props`. Replace it with `mountStatic`; call
+  sites are otherwise\n  unchanged.\n\n### Changed\n\n- **Printed query strings list
+  entries in key order, joined with `&`.**\n  Flags used to come after the params
+  as separate `?`-groups. Code that\n  matches on the exact output of `prettyURI`,
+  `prettyRoute` or `href_` may\n  need updating; see the matching entry under Fixed.\n\n-
+  **Breaking: `uriFragment` no longer includes the leading `#` (#1696).**\n  `parseURI`
+  (and so `getURI`, `uriSub` and `FromJSON URI`) stored the\n  fragment as `\"#cool\"`,
+  contrary to the documented contract, and `toURI` on a\n  route with a `Fragment`
+  field stored `\"##intro\"`. `prettyURI` appended the\n  field as-is, so a hand-built
+  `URI \"foo\" \"section-1\" mempty` printed as\n  `/foosection-1` and `prettyRoute`
+  printed `##intro`. The fragment is now\n  stored without the `#`, and `prettyURI`
+  adds one when it is non-empty.\n  URIs printed from parsed input (`getURI`, `uriSub`,
+  `routerSub`, `route`)\n  are unchanged.\n\n  Migration: stop stripping `#` from
+  a parsed `uriFragment`, and compare\n  against the bare value (`uriFragment uri
+  == \"top\"`). Fragments written with\n  a leading `#` (`uri { uriFragment = \"#top\"
+  }`) still print correctly, since\n  `prettyURI` doesn't repeat an existing `#`.\n\n-
+  **Event handlers run synchronously, during dispatch, on every backend.**\n  `on`
+  / `onWithOptions`, event delegation and `addEventListener` (and the\n  subscriptions
+  built on it: `windowSub`, `windowSubWithOptions`,\n  `keyboardSub`, `arrowsSub`,
+  `onLineSub`, `uriSub`, ...) now call their\n  callback synchronously. On WASM they
+  were asynchronous, so a handler could\n  run after the browser had finished dispatching
+  the event: `preventDefault`\n  / `stopPropagation` then did nothing (#1334), and
+  event data that only\n  exists during dispatch (a `DataTransfer`) was gone. On WASM,
+  a synchronous\n  callback is now followed by a round of the RTS scheduler loop,
+  so the\n  actions it queued are processed right away (#1683). A callback passed
+  to\n  `addEventListener` must not block (`threadDelay`, `await`, `takeMVar`,\n  ...):
+  on WASM, `threadDelay` or `await` in a synchronous callback raises\n  `WouldBlockException`,
+  which stops the Haskell runtime if uncaught; on the\n  JS backend the callback is
+  silently abandoned. Hand blocking work to the\n  `sink` (or `forkIO` it) instead.\n\n-
+  **Breaking: `OnStatic` exists only under the `native` flag.** Elsewhere\n  `event`
+  now dereferences the `StaticPtr` itself and builds a plain `On`.\n  Runtime behavior
+  is unchanged — no web backend ever dispatched by\n  `StaticKey` — but code that
+  pattern-matches on `OnStatic` must be guarded\n  with `#ifdef NATIVE` (or match
+  `On` instead).\n\n- **Breaking: GHCJS 8.6 is no longer supported.** The GHC JavaScript
+  backend\n  (`arch(javascript)`) is now the only JS target. The `GHCJS_OLD` code
+  paths,\n  `impl(ghcjs)` conditionals and the `ghcjs-prim` dependency are removed,
+  along\n  with the legacy nixpkgs pin (`legacyPkgs`) and its GHCJS 8.6 / GHC 8.6.5\n
+  \ Nix targets.\n\n- **`MisoString` on the WASM and MicroHs backends now behaves
+  like\n  `Data.Text`**, which is what it is on the server, so client and server\n
+  \ agree. Positions and lengths count code points everywhere (`head`, `last`,\n  `tail`,
+  `init`, `uncons`, `index`, `takeEnd`, `dropEnd`, `cons`, `snoc`,\n  `singleton`,
+  `intersperse`, `justify*`, `maximum`, `minimum` used to see\n  the two halves of
+  an emoji separately), and:\n  - `lines \"a\\n\" == [\"a\"]` and `lines \"\" == []`
+  (no trailing empty line);\n  - `words`, `strip`, `stripStart` and `stripEnd` use
+  `isSpace`: `words`\n    splits on tabs and newlines too, and `strip` no longer removes
+  U+FEFF,\n    U+2028 or U+2029;\n  - `replace` replaces every occurrence, literally
+  (it replaced only the\n    first, and expanded `$&` in the replacement);\n  - `split
+  p s` no longer appends an empty piece when `s` has no separator;\n  - `stripSuffix
+  \"\"` and `dropEnd 0` / `takeEnd 0` leave the string alone;\n  - `commonPrefixes
+  \"foo\" \"foobar\"` is `Just (\"foo\", \"\", \"bar\")`, not\n    `Nothing`;\n  -
+  `chunksOf k \"\"` is `[]`, and `chunksOf` with `k < 0` no longer loops;\n  - `unfoldrN`
+  keeps its characters in order and stops at `Nothing`;\n  - `pack`, string literals
+  and `textToJSString` keep a leading U+FEFF (the\n    `TextDecoder` dropped it);\n
+  \ - `toLower` maps character by character (JavaScript's `toLowerCase`\n    turned
+  a word-final `Σ` into `ς`);\n  - `head`, `last`, `init`, `index`, `maximum`, `minimum`
+  and `count` fail\n    with a Haskell `error` instead of a JavaScript exception (which
+  is fatal\n    on MicroHs);\n  - `compare` (`Ord`) uses code point order, so `Map
+  MisoString` keys order\n    the same on client and server (JavaScript's `<` put
+  emoji before\n    U+E000 to U+FFFF). The GHC JavaScript backend, whose `JSString`
+  comes\n    from ghcjs-base, still compares code units.\n\n- **`Miso.Canvas` operations
+  call direct foreign imports.** Every\n  straight-line `CanvasRenderingContext2D`
+  operation (`fillRect`, `arc`,\n  `moveTo`, `globalAlpha`, `fillText`, ...) has its
+  own import in\n  `Miso.Canvas.FFI`; the generic path marshalled the method name
+  and\n  allocated a `JSVal` per argument on every call. `fillStyle`, `strokeStyle`\n
+  \ and `shadowColor` with an `RGB` or `RGBA` colour pass the channels as\n  numbers
+  and build the `rgb(...)` string in JavaScript. The public API is\n  unchanged, and
+  native GHC keeps the generic calls.\n\n- **Lynx toolchain and SDK bumped.** `@lynx-js/rspeedy`
+  0.18.4,\n  `@lynx-js/react-rsbuild-plugin` 0.22.1, `@lynx-js/react` 0.129.1,\n  `@lynx-js/types`
+  4.4.2 and `@lynx-js/type-element-api` 0.0.12. The sample\n  native hosts now share
+  one SDK version, 4.0.3 (Android was on 3.8.0, iOS on\n  4.0.0), the newest stable
+  release published on both Maven and CocoaPods.\n\n### Fixed\n\n- **JS backend: `freeFunction`
+  releases the callback.** It was a no-op, and\n  the JS RTS keeps every callback
+  as a permanent GC root until it is\n  released, so each event handler freed on re-render,
+  each mount / unmount\n  callback and each rAF / canvas callback leaked, along with
+  everything it\n  closed over, for the lifetime of the page.\n\n- **`createSub` keeps
+  its thread's delay within a 32-bit `Int`.** The `Sub`\n  thread parked itself with
+  a `threadDelay` of 10^10 microseconds, which does\n  not fit an `Int` on wasm32.
+  GHC wrapped it silently; MicroHs checks `Int`\n  arithmetic and threw `Overflow`,
+  so the `Sub` was released right after it\n  was acquired (a `windowSub` never received
+  an event).\n\n- **`stopSub` from an `rAFSub` / `rAFSubElapsed` / `canvasSub` action
+  no\n  longer crashes.** Each frame callback re-scheduled itself after\n  dispatching,
+  and `release` freed it. The wasm RTS has no timer, so it\n  context-switches at
+  every heap-block boundary when another thread is\n  runnable; sinking the action
+  woke the scheduler, which could run the\n  `stopSub` and free the callback before
+  the callback resumed and called\n  `requestAnimationFrame` on its own freed handle
+  (`getJSVal` throws, and\n  the runtime is gone). The callback now owns its own lifetime:
+  stopping the\n  `Sub` sets a flag, and on its next frame the callback frees itself
+  instead\n  of re-scheduling, so it is freed one frame later than before and nothing\n
+  \ else ever touches it. `rAFSubElapsed` also no longer allocates (and leaks)\n  a
+  new callback every frame. See `Note [rAFLoop teardown]` in\n  `Miso.Subscription.Util`.\n-
+  **Empty query values parse.** After `=` the lexer needed at least one\n  character,
+  so `?a=&b` parsed as the flag `a` and dropped `b`, and a\n  `QueryParam (Just \"\")`
+  printed as `?q=` decoded back as `Nothing`. `?a=`\n  now gives `a` the value `\"\"`,
+  so a `QueryParam \"q\" MisoString` route\n  decodes `?q=` as `Just \"\"` instead
+  of `Nothing`.\n\n- **`ToMisoString (QueryParam p a)` prints `?key=value`.** It printed
+  the\n  value and key swapped, as `?value=key`.\n\n- **`prettyQueryString` / `prettyURI`
+  print one `?` and separate entries with\n  `&`.** Flags were printed as extra `?`-groups
+  after the params (`?a=1?flag`,\n  `?a?b`), which a browser read as `a` = `1?flag`
+  and as one key `a?b`. Every\n  entry now follows a single `?`, in key order (`?a=1&flag`,
+  `?a&b`), and\n  entries with an empty key are skipped. This changes the output of\n
+  \ `prettyRoute`, `href_`, `pushURI` / `replaceURI` / `pushRoute`, and the\n  `ToMisoString`
+  / `ToJSON` instances of `URI`. `parseURI` still accepts the\n  old form.\n\n- **A
+  generic `Index` route keeps its query fields when encoded.**\n  `fromRoute` emitted
+  only `IndexToken` for an index constructor, dropping\n  its `QueryParam` and `QueryFlag`
+  fields, so `prettyRoute` and `href_`\n  printed `/` where they should print `/?page=2`.
+  Decoding already read\n  those fields. (A `Fragment` field is now encoded too, but
+  `Fragment`\n  fields still can't be decoded.)\n\n- **`QueryParam Nothing` is left
+  out of the URL.** It was printed as a bare\n  flag, so a route with an unset param
+  linked to `/widget?bar` rather than\n  `/widget`. This applies to every generic
+  route, not just index routes. It\n  now prints nothing; decoding a URL without the
+  key still gives\n  `QueryParam Nothing`, and so does a URL with the bare key (`?bar`),
+  so\n  existing links still parse. `fromRoute` and `toURI` change too: the key\n
+  \ no longer appears in the token list or in `uriQueryString`.\n\n- **The fragment
+  lexer takes everything after the `#`.** It only accepted\n  path-segment characters,
+  so it stopped at the first `/`, `?`, `#`, `=`,\n  `&`, space or `[`, and the rest
+  was dropped or misparsed as path or query.\n  `/#/users/1?tab=2` parsed as `URI
+  \"\" \"\" mempty`, and `/foo#a/b` parsed as\n  path `foo/b` with fragment `a`. The
+  fragment lexer now takes the rest of\n  the input verbatim, as browsers report it
+  in `location.hash`, so\n  `parseURI \"/#/users/1?tab=2\"` has fragment `/users/1?tab=2`,
+  and `/foo#a/b`\n  has path `foo`. `route` and `routerSub` ignore the fragment; to
+  route on a\n  `#/…` hash, run `toRoute` on `uriFragment`. (The query lexer still
+  stops at\n  a `/` or `?` inside a query value, so `/login?next=/home#tab` still
+  loses\n  everything from that `/` on.)\n\n- **`eitherDecode` and `decode` return
+  `Left` / `Nothing` on invalid JSON\n  instead of throwing (WASM, JS backend, MicroHs).**
+  They called\n  `JSON.parse` through an `unsafe` import, and its `SyntaxError` escaped:
+  on\n  WASM the update that decoded the text was lost, and on MicroHs, where an\n
+  \ exception in an `unsafe` import is fatal, the runtime stopped. The error\n  is
+  now caught in JavaScript, and `eitherDecode` returns\n  `Left \"eitherDecode: <message>\"`
+  with `JSON.parse`'s message, where it used\n  to put the input string. Invalid input
+  does not decode as `null`, so it is\n  a `Left` for a `Maybe a` too. `VANILLA` builds
+  already returned `Left`.\n\n- **`toHtml` escapes attribute values.** Property values,
+  class names and\n  style declarations were written between quotes as they were,
+  so a `\"` in\n  one ended the attribute, and user-controlled text could inject markup
+  into\n  prerendered HTML. They are now escaped with `htmlEncode`, as text nodes\n
+  \ are. The browser decodes them back, so the DOM attributes and hydration are\n
+  \ unchanged. If you escaped attribute values yourself to work around this,\n  stop:
+  they will now be escaped twice (`&amp;` renders as `&amp;amp;`).\n\n- **`toHtml`
+  renders a `textarea`'s value as its content.** Browsers ignore\n  a `value` attribute
+  on a `<textarea>`, so prerendering from any backend but\n  `VANILLA` (where `textarea_`
+  already moved the value) produced an empty\n  textarea. The value is now rendered,
+  escaped, after the textarea's\n  children. An empty value leaves the textarea empty
+  (on `VANILLA` it\n  rendered as a single space, which became the textarea's value),
+  and a\n  leading newline survives parsing (the HTML parser drops the first one).\n\n-
+  **WASM: `startApp` no longer evaluates `miso.js` a second time after\n  `withJS`.**
+  `initComponent` (behind `startApp`, `miso`, `renderApp`,\n  `prerender`, `reload`
+  and `live`) evaluated it unconditionally, replacing\n  `globalThis.miso` and dropping
+  anything set on it in between. It now loads\n  `miso.js` only if `withJS` has not.
+  `renderApp` also loads `miso.js` before\n  installing its drawing context: it wrote
+  to `globalThis.miso` before\n  anything had created it, so it always threw on WASM.
+  The `withJS` Haddock\n  now says that `main` must use it before calling anything
+  that reads\n  `globalThis.miso` (`Miso.FFI`, `Miso.Random`, `Miso.JSON.decode`,
+  ...)\n  ahead of `startApp`.\n  \n- **A tab, newline, form feed or carriage return
+  in a class no longer\n  breaks rendering.** `class_` / `classes_` / `classList_`
+  strings were split\n  on spaces only, so `\"foo\\tbar\"` reached `classList.add`
+  as one token, which\n  throws `InvalidCharacterError` mid-patch, while server rendering
+  of the same\n  view worked. Classes are now split on ASCII whitespace, as the HTML
+  parser\n  splits a `class` attribute. Broken since 1.9.0.\n\n- **`MisoString` on
+  the WASM and MicroHs backends no longer does work one\n  character at a time over
+  the FFI.** `length` allocated an array of the\n  whole string and `uncons` called
+  it, so everything that walks a string was\n  O(n²): `lines` over 110 KB took minutes.
+  Functions that take a Haskell\n  function (`map`, `filter`, the folds, `any`, `all`,
+  `takeWhile`, `break`,\n  `groupBy`, `split`, `zip`, the scans, ...) made three FFI
+  calls per\n  character; they now convert to `Text` once and slice the original string\n
+  \ for the result. Searching and splitting (`breakOn`, `splitOn`, `lines`,\n  `words`,
+  `replace`, `strip`, `commonPrefixes`, ...) is one native call per\n  piece. See
+  `scripts/bench-jsstring` for the benchmark.\n\n## 1.14.0.0\n\n### Added\n\n- **`VModel`
+  / `vmodel` / `withModel`.** The `model` counterpart of\n  `VProps`: an ambient accessor
+  (not a node) wrapping a\n  `model -> View context props model action` function,
+  so a helper deep in a\n  view tree can read the enclosing component's `model` without
+  needing it\n  threaded through as an explicit argument. Resolved against the mounting\n
+  \ component's current `model` whenever the enclosing `View` is built, and\n  against
+  its initial (or hydrated) `model` when rendered with `toHtml`.\n  `withModel` is
+  a synonym for `vmodel`.\n- **`svgWith_`** (`Miso.Native.X.Element.Svg`). Native
+  inline SVG content\n  that reads the enclosing component's `context` / `props` /
+  `model`:\n  `svgWith_ attrs content` is an `<svg>` that obtains all three ambiently
   via\n  `withContext` / `withProps` / `withModel` and hands them to `content_`, so\n
   \ the content may use `vcontext` / `vprops` / `vmodel` directly.\n- **`VProps` /
   `vprops` / `withProps`.** The `props` counterpart of\n  `VContext`: an ambient accessor
@@ -387,9 +586,9 @@ description: "\n<p align=\"center\">\n\n<a href=\"https://haskell-miso.org\">\n\
   width=\"15%\" height=\"512\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/384a1898-0aed-4662-9a03-8dbe5641228f\"
   />\n   </a>\n<p align=\"center\">:ramen: <a href=\"https://haskell-miso.org\"><b>miso</b></a>
   | A library for building web and <a href=\"https://github.com/haskell-miso/miso-lynx\">mobile</a>
-  applications</p>\n</p>\n\n<p align=\"center\"> \n  <a href=\"https://matrix.to/#/#haskell-miso:matrix.org\">\n
-  \   <img src=\"https://img.shields.io/badge/matrix.org-miso-FF4B33.svg?style=for-the-badge\"
-  alt=\"Matrix #haskell-miso:matrix.org\">\n  </a>\n  <a href=\"https://www.npmjs.com/package/haskell-miso\">
+  applications</p>\n</p>\n\n<p align=\"center\"> \n  <a href=\"https://discord.gg/QVDtfYNSxq\">\n
+  \   <img src=\"https://img.shields.io/badge/discord-miso-5865F2.svg?style=for-the-badge&logo=discord&logoColor=white\"
+  alt=\"Discord\">   \n  </a>\n  <a href=\"https://www.npmjs.com/package/haskell-miso\">
   \ \n    <img src=\"https://img.shields.io/npm/v/haskell-miso?style=for-the-badge\"
   />\n  </a>  \n  <a href=\"https://haskell-miso-cachix.cachix.org\">\n    <img src=\"https://img.shields.io/badge/build-cachix-yellow.svg?style=for-the-badge\"
   alt=\"Cachix\">\n  </a>\n  <a href=\"https://actions-badge.atrox.dev/dmjio/miso/goto?ref=master\">\n
@@ -417,20 +616,36 @@ description: "\n<p align=\"center\">\n\n<a href=\"https://haskell-miso.org\">\n\
   mode](https://www.tweag.io/blog/2025-04-17-wasm-ghci-browser/) integrated with [ghciwatch](https://github.com/MercuryTechnologies/ghciwatch).\n\n>
   [!TIP]\n> See the [miso organization](https://github.com/haskell-miso) on GitHub
   for the full ecosystem of packages and examples \U0001F35C\n\n## Table of Contents\n-
-  [Playground](#playground-)\n- [Quick Start (Nix)](#quick-start-nix-)\n- [Manual
-  Setup (GHCup / Cabal)](#manual-setup-ghcup--cabal)\n  - [cabal.project](#cabalproject)\n
-  \ - [app.cabal](#appcabal)\n  - [Main.hs](#mainhs)\n- [Hot Reload](#hot-reload-)\n-
-  [Installation](#installation)\n- [Haddocks](#haddocks)\n- [Wiki](#wiki)\n- [Architecture](#architecture)\n-
-  [Examples](#examples)\n- [HTTP](#interacting-with-http-apis-)\n- [Testing](#testing-)\n-
-  [Native](#native-)\n- [Benchmarks](#benchmarks-%EF%B8%8F)\n- [Nix](#nix-)\n  - [Pinning
-  nixpkgs](#pinning-nixpkgs-)\n  - [Binary cache](#binary-cache)\n- [Community](#community-)\n-
-  [Maintainers](#maintainers)\n- [Commercial](#commercial-)\n- [Contributing](#contributing)\n-
-  [Contributors](#contributors-)\n- [Partnerships](#partnerships-)\n- [Backers](#backers)\n-
-  [Organizations](#organizations)\n- [History](#history-)\n- [License](#license)\n\n##
-  Playground \U0001F6DD\n\nAn interactive playground is available at [try.haskell-miso.org](https://try.haskell-miso.org).
-  It allows editing and running applications directly in the browser without any local
-  toolchain setup, and is useful for experimentation and sharing minimal reproducible
-  examples.\n\n## Quick Start (Nix) ⚡\n\n> [!TIP]\n> The [miso-sampler](https://github.com/haskell-miso/miso-sampler)
+  [Playground](#playground-)\n- [Quick Start (MicroHs)](#quick-start-microhs-)\n-
+  [Quick Start (Nix)](#quick-start-nix-)\n- [Manual Setup (GHCup / Cabal)](#manual-setup-ghcup--cabal)\n
+  \ - [cabal.project](#cabalproject)\n  - [app.cabal](#appcabal)\n  - [Main.hs](#mainhs)\n-
+  [Hot Reload](#hot-reload-)\n- [Installation](#installation)\n- [Haddocks](#haddocks)\n-
+  [Wiki](#wiki)\n- [Architecture](#architecture)\n- [Examples](#examples)\n- [HTTP](#interacting-with-http-apis-)\n-
+  [Testing](#testing-)\n- [Native](#native-)\n- [Benchmarks](#benchmarks-%EF%B8%8F)\n-
+  [Nix](#nix-)\n  - [Pinning nixpkgs](#pinning-nixpkgs-)\n  - [Binary cache](#binary-cache)\n-
+  [Community](#community-)\n- [Maintainers](#maintainers)\n- [Commercial](#commercial-)\n-
+  [Contributing](#contributing)\n- [Contributors](#contributors-)\n- [Partnerships](#partnerships-)\n-
+  [Backers](#backers)\n- [Organizations](#organizations)\n- [History](#history-)\n-
+  [License](#license)\n\n## Playground \U0001F6DD\n\nAn interactive playground is
+  available at [try.haskell-miso.org](https://try.haskell-miso.org). It allows editing
+  and running applications directly in the browser without any local toolchain setup,
+  and is useful for experimentation and sharing minimal reproducible examples.\n\n##
+  Quick Start (MicroHs) \U0001F680\n\nThe `miso` CLI is a single binary with [MicroHs](https://github.com/augustss/MicroHs)
+  built in, so it builds miso applications without GHC or Nix. It runs on Linux, macOS
+  (Intel and Apple Silicon), and Windows (via an [MSYS2](https://www.msys2.org/) shell).\n\n```bash\n#
+  Install the miso CLI\ncurl -fsSL https://haskell-miso.org/download | sh\n\n# Create,
+  build and serve a new project (rebuilds and reloads on changes)\nmiso new my-app
+  && cd my-app\nmiso dev\n```\n\nThe installer downloads the release for your OS and
+  architecture, verifies its sha256 checksum, and unpacks it into `~/.miso` (or `$MISO_HOME`).
+  It asks before changing your `PATH`.\n\nPrerequisites:\n\n  - A C compiler (`cc`),
+  since MicroHs compiles programs to C\n  - [emscripten](https://emscripten.org) (`emcc`)
+  for browser targets. New projects target the browser (WebAssembly) by default. Without
+  emscripten, set `target: native` in `miso.yml` and use `miso run`.\n  - `curl`,
+  `tar`, `sha256sum` or `shasum`, and `git`\n  - [hlint](https://github.com/ndmitchell/hlint),
+  only for `miso lint`\n\nOn Windows, install the tools in MSYS2 first with `pacman
+  -S gcc make tar curl git`.\n\n> [!TIP]\n> Run `miso doctor` to check the installation
+  and required tools, and `miso help` to list all commands. See [the miso CLI docs](https://haskell-miso.org/docs/cli/)
+  for the full reference.\n\n## Quick Start (Nix) ⚡\n\n> [!TIP]\n> The [miso-sampler](https://github.com/haskell-miso/miso-sampler)
   template repository includes a counter application with build scripts for WebAssembly,
   JavaScript, and native GHC targets.\n\nThe following requires [Nix Flakes](https://wiki.nixos.org/wiki/Flakes).
   See also [Binary cache](#binary-cache) to avoid rebuilding dependencies.\n\n```bash\n#
@@ -586,10 +801,9 @@ description: "\n<p align=\"center\">\n\n<a href=\"https://haskell-miso.org\">\n\
   for building, configuring, and deploying applications. The [haskell-miso.org](https://github.com/dmjio/miso/tree/master/haskell-miso.org)
   source serves as a reference for this workflow.\n\n### Pinning nixpkgs \U0001F4CC\n\nBy
   default, `miso` uses a pinned version of [`nixpkgs`](https://github.com/dmjio/miso/blob/master/nix/nixpkgs.json)
-  known as `pkgs`.\n\n> [!NOTE]\n> `miso` also maintains a `legacyPkgs` nixpkgs pin
-  for tools such as `nixops` and for builds using the original `GHCJS 8.6` backend.\n\n###
-  Binary cache\n\nLinux and macOS users can use a [binary cache](https://haskell-miso-cachix.cachix.org)
-  to avoid rebuilding dependencies. Follow the setup instructions on [cachix](https://haskell-miso-cachix.cachix.org/).\n\n```bash\n$
+  known as `pkgs`.\n\n### Binary cache\n\nLinux and macOS users can use a [binary
+  cache](https://haskell-miso-cachix.cachix.org) to avoid rebuilding dependencies.
+  Follow the setup instructions on [cachix](https://haskell-miso-cachix.cachix.org/).\n\n```bash\n$
   cachix use haskell-miso-cachix\n```\n\nFor CI pipelines using GitHub Actions:\n\n```yaml\n-
   name: Install cachix\n  uses: cachix/cachix-action@v16\n  with:\n    name: haskell-miso-cachix\n```\n\n##
   Community :octocat:\n\n- [Github](https://github.com/haskell-miso)\n- [Matrix](https://matrix.to/#/#haskell-miso:matrix.org)\n-
@@ -626,9 +840,9 @@ description: "\n<p align=\"center\">\n\n<a href=\"https://haskell-miso.org\">\n\
   and [HarmonyOS](https://device.harmonyos.com/en/) via [LynxJS](https://lynxjs.org).\n\n##
   License\n\n[BSD3](LICENSE) © dmjio\n"
 description-type: markdown
-hash: aa5b647267052c09f4fd4d18fd44f008cd8534d2018f1455ef4b0b2ed427de0e
+hash: da1bca7040017ac20b518e908719fd135904a1c32c77823c1089c2567ea62314
 homepage: https://haskell-miso.org/
-latest: 1.14.0.0
+latest: 1.15.0.0
 license-name: BSD-3-Clause
 maintainer: David M. Johnson <code@dmj.io>
 synopsis: A tasty Haskell front-end web framework
