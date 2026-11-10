@@ -1,0 +1,159 @@
+all-versions:
+- 0.1.0.0
+author: IC Rainbow
+basic-deps:
+  base: '>=4.16 && <5'
+  vector: '>=0.13 && <0.14'
+changelog: |
+  # Changelog for `Box3D`
+
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+  and this project adheres to the
+  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.1.0.0 - 2026-11-08
+
+  Initial release, bundling Box3D from commit `2c94ad4` of
+  <https://github.com/dpwiz/box3d>. That tree is upstream `v0.1.0` plus 24 commits.
+  On top of upstream's `30c67b5` it adds a NULL guard for `destroyDebugShape`, doc
+  comments on `b3Profile`, `b3Counters` and the timing and hash helpers, and
+  API-dump tooling.
+changelog-type: markdown
+description: |
+  # Box3D
+
+  Low-level Haskell bindings to [Box3D](https://box2d.org/documentation3d/), Erin
+  Catto's 3D rigid-body physics engine.
+
+  The engine's C sources (MIT licensed) are bundled and compiled with the package.
+  You need a C compiler, but no system library.
+
+  This package builds commit `2c94ad4` of
+  [dpwiz/box3d](https://github.com/dpwiz/box3d), which is upstream `v0.1.0` plus 24
+  commits and reports engine version 0.2.0. Box3D is a young engine, so expect its
+  API to keep moving between releases.
+
+  The bindings stay close to the C API: `b3World_Step` is `Box3D.World.step`, and
+  each wrapper's documentation names the function it binds. Most modules are
+  generated from the engine headers by `boxnd-gen`, in the
+  [source repository](https://gitlab.com/dpwiz/box-nd).
+
+  ## Example
+
+  ```haskell
+  {-# LANGUAGE PatternSynonyms #-}
+
+  module Main (main) where
+
+  import Control.Monad (replicateM_)
+
+  import Box3D.Body (BodyDef (..), defaultBodyDef, pattern DynamicBody)
+  import Box3D.Body qualified as Body
+  import Box3D.Geometry (Sphere (..))
+  import Box3D.MathTypes (Pos (..), Vec3 (..), vec3Zero)
+  import Box3D.Shape (defaultShapeDef)
+  import Box3D.Shape qualified as Shape
+  import Box3D.World (WorldDef (..), defaultWorldDef)
+  import Box3D.World qualified as World
+
+  main :: IO ()
+  main = do
+    worldDef <- defaultWorldDef
+    world <- World.create worldDef{gravity = Vec3 0 (-10) 0}
+
+    bodyDef <- defaultBodyDef
+    ball <- Body.create world bodyDef{type_ = DynamicBody, position = Pos 0 10 0}
+    shapeDef <- defaultShapeDef
+    _ <- Shape.createSphere ball shapeDef (Sphere vec3Zero 0.5)
+
+    replicateM_ 60 (World.step world (1 / 60) 4)
+    Body.getPosition ball >>= print
+
+    World.destroy world
+  ```
+
+  ## Modules
+
+  The modules are designed for qualified import.
+
+  | Area | Modules |
+  | --- | --- |
+  | Simulation | `World`, `Body`, `Shape`, `Contact`, `Events` |
+  | Joints | `Joint`, `DistanceJoint`, `FilterJoint`, `MotorJoint`, `ParallelJoint`, `PrismaticJoint`, `RevoluteJoint`, `SphericalJoint`, `WeldJoint`, `WheelJoint` |
+  | Geometry | `Geometry`, `Hull`, `Mesh`, `HeightField`, `Compound`, `Authoring` |
+  | Shape builders | `BoxMesh`, `Cone`, `Cylinder`, `Grid`, `GridMesh`, `HollowBoxMesh`, `PlatformMesh`, `Rock`, `TorusMesh`, `Wave`, `WaveMesh` |
+  | Queries | `Query`, `Collision`, `DynamicTree`, `Mover` |
+  | Callbacks and drawing | `Callbacks`, `DebugDraw`, `DebugShape` |
+  | Recording | `Recording`, `RecPlayer`, `Player` |
+  | Foundation | `Id`, `MathTypes`, `Math`, `MathFunctions`, `Base`, `UserData`, `Extra`, `Tags` |
+
+  `Box3D.Authoring` builds meshes, height fields and compounds from Haskell vectors.
+
+  `Box3D.Internal` and its submodule are exposed, but may change in any release.
+
+  ## Things to know
+
+  - **Start from the defaults.** Create definitions with `default*Def` and update
+    the fields you need, rather than building them from scratch. They carry an
+    initialization marker, which the engine checks when `assertions` is on.
+  - **World positions are `Pos`.** The engine takes and returns `Pos` for places
+    in the world and `WorldTransform` for a full pose, while directions, velocities
+    and shape geometry stay `Vec3`. `MathTypes.toPos`, `toVec3`, `subPos` and
+    `offsetPos` convert between them.
+  - **Enums are open.** They are newtypes over `CInt` with pattern synonyms, and the
+    engine can hand back a value with no name here, so include a wildcard when you
+    `case` on one.
+  - **Worlds are not thread-safe.** Create, step and destroy them from one thread at
+    a time, and never create or destroy two worlds at once: the world table is
+    global. `Callbacks.withThreadPoolTaskSystem` runs the engine's internal work in
+    parallel.
+  - **Callback lifetimes.** The `with*` functions in `Box3D.Callbacks` free their
+    callback when the action ends, so anything holding it, a world included, must
+    be finished by then. Callbacks may run on the engine's worker threads.
+  - **Exceptions in callbacks.** `Draw` callbacks are trapped and rethrown by
+    `Callbacks.draw`. `withDebugShapes` callbacks are trapped too: call
+    `Callbacks.rethrowDebugShapes` after drawing, or the first exception only
+    surfaces when `withDebugShapes` returns. An exception escaping any other
+    callback stops the process, because it cannot unwind through C frames.
+  - **Events are copied.** `Box3D.Events` copies each event buffer into a vector
+    that is safe to keep. The raw buffers from `Box3D.World` are only valid until
+    the next step.
+
+  ## Build flags
+
+  `assertions` (off by default) keeps the engine's internal assertions. They catch
+  invalid arguments and corrupted state, stopping the process with a trap (`SIGILL`
+  on x86-64), and only with this flag does `Base.setAssertFcn` ever fire. Turn it
+  on while developing, for example with `stack build --flag Box3D:assertions`.
+
+  `double-precision` (off by default) builds the engine's large world mode, which
+  stores world positions as doubles so they stay accurate far from the origin.
+  `Pos` then holds `Double` instead of `Float`, and everything else stays `Float`.
+  Code that builds positions from literals and the `MathTypes` helpers compiles
+  either way. Every package in a build shares this setting.
+
+  Run `stack clean Box3D` before changing either flag on an already-built package.
+  A flag change does not rebuild the C objects or preprocessed modules, so without
+  a clean the old setting silently stays in effect.
+
+  ## Limits
+
+  - x86-64 and AArch64 only: ids cross the FFI as machine words, which relies on
+    those calling conventions.
+  - Built and tested on Linux x86-64 with GHC 9.10.3.
+description-type: markdown
+hash: c23f49e4e711e605a420101a455b17189f9ba60fc32439843f1ad8e473742490
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause AND MIT
+maintainer: aenor.realm@gmail.com
+synopsis: Low-level bindings to the Box3D physics engine
+test-bench-deps:
+  Box3D: '>=0'
+  base: '>=4.16 && <5'
+  tasty: '>=0'
+  tasty-bench: '>=0'
+  tasty-hunit: '>=0'
+  vector: '>=0.13 && <0.14'
