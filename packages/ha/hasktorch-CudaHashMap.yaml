@@ -1,0 +1,220 @@
+all-versions:
+- 0.1.0.0
+author: Susumu Katayama
+basic-deps:
+  base: '>=4.7 && <5'
+  hasktorch: '>=0'
+  hasktorch-CudaHashMap: '>=0'
+  libtorch-ffi: '>=0'
+changelog: |
+  # Revision history for CudaHashMap
+
+  ## 0.1.0.0 -- 2026-11-10
+
+  * First version. Released on an unsuspecting world.
+changelog-type: markdown
+description: |
+  # hasktorch-CudaHashMap
+
+  `hasktorch-CudaHashMap` provides a [HaskTorch](https://github.com/hasktorch/hasktorch) interface to the GPU-parallel hash map implementations (`cuco::dynamic_map` and `cuco::static_map`) in NVIDIA [cuCollections (`cuco`)](https://github.com/NVIDIA/cuCollections).
+
+  It supports high-throughput batch insertions and lookups directly on GPU-resident `Tensor`s without round-tripping through host (CPU) memory.
+
+  ## Features
+
+  - **Two-Stage Lifecycle (`dynamic_map` $\rightarrow$ `static_map`)**:
+    - Starts as a dynamically resizing GPU hash map (`cuco::dynamic_map`) for workloads where the number of unique keys is not known in advance (e.g., training or incremental vocabulary/graph construction).
+    - Supports one-time compaction into a single flat `cuco::static_map` via `finalizeCudaHashMap` for maximum lookup throughput during inference or read-heavy phases.
+  - **Typed Key-Value Batch Operations (`insertBatch` / `lookupBatch`)**:
+    - Supports `Int32`, `Int64`, `Float`, and `Double` `Tensor`s for both keys and values.
+    - Uses overwrite (`insert_or_assign`) semantics when duplicate keys are inserted across or within batches.
+  - **Key-to-Index Mapping for `indexPut` / `indexSelect` (`insertKeys` / `lookupIndices`)**:
+    - Automatically assigns 0-based sequential `Int64` indices to unique keys on the GPU.
+    - Produces index `Tensor`s that can be passed directly to HaskTorch's `indexSelect` and `indexPut` (or via the convenience wrappers `hashMapIndexPut` and `hashMapIndexSelect`).
+  - **CUDA Device & Stream Awareness**:
+    - Automatically moves input tensors to the target CUDA device and executes kernels on LibTorch's current CUDA stream.
+
+  ---
+
+  ## System & Toolchain Requirements
+
+  Building the C++/CUDA wrapper (`cbits/cuco_wrapper.cu`) and linking it with GHC and LibTorch is sensitive to the versions of **`cmake`**, **`nvcc`**, **`gcc`**, and **`g++`**.
+
+  > **Important OS & Compiler Note:**
+  > **Ubuntu 26.04 LTS** (or newer) is recommended. **Ubuntu 24.04 LTS is not sufficient** out of the box because its standard package repositories only provide `gcc`/`g++` up to version 14, which is not enough for building this project's toolchain and dependencies. Ubuntu 26.04 provides **GCC/G++ 15** alongside newer CMake and CUDA packages.
+
+  ### Verified Environment (Ubuntu 26.04.1 LTS)
+
+  | Component | Verified Version | Notes |
+  | :--- | :--- | :--- |
+  | **OS** | Ubuntu 26.04.1 LTS | Ubuntu 24.04 (max GCC 14) is insufficient. |
+  | **`gcc` / `g++`** | **15.2.0** (`>= 15`) | Used both for host C++ compilation and as GHC's linker driver (`-pgml g++`). |
+  | **`cmake`** | **4.4.5** | Minimum `3.23.1` required by `CMakeLists.txt`; a recent CMake is needed for CUDA architecture handling and CPM (`cuCollections` / CCCL). |
+  | **`nvcc` (CUDA)** | **12.4** (or newer, e.g. `12.8`) | Must support C++17 (`-std=c++17`) and extended device lambdas (`--expt-extended-lambda`). CUDA libraries (`libcuda`, `libcudart`, `libnvrtc`) are required at link time. |
+  | **GPU Architecture** | **Volta (`sm_70`) or newer** | `cuCollections` requires `sm_70+` (`70;75;80;86;89;90`) for scoped atomic operations. |
+  | **GHC / Cabal** | GHC 9.10.3, Cabal `>= 3.0` | Configured via `Setup.hs` (`build-type: Custom`). |
+  | **LibTorch** | **2.9.1** (CUDA build) | Installed via `libtorch-ffi` with the `+cuda` flag enabled (configured in `cabal.project`). |
+
+  ---
+
+  ## Environment Setup & Building
+
+  ### 1. LibTorch & `LD_LIBRARY_PATH` Configuration
+
+  `cabal.project` enables the `+cuda` flag on `libtorch-ffi`:
+
+  ```cabal
+  packages: .
+
+  package libtorch-ffi
+    flags: +cuda
+  ```
+
+  Both `cbits/CMakeLists.txt` and `setenv` resolve the LibTorch path using the following environment variables (shown with their defaults):
+
+  - `LIBTORCH_HOME`: defaults to `$XDG_CACHE_HOME/libtorch` or `$HOME/.cache/libtorch`
+  - `LIBTORCH_VERSION`: defaults to `2.9.1`
+  - `LIBTORCH_CUDA_VERSION`: defaults to `cu128`
+
+  Before running executables, tests, or benchmarks, source `setenv` to add LibTorch's `lib` directory to `LD_LIBRARY_PATH`:
+
+  ```bash
+  source ./setenv
+  ```
+
+  ### 2. Building with Cabal
+
+  The custom `Setup.hs` hook automatically runs CMake during `cabal configure` / `cabal build` to fetch `NVIDIA/cuCollections` (via CPM) and compile `libcuco_wrapper.a` into `dist-newstyle/cbits-build`:
+
+  ```bash
+  cabal build
+  ```
+
+  *(Optional)* If you prefer to configure and build the C++/CUDA wrapper manually (e.g., to pass custom CMake variables), create `cbits/build` before running `cabal build`. When `cbits/build/CMakeCache.txt` exists, `Setup.hs` uses `cbits/build` instead of `dist-newstyle/cbits-build`:
+
+  ```bash
+  cmake -S cbits -B cbits/build
+  cmake --build cbits/build -j4
+  cabal build
+  ```
+
+  Note that `cabal clean` removes both `dist-newstyle` and `cbits/build`.
+
+  ### 3. Running the Demo, Tests, and Benchmarks
+
+  ```bash
+  # Run the example executable (app/Main.hs)
+  cabal run CudaHashMap
+
+  # Run the test suite (test/Main.hs)
+  cabal test
+
+  # Run the benchmark comparing Torch.CudaHashMap vs Data.HashMap.Strict (bench/Main.hs)
+  cabal bench
+  ```
+
+  ---
+
+  ## Usage Examples
+
+  ### Pattern A: Key-Value Batch Insert & Lookup
+
+  ```haskell
+  import Data.Int (Int64)
+  import Torch.Tensor (asTensor)
+  import Torch.CudaHashMap
+
+  main :: IO ()
+  main = do
+    -- 1. Create a dynamic GPU hash map
+    cudaMap <- newCudaHashMap
+
+    let keysTensor      = asTensor ([10, 20, 30] :: [Int64])
+        valuesTensor    = asTensor ([1.5, 2.5, 3.5] :: [Float])
+        queryKeysTensor = asTensor ([20, 10, 99] :: [Int64])
+
+    -- 2. Insert key-value batches (overwrites existing keys with new values)
+    insertBatch cudaMap keysTensor valuesTensor
+
+    -- 3. (Optional) Compact into a static_map once insertions are finished
+    finalizeCudaHashMap cudaMap
+
+    -- 4. Batch lookup (unregistered keys yield -1 for Int32/Int64, or NaN for Float/Double)
+    resultTensor <- lookupBatch cudaMap queryKeysTensor
+    print resultTensor
+    -- Output: Tensor Float [3] [ 2.5000,  1.5000,  NaN]
+  ```
+
+  ### Pattern B: Key-to-Index Mapping (`indexPut` / `indexSelect`)
+
+  When storing multi-dimensional feature rows or embedding vectors in a separate `Tensor` table, `CudaHashMap` can maintain a mapping from arbitrary keys to 0-based sequential `Int64` row indices:
+
+  ```haskell
+  import Data.Int (Int64)
+  import Torch.Tensor (asTensor)
+  import Torch.TensorFactories (zeros')
+  import Torch.CudaHashMap
+
+  main :: IO ()
+  main = do
+    idxMap <- newCudaHashMap
+    let table0     = zeros' [1000]
+        keysTensor = asTensor ([500, 600, 500, 700] :: [Int64])
+        valsTensor = asTensor ([5.0, 6.0, 5.5, 7.0] :: [Float])
+
+    -- Assigns 0-based Int64 indices to unique keys and writes valsTensor into table0
+    table1 <- hashMapIndexPut idxMap False keysTensor valsTensor table0
+
+    finalizeCudaHashMap idxMap
+
+    -- Look up indices for registered keys and select from table1 along dimension 0
+    selected <- hashMapIndexSelect idxMap 0 (asTensor ([700, 500, 600] :: [Int64])) table1
+    print selected
+  ```
+
+  You can also obtain the raw `Int64` index tensors directly via `insertKeys` and `lookupIndices` (which returns `-1` for missing keys).
+
+  ---
+
+  ## API Summary (`Torch.CudaHashMap`)
+
+  | Function | Type | Description |
+  | :--- | :--- | :--- |
+  | `newCudaHashMap` | `IO CudaHashMap` | Create a new GPU hash map with default initial capacity (`100,000`). Device is inferred from the first tensor (or `cuda:0` for CPU tensors). |
+  | `newCudaHashMapWithCapacity` | `Int -> IO CudaHashMap` | Create a new GPU hash map with a specified minimum capacity. |
+  | `newCudaHashMapOnDevice` | `Device -> Int -> IO CudaHashMap` | Create a new GPU hash map pinned to a specific CUDA `Device` (e.g. `Device CUDA 1`). |
+  | `hashMapDevice` | `CudaHashMap -> IO Device` | Query the CUDA `Device` associated with the hash map. |
+  | `sizeCudaHashMap` | `CudaHashMap -> IO Int` | Return the number of unique keys currently stored in the map. |
+  | `finalizeCudaHashMap` | `CudaHashMap -> IO ()` | Convert the internal `cuco::dynamic_map` into a single `cuco::static_map` for faster lookups. |
+  | `insertBatch` | `CudaHashMap -> Tensor -> Tensor -> IO ()` | Insert or overwrite (`insert_or_assign`) key-value pairs (`Int32`, `Int64`, `Float`, `Double`). |
+  | `lookupBatch` | `CudaHashMap -> Tensor -> IO Tensor` | Look up values for a tensor of keys. Missing keys yield `-1` (`Int32`/`Int64`) or `NaN` (`Float`/`Double`). |
+  | `insertKeys` | `CudaHashMap -> Tensor -> IO Tensor` | Assign 0-based sequential `Int64` indices to unseen keys and return the `Int64` index tensor for all input keys. |
+  | `lookupIndices` | `CudaHashMap -> Tensor -> IO Tensor` | Look up 0-based `Int64` indices for input keys without inserting (`-1` for missing keys). |
+  | `hashMapIndexPut` | `CudaHashMap -> Bool -> Tensor -> Tensor -> Tensor -> IO Tensor` | Map keys via `insertKeys` and update a table tensor using `indexPut`. |
+  | `hashMapIndexSelect` | `CudaHashMap -> Int -> Tensor -> Tensor -> IO Tensor` | Map keys via `lookupIndices` and gather from a table tensor using `indexSelect`. |
+
+  ### Sentinel Value Conventions
+
+  `cuCollections` reserves sentinel values in open-addressing hash tables:
+  - **Empty key sentinel**: `std::numeric_limits<K>::min()` for `Int32`/`Int64`, and quiet `NaN` for `Float`/`Double`. Avoid inserting these reserved values as keys.
+  - **Missing value sentinel (on lookup)**: `-1` for `Int32`/`Int64` values/indices, and quiet `NaN` for `Float`/`Double` values.
+
+  ---
+
+  ## License
+
+  BSD-3-Clause (see [LICENSE](LICENSE)).
+description-type: markdown
+hash: c5a0cb7608bbd617cea36780fcdf53c9fb7d6eb5631cf3899f5228876af053da
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: skata@cs.miyazaki-u.ac.jp
+synopsis: HaskTorch interface to the GPU-parallel hashmap in cuCollections
+test-bench-deps:
+  base: '>=4.7 && <5'
+  clock: '>=0.8'
+  deepseq: '>=1.4'
+  hasktorch: '>=0'
+  hasktorch-CudaHashMap: '>=0'
+  unordered-containers: '>=0.2'
