@@ -21,22 +21,88 @@ all-versions:
 - 2.4.0
 - 2.4.1
 - 2.5.0
+- 3.0.0
 author: Oliver Charles
 basic-deps:
   StateVar: '>=0'
-  base: '>=4.12 && <4.22'
-  containers: '>=0'
-  dear-imgui: '>=0'
-  gl: '>=0'
-  inline-c: '>=0'
-  inline-c-cpp: '>=0'
+  base: '>=4.18 && <5'
+  dear-imgui-raw: ^>=1.0
   managed: '>=0'
-  sdl2: '>=2'
   text: '>=0'
   unliftio: '>=0'
   vector: '>=0'
 changelog: |
   # Changelog for dear-imgui
+
+  ## [3.0.0]
+
+  The FFI layer is now provided by the generated [dear-imgui-raw] packages instead of hand-written inline-c wrappers.
+  `dear-imgui` keeps the high-level `DearImGui` and `DearImGui.FontAtlas` modules on top of them.
+
+  ### Build and packaging
+
+  - Requires GHC 9.6+.
+  - `imgui` updated to [1.93.0] (docking branch; docking and viewports are runtime opt-in).
+    Consult the upstream [changelog](https://github.com/ocornut/imgui/blob/v1.93.0/docs/CHANGELOG.txt) for 1.92.9 to 1.93.0 migration hints. Notably:
+    * Breaking: `ImDrawFlags.RoundCorners*` flags are renamed to `Round*` (e.g. `RoundCornersBottom` -> `RoundBottom`).
+      Obsolete names are disabled, so the upstream redirects are not available.
+    * Numeric widgets (drag, slider, `inputFloat`, `inputInt`, `inputScalar`, ...) write a keyboard-entered value back
+      when it is confirmed (Enter, Tab, focus loss), not on every keystroke.
+      Push `ImGuiItemFlags.LiveEditOnInputScalar` with the raw `pushItemFlag` to restore the old behaviour.
+  - The `imgui` git submodule is gone. Sources are bundled with `dear-imgui-raw`, so `--recurse-submodules` is no longer needed.
+    `dear-imgui-raw` and the `dear-imgui-impl-<backend>` packages are on Hackage.
+  - Breaking: cabal flags `opengl2`, `opengl3`, `vulkan`, `sdl`, `sdl-renderer` and `glfw` are gone.
+    Platform and renderer backends are separate `dear-imgui-impl-<backend>` packages
+    (`opengl2`, `opengl3`, `sdl2`, `sdlrenderer2`, `glfw`, `vulkan`); depend on the ones you use directly.
+    They link the native SDL2/GLFW/Vulkan libraries; `dear-imgui` itself no longer depends on
+    `sdl2`, `GLFW-b`, `bindings-GLFW` or `vulkan` and has no `pkgconfig-depends` or `extra-libraries`.
+  - `glew` is no longer required; OpenGL3 uses the imgui built-in loader. `ImGui_ImplOpenGL3_Init` no longer calls `glewInit()`,
+    so if your code relied on that, initialize your GL loader yourself.
+  - Breaking: cabal flags `use-wchar32`, `use-ImDrawIdx32` and `disable-obsolete` are gone; all three are always on.
+
+  ### Raw access
+
+  - Breaking: `DearImGui.Raw*` modules are gone. For raw access depend on `dear-imgui-raw` and use its per-struct modules
+    (`DearImGui.Raw.ImGui`, `DearImGui.Raw.ImDrawList`, `DearImGui.Raw.ImGuiIO` field accessors like `poke io.iniFilename`, ...).
+    Raw functions take the full imgui argument list and pass small structs by value, so `Foreign.with` wrapping is not needed.
+  - Breaking: prefixed enum patterns (`ImGuiWindowFlags_NoTitleBar`) are gone. Import the raw enum module qualified:
+    `import qualified DearImGui.Raw.Enums.ImGuiWindowFlags as ImGuiWindowFlags` and write `ImGuiWindowFlags.NoTitleBar`
+    (`ImGuiWindowFlags.None` or plain `0` for no flags).
+    Enum types are plain integer aliases now (`CInt`; `ImU8` for `ImGuiSortDirection`), `FiniteEnum` is gone.
+    `DearImGui.Enums` still re-exports the type names used in signatures.
+
+  ### Types
+
+  - Breaking: `ImVec2`/`ImVec4`/`ImTextureRef`/`ImGuiTableSortSpecs`/`ImGuiTableColumnSortSpecs` are the raw records.
+    Field selector functions (`x`, `y`, `z`, `w`, ...) are gone; use pattern matching or `OverloadedRecordDot`.
+    `ImVec3` stays in `DearImGui.Structs`.
+  - Breaking: `ImTextureRef` fields are `_TexData :: Ptr ImTextureData` and `_TexID` (were `texData`/`texID`).
+    `textureRefFromID` is still the recommended constructor.
+  - Breaking: handle newtypes became pointer synonyms: `Context = Ptr ImGuiContext`, `DrawData = Ptr ImDrawData`,
+    `Font = Ptr ImFont`, `DrawList = Ptr ImDrawList`, `FontConfig = Ptr ImFontConfig`, `GlyphRanges = Ptr ImWchar`.
+  - Breaking: `ImGuiKeyChord` is `CInt` (was `Int`).
+
+  ### High-level API
+
+  - Added `imageButton` and `beginItemTooltip`.
+  - Breaking: `image`/`imageWithBg` take `ImTextureRef`/`ImVec2`/`ImVec4` values instead of pointers.
+  - Breaking: `withTooltip` now wraps `beginTooltip` (was mistakenly using `beginItemTooltip`).
+  - Breaking: removed `logText`, `getWindowContentRegionMin`, `getWindowContentRegionMax`, `setColorEditOptions`,
+    `FontAtlas.build` (obsolete in imgui 1.92 or not expressible without varargs). `FontAtlas.rebuild` no longer needs an explicit build step.
+  - `colorButton` no longer requires `HasSetter` on its colour reference.
+  - Breaking: `showStyleSelector`, `showFontSelector` and `tableHeader` take `Text` (were `CString`);
+    `popStyleColor` and `setKeyboardFocusHere` take `Int` (were `CInt`);
+    `plotLines`/`plotHistogram` take `[Float]`; font sizes in `withFontWithSize`/`withFontSize`/`pushFontWithSize`/`pushFontSize`
+    and the drag threshold in `isMouseDragging`/`getMouseDragDelta` are `Float` (were `CFloat`).
+
+  ### Backends
+
+  - Breaking: `DearImGui.OpenGL2`, `DearImGui.OpenGL3`, `DearImGui.SDL`, `DearImGui.SDL.*`, `DearImGui.GLFW`,
+    `DearImGui.GLFW.*` and `DearImGui.Vulkan` are removed. Use the `DearImGui.Impl.*` bridge modules of the
+    `dear-imgui-impl-<backend>` packages (or the `DearImGui.Raw.Impl.*` modules underneath them for raw pointers)
+    and see their documentation for the new APIs.
+
+  [dear-imgui-raw]: https://hackage.haskell.org/package/dear-imgui-raw
 
   ## [2.5.0]
 
@@ -210,7 +276,9 @@ changelog: |
   [2.4.0]: https://github.com/haskell-game/dear-imgui.hs/tree/v2.4.0
   [2.4.1]: https://github.com/haskell-game/dear-imgui.hs/tree/v2.4.1
   [2.5.0]: https://github.com/haskell-game/dear-imgui.hs/tree/v2.5.0
+  [3.0.0]: https://github.com/haskell-game/dear-imgui.hs/tree/v3.0.0
 
+  [1.93.0]: https://github.com/ocornut/imgui/releases/tag/v1.93.0
   [1.92.8]: https://github.com/ocornut/imgui/releases/tag/v1.92.8
   [1.91.9b]: https://github.com/ocornut/imgui/releases/tag/v1.91.9b
   [1.90.9]: https://github.com/ocornut/imgui/releases/tag/v1.90.9
@@ -238,18 +306,16 @@ description: |
 
   To get started, we'll build the following:
 
-  ![](./Example.png)
+  ![](https://raw.githubusercontent.com/haskell-game/dear-imgui.hs/main/Example.png)
 
   `dear-imgui.hs` can be used like a normal Haskell library. If you use Cabal,
-  simply add `dear-imgui` to your `build-depends`. ImGui supports a variety of
-  backends, and you will need to choose your backend at configuration time.
-  Backends can be enabled using Cabal flags, and these can be set through the
-  `cabal.project` file. For example, if you want to use a combination of SDL and
-  OpenGL:
+  add `dear-imgui` to your `build-depends`, together with the
+  `dear-imgui-impl-<backend>` package(s) for the platform and renderer backends
+  you want to use. For example, for a combination of SDL2 and OpenGL 3, plus the
+  `sdl2`, `gl` and `managed` packages the example below uses directly:
 
   ```
-  package dear-imgui
-    flags: +sdl +opengl3
+  build-depends: dear-imgui, dear-imgui-impl-sdl2, dear-imgui-impl-opengl3, sdl2, gl, managed
   ```
 
   With this done, the following module is the "Hello, World!" of ImGui:
@@ -260,9 +326,8 @@ description: |
   module Main ( main ) where
 
   import DearImGui
-  import DearImGui.OpenGL3
-  import DearImGui.SDL
-  import DearImGui.SDL.OpenGL
+  import qualified DearImGui.Impl.OpenGL3 as ImplGL3
+  import qualified DearImGui.Impl.SDL2 as ImplSDL2
 
   import Graphics.GL
   import SDL
@@ -270,7 +335,7 @@ description: |
   import Control.Monad.Managed
   import Control.Monad.IO.Class ()
   import Control.Monad (when, unless)
-  import Control.Exception (bracket, bracket_)
+  import Control.Exception (bracket)
 
   main :: IO ()
   main = do
@@ -290,17 +355,17 @@ description: |
       _ <- managed $ bracket createContext destroyContext
 
       -- Initialize ImGui's SDL2 backend
-      managed_ $ bracket_ (sdl2InitForOpenGL window glContext) sdl2Shutdown
+      managed_ $ ImplSDL2.withInitForOpenGL window glContext
       -- Initialize ImGui's OpenGL backend
-      managed_ $ bracket_ openGL3Init openGL3Shutdown
+      managed_ $ ImplGL3.withInit Nothing
 
       liftIO $ mainLoop window
 
   mainLoop :: Window -> IO ()
   mainLoop window = unlessQuit $ do
     -- Tell ImGui we're starting a new frame
-    openGL3NewFrame
-    sdl2NewFrame
+    ImplGL3.newFrame
+    ImplSDL2.newFrame
     newFrame
 
     -- Build the GUI
@@ -318,7 +383,7 @@ description: |
     -- Render
     glClear GL_COLOR_BUFFER_BIT
     render
-    openGL3RenderDrawData =<< getDrawData
+    ImplGL3.renderDrawData =<< getDrawData
 
     glSwapWindow window
     mainLoop window
@@ -329,7 +394,7 @@ description: |
       unless shouldQuit action
 
     gotQuitEvent = do
-      ev <- pollEventWithImGui
+      ev <- ImplSDL2.pollEvent
 
       case ev of
         Nothing ->
@@ -341,14 +406,46 @@ description: |
       eventPayload event == QuitEvent
   ```
 
+  # Raw access
+
+  The high-level `DearImGui` module covers the common widgets. Everything else is
+  reachable through the generated [`dear-imgui-raw`](https://hackage.haskell.org/package/dear-imgui-raw)
+  packages that `dear-imgui` is built on: one module per struct
+  (`DearImGui.Raw.ImGui`, `DearImGui.Raw.ImDrawList`, ...), plain `IO` functions
+  taking the full imgui argument list, and `OverloadedRecordDot` field accessors on
+  struct pointers (`poke io.iniFilename ptr`). Enum values live in per-enum
+  modules and are meant to be imported qualified:
+
+  ``` haskell
+  import qualified DearImGui.Raw.Enums.ImGuiWindowFlags as ImGuiWindowFlags
+
+  flags = ImGuiWindowFlags.NoTitleBar .|. ImGuiWindowFlags.NoResize
+  ```
+
+  Renderer/platform backends live in the `dear-imgui-impl-<backend>` packages.
+  Each one exposes a raw layer (`DearImGui.Raw.Impl.SDL2`,
+  `DearImGui.Raw.Impl.OpenGL3`, ...) working on raw pointers, plus a bridge
+  module (`DearImGui.Impl.SDL2`, `DearImGui.Impl.GLFW`, ...) that accepts the
+  `sdl2`/`GLFW-b` handle types, feeds SDL events to ImGui (`pollEvent`) and
+  provides `withInit*` brackets. For Vulkan, `DearImGui.Impl.Vulkan` covers the
+  descriptor pool and `ImGui_ImplVulkan_Init` boilerplate, for both render-pass
+  and dynamic-rendering targets.
+
   # Hacking
 
   If you would like to help `dear-imgui`, here's how you can get started.
 
   The best path to development is using
   [Nix](https://nixos.org/guides/install-nix.html). Once you have Nix installed
-  (either in your operating system, or by running NixOS), you can enter a
-  development shell:
+  (either in your operating system, or by running NixOS), add the haskell.nix
+  binary caches to your `nix.conf` so you don't end up building GHC from source:
+
+  ```
+  extra-substituters = https://cache.zw3rk.com https://cache.iog.io
+  extra-trusted-public-keys = loony-tools:pr9m4BkM/5/eSTZlkQyRt57Jz7OMBxNSUiMC4FkcNfk= hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
+  ```
+
+  Then you can enter a development shell:
 
   ```
   $ nix-shell
@@ -357,7 +454,7 @@ description: |
   You should now be in a `bash` shell where you can run `cabal build all`,
   `cabal run readme`, etc.
 
-  If you experience any difficulties, please don't hesistate to raise an issue.
+  If you experience any difficulties, please don't hesitate to raise an issue.
 
   # Getting Help
 
@@ -367,9 +464,9 @@ description: |
   We have a Matrix room at
   [`#dear-imgui.hs:ocharles.org.uk`](https://matrix.to/#/#dear-imgui.hs:ocharles.org.uk).
 description-type: markdown
-hash: 530d914c68634dc59ffb4267791ca17800d382a6657f4ec2f1ceadcab2014152
+hash: bca246991093805bef7962f8c736c1c8337ec5cbd498d41391d730f29d90622e
 homepage: ''
-latest: 2.5.0
+latest: 3.0.0
 license-name: BSD-3-Clause
 maintainer: ollie@ocharles.org.uk, aenor.realm@gmail.com
 synopsis: Haskell bindings for Dear ImGui.
