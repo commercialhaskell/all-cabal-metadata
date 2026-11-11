@@ -22,23 +22,90 @@ all-versions:
 - 1.6.5
 - 1.6.6
 - 1.6.7
+- 1.7.0
 author: Peter Simons <simons@cryp.to>
 basic-deps:
-  Cabal: '>=0'
   Decimal: '>=0'
   base: '>=3 && <5'
   hledger-lib: '>=1.26 && <1.53'
   mtl: '>=0'
   text: '>=0'
   time: '>=0'
-changelog: ''
-changelog-type: ''
+changelog: |
+  # Revision history for hledger-interest
+
+  ## 1.7.0 (2026-11-11)
+
+  ### Changes that affect computed interest
+
+  Several bugs have been fixed that made hledger-interest compute wrong
+  amounts. Re-running it on existing journals may produce different
+  results in the following cases:
+
+  - `--bgb288` applied 5.37% to every date after 2011-06-30, because a
+    stray entry in the table of base rates shadowed all later rates. The
+    table has been fixed, checked against the rates published by the
+    Deutsche Bundesbank, and extended up to 2026-12-31. Dates after the
+    end of the table now produce a clear error message instead of a
+    crash.
+  - `--annual-schedule` used the rate in effect at the start of a period
+    until the next transaction or year end, ignoring any rate changes in
+    between, and a new rate took effect only on the day after its start
+    date. Rates now take effect exactly on their start date
+    ([#20](https://github.com/peti/hledger-interest/issues/20),
+    [#23](https://github.com/peti/hledger-interest/pull/23)). Dates
+    before the first entry of the schedule earn no interest instead of
+    crashing.
+  - A transaction on the first day of a rate period, e.g. on January 1st
+    with `--annual`, earned one day of interest too many
+    ([#21](https://github.com/peti/hledger-interest/issues/21)).
+  - `--30E-360isda` counted the days of a period that starts on the 31st
+    of a month wrongly, e.g. 30 instead of 15 days from 2023-01-31 to
+    2023-02-15 ([#28](https://github.com/peti/hledger-interest/issues/28)).
+  - Interest on balances without decimal places is now shown with at
+    least two decimal places instead of being rounded to whole units.
+
+  ### New features
+
+  - The new `--post-on-transactions` flag posts interest only when the
+    balance changes (and on the final day with `--today`), rather than at
+    the end of every year and rate period. Interest is still computed
+    separately for every year and rate, but no longer compounds at the end
+    of each year
+    ([#16](https://github.com/peti/hledger-interest/issues/16),
+    [#26](https://github.com/peti/hledger-interest/issues/26)).
+  - Without `--file`, hledger-interest now reads `$LEDGER_FILE` or
+    `~/.hledger.journal` like hledger does, instead of silently reading
+    nothing ([#24](https://github.com/peti/hledger-interest/issues/24)).
+    Errors while reading the journal, such as a missing file, are
+    reported without the "Uncaught exception" noise.
+
+  ### Other changes
+
+  - Descriptions of interest on multi-currency balances no longer contain
+    line breaks ([#11](https://github.com/peti/hledger-interest/issues/11),
+    [#13](https://github.com/peti/hledger-interest/pull/13)).
+  - The README explains how interest is computed with each day counting
+    convention, and that `--act` corresponds to Actual/Actual ISDA
+    ([#25](https://github.com/peti/hledger-interest/issues/25)).
+  - Support hledger-lib up to version 1.52.x and GHC 9.6 to 9.14.
+  - Drop the obsolete dependency on Cabal and the `Setup.hs` file.
+
+  ## 1.6.7 and earlier
+
+  See the [git history](https://github.com/peti/hledger-interest/commits/master).
+changelog-type: markdown
 description: |
   hledger-interest
   ================
 
+  [![hackage release](https://img.shields.io/hackage/v/hledger-interest.svg?label=hackage)](http://hackage.haskell.org/package/hledger-interest)
+  [![stackage LTS package](http://stackage.org/package/hledger-interest/badge/lts)](http://stackage.org/lts/package/hledger-interest)
+  [![stackage Nightly package](http://stackage.org/package/hledger-interest/badge/nightly)](http://stackage.org/nightly/package/hledger-interest)
+  [![CI Status](https://github.com/peti/hledger-interest/actions/workflows/haskell-ci.yml/badge.svg)](https://github.com/peti/hledger-interest/actions/workflows/haskell-ci.yml)
+
   hledger-interest is a small command-line utility based on [Simon
-  Michael's hlegder library](http://hledger.org/). Its purpose is to
+  Michael's hledger library](http://hledger.org/). Its purpose is to
   compute interest for a given ledger account. Using command line flags,
   the program can be configured to use various [day counting
   conventions](http://en.wikipedia.org/wiki/Day_count_convention), such as
@@ -50,16 +117,21 @@ description: |
   the source code.
 
   An overview over the available run-time options can be displayed by
-  running "`hleder-interest --help`":
+  running "`hledger-interest --help`":
 
       Usage: hledger-interest [OPTION...] ACCOUNT
         -v          --verbose                   echo input ledger to stdout (default)
         -q          --quiet                     don't echo input ledger to stdout
                     --today                     compute interest up until today
+                    --post-on-transactions      post interest only when the balance changes
+                                                (and with --today), not at the end of
+                                                every year or rate period
         -f FILE     --file=FILE                 input ledger file (pass '-' for stdin)
+                                                default: $LEDGER_FILE or ~/.hledger.journal
         -s ACCOUNT  --source=ACCOUNT            interest source account
         -t ACCOUNT  --target=ACCOUNT            interest target account
-                    --act                       use 'act' day counting convention
+                    --act                       use 'act/act' day counting convention
+                                                (Actual/Actual ISDA; see README)
                     --30-360                    use '30/360' day counting convention
                     --30E-360                   use '30E/360' day counting convention
                     --30E-360isda               use '30E/360isda' day counting convention
@@ -78,6 +150,47 @@ description: |
   transfers the interest that accrued so far. Interest will be debited
   from the account designed by the `--source` flag and credited to the
   account designed by the `--target` flag.
+
+  ## Day counting conventions
+
+  For every period, hledger-interest computes
+
+      interest = balance * rate * days / days-in-year
+
+  where `days` is the length of the period, both ends included, and
+  `days-in-year` is the length of the calendar year in which the period
+  ends. Both are counted with the selected convention:
+
+  - `--act` counts actual calendar days, so a year has 365 or 366 days.
+    `--annual`, `--annual-schedule`, and `--bgb288` never let a period
+    cross a year boundary, which makes this the [Actual/Actual
+    ISDA](https://en.wikipedia.org/wiki/Day_count_convention#Actual/Actual_ISDA)
+    method. It is also the reason why these rates post interest on
+    December 31st of every year (see below). With `--constant`, a period can span
+    several years and is divided by the length of the year it ends in, so
+    the result is only an approximation of Actual/Actual ISDA in that case.
+  - `--30-360`, `--30E-360`, and `--30E-360isda` count every month as 30
+    days and every year as 360 days. They differ in how they treat the
+    31st and the end of February; see the [Wikipedia
+    article](https://en.wikipedia.org/wiki/Day_count_convention#30/360_methods)
+    for details. `--30E-360isda` does not apply the February exception
+    for the maturity date, because hledger-interest has no notion of
+    maturity.
+
+  By default, hledger-interest posts the interest at the end of every
+  period: on every transaction date, but also on December 31st and on
+  every date at which the rate changes. If the interest is credited to the
+  interest-bearing account itself, it compounds from then on. Many loans
+  and savings accounts compound less often, though, e.g. only when a
+  payment is made. With `--post-on-transactions`, interest is still
+  computed separately for every year and rate, but posted only on
+  transaction dates (and on the final day with `--today`). Since such a
+  posting may cover several rates, its description does not mention a
+  rate, e.g. for a rate change from 5% to 7% on 2021-12-20:
+
+      2022-01-10 interest for -9841.10 USD over 31 days
+          Liabilities:Loan       -53.65 USD
+          Expenses:Interest       53.65 USD
 
   ## Examples
 
@@ -221,9 +334,9 @@ description: |
       2011/03/17 ACME                 Re:ACME:Interest          EUR -0.90    EUR 35.00
                                       Receivable:ACME          EUR -34.10     EUR 0.90
 description-type: markdown
-hash: f6652e014510cd768617280125fe2d4cc724c200043b83242b51ef5c83f27b5b
+hash: 51daac0035b8156ecdf06bbc150f33db2cfc88bbb4b1238928fb3e3e7db482ab
 homepage: https://github.com/peti/hledger-interest
-latest: 1.6.7
+latest: 1.7.0
 license-name: BSD-3-Clause
 maintainer: Peter Simons <simons@cryp.to>
 synopsis: computes interest for a given account
