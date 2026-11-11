@@ -1,0 +1,161 @@
+all-versions:
+- 0.1.0.0
+author: Wen Kokke
+basic-deps:
+  base: '>=4.16 && <5'
+changelog: |
+  # Revision history for lossy-chan
+
+  ## 0.1.0.0 -- YYYY-mm-dd
+
+  * First version. Released on an unsuspecting world.
+changelog-type: markdown
+description: |
+  # `lossy-chan`
+
+  This package provides fast, bounded, and _lossy_ broadcast channels backed by a ring buffer.
+
+  As long as receivers keep up with senders, a `lossy-chan` acts as a regular channel. For example:
+
+  ```haskell
+  (i, o) <- LC.new 64       -- buffer size
+  for_ [0..1000] $ \m -> do
+      LC.send i m
+      m' <- LC.receive o
+      assertM (m' == m)
+  ```
+
+  If a receiver lags behind, it loses access to the _oldest_ messages first. For example:
+
+  ```haskell
+  (i, o) <- LC.new 64
+  for_ [0..64] (LC.send i)  -- sends 65 messages
+  m' <- LC.receive o
+  assertM (m' == 1)         -- 0 was dropped
+  ```
+
+  A `lossy-chan` channel is split into an input and an output channel, both of which are thread-safe.
+  If you use a single output channel in two threads, the messages are split between the two.
+  If you want two output channls that both receive every message, you can _duplicate_ the output channel.
+  The new output channel receives messages starting where the duplicated channel left off. For example:
+
+  ```haskell
+  (i, o1) <- LC.new 64
+  for_ [1,2] (LC.send i)
+
+  m1 <- LC.receive o1
+  assertM (m1 == 1)         -- receive the 1 on o1
+
+  o2 <- LC.dup o1           -- duplicate o1
+  m2 <- LC.receive o2       -- receive the 2 on o2
+  assertM (m2 == 2)
+
+  m2' <- LC.receive o1      -- receive the 2 on o1
+  assertM (m2' == 2)
+  ```
+
+  The `lossy-chan` buffer uses access counts to ensure that messages can be garbage collected as soon as they've been received by every output channel. This relies on finalizers and is not guaranteed to be prompt. For example:
+
+  ```haskell
+  (i, o) <- LC.new 64
+  LC.send i bigThing
+  void (LC.receive o)       -- bigThing can now be garbage collected
+  ```
+
+  If the input channel is garbage collected, output channels can continue to receive values until they reach the end of the buffer, at which point `receive` will throw a `NoInChanError`. Alternatively, the GHC RTS may also throw a `BlockedIndefinitelyOnSTM` exception. For example:
+
+  ```haskell
+  (i, o) <- LC.new 64
+  LC.send i 1
+
+  m1 <- LC.receive o
+  assertM (m1 == 1)         -- receive the 1
+
+  m2 <- LC.receive o        -- throws NoInChanError or BlockedIndefinitelyOnSTM
+  ```
+
+  ## Benchmarks
+
+  This section shows the results of time and space benchmarks that compare `lossy-chan` with various other channels implementations:
+
+  - The `base` benchmark uses `Control.Concurrent.Chan`.
+  - The `stm` benchmark uses `Control.Concurrent.STM.TChan`.
+  - The `unagi-chan` benchmark uses `Control.Concurrent.Chan.Unagi`.
+  - The `lossy-chan-N` benchmarks use `Control.Concurrent.LossyChan` with buffer size `N`.
+
+  The benchmark itself was adapted from the `unagi-chan`'s benchmark, and consists of some number of sender threads, each of which sends 10,000 messages, and some number of receiver threads, each of which tries to receive 10,000 messages.
+  Since `lossy-chan` channels may lose some messages, receiver threads terminate when they catch a `NoInChanError` or `BlockedIndefinitelyOnSTM` exception.
+
+  _This isn't a fair comparison_, since none of the other channel implementations is lossy. However, it should give you some idea of the performance and memory usage characteristics of `lossy-chan`.
+
+  ### Time
+
+  The time benchmark, created using `criterion`, shows that a `lossy-chan` channel is roughly as fast as an `unagi-chan` channel, and both are significantly faster than the `base` and `stm` channels. Moreover, the buffer size doesn't appear to significanly affect the performance of a `lossy-chan` channel.
+
+  ![Benchmark that compares lossy-chan with unagi-chan.](https://github.com/well-typed/lossy-chan/blob/ed2abb0ee3b55a549fce7f466f6a872c4bc6ec25/assets/benchmark.png?raw=true)
+
+  ### Space
+
+  The space benchmark, created using `weigh`, shows that a `lossy-chan` channel has much lower maximum residency when compared to the other channel implementations, and that its maximum residency scales with the buffer size. This is expected from the use of a ring buffer.
+
+
+  | Benchmark        | Case                   |  Allocated | Max Residency |
+  | :--------------- | :--------------------- | ---------: | ------------: |
+  | `base`           | 1 senders, 1 receivers | 25,604,448 |     8,348,840 |
+  |                  | 2 senders, 2 receivers | 51,208,176 |    12,275,048 |
+  |                  | 3 senders, 3 receivers | 76,811,928 |    16,699,824 |
+  |                  | 4 senders, 4 receivers | 96,154,064 |    24,617,800 |
+  | `stm`            | 1 senders, 1 receivers | 16,805,400 |     8,830,408 |
+  |                  | 2 senders, 2 receivers | 33,609,720 |     9,845,000 |
+  |                  | 3 senders, 3 receivers | 50,414,848 |    14,717,096 |
+  |                  | 4 senders, 4 receivers | 55,414,888 |    17,660,312 |
+  | `unagi-chan`     | 1 senders, 1 receivers | 18,439,984 |     4,540,792 |
+  |                  | 2 senders, 2 receivers | 36,862,432 |     4,541,464 |
+  |                  | 3 senders, 3 receivers | 55,277,096 |    10,573,080 |
+  |                  | 4 senders, 4 receivers | 73,698,768 |    10,573,984 |
+  | `lossy-chan-2`   | 1 senders, 1 receivers | 12,008,624 |         3,088 |
+  |                  | 2 senders, 2 receivers | 24,013,384 |         4,960 |
+  |                  | 3 senders, 3 receivers | 36,018,184 |         6,816 |
+  |                  | 4 senders, 4 receivers | 48,021,576 |         8,672 |
+  | `lossy-chan-4`   | 1 senders, 1 receivers | 12,008,928 |         3,168 |
+  |                  | 2 senders, 2 receivers | 24,014,392 |         5,040 |
+  |                  | 3 senders, 3 receivers | 36,018,456 |         6,896 |
+  |                  | 4 senders, 4 receivers | 48,021,664 |         8,752 |
+  | `lossy-chan-8`   | 1 senders, 1 receivers | 12,009,536 |         3,328 |
+  |                  | 2 senders, 2 receivers | 24,015,448 |         5,200 |
+  |                  | 3 senders, 3 receivers | 36,019,056 |         7,056 |
+  |                  | 4 senders, 4 receivers | 48,024,952 |         8,912 |
+  | `lossy-chan-16`  | 1 senders, 1 receivers | 12,010,472 |         3,648 |
+  |                  | 2 senders, 2 receivers | 24,017,080 |         5,520 |
+  |                  | 3 senders, 3 receivers | 36,019,840 |         7,376 |
+  |                  | 4 senders, 4 receivers | 48,028,224 |         9,232 |
+  | `lossy-chan-32`  | 1 senders, 1 receivers | 12,011,728 |         4,288 |
+  |                  | 2 senders, 2 receivers | 24,017,720 |         6,160 |
+  |                  | 3 senders, 3 receivers | 36,028,936 |         8,016 |
+  |                  | 4 senders, 4 receivers | 48,037,104 |         9,872 |
+  | `lossy-chan-64`  | 1 senders, 1 receivers | 12,014,464 |         5,568 |
+  |                  | 2 senders, 2 receivers | 24,030,232 |         7,440 |
+  |                  | 3 senders, 3 receivers | 36,041,456 |         9,296 |
+  |                  | 4 senders, 4 receivers | 48,067,576 |        11,152 |
+  | `lossy-chan-128` | 1 senders, 1 receivers | 12,021,448 |         8,128 |
+  |                  | 2 senders, 2 receivers | 24,047,128 |        10,000 |
+  |                  | 3 senders, 3 receivers | 36,065,520 |        11,856 |
+  |                  | 4 senders, 4 receivers | 48,083,512 |        13,712 |
+description-type: markdown
+hash: 8ceb1d9ea825d73f974c635c91dbb917c7564c0289cd828a4528ab1c324af8dd
+homepage: ''
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: wen@well-typed.com
+synopsis: Fast, bounded, and lossy broadcast channels backed by a ring buffer
+test-bench-deps:
+  async: '>=0'
+  base: '>=4.16 && <5'
+  criterion: '>=0'
+  lossy-chan: '>=0'
+  stm: '>=0'
+  tasty: '>=0'
+  tasty-hunit: '>=0'
+  tasty-quickcheck: '>=0'
+  unagi-chan: '>=0'
+  weigh: '>=0'
