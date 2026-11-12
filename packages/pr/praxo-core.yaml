@@ -1,0 +1,211 @@
+all-versions:
+- 0.3.0
+author: AxisVela
+basic-deps:
+  base: '>=4.14 && <5'
+  containers: '>=0.6 && <0.9'
+  praxo-core: '>=0'
+changelog: ''
+changelog-type: ''
+description: |
+  # PRAXO-CORE Haskell Core
+
+  PRAXO-CORE is an embeddable, MIT-licensed agent framework. This package is its
+  native Haskell Core. It implements all eleven declared vector groups and does not
+  call Go or another Core. It includes a native callback-based agent loop with
+  tools, policy hooks, typed events, memory, checkpoints, context budgets,
+  middleware, JSON Schema validation, plugin manifest parsing, and runtime helpers.
+
+  - Implementation type: Core.
+  - Package version: `0.2.0`; supported `SPEC_VERSION`: `0.2.0`.
+  - Local gate: all eleven shared vector groups, native regression tests, and
+    source API/parity checks.
+  - Linux and Windows CI run the full suite. Hackage publication uses
+    `.github/workflows/haskell-release.yml`; production readiness is not implied
+    by the source tag.
+
+  ## Registry and Coding-Agent Entry
+
+  - Registry introduction: [REGISTRY.md](https://github.com/axisvela/praxo-core/blob/main/language/haskell/REGISTRY.md)
+  - Machine-readable entry: [llms.txt](https://github.com/axisvela/praxo-core/blob/main/language/haskell/llms.txt) and [llms.md](https://github.com/axisvela/praxo-core/blob/main/language/haskell/llms.md)
+  - Coding-agent contract: [docs/getting-started/coding-agents.md](https://github.com/axisvela/praxo-core/blob/main/docs/getting-started/coding-agents.md)
+  - Registry: [Hackage (pending)](https://github.com/axisvela/praxo-core/releases/tag/haskell%2Fv0.2.0)
+
+  ## Build and Test
+
+  Use GHC 9.0 or newer and Python 3.10 or newer. CI targets GHC 9.12.2 on Linux
+  and Windows. From the repository root:
+
+  ```bash
+  python language/haskell/run-tests.py
+  python language/haskell/api-snapshot.py --check
+  ```
+
+  Set `GHC` or pass `--compiler /path/to/ghc` to select the compiler. Python only
+  builds and launches the native programs; it does not implement their behavior.
+  Generated files stay under `language/haskell/build/`.
+
+  For a Cabal source build, from `language/haskell/`:
+
+  ```bash
+  cabal build --offline all
+  cabal test --offline
+  cabal run --offline praxo-haskell-conformance -- ../../spec
+  ```
+
+  The library depends only on GHC's `base` and `containers` packages. No provider,
+  JSON, or regular-expression package is downloaded by the native test driver.
+  Offline Cabal builds require those boot packages to be available with GHC.
+
+  ## Usage
+
+  ```haskell
+  import Praxo.Json
+  import Praxo.JsonSchema
+  import Praxo.ToolCall
+
+  main :: IO ()
+  main = do
+      print (parseToolCall "{\"name\":\"echo\",\"input\":{\"text\":\"hello\"}}")
+      print (validateSchema (JObject [("type", JString "string")]) (JNumber 42))
+      print (encodeJson (JObject [("runId", JString "run-1")]))
+  ```
+
+  Public declarations are inventoried in [`api/0.1.0.txt`](api/0.1.0.txt).
+  This is a source declaration check, not a binary ABI promise. Intentional API
+  changes require review and regeneration with `python api-snapshot.py`.
+
+  ## OpenAI-Compatible Adapter
+
+  `Praxo.OpenAICompatible` builds a `POST {baseUrl}/chat/completions` request with
+  messages, tools, tool choice, assistant tool calls, and token usage, and maps
+  provider HTTP failures to `PROVIDER_HTTP`. Streaming is not implemented.
+
+  ```haskell
+  import qualified Praxo.Agent as A
+  import Praxo.Json
+  import Praxo.OpenAICompatible
+
+  adapter :: Transport -> OpenAIConfig
+  adapter transport = OpenAIConfig
+      { openAIBaseURL = "https://api.example.com/v1"
+      , openAIModel = "provider-model-id"
+      , openAIKey = Just "secret"
+      , openAIToolChoice = Just "auto"
+      , openAITools = []
+      , openAITransport = transport
+      }
+
+  main :: IO ()
+  main = do
+      result <- generate (adapter myTransport) [A.Message "user" "hello" [] ""]
+      print result
+  ```
+
+  The adapter does not bundle an HTTP client, so the library keeps its `base` and
+  `containers` dependency set. Supply a synchronous `Transport` that performs the
+  HTTP exchange for production or tests; deterministic tests use a fake transport.
+  The Core `Response` type has no finish-reason field, so `finish_reason` is
+  ignored.
+
+  ## Anthropic and Gemini Adapters
+
+  Praxo.Anthropic and Praxo.Gemini build native Messages and
+  generateContent requests with the same injected Transport seam.
+
+  `haskell
+  import qualified Praxo.Anthropic as An
+  import qualified Praxo.Gemini as G
+  `
+
+  They map tool calls, tool schemas, usage, and provider errors. No HTTP client is
+  bundled.
+
+  ## Harmovela Event Sink
+
+  `Praxo.Harmovela` posts Core events to `POST {baseURL}/events` with the
+  documented envelope (`spec_version`, `id`, `type`, `source`, `created_at`,
+  `payload`). Supply a transport and a UTC nanosecond clock; the package keeps its
+  `base` and `containers` dependency set and does not bundle an HTTP client.
+
+  ```haskell
+  import qualified Praxo.Harmovela as H
+
+  sink :: H.HarmovelaTransport -> IO Integer -> H.HarmovelaSink
+  sink transport clock = H.newHarmovelaSink
+      "http://127.0.0.1:8790/aep/api"
+      transport
+      clock
+  ```
+
+  `emitHarmovelaEvent` accepts any 2xx response and returns `HARMOVELA_HTTP` with
+  the status and a bounded body otherwise. The sink adds no authentication,
+  retries, buffering, ordering, or exactly-once delivery. Event data may contain
+  sensitive content, so filter caller-side; use HTTPS for remote endpoints.
+
+  ## Declared Scope and Limits
+
+  - JSON parsing is strict, rejects malformed escapes and lone surrogates, and
+    bounds input to 1,048,576 Haskell characters and nesting to 64. Numbers use
+    exact rationals with bounded decimal spelling/exponents. Encoding rejects
+    non-terminating decimal rationals and invalid Unicode scalars.
+  - JSON object equality is order-independent and uses the last duplicate key.
+    Plugin manifests additionally reject duplicate fields to avoid ambiguity.
+  - Tool calls support canonical JSON, closed XML-style blocks, closed dotted
+    tags, and dotted plain lines. Governance metadata is preserved as strings.
+    No call ID is generated. DSML, invoke, todo, and skill-install formats are not
+    implemented. Tool-call input is limited to 262,144 characters; oversized input
+    is not parsed, and the stripping helper returns it unchanged. This helper is
+    not a security sanitizer. Do not infer full Go parser parity from the vectors.
+  - JSON Schema supports object properties/required fields, array items and
+    lengths, scalar types, enum, numeric bounds, and Unicode code-point lengths.
+    The reference's zero-bound behavior is preserved. Unknown keywords are ignored.
+  - Patterns support ASCII literals, dot, ranges/classes, anchors, `*`, `+`, `?`,
+    and basic escaped classes. This is not full RE2. Unsupported syntax fails
+    explicitly; work is bounded by pattern and input size. Pattern failures such
+    as `SCHEMA_PATTERN_UNSUPPORTED` are Core-local, not new wire error codes.
+    Other `Left` diagnostic strings are also Core-local rather than wire envelopes.
+  - Plugin checks cover declared manifest fields, entrypoint/isolation, limits,
+    permissions, health, capabilities, and signature/SBOM declarations. They do
+    not execute plugins, verify signatures, establish trust, or enforce OS confinement.
+  - The loop accepts model, tool, and event callbacks returning explicit errors.
+    It runs tools sequentially, preserves message history, and enforces step and
+    cumulative input/output token budgets. Negative model-reported input or output
+    counts fail with the Core-local `AGENT_INVALID_USAGE` error and a `run.failed`
+    event before that response's tools run, even when the token budget is disabled.
+    The loop relies on callbacks to report accurate non-negative usage; it cannot
+    independently verify counts. Callbacks must return errors rather
+    than throw exceptions; exceptions are not converted to agent errors. Tool
+    lookup and validation are the caller's responsibility. Events contain only
+    their kind, not full wire event envelopes. There is no asynchronous streaming
+    runtime, cancellation, or concurrent session management.
+  - `Praxo.Runtime` provides memory, event sinks, checkpoints, lexical path policy,
+    context compaction, and stream-kind constants. `Praxo.Middleware` provides PII
+    redaction, structured-output validation, call limits, tool selection, and
+    fallback helpers. The callback-based agent loop does not automatically apply
+    these opt-in helpers.
+  - The OpenAI-compatible adapter requires a caller-supplied transport and does
+    not implement streaming. There is no asynchronous event stream or plugin host
+    in this Core. Generic JSON can preserve wire field names; typed codecs for
+    other contract envelopes are not claimed.
+
+  See the [normative specification](../../spec/README.md),
+  [parity inventory](../../spec/parity/haskell.md), and
+  [language policy](../../docs/contributing/language-policy.md).
+  The parity inventory records the implemented Core surfaces.
+  See [SETUP.md](SETUP.md) for local setup and test commands.
+
+  ## License
+
+  MIT. See [LICENSE](LICENSE). `base` and `containers` use BSD-style licenses;
+  GHC and its runtime are separate toolchain components, not vendored code.
+description-type: markdown
+hash: e184c4e7efae8ece467f23b1c0b2973e1ae21854c4f19e755e45f947236c2333
+homepage: https://axisvela.github.io/praxo-core/
+latest: 0.3.0
+license-name: MIT
+maintainer: AxisVela <releases@axisvela.com>
+synopsis: Embeddable MIT-licensed agent framework for Haskell
+test-bench-deps:
+  base: '>=4.14 && <5'
+  praxo-core: '>=0'
