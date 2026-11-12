@@ -329,6 +329,7 @@ all-versions:
 - 1.9.1
 - 1.10.0
 - 1.10.1
+- 1.11.0
 author: JP Rupp
 basic-deps:
   aeson: '>=2.2.5.1 && <2.3'
@@ -347,10 +348,10 @@ basic-deps:
   filepath: '>=1.5.5.0 && <1.6'
   hashable: '>=1.5.1.0 && <1.6'
   hashtables: '>=1.4.2 && <1.5'
-  haskoin-core: '>=1.6.1 && <1.7'
+  haskoin-core: '>=1.6.2 && <1.7'
   haskoin-node: '>=2.5.1 && <2.6'
   haskoin-store: '>=0'
-  haskoin-store-data: '>=2.0 && <2.1'
+  haskoin-store-data: '>=2.0.1 && <2.1'
   hedis: '>=0.16.4 && <0.17'
   http-types: '>=0.12.6 && <0.13'
   lens: '>=5.3.6 && <5.4'
@@ -381,37 +382,89 @@ basic-deps:
 changelog: "# Changelog\nAll notable changes to this project will be documented in
   this file.\n\nThe format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)\nand
   this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)\n\n##
-  [Unreleased]\n\n## [1.10.1] - 2026-11-12\n\n### Changed\n- `swagger.yaml` names
-  one server, `./`: the server that served it,\n  wherever it is mounted. It no longer
-  lists the servers of api.haskoin.com,\n  which describe whatever version those run,
-  not the server in front of\n  you. The server serves the file as it is, instead
-  of adding itself to\n  that list.\n- The reference page at `/` has no list of servers
-  to choose from and no\n  bar to load another description: it shows the reference
-  of the server\n  that serves it, and nothing else.\n\n### Fixed\n- The licence links
-  of `swagger.yaml` and `README.md` pointed to a file\n  that does not exist, and
-  the version in `swagger.yaml` said 1.9.1.\n\n## [1.10.0] - 2026-11-12\n\nThe API
-  speaks JSON only. Its binary format is gone, from the server and\nfrom the documentation.\n\n###
-  Removed\n\n- **The binary format.** `Accept: application/octet-stream` no longer\n
-  \ gives binary: every answer is JSON, errors and `/events` included. The\n  \"Binary
-  format\" sections of `README.md` and `swagger.yaml` are gone.\n  Clients built with
-  haskoin-store-data before 2.0.0 ask for binary and\n  do not work with this server;
-  version 2.0.0 of its client speaks JSON.\n- **Binary frames over the WebSocket**
-  of `/events`. Events are sent in\n  text frames, and a binary frame from the client
-  closes the connection\n  as a command that cannot be read.\n- **Raw bytes in `POST
-  /transactions`.** The body is the transaction in\n  hex.\n\n### Changed\n\n- Answers
-  have `Vary: Accept-Encoding`, without `Accept`, which no longer\n  changes what
-  is answered.\n- Depends on haskoin-store-data 2.0.0.\n\n### Added\n\n- `docs/fleet-mempool.md`:
-  how the shared mempool of a fleet works, why\n  it holds, and its weak points. A
-  report in the repository, not in the\n  package.\n\n## [1.9.1] - 2026-11-11\n\n###
-  Changed\n\n- **The health check runs every second**, where it ran every thirty,
-  and\n  at once when the store has a new best block. `/health` answers from the\n
-  \ last result, so a load balancer and a fleet acted on news of up to half\n  a minute
-  ago. Redis is asked every five seconds.\n  `--health-check-interval` still sets
-  the interval.\n\n- **Log levels say who has the problem.** An error in the log is
-  now\n  something wrong with the store or its database, so that an alert on\n  errors
-  is worth having. The README has a table of the levels.\n  - A transaction from a
-  peer that the store refuses (an orphan, a double\n    spend, one without funds,
-  one already confirmed) is logged for\n    debugging. These were errors, several
+  [Unreleased]\n\n## [1.11.0] - 2026-11-12\n\n`POST /transactions` is done another
+  way, and now says what came of the\ntransaction. `docs/publishing.md` has the design
+  and the measurements.\n\n### Changed\n- **A 200 means that a full node accepted
+  the transaction and that the\n  server has it.** It used to mean that the transaction
+  was sent, and came\n  at once whatever happened. The request now waits for a node
+  to announce\n  the transaction back, for `--publish-timeout` (`PUBLISH_TIMEOUT`)\n
+  \ seconds at most, 30 by default. With a node that whitelists the store\n  that
+  takes milliseconds.\n- The transaction is handed to one node, on a connection made
+  for it. It\n  used to go to half the peers, on the connections the store syncs from.\n-
+  The transaction comes into the mempool when a node announces it on a\n  connection
+  that never sent it. The store used to ask the peers it had\n  sent it to, once,
+  five seconds later.\n- The same transaction posted again is sent once, and one that
+  the store\n  has is not sent at all.\n\n### Added\n- The store refuses, with 400
+  and the reason, a transaction that it can\n  tell no node will take:\n  - one that
+  spends an output it does not know, one that a confirmed\n    transaction has spent,
+  or a coinbase less than a hundred blocks old;\n  - one whose outputs are worth more
+  than its inputs, or that is a\n    coinbase;\n  - one whose lock time has not passed;\n
+  \ - one larger than nodes relay, or with an output that is dust;\n  - **one with
+  a forged signature**, for coins locked to one key: key\n    hash, key, witness key
+  hash plain or nested, and Taproot by its key;\n    on Bitcoin Cash with ECDSA and
+  Schnorr signatures, and for coins that\n    hold tokens. This is `judgeInputs` of
+  haskoin-core 1.6.2, which also\n    verifies multisig: with ECDSA signatures on
+  both networks, with\n    Schnorr signatures on Bitcoin Cash, and the multisig of
+  Taproot.\n- `--node-rpc` (`NODE_RPC`): the JSON-RPC URL of a full node. The store\n
+  \ publishes through it (`sendrawtransaction`): the node checks\n  everything, says
+  why it refuses, which Bitcoin Core does not tell a\n  peer, and does not close the
+  store's connections over what it refuses.\n  When the node does not answer, the
+  transaction goes to a peer.\n- **A peer is sent only what the store verified.**
+  A transaction with an\n  input that the store cannot verify, a script that is not
+  a key or a\n  multisig, is refused with 400 unless the store can send it over RPC.
+  A\n  peer that finds a transaction invalid may close every connection of\n  the
+  store, so sending on what it could not judge let anyone cut the\n  store off from
+  its peers.\n- The reason of a node that refuses a transaction and says why, as Bitcoin\n
+  \ Cash Node does, is the message of the 400.\n- 500 when no node could be reached,
+  when a node closed the connection on\n  receiving the transaction, and when no node
+  announced it in time. The\n  reference always listed these errors; the code gave
+  none of them.\n- A transaction that a node refused, closed the connection on, or
+  did not\n  announce is remembered for ten minutes and not sent again. Other\n  transactions
+  are published as before.\n- The body of `POST /transactions` is read up to the length
+  of the longest\n  transaction of the network in hexadecimal, and a longer one is
+  answered\n  413. The server used to read a body of any size into memory.\n- `Store`
+  has `connect`, the function that opens a connection to a node.\n- The integration
+  tests run a store against a Bitcoin Core and a Bitcoin\n  Cash Node that do not
+  whitelist it.\n\n### Fixed\n- **A published transaction was often not seen until
+  a block confirmed\n  it.** Bitcoin Core does not give a transaction back on the
+  connection\n  that sent it until its timer for announcements has run, five seconds
+  on\n  average: the one request the store made at five seconds got `notfound`\n  three
+  times in four against Bitcoin Core 32.1. A store whose only node\n  did not whitelist
+  it then never took the transaction in.\n- **One request could cut a store off from
+  half its peers.** A node that\n  finds a transaction invalid may close every connection
+  from the address\n  that sent it, and Bitcoin Cash Node 29.2 does. A forged transaction
+  went\n  to half the peers on the connections the store syncs from.\n- With no peer
+  connected the answer was 200 and nothing was sent.\n\n## [1.10.1] - 2026-11-12\n\n###
+  Changed\n- `swagger.yaml` names one server, `./`: the server that served it,\n  wherever
+  it is mounted. It no longer lists the servers of api.haskoin.com,\n  which describe
+  whatever version those run, not the server in front of\n  you. The server serves
+  the file as it is, instead of adding itself to\n  that list.\n- The reference page
+  at `/` has no list of servers to choose from and no\n  bar to load another description:
+  it shows the reference of the server\n  that serves it, and nothing else.\n\n###
+  Fixed\n- The licence links of `swagger.yaml` and `README.md` pointed to a file\n
+  \ that does not exist, and the version in `swagger.yaml` said 1.9.1.\n\n## [1.10.0]
+  - 2026-11-12\n\nThe API speaks JSON only. Its binary format is gone, from the server
+  and\nfrom the documentation.\n\n### Removed\n\n- **The binary format.** `Accept:
+  application/octet-stream` no longer\n  gives binary: every answer is JSON, errors
+  and `/events` included. The\n  \"Binary format\" sections of `README.md` and `swagger.yaml`
+  are gone.\n  Clients built with haskoin-store-data before 2.0.0 ask for binary and\n
+  \ do not work with this server; version 2.0.0 of its client speaks JSON.\n- **Binary
+  frames over the WebSocket** of `/events`. Events are sent in\n  text frames, and
+  a binary frame from the client closes the connection\n  as a command that cannot
+  be read.\n- **Raw bytes in `POST /transactions`.** The body is the transaction in\n
+  \ hex.\n\n### Changed\n\n- Answers have `Vary: Accept-Encoding`, without `Accept`,
+  which no longer\n  changes what is answered.\n- Depends on haskoin-store-data 2.0.0.\n\n###
+  Added\n\n- `docs/fleet-mempool.md`: how the shared mempool of a fleet works, why\n
+  \ it holds, and its weak points. A report in the repository, not in the\n  package.\n\n##
+  [1.9.1] - 2026-11-11\n\n### Changed\n\n- **The health check runs every second**,
+  where it ran every thirty, and\n  at once when the store has a new best block. `/health`
+  answers from the\n  last result, so a load balancer and a fleet acted on news of
+  up to half\n  a minute ago. Redis is asked every five seconds.\n  `--health-check-interval`
+  still sets the interval.\n\n- **Log levels say who has the problem.** An error in
+  the log is now\n  something wrong with the store or its database, so that an alert
+  on\n  errors is worth having. The README has a table of the levels.\n  - A transaction
+  from a peer that the store refuses (an orphan, a double\n    spend, one without
+  funds, one already confirmed) is logged for\n    debugging. These were errors, several
   a minute on a healthy server.\n  - A request answered 4xx or 503 is logged for debugging,
   like a\n    successful one. Only a 500 is an error.\n  - A peer that times out or
   sends a block that was not asked for is a\n    warning.\n  - Redis or the price
@@ -1832,9 +1885,14 @@ description: |
   curl -X POST --data-binary @tx.hex localhost:3000/transactions
   ```
 
-  The body is the signed transaction in hex. The store sends it to its peers and
-  returns the transaction id. It appears in the mempool, and in the wallet's
-  history, as soon as a peer relays it back.
+  The body is the signed transaction in hex. The store hands it to one full
+  node and answers with the transaction id once a node has announced it back
+  and the store has it: the wallet's history shows it on the next request.
+
+  A transaction that cannot be valid, or that a node refuses with a reason, is
+  answered 400 with the reason. A 500 means that the store could not find out:
+  post the same transaction again, which sends nothing twice.
+  [Publishing](#publishing) has the rest.
 
   ### 6. Stay up to date without polling
 
@@ -1943,6 +2001,8 @@ description: |
   | `--max-full-item-count` | `MAX_FULL_ITEM_COUNT` | `5000` | Most full transactions in a list (0 = no limit) |
   | `--max-offset` | `MAX_OFFSET` | `50000` | Largest `offset` (0 = no limit) |
   | `--slow-request` | `SLOW_REQUEST` | `5` | Seconds a request may take before the log warns of it (0 = never) |
+  | `--publish-timeout` | `PUBLISH_TIMEOUT` | `30` | Seconds that `POST /transactions` waits for a node to announce the transaction back |
+  | `--node-rpc` | `NODE_RPC` | none | JSON-RPC URL of a full node, such as `http://user:password@127.0.0.1:8332/`, to publish transactions through; without it, or when it does not answer, they go to a peer |
   | `--def-item-count` | `DEF_ITEM_COUNT` | `100` | Items in a list when no `limit` is given |
   | `--xpub-gap` | `XPUB_GAP` | `32` | Unused addresses kept after the last used one of each chain of an xpub; payments further away are not seen |
   | `--xpub-gap-init` | `XPUB_GAP_INIT` | `20` | Addresses looked at for an xpub with no transactions; an xpub with none used among them counts as unused |
@@ -2112,6 +2172,10 @@ description: |
     as a form (`application/x-www-form-urlencoded`), so that it does not
     have to fit in a URL. `/transactions` does not: `POST` there publishes
     a transaction.
+  - **A transaction to publish has a largest size**: the body of
+    `POST /transactions` may be as long as the longest transaction of the
+    network in hexadecimal, 8 MB with SegWit and 2 MB on Bitcoin Cash. More
+    is answered 413 without being read whole.
   - **A 503 says when to try again**, in `Retry-After`.
   - **HTTPS is optional and off by default.** With `--tls-cert` and
     `--tls-key` the server speaks HTTPS on its port, and nothing else. A
@@ -2151,6 +2215,46 @@ description: |
     is back on the main chain of headers.
   - The **web server** answers from RocksDB, and from Redis for what is
     cached there.
+
+  ### Publishing
+
+  The store does not check scripts, so a transaction that a client posts
+  never goes into its mempool directly: anyone could show a payment that will
+  never confirm. It is handed to one full node, and comes in when a node
+  announces it back.
+
+  - **A connection of its own.** The transaction goes to a node on a
+    connection made for it, not on those the store syncs from. A node does
+    not announce a transaction to the connection that gave it. On the others
+    the store hears of it as of any transaction, and imports it the same way.
+  - **The answer waits for that**, up to `--publish-timeout` seconds. A 200
+    means that a full node accepted the transaction and the store has it.
+  - **The store checks what it can first**: that the inputs exist and are
+    not spent, that a coinbase is old enough, the amounts, the lock time,
+    the size and the dust rule of relay, and the signature of every coin
+    that is locked to one key, on both networks. A transaction that fails
+    is refused with the reason, and nothing is sent. A script of any other
+    kind is left to the node.
+  - **Over the RPC of a node, when the store has it.** With `--node-rpc`
+    the store gives the transaction to a full node over its RPC. The node
+    checks everything and says why it refuses. If the node does not
+    answer, the transaction goes to a peer instead.
+  - **To a peer, only what the store verified.** A peer that is sent a
+    transaction it finds invalid may close every connection of the store.
+    So a transaction with an input that the store cannot verify, a script
+    that is not a key or a multisig, is refused unless there is an RPC to
+    send it over. Give the store the RPC of a node to publish those.
+  - **The same transaction is sent once**, however often it is posted.
+  - **Whitelist the store on your nodes** (`-whitelist` in Bitcoin Core and
+    Bitcoin Cash Node). A node announces to a whitelisted peer without
+    delay, so the answer takes milliseconds; otherwise Bitcoin Core takes
+    five seconds on average. And a node that finds a transaction invalid may
+    close every connection of the peer that sent it, which it never does to
+    a whitelisted one. The store then connects again, does not send that
+    transaction a second time, and goes on publishing the others.
+
+  `docs/publishing.md` has the design, what was measured on Bitcoin Core and
+  Bitcoin Cash Node, and how it differs from versions before 1.11.0.
 
   ### The database
 
@@ -2280,6 +2384,7 @@ description: |
   | `Haskoin.Store.Cache` | The Redis cache of a server alone |
   | `Haskoin.Store.Fleet.Member`, `Haskoin.Store.Fleet.XPub` | A fleet, and its cache |
   | `Haskoin.Store.Web`, `Haskoin.Store.Web.Events` | The web server, and `/events` |
+  | `Haskoin.Store.Web.Publish` | Publishing a transaction through a full node |
 
   The rules and queries of version 20 (`Haskoin.Store.Logic`,
   `Haskoin.Store.Database.Query`) stay in the library as a reference. The
@@ -2603,9 +2708,9 @@ description: |
 
   Haskoin Store is released under the [MIT License](LICENSE).
 description-type: markdown
-hash: b8f008cbe73c7612cbb84a7b4905337cdec4c207185ffe459cc1cb70d651b889
+hash: 7aab77efbe2655c90dfb5db5ef561b830109091834d68d7ac868c3c539a85014
 homepage: https://github.com/jprupp/haskoin-store#readme
-latest: 1.10.1
+latest: 1.11.0
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Storage and index for Bitcoin and Bitcoin Cash
@@ -2628,10 +2733,10 @@ test-bench-deps:
   file-embed: '>=0.0.16.0 && <0.1'
   hashable: '>=1.5.1.0 && <1.6'
   hashtables: '>=1.4.2 && <1.5'
-  haskoin-core: '>=1.6.1 && <1.7'
+  haskoin-core: '>=1.6.2 && <1.7'
   haskoin-node: '>=2.5.1 && <2.6'
   haskoin-store: '>=0'
-  haskoin-store-data: '>=2.0 && <2.1'
+  haskoin-store-data: '>=2.0.1 && <2.1'
   hedis: '>=0.16.4 && <0.17'
   hspec: '>=2.11.18 && <2.12'
   http-types: '>=0.12.6 && <0.13'
