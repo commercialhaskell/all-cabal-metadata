@@ -146,6 +146,7 @@ all-versions:
 - 1.10.0
 - 1.11.0
 - 2.0.0
+- 2.0.1
 author: JP Rupp
 basic-deps:
   aeson: '>=2.2.5.1 && <2.3'
@@ -172,44 +173,93 @@ basic-deps:
 changelog: "# Changelog\nAll notable changes to this project will be documented in
   this file.\n\nThe format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)\nand
   this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)\n\n##
-  [Unreleased]\n\n## [2.0.0] - 2026-11-12\n\nThe API speaks JSON only. The binary
-  encoding of the API is gone, from the\ntypes, the client and the documentation.
-  Servers from haskoin-store 1.10\nanswer in JSON only, and clients of earlier versions,
-  which ask for binary,\ndo not work with them.\n\n### Removed\n\n- The binary instances
-  (`Serial`, `Serialize`, `Binary`) of the types that\n  only the API used: `Transaction`,
-  `StoreInput`, `StoreOutput`,\n  `PeerInfo`, `XPubUnspent`, `XPubSummary`, the health
-  checks, `Event`,\n  `Except`, `TxId`, `GenericResult`, `RawResult`, `RawResultList`
-  and\n  `SerialList`. The types that the server keeps in its database and its\n  caches
-  keep theirs.\n- `Marshal (Network, Ctx) EventCommand`: commands over the WebSocket
-  of\n  `/events` are JSON in text frames.\n- `EventStream`. `GetEvents` answers `SerialList
-  Event`; read the events\n  with `apiEvents`, as before.\n\n### Changed\n\n- `apiCall`
-  and `apiBatch` ask for JSON and read it with the new class\n  `ApiResponse`, which
-  every response type has and `ApiResource` now\n  requires in place of `Serial`.\n-
-  `apiEvents` and `apiEventsAfter` read the events as lines of JSON.\n- `PostBox`
-  holds the text of a request body. `PostTx` sends the\n  transaction in hex, as `text/plain`.\n\n##
-  [1.11.0] - 2026-11-10\n\n### Added\n\n- `EventCommand`: what a client sends over
-  the WebSocket at `/events` to\n  choose the transactions it hears about. It watches
-  addresses\n  (`EventWatch`, `EventUnwatch`), extended public keys with a type of\n
-  \ address (`EventWatchXPub`, `EventUnwatchXPub`), or what matches a Bloom\n  filter
-  as in BIP 37 (`EventFilterLoad`, `EventFilterAdd`,\n  `EventFilterClear`); `EventAll`
-  goes back to every transaction, and\n  `EventNone` to blocks alone. It has\n  `Marshal`
-  for binary frames and `MarshalJSON` for text frames, both given\n  the network.
-  A key is written in binary as in BIP 32, in the 78 bytes\n  that its text decodes
-  to. Servers understand it from the release of\n  haskoin-store after 1.8.1.\n- `apiEventsAfter`
-  listens to the events that came after one that the\n  client names, so that a client
-  that lost its connection misses nothing.\n  The server answers `ThingNotFound` when
-  it no longer has that event.\n\n## [1.10.0] - 2026-11-10\n\n### Added\n\n- Errors
-  have a binary encoding: `Except` has `Serial`, `Serialize` and\n  `Binary` instances.
-  It is one byte that says which error, followed by the\n  message of `UserError`
-  and `StringError`, as UTF-8 with its length, or\n  by the transactions of `TxIndexConflict`.
-  Until now a server answered an\n  error in JSON whatever the client had asked for,
-  so a client that spoke\n  binary needed a JSON decoder for that one case.\n- `apiCall`
-  and `apiBatch` decode an error as the `Content-Type` of the\n  response says: binary
-  from a server that sends binary errors, JSON from\n  an older one. A client built
-  with this version works with both.\n\n- `apiEvents` listens to the events of a server
-  and calls a function with\n  each as it comes. `apiCall` could not: it waits for
-  a whole response, and\n  that one has no end.\n\n### Changed\n\n- Breaking, version
-  1.10.0, on the wire: `RawResultList`, the answer of\n  `/transactions/raw`, `/block/{block}/transactions/raw`
+  [Unreleased]\n\n## [2.0.1] - 2026-11-12\n\nThe fixes of a review of the parsers,
+  the types and the client. No parser\nrefused an object for having more fields than
+  it reads; what was wrong was\nelsewhere. `test/Haskoin/Store/RobustSpec.hs` holds
+  each by the input that\nshowed it.\n\n### Fixed\n- **A peer could make `/peers`
+  fail.** The JSON of `PeerInfo` decoded the\n  user agent as strict UTF-8 and threw
+  on one that is not. The server\n  fills it with the bytes of the peer's version
+  message. Bytes that are\n  not UTF-8 are now written as the replacement character;
+  `relayed_by`\n  of `BinfoTx` the same.\n- **Values that failed with `error` after
+  their parser had answered.**\n  - A health check whose `time` is not a time: the
+  reader used `read`.\n  - An xpub of the Blockchain.info format whose `path` is not
+  a path: the\n    fallback was a text that `error`ed when read as a path.\n- **`apiCall`
+  threw `error`** for an address in the path that the network\n  cannot write, such
+  as a SegWit address on Bitcoin Cash. It answers\n  `UserError`, as it did for one
+  in the query string. `pathEncodes` is new\n  and says whether `queryPath` can be
+  called.\n- **`apiBatch` with a size of zero never returned.** Zero is taken for
+  one.\n- **The client lost what the server said in an error.**\n  - Only the first
+  piece of the body was read, so an error that came in\n    two pieces was \"could
+  not decode error\". The whole body is read, up\n    to 64 KiB.\n  - An error that
+  the client does not know, from a newer server, is read\n    as `StringError` with
+  its name and message, instead of not at all.\n  - A message that is not text no
+  longer makes the error unreadable.\n  - An answer that is not from the server, such
+  as the page of a proxy,\n    is `StringError` with the status and the start of the
+  body.\n- **`apiEvents` stopped, as if asked to, at a line it could not read**,\n
+  \ and the events after it were lost. A newer server that tells of more\n  than blocks
+  and transactions would have stopped every client. Such a\n  line is left out. A
+  line longer than 64 KiB ends the stream with an\n  error, instead of being kept
+  without limit.\n- **Numbers of request parameters wrapped around.** `-1`, a number
+  too\n  large for its type, hexadecimal and spaces were read, the first two as\n
+  \ another number: `-1` as the largest. Only decimal digits that fit are\n  read
+  now, in `parseBinfoBlockId`, `parseBinfoTxId`, `parseBinfoFilter`\n  and the `time`,
+  `height`, `heights`, `limit`, `offset` and start\n  parameters.\n- A date before
+  1970 in `parseBinfoDate`, and a time before 1970 in a\n  health check, were read
+  as a number near 2^64. They are refused.\n- `RawResult`, `RawResultList` and the
+  services of `PeerInfo` took bytes\n  after the value and ignored them. They are
+  refused.\n- An `address` that is neither null nor an address, in an unspent output,\n
+  \ an input or an output, was read as no address. It is refused.\n- The binary reader
+  of `DeriveType` took any unknown byte for `normal`. It\n  fails.\n- Differences
+  of unsigned amounts that could wrap now stop at zero:\n  `txDataFee`, the fee of
+  `toTransaction`, and `sent` of an address in\n  `toBinfoAddrs`.\n- `isOK` of `BlockHealth`
+  took the difference of two heights in 32 signed\n  bits.\n- `Ord BinfoXPubPath`
+  compared only the fingerprint of the parent and the\n  path, so two different keys
+  could compare equal while `==` said no.\n- A `BlockRef` with neither form says what
+  it expected, not that\n  `mempool` is missing.\n\n### Changed\n- `apiCall`, `apiBatch`
+  and `apiEvents` answer `Left (StringError …)` when\n  the server cannot be reached
+  or the URL cannot be read. They used to\n  throw the exception of the HTTP client,
+  which a caller that looked only\n  at the `Either` did not expect.\n\n### Not changed\n-
+  `BlockData` writes `weight` only on networks with SegWit and reads a\n  missing
+  one as zero. A weight on Bitcoin Cash is therefore lost on the\n  way; it has no
+  meaning there, and writing it would add a field to the\n  API.\n\n## [2.0.0] - 2026-11-12\n\nThe
+  API speaks JSON only. The binary encoding of the API is gone, from the\ntypes, the
+  client and the documentation. Servers from haskoin-store 1.10\nanswer in JSON only,
+  and clients of earlier versions, which ask for binary,\ndo not work with them.\n\n###
+  Removed\n\n- The binary instances (`Serial`, `Serialize`, `Binary`) of the types
+  that\n  only the API used: `Transaction`, `StoreInput`, `StoreOutput`,\n  `PeerInfo`,
+  `XPubUnspent`, `XPubSummary`, the health checks, `Event`,\n  `Except`, `TxId`, `GenericResult`,
+  `RawResult`, `RawResultList` and\n  `SerialList`. The types that the server keeps
+  in its database and its\n  caches keep theirs.\n- `Marshal (Network, Ctx) EventCommand`:
+  commands over the WebSocket of\n  `/events` are JSON in text frames.\n- `EventStream`.
+  `GetEvents` answers `SerialList Event`; read the events\n  with `apiEvents`, as
+  before.\n\n### Changed\n\n- `apiCall` and `apiBatch` ask for JSON and read it with
+  the new class\n  `ApiResponse`, which every response type has and `ApiResource`
+  now\n  requires in place of `Serial`.\n- `apiEvents` and `apiEventsAfter` read the
+  events as lines of JSON.\n- `PostBox` holds the text of a request body. `PostTx`
+  sends the\n  transaction in hex, as `text/plain`.\n\n## [1.11.0] - 2026-11-10\n\n###
+  Added\n\n- `EventCommand`: what a client sends over the WebSocket at `/events` to\n
+  \ choose the transactions it hears about. It watches addresses\n  (`EventWatch`,
+  `EventUnwatch`), extended public keys with a type of\n  address (`EventWatchXPub`,
+  `EventUnwatchXPub`), or what matches a Bloom\n  filter as in BIP 37 (`EventFilterLoad`,
+  `EventFilterAdd`,\n  `EventFilterClear`); `EventAll` goes back to every transaction,
+  and\n  `EventNone` to blocks alone. It has\n  `Marshal` for binary frames and `MarshalJSON`
+  for text frames, both given\n  the network. A key is written in binary as in BIP
+  32, in the 78 bytes\n  that its text decodes to. Servers understand it from the
+  release of\n  haskoin-store after 1.8.1.\n- `apiEventsAfter` listens to the events
+  that came after one that the\n  client names, so that a client that lost its connection
+  misses nothing.\n  The server answers `ThingNotFound` when it no longer has that
+  event.\n\n## [1.10.0] - 2026-11-10\n\n### Added\n\n- Errors have a binary encoding:
+  `Except` has `Serial`, `Serialize` and\n  `Binary` instances. It is one byte that
+  says which error, followed by the\n  message of `UserError` and `StringError`, as
+  UTF-8 with its length, or\n  by the transactions of `TxIndexConflict`. Until now
+  a server answered an\n  error in JSON whatever the client had asked for, so a client
+  that spoke\n  binary needed a JSON decoder for that one case.\n- `apiCall` and `apiBatch`
+  decode an error as the `Content-Type` of the\n  response says: binary from a server
+  that sends binary errors, JSON from\n  an older one. A client built with this version
+  works with both.\n\n- `apiEvents` listens to the events of a server and calls a
+  function with\n  each as it comes. `apiCall` could not: it waits for a whole response,
+  and\n  that one has no end.\n\n### Changed\n\n- Breaking, version 1.10.0, on the
+  wire: `RawResultList`, the answer of\n  `/transactions/raw`, `/block/{block}/transactions/raw`
   and\n  `/block/height/{height}/raw`, starts with the number of its values, like\n
   \ every other list. It was the values alone, one after the other. A client\n  and
   a server have to be of the same side of this change for those three\n  endpoints.\n-
@@ -996,9 +1046,9 @@ description: |
 
   [MIT](LICENSE)
 description-type: markdown
-hash: b015535220e94259f35c4906e49efede9727426322cc46a380e2f8cf61e75019
+hash: 638d701513a5cf9068905efb89cb176c5cbcd38203caa1691dabe04fa7493c1d
 homepage: https://github.com/jprupp/haskoin-store-data#readme
-latest: 2.0.0
+latest: 2.0.1
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Data types and API client of Haskoin Store
@@ -1020,7 +1070,7 @@ test-bench-deps:
   http-client: '>=0.7.19 && <0.8'
   http-types: '>=0.12.6 && <0.13'
   lens: '>=5.3.6 && <5.4'
-  network: '>=3.2.12.0 && <3.3'
+  network: '>=0'
   string-conversions: '>=0.4.0.1 && <0.5'
   text: '>=2.1.4 && <2.2'
   time: '>=1.14 && <1.15'
