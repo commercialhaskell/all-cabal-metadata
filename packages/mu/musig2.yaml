@@ -6,17 +6,165 @@ all-versions:
 - 0.1.4
 - 0.2.0
 - 0.2.1
+- 0.3.0
 author: Jose Storopoli
 basic-deps:
-  base: '>=4.19 && <5'
-  binary: '>=0.8 && <0.9'
-  bytestring: '>=0.9 && <0.13'
+  base: '>=4.20 && <5'
+  bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.9'
-  entropy: '>=0.4 && <0.5'
+  deepseq: '>=1.4 && <1.7'
+  entropy: '>=0.4.1.6 && <0.5'
+  ppad-fixed: '>=0.2.2 && <0.3'
   ppad-secp256k1: '>=0.5.10 && <0.6'
-  ppad-sha256: '>=0.3.2 && <0.4'
+  ppad-sha256: '>=0.3.5 && <0.4'
 changelog: |
   # Changelog
+
+  ## 0.3.0 (2026-11-12)
+
+  A redesigned, hard-to-misuse API. Every value of an exported type is valid by
+  construction, secrets cannot be printed, compared or encoded, public values
+  have BIP-0327 byte encodings, and each kind of failure has its own error type.
+  This release breaks every 0.2 program; the migration table below maps the old
+  names to the new ones.
+
+  * Breaking API changes (old -> new):
+    - `SecKey` (a newtype over `Integer` with `Num`, `Read`, `Eq`, `Ord`) ->
+      opaque `SecKey`: `secKeyFromBytes` (32 bytes, `0 < d < n`),
+      `secKeyToBytes`, `secKeyPubKey`. No `Show`, `Eq`, `Ord`, `Read`, `Num`
+      or `Generic`.
+    - `Pub` (ppad's `Projective`) -> `PubKey` (valid, finite, `Eq`/`Ord`/`Show`
+      on its 33-byte encoding) and `XOnlyPubKey`; `pubKeyFromPoint` and
+      `pubKeyPoint` convert from and to `ppad-secp256k1` points
+    - New `Encode` class (`encode`/`decode`) with the BIP-0327 byte formats for
+      `PubKey`, `XOnlyPubKey`, `PubNonce`, `AggNonce`, `PartialSignature`,
+      `Signature` and `Tweak`. Decoders reject non-canonical input: 32- and
+      65-byte public keys, invalid points, infinity where a finite point is
+      required, scalars `>= n`.
+    - `mkKeyAggContext pks mTweak` -> `keyAgg :: NonEmpty PubKey -> Either KeyAggError KeyAggContext`,
+      then `applyPlainTweak`/`applyXOnlyTweak`/`applyTaprootTweak`
+    - `sortPublicKeys` -> `keySort :: NonEmpty PubKey -> NonEmpty PubKey`
+    - `aggregatedPubkey` -> `aggPubKey` (possibly tweaked `Q`) and
+      `aggXOnlyPubKey` (what the final signature verifies against); new
+      `keyAggPubKeys` and `signerIndex`
+    - `Tweak (XOnlyTweak t | PlainTweak t)` and `applyTweak ctx tweak` ->
+      opaque `Tweak` (`tweakFromBytes`, `0 <= t < n`) with `applyPlainTweak`
+      and `applyXOnlyTweak`. New `applyTaprootTweak` computes the BIP-0341
+      TapTweak from the current key and an optional merkle root.
+    - Tweaks are given once, to the `KeyAggContext`; sessions no longer take a
+      tweak list
+    - `SecNonceGenParams`, `defaultSecNonceGenParams`, `secNonceGen`,
+      `publicNonce` -> `nonceGen :: PubKey -> NonceInputs -> IO (Either NonceGenError (SecNonce, PubNonce))`
+      with `NonceInputs` (`nonceSecKey`, `nonceAggPubKey` (x-only, as in
+      BIP-0327), `nonceMessage`, `nonceExtraInput`) and `noNonceInputs`
+    - `mkSecNonce` and `secNonceGenWithRand` removed from the public API:
+      secret nonces come from `nonceGen` (or, deliberately, from the new
+      `Crypto.Curve.Secp256k1.MuSig2.Unsafe` module)
+    - `SecNonce` is one-shot: its scalars live in a pinned buffer with an
+      atomic used flag. `sign :: SecNonce -> SecKey -> Session -> IO (Either SignError PartialSignature)`
+      consumes the nonce before any check (as BIP-0327's reference code and
+      libsecp256k1 do) and zero-fills the buffer; any later `sign` with it,
+      through any copy and from any thread, returns `SecNonceAlreadyUsed`.
+      A failed `sign` consumes the nonce too.
+    - Nonces generated with `nonceAggPubKey` or `nonceMessage` are bound to
+      them: `sign` returns `SecNonceSessionMismatch` for a session with
+      another aggregate key or message
+    - New `deterministicSign :: SecKey -> AggNonce -> KeyAggContext -> ByteString -> Maybe ByteString -> Either SignError (PubNonce, PartialSignature)`
+      (BIP-0327 `DeterministicSign`) for a signer without randomness that sends
+      its nonce last
+    - New module `Crypto.Curve.Secp256k1.MuSig2.Unsafe` with
+      `nonceGenWithRand` (caller-supplied randomness), `nonceGenCounter`
+      (libsecp256k1's `musig_nonce_gen_counter`), `secNonceToBytes` (BIP-0327
+      97-byte encoding; consumes the nonce), `secNonceFromBytes` and
+      `signWithoutVerification`
+    - New module `Crypto.Curve.Secp256k1.MuSig2.Coordinator`: a coordinator
+      collects the signers' encoded public nonces (`newNonceRound`,
+      `receivePubNonce`, `finishNonceRound`) and partial signatures
+      (`newSigRound`, `receivePartialSig`, `finishSigRound`) by signer index,
+      decodes and verifies each one as it arrives, and blames the signer of an
+      invalid, conflicting, unknown or missing contribution (`Blame`,
+      `BlameReason`). `finishSigRound` also checks the final BIP-340 signature
+      (`SigRoundError`).
+    - `NonceGenError` gains `InvalidRandLength` and `NonceIsZero` (from the
+      `Unsafe` generators only); `SignError` gains `SecNonceAlreadyUsed`,
+      `SecNonceSessionMismatch`, and, for `deterministicSign`,
+      `InvalidAuxRandLength`, `DeterministicNonceIsZero` and
+      `AggOtherNonceAtInfinity`
+    - `aggNonces` -> `nonceAgg :: NonEmpty PubNonce -> AggNonce` (total);
+      aggregate nonces have their own type, `AggNonce`, whose points may be
+      infinity
+    - `SessionContext(..)` and `mkSessionContext aggNonce pks tweaks msg` ->
+      opaque `Session` from `newSession :: KeyAggContext -> AggNonce -> ByteString -> Session`
+      (total), which computes the session values once; `sessionKeyAgg`
+    - `sign` now returns `IO (Either SignError PartialSignature)`;
+      `PartialSignature` is opaque instead of `Integer`
+    - `partialSigVerify psig nonces pks tweaks msg i` ->
+      `partialSigVerify :: Session -> PubKey -> PubNonce -> PartialSignature -> Bool`,
+      without rebuilding the session per call
+    - `aggPartials psigs ctx` -> `partialSigAgg :: Session -> NonEmpty PartialSignature -> Signature`
+      (total)
+    - New `verify :: XOnlyPubKey -> ByteString -> Signature -> Bool` (BIP-0340)
+    - `MuSig2Error` -> `DecodeError`, `KeyAggError`, `NonceGenError` and
+      `SignError`, with no `String` or secret payloads and `Exception`
+      instances. `sign` reports `SecNonceKeyMismatch`, `SignerNotInSession` or
+      `SelfVerificationFailed` instead of the misleading
+      `SecretKeyPublicKeyMismatch`/`PublicNonceGenerationFailed`.
+    - Removed the orphan `Ord`, `Semigroup` and `Monoid` instances on ppad's
+      `Projective`, and the `Semigroup`/`Monoid` instances on `PubNonce`
+    - `NFData` instances for all exported types
+  * Other changes:
+    - Key aggregation is `O(n)` instead of `O(n^2)`: the key list is hashed
+      once and keys with coefficient 1 are not multiplied (200 keys: ~600 ms
+      -> ~50 ms)
+    - Public scalar multiplications are variable-time; multiplications of the
+      generator use ppad's precomputed (timing-safe) wNAF tables. A 2-of-2
+      session from nonce aggregation to the verified signature is ~5x faster.
+    - `nonceGen` rejects extra input longer than `2^32 - 1` bytes instead of
+      silently truncating its length (`NonceExtraInputTooLong`)
+    - All fields holding points or scalars are strict, and nonce aggregation
+      folds strictly
+    - `pubKeyFromPoint` rejects points that are not on the curve
+    - The implementation lives in a private `internal` library used by the
+      tests and benchmarks
+    - The README and module examples are compiled and run by the test suite
+    - Tests: official BIP-0327 vectors for invalid encodings and
+      `DeterministicSign` now run, checking that decoding fails for exactly the
+      contribution the vector blames (the `NonceAgg` and `PartialSigAgg`
+      vectors also run through the coordinator, which must blame the same
+      signer); a committed differential corpus of 300 sessions and 48
+      `NonceGen` cases generated by the BIP-0327 reference implementation
+      (`scripts/gen-diff-corpus.py`, `test/vectors/diff`) is replayed byte for
+      byte; the coordinator's blame is tested for every kind of misbehavior
+      and for any order of arrival; nonce reuse (sequential, through copies
+      and from many threads at once), session binding and zero-filling are
+      tested;
+      property tests run complete multi-signer sessions with random plain,
+      x-only and Taproot tweaks and check the final signature, and corrupt
+      inputs to check that verification fails
+  * Drop support for GHC 9.8 (`base >= 4.20`); tested with GHC 9.10.3, 9.12.4
+    and 9.14.1
+  * Security hardening:
+    - Constant-time arithmetic on secrets: secret keys and nonce scalars are
+      no longer `Integer`s. They are parsed, range-checked (`secKeyFromBytes`,
+      `secNonceFromBytes`), reduced from hashes (`NonceGen`,
+      `DeterministicSign`), combined in `sign`, negated and encoded with
+      `ppad-fixed`'s constant-time Montgomery arithmetic, and passed to the
+      generator multiplication as fixed-width words instead of through the
+      variable-time `fromInteger`. Public values stay `Integer`. New
+      dependency: `ppad-fixed >= 0.2.2`.
+    - Require `entropy >= 0.4.1.6`, which waits for the kernel entropy pool
+      (`getrandom`) instead of reading `/dev/urandom` early at boot
+    - Require `ppad-sha256 >= 0.3.5`, which no longer crashes on aarch64 CPUs
+      without SHA2 instructions
+    - Under the `llvm` flag on x86_64, disable LLVM's cmov-to-branch conversion
+      (`-optlc=-x86-cmov-converter=false`), as `ppad-secp256k1` does
+    - Drop the `binary` dependency
+    - Correct the security documentation: nonce reuse in any session leaks the
+      secret key, `secNonceGenWithRand` is deterministic, and the remaining
+      caveats of constant-time code (public values are variable-time by
+      design, GHC's code generation, best-effort zeroization) are spelled out
+  * Fix the README and module examples, which imported a module from a package
+    that is no longer a dependency
 
   ## 0.2.1 (2026-11-12)
 
@@ -85,28 +233,252 @@ changelog: |
 
   * Initial release, full BIP-0327 support except [Deterministic and Stateless Signing for a Single Signer](https://github.com/bitcoin/bips/blob/master/bip-0327.mediawiki#user-content-Deterministic_and_Stateless_Signing_for_a_Single_Signer)
 changelog-type: text
-description: Pure BIP0327 MuSig2 (partial)signatures with tweak support on the elliptic
-  curve secp256k1.
-description-type: haddock
-hash: 7e57bd637fbbceac8810f7c60eb7a2fb2d731dd51c5f6421b0affce6dd0f0932
+description: |
+  # musig2
+
+  [![](https://img.shields.io/hackage/v/musig2?color=blue)](https://hackage.haskell.org/package/musig2)
+  ![](https://img.shields.io/badge/license-MIT-brightgreen)
+  [![](https://img.shields.io/badge/haddock-musig2-lightblue)](https://hackage-content.haskell.org/package/musig2/docs/Crypto-Curve-Secp256k1-MuSig2.html)
+
+  A pure Haskell implementation of [BIP-0327][bip327] [MuSig2 multi-signature
+  scheme][musig2] on [secp256k1][ppad-secp256k1]. The library implements partial
+  signatures with tweak support following best practices and guidelines
+  from [BIP-0327][bip327].
+
+  ## Usage
+
+  Two signers produce one BIP-340 signature for their aggregate key. Public
+  values travel between signers as bytes (`encode`/`decode`, in the BIP-0327
+  formats); decoding validates them.
+
+  <!-- example start -->
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import Control.Exception (Exception, throwIO)
+  import qualified Crypto.Curve.Secp256k1.MuSig2 as MuSig2
+  import qualified Data.ByteString as BS
+  import Data.List.NonEmpty (NonEmpty (..))
+  import qualified Data.List.NonEmpty as NE
+
+  -- | Throws the error of a 'Left'.
+  orThrow :: (Exception e) => Either e a -> IO a
+  orThrow = either throwIO pure
+
+  -- | Two signers sign a message; returns whether the signature verifies.
+  example :: IO Bool
+  example = do
+    -- Each signer has a secret key and publishes its public key.
+    -- (Fixed keys for the example only: never hard-code real keys.)
+    sk1 <- orThrow (MuSig2.secKeyFromBytes (BS.replicate 32 0x11))
+    sk2 <- orThrow (MuSig2.secKeyFromBytes (BS.replicate 32 0x22))
+    let pk1 = MuSig2.secKeyPubKey sk1
+        pk2 = MuSig2.secKeyPubKey sk2
+
+    -- Everyone aggregates the same list of public keys, here sorted.
+    keyAggCtx <- orThrow (MuSig2.keyAgg (MuSig2.keySort (pk1 :| [pk2])))
+    let aggKey = MuSig2.aggXOnlyPubKey keyAggCtx
+        msg = "i approve of this message"
+
+    -- Each signer generates a fresh nonce and publishes the public part.
+    (secNonce1, pubNonce1) <- MuSig2.nonceGen pk1 MuSig2.noNonceInputs >>= orThrow
+    (secNonce2, pubNonce2) <- MuSig2.nonceGen pk2 MuSig2.noNonceInputs >>= orThrow
+
+    -- Values travel as bytes; decoding validates them.
+    received <- orThrow (MuSig2.decode (MuSig2.encode pubNonce2))
+
+    -- Everyone aggregates the public nonces and opens the same session.
+    let session = MuSig2.newSession keyAggCtx (MuSig2.nonceAgg (pubNonce1 :| [received])) msg
+
+    -- Each signer signs once with its nonce and publishes its partial signature.
+    -- 'sign' consumes the secret nonce: signing again with it fails.
+    psig1 <- MuSig2.sign secNonce1 sk1 session >>= orThrow
+    psig2 <- MuSig2.sign secNonce2 sk2 session >>= orThrow
+
+    -- The aggregator checks each partial signature, then aggregates them.
+    let valid =
+          MuSig2.partialSigVerify session pk1 pubNonce1 psig1
+            && MuSig2.partialSigVerify session pk2 pubNonce2 psig2
+        signature = MuSig2.partialSigAgg session (psig1 :| [psig2])
+
+    -- The result is an ordinary BIP-340 signature for the aggregate key.
+    pure (valid && MuSig2.verify aggKey msg signature)
+  ```
+  <!-- example end -->
+
+  A Taproot output key is the aggregate key tweaked with `applyTaprootTweak`;
+  tweaks live in the key aggregation context only, and sessions are opened on
+  the tweaked context:
+
+  <!-- taproot start -->
+  ```haskell
+  -- | Three signers spend a Taproot output by key path.
+  taprootExample :: IO Bool
+  taprootExample = do
+    sks <- traverse (orThrow . MuSig2.secKeyFromBytes . BS.replicate 32) (0x33 :| [0x44, 0x55])
+    let pks = fmap MuSig2.secKeyPubKey sks
+
+    -- The internal key is the aggregate key; the output key commits to the
+    -- script tree's merkle root ('Nothing' for a key-path-only output, BIP-86).
+    internal <- orThrow (MuSig2.keyAgg (MuSig2.keySort pks))
+    output <- orThrow (MuSig2.applyTaprootTweak (Just (BS.replicate 32 0xAB)) internal)
+    let outputKey = MuSig2.aggXOnlyPubKey output
+        sighash = BS.replicate 32 0x01
+
+    -- Binding the nonces to the key and message adds protection against bad randomness.
+    let inputs sk =
+          MuSig2.noNonceInputs
+            { MuSig2.nonceSecKey = Just sk
+            , MuSig2.nonceAggPubKey = Just outputKey
+            , MuSig2.nonceMessage = Just sighash
+            }
+    nonces <- traverse (\sk -> MuSig2.nonceGen (MuSig2.secKeyPubKey sk) (inputs sk) >>= orThrow) sks
+
+    -- Sessions are opened on the tweaked context: the tweak lives in the context only.
+    let session = MuSig2.newSession output (MuSig2.nonceAgg (fmap snd nonces)) sighash
+    psigs <- traverse (\(sk, (secNonce, _)) -> MuSig2.sign secNonce sk session >>= orThrow) (NE.zip sks nonces)
+    let signature = MuSig2.partialSigAgg session psigs
+    pure (MuSig2.verify outputKey sighash signature)
+  ```
+  <!-- taproot end -->
+
+  ### Coordinator
+
+  The `Crypto.Curve.Secp256k1.MuSig2.Coordinator` module collects the signers'
+  contributions as bytes, by signer index (the position of the signer's key in
+  the key aggregation context). It decodes and verifies each nonce and partial
+  signature as it arrives and blames the signer of an invalid, conflicting or
+  missing one (`Blame`). The coordinator can be one of the signers or a
+  separate, untrusted party: a wrong aggregate nonce can only make the session
+  fail. With `Control.Monad (foldM)`, `Data.Bifunctor (first)` and the module
+  imported qualified as `Coordinator`:
+
+  <!-- coordinator start -->
+  ```haskell
+  -- | A coordinator collects three signers' nonces and partial signatures as bytes.
+  coordinatorExample :: IO Bool
+  coordinatorExample = do
+    sks <- traverse (orThrow . MuSig2.secKeyFromBytes . BS.replicate 32) (0x66 :| [0x77, 0x88])
+    -- Signer i is the one with the i-th public key of the context.
+    keyAggCtx <- orThrow (MuSig2.keyAgg (fmap MuSig2.secKeyPubKey sks))
+    let msg = "pay Carol 1 BTC"
+
+    -- Round one: each signer sends its encoded public nonce, in any order.
+    nonces <- traverse (\sk -> MuSig2.nonceGen (MuSig2.secKeyPubKey sk) MuSig2.noNonceInputs >>= orThrow) (NE.toList sks)
+    nonceRound <-
+      orThrow $
+        foldM
+          (\r (i, (_, pubNonce)) -> Coordinator.receivePubNonce i (MuSig2.encode pubNonce) r)
+          (Coordinator.newNonceRound keyAggCtx)
+          (zip [0 ..] nonces)
+    -- Fails if a nonce is missing (here reporting only the first such signer).
+    collected <- orThrow (first NE.head (Coordinator.finishNonceRound nonceRound))
+
+    -- The coordinator sends the aggregate nonce to every signer, who decodes it
+    -- and opens the session.
+    aggNonce <- orThrow (MuSig2.decode (MuSig2.encode (Coordinator.collectedAggNonce collected)))
+    let session = MuSig2.newSession keyAggCtx aggNonce msg
+
+    -- Round two: each signer sends its encoded partial signature. The
+    -- coordinator verifies each one and blames the signer of an invalid one.
+    psigs <- traverse (\(sk, (secNonce, _)) -> MuSig2.sign secNonce sk session >>= orThrow) (zip (NE.toList sks) nonces)
+    sigRound <-
+      orThrow $
+        foldM
+          (\r (i, psig) -> Coordinator.receivePartialSig i (MuSig2.encode psig) r)
+          (Coordinator.newSigRound collected msg)
+          (zip [0 ..] psigs)
+    -- Aggregates the partial signatures and verifies the result.
+    signature <- orThrow (Coordinator.finishSigRound sigRound)
+    pure (MuSig2.verify (MuSig2.aggXOnlyPubKey keyAggCtx) msg signature)
+  ```
+  <!-- coordinator end -->
+
+  All three examples are compiled and run by the test suite (`test/Example.hs`),
+  which also checks that this README shows them verbatim.
+
+  Upgrading from 0.2? The [CHANGELOG](CHANGELOG) lists every renamed and
+  removed function.
+
+  ## Documentation
+
+  Haddocks (API documentation, etc.) are hosted at [hackage][hackage].
+
+  ## Security
+
+  Read the security considerations in the
+  [module documentation][haddock] before using the library. Secret nonces are
+  one-shot: `sign` atomically consumes the nonce (and zero-fills its buffer)
+  before anything else, so a second `sign` with the same nonce, from any copy
+  or thread, fails with `SecNonceAlreadyUsed`. The
+  `Crypto.Curve.Secp256k1.MuSig2.Unsafe` module holds the escape hatches this
+  cannot cover (caller-supplied randomness, counters, exporting secret nonces).
+  Arithmetic on secret keys and nonces is constant-time (fixed-width
+  Montgomery arithmetic from `ppad-fixed`); the module documentation lists the
+  remaining caveats.
+
+  The API is hard to misuse by construction: every value of an exported type is
+  valid (decoders and smart constructors check points, scalar ranges and
+  lengths), secret keys and nonces have no `Show`, `Eq`, `Ord` or encoding,
+  and errors carry no secrets.
+
+  The test suite runs the official [BIP-0327][bip327] test vectors, loaded
+  from the upstream JSON files, with exact-output assertions; invalid-encoding
+  vectors check that decoding fails for exactly the contribution the vector
+  blames, including the `DeterministicSign` vectors. A committed corpus of 300
+  sessions generated by the BIP-0327 reference implementation
+  (`scripts/gen-diff-corpus.py`) is replayed byte for byte, covering 1 to 8
+  signers, duplicate keys, tweak chains, long messages, every combination of
+  `NonceGen` inputs, `DeterministicSign` and aggregate nonces at infinity.
+  [`QuickCheck`][quickcheck] properties run complete
+  multi-signer sessions with random tweaks (plain, x-only and Taproot) and check
+  the final signature with BIP-340 verification.
+  Elliptic curve operations are done by the
+  [`ppad-secp256k1`][ppad-secp256k1] package.
+
+  ## Development
+
+  You'll require [Nix][nixos] with [flake][flake] support enabled. Enter a
+  development shell with:
+
+  ```console
+  $ nix develop
+  ```
+
+  Then do e.g.:
+
+  ```console
+  $ cabal repl musig2
+  ```
+
+  to get a REPL for the main library.
+
+  [musig2]: https://eprint.iacr.org/2020/1261
+  [bip327]: https://github.com/bitcoin/bips/blob/master/bip-0327.mediawiki
+  [ppad-secp256k1]: https://github.com/ppad-tech/secp256k1
+  [hackage]: https://hackage.haskell.org/package/musig2
+  [haddock]: https://hackage-content.haskell.org/package/musig2/docs/Crypto-Curve-Secp256k1-MuSig2.html
+  [quickcheck]: https://hackage.haskell.org/package/QuickCheck
+  [nixos]: https://nixos.org/
+  [flake]: https://nixos.org/manual/nix/unstable/command-ref/new-cli/nix3-flake.html
+description-type: markdown
+hash: e5a215e6b332c2c5a0f48ded81dcd821f6f4cdcc3121f0586de8b2c043fd8bdc
 homepage: https://github.com/storopoli/musig2
-latest: 0.2.1
+latest: 0.3.0
 license-name: MIT
 maintainer: jose@storopoli.com
 synopsis: MuSig2 library
 test-bench-deps:
+  QuickCheck: '>=0'
   aeson: '>=2.0 && <2.4'
-  base: '>=4.19 && <5'
+  base: '>=4.20 && <5'
   base16-bytestring: '>=0'
-  binary: '>=0'
   bytestring: '>=0'
-  containers: '>=0'
   criterion: '>=0'
-  deepseq: '>=0'
   directory: '>=0'
-  entropy: '>=0'
   filepath: '>=0'
   musig2: '>=0'
+  ppad-fixed: '>=0'
   ppad-secp256k1: '>=0'
   ppad-sha256: '>=0'
   tasty: '>=0'
