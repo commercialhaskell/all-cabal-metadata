@@ -330,10 +330,10 @@ all-versions:
 - 1.10.0
 - 1.10.1
 - 1.11.0
+- 1.12.0
 author: JP Rupp
 basic-deps:
   aeson: '>=2.2.5.1 && <2.3'
-  aeson-pretty: '>=0.8.11 && <0.9'
   base: '>=4.21.2.0 && <4.22'
   base16: '>=2.0 && <2.1'
   bytes: '>=0.17.5 && <0.18'
@@ -382,8 +382,34 @@ basic-deps:
 changelog: "# Changelog\nAll notable changes to this project will be documented in
   this file.\n\nThe format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)\nand
   this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)\n\n##
-  [Unreleased]\n\n## [1.11.0] - 2026-11-12\n\n`POST /transactions` is done another
-  way, and now says what came of the\ntransaction. `docs/publishing.md` has the design
+  [1.12.0] - 2026-11-13\n\nLong lists of transactions and raw blocks are sent while
+  they are read,\nand pretty JSON is gone.\n\n### Removed\n- **Pretty JSON.** The
+  `pretty` parameter is gone from every endpoint, and\n  a request with it is refused
+  like any other unknown parameter. Pipe an\n  answer through a tool such as `jq`
+  to read it indented.\n\n### Changed\n- **Long answers are sent while they are read.**
+  The endpoints that answer\n  with all the transactions that the database lists somewhere
+  read them a\n  hundred at a time, and send each hundred while they read the next:\n
+  \ - `/address/:addr/transactions/full`, `/address/transactions/full` and\n    `/xpub/:xpub/transactions/full`;\n
+  \ - `/transactions/block/:block` and `/transactions/block/:block/raw`;\n  - the
+  raw blocks: `/block/:block/raw`, `/block/best/raw`,\n    `/block/height/:height/raw`,
+  `/block/time/:time/raw` and\n    `/block/mtp/:time/raw`;\n  - `/blockchain/rawblock/:block`,
+  in JSON and in hex, and\n    `/blockchain/block-height/:height`.\n\n  The bytes
+  are the same. With 5,000 transactions of an address (15 MB) on\n  regtest, the first
+  byte left after 11 ms where it took 96 ms, and sixteen\n  such requests at once
+  took 197 MB of memory where they took 1,014 MB. The\n  whole response takes as long
+  as before: encoding JSON is most of it.\n- These responses have no `Content-Length`.
+  What can refuse the request is\n  checked before the first byte; a failure after
+  it ends the response\n  before it is complete, where it used to be an error with
+  a status.\n- Lists that the client names, such as `/transactions?txids=`, are read\n
+  \ whole before they are answered, as before: what is asked for may not be\n  there.\n-
+  The timings of these endpoints count the whole response, the time that\n  the client
+  takes to read it included.\n- No longer depends on aeson-pretty.\n- **The warning
+  of a slow request counts the whole response**, until its\n  last byte is sent. It
+  counted only the time to make the status, which\n  for an answer sent while it is
+  read is the first hundred transactions.\n  A client or proxy that reads slowly can
+  now make a request slow. A\n  response cut short is logged too, ending in `, cut
+  short`.\n\n## [1.11.0] - 2026-11-12\n\n`POST /transactions` is done another way,
+  and now says what came of the\ntransaction. `docs/publishing.md` has the design
   and the measurements.\n\n### Changed\n- **A 200 means that a full node accepted
   the transaction and that the\n  server has it.** It used to mean that the transaction
   was sent, and came\n  at once whatever happened. The request now waits for a node
@@ -1740,7 +1766,7 @@ description: |
   | Xpubs           | Balances, transactions and UTXO of extended public keys, for legacy, nested SegWit and native SegWit addresses, with an optional Redis cache for large wallets |
   | Blocks and txs  | Lookup by hash, height or time; raw serialized forms; transactions of a block               |
   | Mempool         | Persistent, indexed by arrival time, with replace-by-fee on BTC and pruning of old entries   |
-  | Formats         | JSON, or pretty JSON                                                                         |
+  | Formats         | JSON                                                                                         |
   | Live events     | New blocks and transactions as a JSON stream or over a WebSocket                            |
   | Compatibility   | Endpoints in the style of Blockchain.info under `/blockchain/`                               |
   | Operations      | Health check, StatsD metrics, RocksDB memory limits, Docker image                           |
@@ -1765,7 +1791,7 @@ description: |
     -e NET=btc -e DISCOVER=true \
     -v haskoin-store-data:/home/haskoin/.haskoin-store \
     haskoin-store
-  curl 'http://localhost:3000/block/best?pretty=true'
+  curl -s 'http://localhost:3000/block/best' | jq
   ```
 
   The first sync downloads and indexes the whole chain, which takes a long
@@ -1841,7 +1867,7 @@ description: |
   SegWit, `segwit` for native SegWit):
 
   ```sh
-  curl 'localhost:3000/xpub/xpub6C...?derive=segwit&pretty=true'
+  curl -s 'localhost:3000/xpub/xpub6C...?derive=segwit' | jq
   ```
 
   The answer has confirmed and unconfirmed balances, and the index of the last
@@ -2150,7 +2176,8 @@ description: |
     one server, `./`, so requests tried from the page go to the server that
     served it, also behind a proxy that mounts it under a path such as
     `/btc/`. The reference always matches the version that is running.
-  - Answers are JSON. Add `?pretty=true` for indented JSON.
+  - Answers are JSON, without spaces. Pipe them through `jq` to read them
+    indented.
   - Lists are paged with `limit` and `offset`, newest first. `height` begins
     a page at a transaction hash, a block hash, a block height or a Unix time
     instead.
@@ -2167,6 +2194,19 @@ description: |
     may send from another site.
   - **Answers are compressed** for a client that sends
     `Accept-Encoding: gzip`, but for the stream of events.
+  - **Long answers are sent while they are read.** The endpoints that answer
+    with all the transactions that the database lists somewhere read them a
+    hundred at a time and send each hundred while they read the next: the
+    full transactions of addresses and of an xpub (`.../transactions/full`),
+    the transactions of a block (`/transactions/block/:block` and its `/raw`),
+    the raw blocks (`/block/.../raw`), and the blocks of the Blockchain.info
+    API (`/blockchain/rawblock/:block`, `/blockchain/block-height/:height`).
+    The first byte leaves sooner and the server holds two hundred
+    transactions, not the whole answer. These answers have no
+    `Content-Length`. What can refuse a request is checked before the first
+    byte; a failure after it ends the answer before it is complete. Lists
+    that the client names, such as `/transactions?txids=`, are read whole
+    first, because what is asked for may not be there.
   - **Long lists go in a body.** The endpoints that take a list of
     addresses, blocks, heights or transactions also take it under `POST`,
     as a form (`application/x-www-form-urlencoded`), so that it does not
@@ -2384,6 +2424,7 @@ description: |
   | `Haskoin.Store.Cache` | The Redis cache of a server alone |
   | `Haskoin.Store.Fleet.Member`, `Haskoin.Store.Fleet.XPub` | A fleet, and its cache |
   | `Haskoin.Store.Web`, `Haskoin.Store.Web.Events` | The web server, and `/events` |
+  | `Haskoin.Store.Web.Pieces` | Answers that are sent while they are read |
   | `Haskoin.Store.Web.Publish` | Publishing a transaction through a full node |
 
   The rules and queries of version 20 (`Haskoin.Store.Logic`,
@@ -2501,8 +2542,10 @@ description: |
     behind the headers` as a warning, and `Healthy again`. A store that is
     still syncing says `Not healthy yet` once, which is not a warning.
   - **Slow requests.** A warning for a request that took `--slow-request`
-    seconds or more to answer, with the request and how long it took. The
-    stream of events is left out.
+    seconds or more to answer, with the request and how long it took, until
+    the last byte was sent. A client or proxy that reads slowly can make a
+    request slow too. A response cut short ends in `, cut short`. The stream
+    of events is left out.
   - **Every request**, with `--access-log`, which is off by default:
     `203.0.113.7 GET /block/best HTTP/1.1: 200 OK, 0.4 ms`. A public
     server usually has a proxy in front that keeps this log better. The
@@ -2708,16 +2751,15 @@ description: |
 
   Haskoin Store is released under the [MIT License](LICENSE).
 description-type: markdown
-hash: 7aab77efbe2655c90dfb5db5ef561b830109091834d68d7ac868c3c539a85014
+hash: b1270d7e606ce40af19b3accd902164c8ee16d8b2bc4f50208d32a319fc07a7c
 homepage: https://github.com/jprupp/haskoin-store#readme
-latest: 1.11.0
+latest: 1.12.0
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Storage and index for Bitcoin and Bitcoin Cash
 test-bench-deps:
   QuickCheck: '>=2.17.1.0 && <2.18'
   aeson: '>=2.2.5.1 && <2.3'
-  aeson-pretty: '>=0.8.11 && <0.9'
   base: '>=4.21.2.0 && <4.22'
   base16: '>=2.0 && <2.1'
   base64: '>=1.0.1 && <1.1'
