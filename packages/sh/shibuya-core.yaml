@@ -17,6 +17,7 @@ all-versions:
 - 0.10.0.1
 - 0.11.0.0
 - 0.12.0.0
+- 0.13.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: ^>=2.2
@@ -41,6 +42,78 @@ basic-deps:
   unordered-containers: ^>=0.2
 changelog: |
   # Changelog
+
+  ## 0.13.0.0 — 2026-11-12
+
+  ### Breaking Changes
+
+  - `Adapter` gains a strict `telemetry :: AdapterTelemetry` field. Record
+    constructions must add `telemetry = defaultAdapterTelemetry`; positional
+    construction requires the extra argument. Adapters should expose the value in
+    their own configuration so users can override it.
+  - Per-message processing spans now carry a link to the producer's span when
+    `Envelope.traceContext` decodes. Under the default `ParentAndLink` policy the span
+    is still the producer span's child, so existing traces keep their shape and gain
+    one link.
+  - Batch processing spans are always roots and no longer join the first member's
+    trace. They link every member whose trace headers decode, in member order, each
+    link carrying `messaging.message.id`, up to 128 links. Valid contexts beyond
+    that are counted in `shibuya.batch.links.dropped`. Batch spans also carry
+    `messaging.batch.message_count`.
+  - Processing and batch spans are renamed from `<destination> process` to
+    `process <destination>`, following the messaging conventions'
+    `{messaging.operation.name} {destination}`. Saved searches, alerts and sampling
+    rules that match the span or operation name must change: a Jaeger or Tempo
+    search for operation `orders process` becomes `process orders`. Lifecycle span
+    names are unchanged.
+
+  ### New Features
+
+  - Processing and batch spans carry `messaging.operation.name = "process"`, which
+    the conventions mark Required, alongside `messaging.operation.type`.
+    `Shibuya.Telemetry.Semantic` exports `attrMessagingOperationName`.
+  - New module `Shibuya.Telemetry.Correlation`, re-exported from `Shibuya.Adapter`,
+    `Shibuya.Telemetry` and `Shibuya`. It provides `TraceCorrelation`
+    (`ParentAndLink`, `LinkOnly`), `AdapterTelemetry` (constructor hidden, built from
+    `defaultAdapterTelemetry` by record update), and the link helpers `creationLink`,
+    `creationLinkWith` and `consumerSpanArgsLinkedTo`.
+  - `LinkOnly` makes each processing span with a usable creation context the root of
+    a new trace, related to the producer only by the link. Use it for replayed,
+    fanned-out or long-delayed sources and with tail-based sampling. Without usable
+    headers both policies keep the ambient parent and add no link.
+  - New module `Shibuya.Telemetry.Process` with `withProcessSpan` (in `Tracing`) and
+    `withProcessSpanIO` (for a plain `Tracer`). They open the same processing span
+    as the runner for code that drains an adapter outside it. With valid headers they
+    neither parent on nor link an ambient span; they are meant for independent
+    message processing.
+  - `Shibuya.Telemetry.Correlation` also exports `maxBatchLinks`, `BatchLinks`,
+    `collectBatchLinks` and `collectBatchLinksBy`, and `Shibuya.Telemetry.Semantic`
+    exports `attrMessagingBatchMessageCount` and `attrShibuyaBatchLinksDropped`.
+  - `Shibuya.Telemetry.Effect.withRootContext` runs an action with an empty
+    OpenTelemetry context attached.
+
+  ### Other Changes
+
+  - With tracing disabled, per-message processing no longer decodes the W3C trace
+    headers. Before, each message with a `traceparent` was decoded even under
+    `runTracingNoop`.
+  - Per-message processing allocates about 208 bytes less on every single-message
+    path. With tracing enabled and trace headers present it allocates about 210 bytes
+    less, even with the added link, because the context attachment and the span now
+    share one unlift.
+  - Accept a measured allocation increase on `Async` runners whose handlers wait:
+    `concurrency-modes` `async-5` cells allocate 20–30% more than 0.12.0.0 (for
+    example 1.17–1.21 MB to 1.47–1.57 MB for 100 messages with a 1 ms handler delay),
+    `async-10` 4–5% and `async-20` 2–3% more, with unchanged time. `async-2`, every
+    `Ahead` cell and `hot-path/async8` are flat or lower. The per-message code these
+    cells run is the path that got cheaper everywhere else; the increase comes from
+    streamly's worker dispatch, which is sensitive to the shape of per-message work
+    (see `docs/plans/30-investigate-and-reduce-the-async-ahead-concurrency-allocation-regression.md`).
+  - The release comparison against 0.12.0.0 measured 10,000-message processing
+    (`hot-path/serial-noop-10000`) at 9.247 to 9.098 ms, with allocation falling
+    from 19,918,565 to 17,837,870 bytes. Every timing comparison passed the 10% gate
+    in interleaved confirming runs at `--stdev 3`; measurements used package-default
+    RTS settings on a shared workstation.
 
   ## 0.12.0.0 — 2026-10-26
 
@@ -543,9 +616,9 @@ description: |-
   Provides unified queue abstraction, NQE-based supervision, backpressure
   via bounded inbox, explicit ack semantics, and OpenTelemetry tracing.
 description-type: haddock
-hash: 75e59517323d0b44af8a30bdbe89a0edca2d9892f54f676aa941d8a69e33630f
+hash: bc0d03437aa9d9f70bcb82a130782a175545cdd84c90b5d71e3271fc1572d374
 homepage: ''
-latest: 0.12.0.0
+latest: 0.13.0.0
 license-name: MIT
 maintainer: nadeem@gmail.com
 synopsis: Supervised queue processing framework for Haskell
@@ -557,7 +630,7 @@ test-bench-deps:
   containers: '>=0'
   effectful-core: '>=2.6.1 && <2.7 || >=2.7.1.1 && <2.8'
   hs-opentelemetry-api: '>=0'
-  hs-opentelemetry-exporter-in-memory: ^>=1.0
+  hs-opentelemetry-exporter-in-memory: '>=1.0 && <1.1'
   hspec: ^>=2.11
   nqe: '>=0'
   shibuya-core: '>=0'
