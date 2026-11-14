@@ -1,91 +1,416 @@
 all-versions:
 - 0.0.1.0
+- 0.1.0.0
 author: Tushar Adhatrao
 basic-deps:
   aeson: '>=2.0 && <3'
+  async: '>=2.2 && <3'
   base: '>=4.7 && <5'
   bytestring: '>=0.10.4.0 && <0.13'
   containers: '>=0.6 && <0.8'
+  contravariant: '>=1.5 && <2'
+  cron: '>=0.7 && <1'
+  hasql: '>=1.6 && <1.10'
+  hasql-pool: '>=1.2 && <1.4'
+  mtl: '>=2.2 && <3'
   postgresql-simple: '>=0.7 && <0.9'
+  random: '>=1.2 && <1.3'
+  stm: '>=2.5 && <3'
   text: '>=1.2 && <3'
   time: '>=1.9 && <2'
+  unliftio: '>=0.2 && <0.3'
+  unordered-containers: '>=0.2 && <0.3'
   uuid: '>=1.3 && <2'
+  vector: '>=0.12 && <1'
 changelog: |
-  # Changelog for `pgqueuer-hs`
+  # Changelog
 
-  All notable changes to this project will be documented in this file.
+  All notable changes to `pgqueuer-hs` will be documented in this file.
 
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-  and this project adheres to the
-  [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+  and this project adheres to the [Haskell Package Versioning Policy (PVP)](https://pvp.haskell.org/).
 
-  ## Unreleased
+  ## [0.1.0.0] - 2026-11-14
 
-  ## 0.1.0.0 - YYYY-MM-DD
+  ### Added
+  - **Testcontainers Integration**:
+    - Native containerized PostgreSQL 16 testing (`Tests.TestContainer`) with ephemeral port allocation, active socket readiness probing, and dynamic connection string resolution.
+    - Automatic fallback to local database when Docker/Podman is not running.
+  - **Multi-Snapshot CI Matrix**:
+    - Added support for multiple Stackage LTS resolvers (`stack-lts-24.52.yaml`, `stack-lts-23.28.yaml`, `stack-lts-22.44.yaml`, `stack-lts-21.25.yaml`).
+    - Added dynamic matrix discovery using `freckle/stack-action/generate-matrix@v5`.
+  - **Comprehensive Unit & Integration Test Suites**:
+    - `Tests.TypesSpec`: Bidirectional roundtrips for `JobStatus`, `OnFailure`, `BackoffStrategy`, `Jitter`, and JSON serialization.
+    - `Tests.BufferSpec`: Concurrency, overflow triggering, timer flush, and graceful shutdown tests for `TimedOverflowBuffer`.
+    - `Tests.CronSpec`: Cron expression parsing and next run calculation tests.
+    - `Tests.WorkflowSpec`: Hierarchical DAG tree construction and invariant verification.
+    - `Tests.BackoffSpec`: Backoff interval calculation and jitter distribution bounds.
+    - `Tests.CoreSpec`, `Tests.SimpleSpec`, `Tests.HasqlSpec`: 100% behavioral parity verification across `SimpleDb` and `HasqlDb`.
+  - **Runnable Example Executables**:
+    - Added `hasql-worker` (`example/app/05-hasql-worker.hs`) showcasing the high-performance compiled binary Hasql backend with connection pooling.
+    - Added `cron-pipeline` (`example/app/06-cron-pipeline.hs`) demonstrating recurring cron job scheduling and worker dispatch.
+  - **Workflow Automation & Developer Tooling**:
+    - Added `Makefile` with targets for `build`, `test`, `bench`, `lint`, `format`, `format-check`, `check`, `docs`, `clean`, `db-up`, `db-down`.
+    - Added `.hlint.yaml` configuration preventing dangerous partial functions (`head`, `tail`, `fromJust`, `read`, `undefined`, etc.).
+    - Added automated Hackage publication pipeline (`.github/workflows/publish-hackage.yml`).
+    - Added `cabal.project` linking root and example packages.
+
+  ### Fixed
+  - **Haddock Documentation Warnings**:
+    - Achieved 100% Haddock documentation coverage across all library modules.
+    - Disambiguated identifier type/value links (`'t:JobId'`, `'t:Job'`, `'t:SimpleDb'`, `'t:HasqlDb'`, `'t:TimedOverflowBuffer'`, `'t:DBSettings'`).
+    - Fixed out-of-scope identifier link warnings.
+  - **Codebase Cleanup & Housekeeping**:
+    - Removed obsolete duplicate files (`agent.md`, `fourmolu.yml`, `example/test/Spec.hs`).
+    - Streamlined `enqueueSingle` to use direct single-element lists without custom list shadows.
+    - Pruned unused dependencies (`tasty-bench`, `tasty`) from benchmark harness.
+    - Extended Fourmolu formatting to cover `bench/` and `example/`.
+  - **Fourmolu Formatting**:
+    - Cleaned and formatted all source trees (`src`, `test`, `bench`, `example`) conforming strictly to `fourmolu.yaml`.
+  - **Database Engine Compatibility**:
+    - Made `start-db.sh` and Makefile auto-detect both `podman` and `docker` with health-check readiness polling.
+    - Fixed resilient scraper example's admin retry loop with real timestamp and attempt tracking.
+
+  ---
+
+  ## [0.0.1.0] - 2026-11-08
+
+  ### Added
+  - **Core Architecture (`PGQueuer`)**:
+    - High-level `QueueManager` API (`createQueueManager`, `withQueueManager`) for lifecycle and connection management.
+    - Dual backend abstraction via `MonadPGQueuer`:
+      - `SimpleDb`: Reference driver built on `postgresql-simple`.
+      - `HasqlDb`: Zero-allocation high-performance driver using compiled binary prepared statements and `hasql-pool`.
+  - **Lock-Free Concurrency**:
+    - Dequeue engine utilizing PostgreSQL `FOR UPDATE SKIP LOCKED` for zero-contention job claims across horizontal worker instances.
+    - Per-entrypoint concurrency limits and optional global concurrency limits.
+  - **STM Timed Overflow Buffering (`PGQueuer.Worker.Buffer`)**:
+    - Decoupled database write logging and heartbeat updates via `TimedOverflowBuffer`.
+    - Bulk flushing triggered by buffer capacity overflow or timer expiration.
+  - **Retry Policies & Jitter Algorithms (`PGQueuer.Worker.Backoff`)**:
+    - Mathematical backoff strategies: `Exponential`, `Linear`, `Constant`.
+    - Anti-thundering-herd jitter implementations: `NoJitter`, `FullJitter`, `EqualJitter`.
+    - Transient exception hierarchy: `JobRetryableException` and `JobPermanentException`.
+  - **DAG Workflow Dependencies (`PGQueuer.Workflow`)**:
+    - Tree-structured job execution (`JobTree`, `JobNode`, `<~~`).
+    - Automatic atomic hold on parent jobs until all child jobs complete with rollup of child outputs.
+  - **Distributed Cron Scheduling (`PGQueuer.Worker.Cron`)**:
+    - 5-field cron recurring job registration (`CronExpression`) stored directly in PostgreSQL.
+    - Lock-free schedule acquisition with `calculateNextRunTime` dispatch.
+  - **OpenTelemetry Observability (`PGQueuer.Tracing`)**:
+    - Conditional OpenTelemetry integration (`-f otel`) supporting W3C trace context propagation in job headers.
+  - **Database Schema Management (`PGQueuer.Schema`)**:
+    - Full automated DDL installation (`installSchema`, `uninstallSchema`, `verifyStructure`).
+    - Triggers and functions emitting asynchronous pub/sub events via `LISTEN`/`NOTIFY`.
 changelog-type: markdown
-description: "# pgqueuer-hs: PostgreSQL-powered job queues for Haskell\n\nA PostgreSQL-powered
-  job queue library. fully compatible Haskell implementation of [pgqueuer](https://github.com/janbjorge/pgqueuer).\n\n##
-  Overview\n\nYour PostgreSQL database is already a job queue.\n\n`pgqueuer-hs` turns
-  PostgreSQL into a fast, reliable background job processor. Jobs live in the same
-  database as your application data. One stack, full ACID guarantees, and no separate
-  message broker to run.\n\n### Key Features\n\n- **PostgreSQL-Native**: Jobs stored
-  directly in PostgreSQL with ACID guarantees\n- **Transactional Enqueue**: Enqueue
-  jobs in the same transaction as your application data\n- **Safe Concurrency**: `FOR
-  UPDATE SKIP LOCKED` prevents duplicate processing\n- **Per-Entrypoint Limits**:
-  Configure concurrency limits per job type\n- **Global Limits**: Optional global
-  concurrency control across all entrypoints\n- **Instant Dispatch**: `LISTEN/NOTIFY`
-  wakes workers immediately when jobs arrive\n- **Deferred Jobs**: Schedule job execution
-  with `execute_after`\n- **Deduplication**: Prevent duplicate jobs with `dedupe_key`\n-
-  **Cross-Language Compatible**: Jobs created in Python can be processed by Haskell
-  (and vice versa)\n- **Job Tracking**: Complete logging of job status transitions\n-
-  **Error Handling**: Failed jobs can be retried or held for manual inspection\n\n##
-  Database Schema\n\nThe Haskell port uses the **exact same schema** as Python pgqueuer:\n\n##
-  Examples\n\nFully working examples are available in `./example` directory\n\n##
-  Installation\n\nAdd `pgqueuer-hs` to your `package.yaml` or `project.cabal` dependencies:\n\n```yaml\ndependencies:\n
-  \ - pgqueuer-hs\n  - postgresql-simple\n  - uuid\n  - time\n  - text\n  - aeson\n\n##
-  Quick start\n\nInstall schema if not installed.\n\n```haskell\n{-# LANGUAGE OverloadedStrings
-  #-}\n\nimport Data.UUID.V4 (nextRandom)\nimport PGQueuer\nimport Data.Either (isLeft)\nimport
-  Data.UUID.V4 (nextRandom)\n\nmain :: IO ()\nmain = do\n    let conStr = \"postgresql://queue_user:queue_pass@localhost:5432/queue_db\"\n
-  \   queueMgrId <- nextRandom\n    withQueueManager conStr defaultDBSettings queueMgrId
-  $ \\qm -> do\n        -- setup schema\n        eInstalled <- verifyStructure qm\n
-  \       when (isLeft eInstalled) (installSchema qm)\n\n        -- Enqueue a job\n
-  \       let ep = Entrypoint \"hello\"\n        let params = [EntrypointExecutionParameter
-  ep 0]\n        qm1 <- registerEntrypoint qm ep (\\_ -> pure ())\n        _ <- enqueue
-  qm1 ep Nothing 0 Nothing Nothing Nothing\n\n        -- Dequeue jobs\n        pickedJobs
-  <- dequeue qm1 20 params Nothing 3\n        mapM_ (\\job -> jobStatus job) pickedJobs\n```\n\n##
-  Core Concepts\n### Architecture\n\nPGQueuer creates a self-contained ecosystem within
-  your PostgreSQL database:\n  1. pgqueuer table: The primary ledger for active jobs
-  (status: queued, picked).\n  2. pgqueuer_log table: An unlogged table used for fast,
-  high-volume event logging of job state transitions.\n  3. pgqueuer_statistics table:
-  Aggregates queue throughput and metrics.\n  4. pgqueuer_schedules table: Manages
-  cron-like recurring jobs and future executions.\n  \n  Database Triggers: Automatically
-  emit pub/sub notifications via fn_pgqueuer_changed when queue states mutate.\n\n###
-  Status Lifecycle\n\n- Jobs transition through various states defined by JobStatus:\n-
-  Queued - Waiting for a worker.\n- Picked - Claimed by a worker (protected by a heartbeat
-  timeout).\n- Successful - Completed without errors.\n- Failed / Exception - Encountered
-  an error (eligible for retry).\n- Canceled / Deleted - Terminated or scrubbed.\n\n>
-  [!IMPORTANT]  \n> Codebase is currently highly unstable.\n\n## Notes\n\n- Postgresql-simple
-  is currently being used as the primary database driver. In the future, adapter drivers
-  will be implemented.\n- Scheduling is not supported right now.\n\n## License\n\nThis
-  project is licensed under the MIT License - see the LICENSE file for details.\n\n##
-  See Also\n\n- [Python pgqueuer](https://github.com/janbjorge/pgqueuer)\n- [PostgreSQL
-  Documentation](https://www.postgresql.org/docs/)\n- [postgresql-simple](http://hackage.haskell.org/package/postgresql-simple)\n"
+description: |
+  # pgqueuer-hs
+
+  [![Hackage](https://img.shields.io/hackage/v/pgqueuer-hs.svg)](https://hackage.haskell.org/package/pgqueuer-hs)
+  [![GHC](https://img.shields.io/badge/GHC-9.4%20%7C%209.6%20%7C%209.8%20%7C%209.10-purple.svg)](https://www.haskell.org/ghc/)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+  [![Haskell CI](https://github.com/tusharad/pgqueuer-hs/actions/workflows/haskell.yaml/badge.svg)](https://github.com/tusharad/pgqueuer-hs/actions/workflows/haskell.yaml)
+
+  A high-performance, transactional PostgreSQL-backed background job queue for Haskell, fully compatible with [pgqueuer](https://github.com/janbjorge/pgqueuer).
+
+  ---
+
+  ## Overview
+
+  **Your PostgreSQL database is already a distributed job queue.**
+
+  `pgqueuer-hs` turns PostgreSQL into a fast, resilient, horizontally scalable background job processor. Jobs reside directly inside your PostgreSQL database with full ACID guarantees.
+
+  - **No separate message broker**: Eliminate the operational overhead of running RabbitMQ, Redis, or Kafka for background tasks.
+  - **Transactional enqueuing**: Enqueue jobs in the exact same database transaction as your business domain data. If your transaction rolls back, the job is never scheduled.
+  - **Zero-allocation binary protocol**: Support for both `postgresql-simple` and compiled `hasql` prepared statements with connection pooling.
+  - **Cross-language compatible**: Process jobs enqueued by Python `pgqueuer` services in Haskell, or vice versa.
+
+  ---
+
+  ## Architecture
+
+  ```mermaid
+  flowchart TD
+      subgraph Producers ["Producers / Applications"]
+          P1["App Transaction (PostgreSQL)"]
+          P2["Cron Scheduler (PGQueuer)"]
+          P3["DAG Workflow Root"]
+      end
+
+      subgraph Postgres ["PostgreSQL 14+"]
+          Q["pgqueuer (Active Ledger)\nFOR UPDATE SKIP LOCKED"]
+          L["pgqueuer_log (Unlogged Table)\nAudit & Telemetry"]
+          S["pgqueuer_schedules\nDistributed Cron"]
+          T["Triggers & LISTEN/NOTIFY\nInstant Dispatch"]
+      end
+
+      subgraph Workers ["Horizontal Worker Cluster"]
+          W1["Worker Instance 1"]
+          W2["Worker Instance 2"]
+          W3["Worker Instance N"]
+      end
+
+      subgraph Buffers ["STM Decoupled Sinks"]
+          B1["TimedOverflowBuffer (Logs)"]
+          B2["TimedOverflowBuffer (Heartbeats)"]
+      end
+
+      P1 -->|INSERT INTO pgqueuer| Q
+      P2 -->|Dispatch Due Jobs| Q
+      P3 -->|insertJobTree| Q
+
+      Q -.->|Notify Mutation| T
+      T -.->|Instant Wakeup| Workers
+
+      Workers -->|Batch Claim| Q
+      Workers -->|Push Logs| B1
+      Workers -->|Push Keepalives| B2
+
+      B1 -->|Bulk Flush| L
+      B2 -->|HOT Update| Q
+  ```
+
+  ---
+
+  ## Key Features
+
+  - **Lock-Free Concurrency**: Leverages `FOR UPDATE SKIP LOCKED` and partial indexes to eliminate row lock contention across horizontal worker pools.
+  - **Dual Backend Architecture (`MonadPGQueuer`)**:
+    - `SimpleDb`: Reference driver built on `postgresql-simple` for lightweight setups.
+    - `HasqlDb`: High-performance binary driver using server-side prepared statements and `hasql-pool`.
+  - **Instant Event Dispatch**: Emits PostgreSQL `LISTEN` / `NOTIFY` signals when jobs arrive, waking workers immediately without wasteful high-frequency polling.
+  - **STM Timed Overflow Buffering**: Worker threads push status transitions and heartbeats to bounded STM queues (`TimedOverflowBuffer`), flushed in bulk to eliminate WAL write amplification.
+  - **Resilient Backoff & Jitter**: Configurable mathematical backoff strategies (`Exponential`, `Linear`, `Constant`) with anti-thundering-herd jitter (`FullJitter`, `EqualJitter`, `NoJitter`).
+  - **DAG Workflow Trees**: Build complex job dependency pipelines (`JobTree`, `<~~`). Parent jobs remain held in PostgreSQL until all child tasks finish successfully.
+  - **Distributed Cron Scheduling**: Native 5-field cron recurring jobs (`CronExpression`) stored and coordinated directly in PostgreSQL.
+  - **Distributed Tracing (OpenTelemetry)**: Built-in W3C trace context injection and span extraction in job headers (`-f otel`).
+
+  ---
+
+  ## Installation
+
+  Add `pgqueuer-hs` to your `package.yaml`:
+
+  ```yaml
+  dependencies:
+    - pgqueuer-hs >= 0.1.0.0
+    - postgresql-simple
+    - aeson
+    - text
+    - time
+    - uuid
+  ```
+
+  Or in your `.cabal` file:
+
+  ```cabal
+  build-depends:
+      base >= 4.7 && < 5
+    , pgqueuer-hs >= 0.1.0.0
+  ```
+
+  ---
+
+  ## Quick Start (15 Lines)
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import Data.Aeson (encode)
+  import Data.UUID.V4 (nextRandom)
+  import PGQueuer
+
+  main :: IO ()
+  main = do
+    let connStr = "postgresql://queue_user:queue_pass@localhost:5432/queue_db"
+    queueMgrId <- nextRandom
+
+    withQueueManager connStr defaultDBSettings queueMgrId $ \qm -> do
+      -- 1. Setup schema automatically
+      setupSchema qm
+
+      -- 2. Register entrypoint handler
+      let ep = Entrypoint "SendWelcomeEmail"
+      qm1 <- registerEntrypoint qm ep $ \job -> do
+        putStrLn $ "Processing job #" ++ show (let JobId jid = jobId job in jid)
+
+      -- 3. Enqueue a job
+      _ <- enqueue qm1 ep (Just $ encode ("user@example.com" :: String)) 0 Nothing Nothing Nothing
+
+      -- 4. Start worker loop (blocks and processes jobs)
+      putStrLn "Worker listening for incoming jobs..."
+      let execParams = [EntrypointExecutionParameter ep 5 3 (Exponential 2 60) FullJitter]
+      workerLoop qm1 defaultBufferConfig execParams
+  ```
+
+  ---
+
+  ## Backend Comparison
+
+  `pgqueuer-hs` provides a unified `MonadPGQueuer` typeclass that abstracts low-level database operations:
+
+  | Feature | `SimpleDb` (postgresql-simple) | `HasqlDb` (hasql) |
+  |---|---|---|
+  | **Protocol** | Text/Parametrized | Compiled Binary Protocol |
+  | **Connection Pooling** | Single Connection or external pool | Native `hasql-pool` (built-in) |
+  | **Query Planning** | Client-side query preparation | Server-side prepared statements |
+  | **Best For** | Simple CLI scripts, prototypes, testing | High-throughput production microservices |
+
+  ### Running with Hasql Connection Pool
+
+  ```haskell
+  import Database.PostgreSQL.Simple (connectPostgreSQL)
+  import PGQueuer.Backend.Hasql
+  import PGQueuer.Core.Monad
+  import PGQueuer.Schema (install)
+  import PGQueuer.Settings (defaultDBSettings)
+  import PGQueuer.Types
+
+  main :: IO ()
+  main = do
+    let connStr = "postgresql://queue_user:queue_pass@localhost:5432/queue_db"
+    env <- mkHasqlDbEnv connStr defaultDBSettings
+
+    -- Execute transactional job operations
+    runHasqlDb env $ withTransaction $ do
+      _ <- enqueue (Entrypoint "ImageResize") Nothing 0 Nothing Nothing Nothing Nothing Nothing Queued
+      pure ()
+
+    releaseHasqlDbEnv env
+  ```
+
+  ---
+
+  ## Core Capabilities
+
+  ### 1. Resilient Retries with Jitter
+
+  Prevent cascading failures and thundering herd stampedes by applying backoff and jitter algorithms:
+
+  ```haskell
+  let params =
+        [ EntrypointExecutionParameter
+            { paramEntrypoint = Entrypoint "ExternalPaymentAPI"
+            , paramConcurrencyLimit = 5       -- At most 5 concurrent jobs
+            , paramMaxAttempts = 5            -- Retry up to 5 times
+            , paramBackoffStrategy = Exponential 2 60 -- Base 2s, Cap 60s
+            , paramJitter = EqualJitter       -- Half deterministic, half random
+            }
+        ]
+  ```
+
+  ### 2. DAG Workflows & Dependency Trees
+
+  Define workflows where parent tasks wait for child tasks to complete:
+
+  ```haskell
+  -- Define child task nodes
+  let childA = JobNode (Entrypoint "ExtractData") (Just "chunk-1") 0 Nothing Nothing Nothing Nothing <~~ []
+      childB = JobNode (Entrypoint "ExtractData") (Just "chunk-2") 0 Nothing Nothing Nothing Nothing <~~ []
+
+  -- Parent MasterReport task depends on childA and childB
+  let workflow = JobNode (Entrypoint "MasterReport") Nothing 0 Nothing Nothing Nothing Nothing <~~ [childA, childB]
+
+  -- Atomically inserts tree: children are Queued, parent is Held until children complete
+  insertJobTree workflow
+  ```
+
+  ### 3. Distributed Cron Scheduling
+
+  Coordinate periodic jobs across your entire cluster without external daemons:
+
+  ```haskell
+  -- Register a schedule running every 15 minutes
+  registerSchedule qm (CronExpression "*/15 * * * *") (Entrypoint "SyncCatalog")
+  ```
+
+  ---
+
+  ## Examples
+
+  Fully working examples are located in the [`example`](example/) directory:
+
+  - [**01-hello-mailer**](example/app/01-hello-mailer.hs): Basic queue management, JSON payload handling, worker loop.
+  - [**02-resilient-scraper**](example/app/02-resilient-scraper.hs): Flaky API handling with `JobRetryableException`, exponential backoff, equal jitter, and admin retry watchdog.
+  - [**03-map-reduce-etl**](example/app/03-map-reduce-etl.hs): Hierarchical DAG workflows (`JobTree`) with 500 child tasks and parent state aggregation.
+  - [**04-chaos-ecommerce**](example/app/04-chaos-ecommerce.hs): High-throughput stress test with 5,000+ jobs/sec and a live queue status dashboard.
+  - [**05-hasql-worker**](example/app/05-hasql-worker.hs): Zero-allocation binary protocol backend with connection pooling and `FOR UPDATE SKIP LOCKED`.
+  - [**06-cron-pipeline**](example/app/06-cron-pipeline.hs): Distributed cron schedule management and periodic worker dispatch.
+
+  To run the examples:
+
+  ```bash
+  # 1. Start local PostgreSQL
+  make db-up
+
+  # 2. Run any example
+  cd example
+  stack run hello-mailer
+  stack run hasql-worker
+  stack run cron-pipeline
+  ```
+
+  ---
+
+  ## Development & Makefile
+
+  ```bash
+  make help          # List all available targets
+  make db-up         # Start local PostgreSQL container (Podman or Docker)
+  make test          # Run test suite against PostgreSQL
+  make bench         # Compile and execute benchmarks
+  make lint          # Run HLint static analysis
+  make format        # Format all Haskell files with Fourmolu
+  make format-check  # Verify formatting compliance (CI check)
+  make check         # Run cabal check for Hackage packaging
+  make docs          # Build Haddock documentation
+  make clean         # Clean build artifacts
+  make db-down       # Stop and remove local database container
+  ```
+
+  ---
+
+  ## License
+
+  This project is licensed under the [MIT License](LICENSE) - see the LICENSE file for details.
+
+  ---
+
+  ## See Also
+
+  - [Python pgqueuer](https://github.com/janbjorge/pgqueuer) - The original Python implementation.
+  - [PostgreSQL Documentation](https://www.postgresql.org/docs/) - `FOR UPDATE SKIP LOCKED` and `LISTEN/NOTIFY`.
+  - [hasql](https://hackage.haskell.org/package/hasql) - High-performance PostgreSQL driver.
+  - [postgresql-simple](https://hackage.haskell.org/package/postgresql-simple) - Mid-level client library.
 description-type: markdown
-hash: 6e22481dc8818e7d9add13167d4c2fb5f491c73e57441d15cea3fea07443ac4d
+hash: 9ea45a2177264f449e6fe76b6aa0d5cefd4ea79bf7ac0c8dd0efa5e260cc0ee2
 homepage: https://github.com/tusharad/pgqueuer-hs#readme
-latest: 0.0.1.0
+latest: 0.1.0.0
 license-name: MIT
 maintainer: tusharadhatrao@gmail.com
-synopsis: PostgreSQL powered Job queue
+synopsis: High-performance PostgreSQL background job queue with cron and workflows
 test-bench-deps:
   aeson: '>=2.0 && <3'
+  async: '>=2.2 && <3'
   base: '>=4.7 && <5'
   bytestring: '>=0.10.4.0 && <0.13'
   containers: '>=0.6 && <0.8'
+  contravariant: '>=1.5 && <2'
+  cron: '>=0.7 && <1'
+  hasql: '>=1.6 && <1.10'
+  hasql-pool: '>=1.2 && <1.4'
+  mtl: '>=2.2 && <3'
   pgqueuer-hs: '>=0'
   postgresql-simple: '>=0.7 && <0.9'
+  random: '>=1.2 && <1.3'
+  stm: '>=2.5 && <3'
   tasty: '>=1.4 && <2'
   tasty-hunit: '>=0.10 && <1'
+  testcontainers: '>=0.5 && <0.6'
   text: '>=1.2 && <3'
   time: '>=1.9 && <2'
+  unliftio: '>=0.2 && <0.3'
+  unordered-containers: '>=0.2 && <0.3'
   uuid: '>=1.3 && <2'
+  vector: '>=0.12 && <1'
