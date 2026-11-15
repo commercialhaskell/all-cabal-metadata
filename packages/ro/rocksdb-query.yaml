@@ -15,19 +15,47 @@ all-versions:
 - 0.5.0
 - 0.6.0
 - 0.6.1
+- 0.7.0
 author: JP Rupp
 basic-deps:
   base: '>=4.7 && <5'
   bytestring: '>=0'
   cereal: '>=0'
   conduit: '>=0'
-  rocksdb-haskell-jprupp: '>=2.3.0'
+  data-default: '>=0'
+  rocksdb-haskell-jprupp: '>=2.8.0'
 changelog: |
   # Changelog
   All notable changes to this project will be documented in this file.
 
   The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
   and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+
+  ## 0.7.0 - 2026-11-15
+  ### Changed
+  - Prefix queries read the database in chunks, through `iterChunk` of
+    rocksdb-haskell-jprupp 2.8.0, which is now required. They made a call into
+    RocksDB for every entry, and each such call costs a Haskell thread its
+    capability, which it has to wait for under load. Lists now read up to 256
+    entries or a megabyte per call. Conduits read 16 entries, then 64, then
+    256 at a time, so that a consumer who stops early has made the database
+    read little more than it took.
+  - The list functions no longer use stack for every entry. Their loop left a
+    frame there for each one, and the run-time system walks the stack at every
+    call that may block, so each entry cost more the longer the list was.
+  - Together, `matchingAsList` on four cores: 2,000 entries in 1 ms where they
+    took 5, and from sixteen threads at once in 6 ms where they took 48;
+    200,000 entries in 0.12 s where they took 0.54, and from sixteen threads
+    in 0.92 s where they took 4.8.
+  - `firstMatching` and its variants read the one entry and nothing after it,
+    without a conduit.
+  - A failure of RocksDB to read, such as a corrupt block, is thrown as an
+    `IOError`. It used to look like the end of the data, and the result was
+    only shorter.
+  - After a consumer of `matching` or `matchingSkip` stops, the iterator is
+    past the entries read ahead, and no longer on the last one yielded.
+  - The module has an export list. It exports everything that it did before;
+    the helpers that are new stay internal.
 
   ## 0.6.1
   ### Changed
@@ -219,8 +247,8 @@ description: |
 
   ```yaml
   extra-deps:
-    - rocksdb-query-0.6.1
-    - rocksdb-haskell-jprupp-2.6.1
+    - rocksdb-query-0.7.0
+    - rocksdb-haskell-jprupp-2.8.0
   ```
 
   ## Quick start
@@ -409,10 +437,11 @@ description: |
   | Function            | Returns                                      |
   | ------------------- | -------------------------------------------- |
   | `matchingAsList`    | every match, as a list                       |
-  | `firstMatching`     | the first match                              |
+  | `firstMatching`     | the first match, reading that entry only     |
   | `matching`          | every match, as a conduit, on your iterator  |
 
-  The conduit version reads lazily, so it suits prefixes with many matches:
+  The conduit version reads as its consumer asks, so it suits prefixes with
+  many matches, and consumers that stop early:
 
   ```haskell
   import Conduit
@@ -421,6 +450,38 @@ description: |
   total <- withIter db $ \it ->
     runConduit $ matching it (OrderKeyS 1) .| mapC (qty . snd) .| sumC
   ```
+
+  ### How a prefix is read
+
+  Moving a RocksDB iterator is a foreign call that may wait for the disk, and
+  Haskell pays for each such call: the thread gives up its capability and has
+  to get one back, which under load means waiting for one. So a prefix is not
+  read one entry per call, but in chunks, with `iterChunk` of
+  rocksdb-haskell-jprupp:
+
+  - **Lists** read up to 256 entries, or a megabyte of them, per call. More
+    per call gains nothing that can be measured; the megabyte keeps large
+    values from being held 256 at a time.
+  - **Conduits** read 16 entries first, then four times as many with each
+    chunk, up to the same 256. A consumer that takes three entries makes the
+    database read 16; one that takes thousands is soon at full size. When the
+    consumer stops, the iterator is past what was read ahead, not on the last
+    entry yielded.
+  - **`firstMatching`** and its variants read one entry and move nowhere.
+
+  The lists are also built without using stack for each entry. Seconds to read
+  a list with `matchingAsList`, on four cores, before and after both changes:
+
+  | Entries | Threads | 0.6.1 | 0.7.0 |
+  | ------- | ------- | ----- | ----- |
+  | 2,000   | 1       | 0.005 | 0.001 |
+  | 2,000   | 16      | 0.048 | 0.006 |
+  | 200,000 | 1       | 0.54  | 0.12  |
+  | 200,000 | 16      | 4.8   | 0.92  |
+
+  If RocksDB fails to read, with a corrupt block for instance, the queries
+  throw an `IOError`. They do not return what they had as if the data ended
+  there.
 
   ### Pagination
 
@@ -489,6 +550,9 @@ description: |
   `rocksdb-query.cabal`, which [hpack](https://github.com/sol/hpack) generates.
 
   The tests are in `test/Spec.hs` and use [hspec](https://hspec.github.io/).
+  They run with a stack of at most 1 MiB, so that a query whose stack grows
+  with its result fails on the lists of a hundred thousand records instead of
+  only being slow.
 
   ### Contributing
 
@@ -512,17 +576,19 @@ description: |
   rocksdb-query is released under the
   [MIT License](https://github.com/jprupp/rocksdb-query/blob/master/LICENSE).
 description-type: markdown
-hash: 46918664cceca0e69a91828eccc214f1f0ae88aa29825c31f8fc4d6b2b298496
+hash: e5240d85206d4a466ef98db6d205f4e3e5aba530dd09d4f2e5b371a92fdce2b2
 homepage: https://github.com/jprupp/rocksdb-query#readme
-latest: 0.6.1
+latest: 0.7.0
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: RocksDB database querying library for Haskell
 test-bench-deps:
   base: '>=4.7 && <5'
+  bytestring: '>=0'
   cereal: '>=0'
+  conduit: '>=0'
   data-default: '>=0'
   hspec: '>=0'
-  rocksdb-haskell-jprupp: '>=2.3.0'
+  rocksdb-haskell-jprupp: '>=2.8.0'
   rocksdb-query: '>=0'
   temporary: '>=0'
