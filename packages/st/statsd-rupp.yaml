@@ -11,12 +11,14 @@ all-versions:
 - 0.5.0.0
 - 0.5.0.1
 - 0.5.0.2
+- 0.6.0
 author: JP Rupp
 basic-deps:
+  async: '>=2.2.4 && <3'
   base: '>=4.7 && <5'
   bytestring: '>=0.11.5.1 && <2'
   network: '>=3.1.4.0 && <4'
-  unliftio: '>=0.2.25 && <2'
+  stm: '>=2.5.1.0 && <3'
   unordered-containers: '>=0.2.19.1 && <2'
   vector: '>=0.13.0 && <2'
 changelog: |
@@ -27,6 +29,35 @@ changelog: |
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   and this project adheres to the
   [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.6.0 - 2026-11-15
+
+  - Every function runs in plain `IO` instead of any `MonadIO` or
+    `MonadUnliftIO` monad. This breaks backwards compatibility. Names and
+    argument orders are the same.
+  - Remove the dependency on `unliftio`. The library now depends on `async` and
+    `stm` directly.
+  - `withStats` closes its UDP socket when it returns. It was left open, so a
+    program that opened clients again and again lost a file descriptor each
+    time. A handle that outlives the scope still counts and sends nothing.
+  - Test `withStats` over UDP, and the errors for bad keys and sampling rates.
+
+  ### Migrating
+
+  - Code that already runs in `IO` needs no change.
+  - Code in another monad has to lift each call: `liftIO (incrementCounter c 1)`.
+  - `withStats` takes a function in `IO`. To use it from a monad transformer
+    stack, run the stack inside that function. With `ReaderT env IO`, for
+    example:
+
+    ```haskell
+    env <- ask
+    liftIO $ withStats cfg $ \stats -> runReaderT (app stats) env
+    ```
+
+  - Behaviour is unchanged: the same errors are thrown as `IOError`, network
+    errors are ignored when sending, and the flushing thread is linked to the
+    caller of `withStats`.
 
   ## 0.5.0.2 - 2026-11-07
 
@@ -154,6 +185,8 @@ description: |
     updating it is one short STM transaction and at most one UDP packet.
   - **Sampling saves traffic, not accuracy.** Sampling thins out the samples you
     send. Aggregated statistics always count every reading.
+  - **Plain `IO`.** Every action is an ordinary `IO` action, built on `base`,
+    `stm` and `async`. From a monad transformer stack, call them with `liftIO`.
   - **Familiar names.** Aggregated metrics follow the naming of the StatsD daemon
     (`stats.counters.x.count`, `stats.timers.x.mean_90`), so existing dashboards
     and alerts keep working.
@@ -167,7 +200,7 @@ description: |
   | Aggregation  | Counts and rates; gauge values; distinct set sizes; timing count, rate, mean, median, standard deviation, minimum, maximum, sum, sum of squares and percentiles |
   | Naming       | Configurable namespace and prefixes; key validation                              |
   | Transport    | UDP to any host and port, with an optional newline after each line               |
-  | Monads       | Works in any `MonadIO`; `withStats` needs `MonadUnliftIO`                         |
+  | Monads       | Plain `IO`; from another monad, call it with `liftIO`                            |
 
   ### What is not included
 
@@ -218,7 +251,7 @@ description: |
 
   ```yaml
   extra-deps:
-    - statsd-rupp-0.5.0.1
+    - statsd-rupp-0.6.0
   ```
 
   ## Quick start
@@ -273,9 +306,9 @@ description: |
   {-# LANGUAGE OverloadedRecordDot #-}
   {-# LANGUAGE ScopedTypeVariables #-}
 
+  import Control.Exception (SomeException, throwIO, try)
   import GHC.Clock (getMonotonicTimeNSec)
   import System.Metrics.StatsD
-  import UnliftIO (SomeException, throwIO, try)
 
   data Metrics = Metrics
     { requests :: StatCounter,
@@ -315,6 +348,12 @@ description: |
   Use a monotonic clock (`GHC.Clock.getMonotonicTimeNSec`) for durations, so that
   clock adjustments do not produce negative or huge timings.
 
+  `try` from `Control.Exception` also catches asynchronous exceptions, such as
+  the one a timeout sends to a request that takes too long. That is wanted here:
+  the request is timed and counted as an error, and `throwIO` then lets the
+  exception carry on. Never swallow such an exception, or the thread cannot be
+  stopped.
+
   ### 4. Choose the mode
 
   - If a real StatsD daemon aggregates for you, turn aggregation off with
@@ -338,6 +377,10 @@ description: |
   `Stats` handle to your function. If aggregation is on, it also runs a thread
   that flushes statistics. Everything stops when the function returns. A `Stats`
   can be shared between threads.
+
+  Everything runs in `IO`. In a `ReaderT` or similar stack, record metrics with
+  `liftIO (incrementCounter c 1)`, and run your stack inside the function that
+  you give to `withStats`.
 
   ### Registering metrics
 
@@ -506,19 +549,20 @@ description: |
   statsd-rupp is released under the
   [BSD 3-Clause License](https://github.com/jprupp/statsd-rupp/blob/master/LICENSE).
 description-type: markdown
-hash: 4cecfa52c8f3b6dfe1f6d124bab7ba8851f238c409115d7ed2f3fc0a1ab7b1f8
+hash: 50f07fdc10ad8da355f8e63b30a9af21de13b7818b58cd0a1722967bb73cb093
 homepage: https://github.com/jprupp/statsd-rupp#readme
-latest: 0.5.0.2
+latest: 0.6.0
 license-name: BSD-3-Clause
 maintainer: jprupp@protonmail.ch
 synopsis: Simple StatsD Client
 test-bench-deps:
   QuickCheck: '>=0'
+  async: '>=2.2.4 && <3'
   base: '>=4.7 && <5'
   bytestring: '>=0.11.5.1 && <2'
   hspec: '>=0'
   network: '>=3.1.4.0 && <4'
   statsd-rupp: '>=0'
-  unliftio: '>=0.2.25 && <2'
+  stm: '>=2.5.1.0 && <3'
   unordered-containers: '>=0.2.19.1 && <2'
   vector: '>=0.13.0 && <2'

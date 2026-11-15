@@ -16,22 +16,77 @@ all-versions:
 - 0.6.7
 - 0.6.8
 - 0.6.9
+- 0.7.0
 author: JP Rupp
 basic-deps:
+  async: '>=0'
   base: '>=4.8 && <5'
   conduit: '>=0'
   containers: '>=0'
   hashable: '>=0'
-  mtl: '>=0'
   stm: '>=0'
   unique: '>=0'
-  unliftio: '>=0'
 changelog: |
   # Changelog
   All notable changes to this project will be documented in this file.
 
   The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
   and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+
+  ## 0.7.0 - 2026-11-15
+  ### Changed
+  - Every function runs in plain `IO` (or `STM`, as before) instead of any
+    `MonadIO` or `MonadUnliftIO` monad. This breaks backwards compatibility.
+    Names and argument orders are the same.
+  - `conduitMailbox` is a `ConduitT msg o IO ()`.
+  - A supervisor with the `KillAll` or `IgnoreGraceful` strategy re-throws an
+    asynchronous exception that stopped a child wrapped in the new
+    `AsyncChildException`. It used to be wrapped in `SyncExceptionWrapper` from
+    `unliftio`. Other exceptions are re-thrown unchanged, as before.
+  - The publisher loop uses `forever`. The workaround of 0.6.7 was only needed
+    for `LoggingT`.
+
+  ### Fixed
+  - A child of a supervisor that never blocks can be stopped. Children ran
+    with asynchronous exceptions masked, because the supervisor forks them
+    inside the mask under which it registers them, and a forked thread
+    inherits the mask. Such a child could be interrupted only where it
+    blocked: one that computed in a loop could not be cancelled, a `timeout`
+    inside it never fired, and `removeChild` and the end of its supervisor
+    waited for it for good. Children now start unmasked.
+
+  ### Added
+  - `AsyncChildException`.
+  - Tests for timeouts, for `withSubscription`, for a supervised child that
+    is cancelled directly, and for children that never block.
+
+  ### Removed
+  - The dependencies on `unliftio` and `mtl`. The library now depends on `async`
+    directly.
+
+  ### Migrating
+  - Code that already runs in `IO` needs no change to its calls. If it imported
+    `UnliftIO` only to use NQE, it can take `atomically` from
+    `Control.Concurrent.STM`, `threadDelay` from `Control.Concurrent`, `cancel`
+    and `Async` from `Control.Concurrent.Async`, and exceptions from
+    `Control.Exception`.
+  - Code in another monad has to lift: `liftIO (send msg mbox)`. For the
+    functions that take an action (`withProcess`, `process`, `withSupervisor`,
+    `withPublisher`, `withSubscription`), run your monad inside the `IO` action.
+    With a `ReaderT env IO` stack, for example:
+
+    ```haskell
+    env <- ask
+    liftIO $ withProcess (\inbox -> runReaderT (server inbox) env) $ \p ->
+      runReaderT (client p) env
+    ```
+
+  - In a conduit over another monad, write `transPipe liftIO (conduitMailbox m)`.
+  - If you match on `SyncExceptionWrapper` in an exception re-thrown by a
+    supervisor, match on `AsyncChildException` instead.
+  - The behaviour with exceptions is otherwise the same as in 0.6.9: supervisors
+    stop their children, and `withSubscription` unsubscribes, with asynchronous
+    exceptions blocked uninterruptibly.
 
   ## 0.6.9
   ### Added
@@ -121,10 +176,9 @@ description: |
   that start and watch over them, and publishers that broadcast messages to
   subscribers.
 
-  Everything is built on [STM](https://hackage.haskell.org/package/stm) and
-  [unliftio](https://hackage.haskell.org/package/unliftio). It works in `IO` and
-  in any monad with a `MonadUnliftIO` instance, such as `ReaderT` stacks or
-  `LoggingT`. It has no C dependencies.
+  Everything is built on [stm](https://hackage.haskell.org/package/stm) and
+  [async](https://hackage.haskell.org/package/async), and runs in plain `IO` and
+  `STM`. It has no C dependencies.
 
   - [API documentation](https://hackage.haskell.org/package/nqe)
   - [Changelog](https://github.com/jprupp/nqe/blob/master/CHANGELOG.md)
@@ -190,6 +244,11 @@ description: |
   - **Scoped lifetimes.** The `with` functions tie a process, supervisor or
     subscription to a block of code, so it cannot outlive it, even on an
     exception.
+  - **Plain `IO`.** Every action is an `IO` or `STM` action from the ordinary
+    `base`, `stm` and `async` libraries. Signatures are short, and exceptions
+    follow the rules of `Control.Exception`, with nothing in between. The cost is
+    that code in a monad transformer stack has to `liftIO` its calls to NQE; see
+    [Things to watch out for](#things-to-watch-out-for).
   - **Not quite Erlang.** No distribution, no registry, no hot code reloading and
     no automatic restarts. Those features add a lot of machinery that most
     Haskell programs never use. Supervisors report deaths; your code decides
@@ -231,7 +290,7 @@ description: |
      cd nqe-demo
      ```
 
-     In `nqe-demo.cabal`, add `nqe` and `unliftio` to `build-depends` of the
+     In `nqe-demo.cabal`, add `nqe` and `stm` to `build-depends` of the
      executable.
   3. Paste the [quick start](#quick-start) program into `src/Main.hs`.
   4. Build and run it:
@@ -250,7 +309,7 @@ description: |
   cabal init --non-interactive --exe
   ```
 
-  Add `nqe` and `unliftio` to `build-depends` in `nqe-demo.cabal`, put the quick
+  Add `nqe` and `stm` to `build-depends` in `nqe-demo.cabal`, put the quick
   start program in `app/Main.hs`, and run it with `cabal run`.
 
   ### Adding NQE to an existing project
@@ -261,7 +320,7 @@ description: |
   build-depends:
       base
     , nqe
-    , unliftio
+    , stm
   ```
 
   With Stack and hpack, list it in `package.yaml`:
@@ -269,15 +328,18 @@ description: |
   ```yaml
   dependencies:
     - nqe
-    - unliftio
+    - stm
   ```
+
+  `stm` is there for `atomically`, which you need to run a `Listen` callback.
+
 
   If your Stack resolver does not include NQE, or has an older version, add it
   to `stack.yaml`:
 
   ```yaml
   extra-deps:
-    - nqe-0.6.8
+    - nqe-0.7.0
   ```
 
   ## Quick start
@@ -285,9 +347,9 @@ description: |
   A server that answers `Ping` with `Pong`, and a client that asks it once:
 
   ```haskell
+  import Control.Concurrent.STM (atomically)
   import Control.Monad (forever)
   import NQE
-  import UnliftIO
 
   data Pong = Pong deriving Show
 
@@ -358,10 +420,10 @@ description: |
   ```haskell
   {-# LANGUAGE LambdaCase #-}
 
+  import Control.Concurrent (threadDelay)
+  import Control.Concurrent.STM (atomically)
   import Control.Monad (replicateM_)
   import NQE
-  import UnliftIO
-  import UnliftIO.Concurrent (threadDelay)
 
   main :: IO ()
   main = do
@@ -425,8 +487,8 @@ description: |
 
   ### Thread linking
 
-  `withProcess` and `process` link the new thread to the caller with
-  `UnliftIO.link`. An exception in the child is re-thrown in the parent as an
+  `withProcess` and `process` link the new thread to the caller with `link` from
+  the `async` package. An exception in the child is re-thrown in the parent as an
   `ExceptionInLinkedThread`, so a failing process is never silent.
 
   ## Usage guide
@@ -488,9 +550,16 @@ description: |
       mainLoop
   ```
 
-  When the supervisor stops, it cancels all its children. Children run in `IO`;
-  use `withRunInIO` or `toIO` to turn an action in your own monad into a
-  `ChildAction`.
+  When the supervisor stops, it cancels all its children and waits for them. It
+  does that with asynchronous exceptions blocked, so cancelling the supervisor
+  twice cannot leave children behind.
+
+  `KillAll` and `IgnoreGraceful` re-throw the exception that stopped a child. If
+  the child died of an asynchronous exception, for example because some other
+  thread called `cancel` on it instead of `removeChild`, the supervisor throws it
+  wrapped in `AsyncChildException`. That keeps it an error: thrown unwrapped, an
+  `AsyncCancelled` would pass for a normal cancellation of the supervisor and
+  nobody would be told. `Notify` always gets the original exception.
 
   ### Publishers
 
@@ -513,7 +582,8 @@ description: |
   runConduit $ sourceHandle stdin .| linesUnboundedAsciiC .| conduitMailbox mbox
   ```
 
-  With a bounded mailbox, a slow consumer slows down the producer.
+  With a bounded mailbox, a slow consumer slows down the producer. The sink runs
+  in `IO`; in a pipeline over another monad, use `transPipe liftIO`.
 
   ## Module overview
 
@@ -537,6 +607,13 @@ description: |
     unsubscribe leaks the callback and everything it refers to.
   - `withSubscription` uses an unbounded inbox. Read from it, or it grows without
     limit.
+  - Everything runs in `IO`. From a `ReaderT` or `LoggingT` stack, call NQE with
+    `liftIO`, and run the stack again inside the `IO` action that you give to
+    `withProcess`, `addChild` and the like. Versions before 0.7.0 did this for
+    you; the [changelog](CHANGELOG.md) says how to migrate.
+  - Do not catch `SomeException` around NQE calls without letting asynchronous
+    exceptions through. `cancel` and the linking of threads work by throwing
+    them, and a handler that swallows them leaves threads that cannot be stopped.
 
   ## Development
 
@@ -578,9 +655,9 @@ description: |
   NQE is released under the
   [MIT License](https://github.com/jprupp/nqe/blob/master/LICENSE).
 description-type: markdown
-hash: 65b548dcaa0b663a800f60a6d75f264df1a5b8572d106917176a0d9ec187d608
+hash: 23e04e49a8ff2026047c045cda4b4cc4e80f59ff5fac11a17c6e85b8f604ecc7
 homepage: https://github.com/xenog/nqe#readme
-latest: 0.6.9
+latest: 0.7.0
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Concurrency library in the style of Erlang/OTP
@@ -596,4 +673,3 @@ test-bench-deps:
   stm: '>=0'
   stm-conduit: '>=0'
   text: '>=0'
-  unliftio: '>=0'
