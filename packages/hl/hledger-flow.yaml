@@ -27,6 +27,7 @@ all-versions:
 - 0.18.0
 - 0.19.0
 - 0.20.0
+- 0.20.1
 author: Andreas Pauley <hledger-flow@pauley.org.za>
 basic-deps:
   aeson: '>=2.2.5.1 && <2.3'
@@ -35,6 +36,7 @@ basic-deps:
   base: '>=4.20 && <4.22'
   bytestring: '>=0.12.2.0 && <0.13'
   containers: '>=0.7 && <0.8'
+  cryptohash-sha256: '>=0.11 && <0.12'
   directory: '>=1.3.8.5 && <1.4'
   exceptions: '>=0.10.9 && <0.11'
   filepath: '>=1.5.4.0 && <1.6'
@@ -49,6 +51,7 @@ basic-deps:
   stm: '>=2.5.3.1 && <2.6'
   text: '>=2.1.3 && <2.2'
   time: '>=1.12.2 && <1.13 || >=1.14 && <1.15'
+  unix: '>=2.8 && <2.9'
 changelog: |
   # Changelog for [hledger-flow](https://github.com/apauley/hledger-flow)
 
@@ -83,13 +86,33 @@ changelog: |
     existing destination belongs in release-procedure.md.
   -->
 
+  ## 0.20.1
+
+  - Use `hledger-flow import --incremental` with hledger 1.52.4 or later to reuse journals when their inputs, including nested rules files, still match. Choose `--incremental=skip-unchanged-scripts` to also reuse the outputs of unchanged scripts. See the [incremental import reference](https://hledger-flow.github.io/reference/incremental-import/).
+  - Interactive `import` and `report` share a [release check](https://hledger-flow.github.io/reference/release-notices/) for 24 hours. `status` can show a previously discovered upgrade while offline.
+  - On macOS, incremental import checks the hledger executable faster and still detects a replacement build that reports the same version.
+  - `hledger-flow import --verbose` and `hledger-flow report --verbose` are
+    easier to read. Each statement's lines appear together, files are labelled
+    by what import looked for, and every hledger or hook command is shown ready
+    to paste into a shell at the base directory, with paths there starting
+    with `./`. On a terminal, the output uses colour unless
+    `NO_COLOR` is set.
+  - `--help` is easier to scan. Each command's help lists the global options,
+    describes its examples and links to its docs. `import --help` shows each
+    `--incremental` mode on its own line. On a terminal, examples and modes use
+    colour unless `NO_COLOR` is set.
+  - When hledger or a preprocess or construct script fails, the message names
+    that program, keeps its exit code and marks its output as its own. With
+    `--verbose`, the full error output is shown instead of the first 20 lines.
+    A construct script's error output now appears once the script finishes.
+
   ## 0.20.0
 
   - If you have statements with brackets in their filenames, such as
     `April [1].csv`, run `hledger-flow import` to regenerate their journals.
     Each now imports exactly once alongside `April 1.csv`.
-  - If a statement is newer than its cached CSV and its preprocess hook is
-    missing, import stops and names both files. Restore the hook or move the
+  - If a statement is newer than its cached CSV and its preprocess script is
+    missing, import stops and names both files. Restore the script or move the
     cached CSV aside, then run `hledger-flow import`.
   - The documentation has moved to the [project site](https://hledger-flow.github.io/).
     Links in hledger-flow's messages and `--help` open the relevant section
@@ -556,30 +579,58 @@ description: |
 
   ## What is it?
 
-  hledger-flow organises bank statements by owner, bank, account and year.
-  It uses [hledger](https://hledger.org/) and its CSV rules to generate one
-  journal per statement, then includes those journals and your manual entries
-  in `all-years.journal`. You keep the original statements so you can rebuild
-  the imported entries when your rules change.
+  Keep every statement. Rebuild your journals from them.
+
+  hledger-flow is a command-line workflow for [hledger](https://hledger.org/),
+  the plain-text accounting tool. hledger keeps your accounts in journals:
+  human-readable text files you can open in any editor, in a format that
+  hledger reads and that
+  [Ledger](https://hledger-flow.github.io/guides/ledger/) and other plain-text
+  accounting tools largely share.
+
+  hledger-flow is opinionated about where files live. You save each statement,
+  exactly as your bank issued it, in a folder for its owner, institution,
+  account and year. `hledger-flow import` converts each one with your hledger
+  rules, or a script for formats rules can't read, and links the journals
+  through `all-years.journal`. The statements stay as permanent input, so
+  every journal can be rebuilt from its source and every entry traced to the
+  statement it came from.
 
   It grew out of scripts I wrote while using
   [adept's Full-fledged Hledger](https://github.com/adept/full-fledged-hledger/wiki).
 
   ## Who should use this?
 
-  **Choose hledger-flow** if you keep non-overlapping statements and want to
-  apply better rules to several years of transactions. It is especially useful
-  when you manage several accounts or owners and want to review the changes
-  to each statement's journal before committing them.
+  There are many ways to keep your finances with hledger, and
+  [hledger's workflows page](https://hledger.org/workflows.html) describes them.
+  Three of them handle bank statements in quite different ways:
 
-  **Choose plain `hledger import`** if you want to append new transactions
-  and then review, split or annotate them directly in your journal. Your edits
-  survive the next import. This also suits rolling downloads such as “the last
-  90 days” from the same account. hledger remembers how far it got for each
-  source, which works well when dates and the order of same-day transactions
-  are stable. hledger-flow processes each statement independently, so overlapping
-  files can count the same purchase twice. You can keep the original CSVs with
-  either workflow. See [hledger's import guide](https://hledger.org/dev/hledger.html#import).
+  - **`hledger import`.** Your journal is the primary record. You classify,
+    split and annotate entries by editing the journal, and a better rule changes
+    future imports only. Overlapping downloads are fine: hledger skips entries
+    it has already imported, as long as their dates and same-day order stay
+    stable. [How hledger import works](https://hledger.org/hledger.html#import)
+  - **Read the CSV directly.** The CSV files are the record and nothing is
+    generated. You classify by editing the rules, and a better rule applies the
+    next time hledger reads the file. Suits a few files you name yourself, as in
+    `hledger -f checking.csv bal`. The hledger 1.99 previews can also `include`
+    a CSV in a journal. [Reading CSV with hledger](https://hledger.org/hledger.html#csv)
+  - **hledger-flow.** The original statements are the primary record, and
+    journals are rebuilt from them. You classify by editing rules files, and a
+    better rule rebuilds every journal that uses it, in every year. A fixed
+    folder for each owner, institution, account and year keeps years of
+    statements maintainable. An account's statements must not overlap, or a
+    purchase appears twice.
+
+  Choose `hledger import` if your journal is your primary record and you want
+  to edit it by hand. Choose hledger-flow if you want to generate your journals
+  from statements exactly as they came from the source, classify by editing
+  rules, and keep years of files in a structure that stays maintainable and
+  auditable.
+
+  Full-fledged hledger teaches this last approach with build scripts you can adapt.
+  hledger-flow packages the folder conventions, import and standard reports as CLI commands.
+  [Full-fledged hledger’s principles and practices](https://github.com/adept/full-fledged-hledger/wiki/Key-principles-and-practices)
 
   ## Overview of the Basic Workflow
 
@@ -622,13 +673,13 @@ description: |
 
   ## How do I install it?
 
-  Install with Homebrew on macOS or Linux:
+  Install with Homebrew on Linux or macOS:
 
   ```sh
   brew install ferntrail/tap/hledger-flow
   ```
 
-  Or download a release for Windows, macOS or Linux, or build from source.
+  Or download a release for Linux, macOS, or Windows, or build from source.
   The [quick start](https://hledger-flow.github.io/quickstart/) covers each option, how to verify a
   download, and your first import.
 
@@ -669,9 +720,9 @@ description: |
 
   Have a look at the [contribution guidelines](CONTRIBUTING.md).
 description-type: markdown
-hash: 7e65e13e7496abbfd481ec8d2ea457dc152bfa3469ee5b37623e14bfe541cb95
+hash: 8a526ea1583b6e20cdf0da138537ab151557a160b6015d46b370147f37323968
 homepage: https://github.com/apauley/hledger-flow#readme
-latest: 0.20.0
+latest: 0.20.1
 license-name: GPL-3.0-only
 maintainer: Andreas Pauley <hledger-flow@pauley.org.za>
 synopsis: An hledger workflow focusing on automated statement import and classification.
@@ -679,12 +730,15 @@ test-bench-deps:
   HUnit: '>=1.6.2.0 && <1.7'
   aeson: '>=2.2.5.1 && <2.3'
   base: '>=4.20 && <4.22'
+  bytestring: '>=0.12.2.0 && <0.13'
   containers: '>=0.7 && <0.8'
   directory: '>=1.3.8.5 && <1.4'
   filepath: '>=1.5.4.0 && <1.6'
   hledger-flow: '>=0'
   path: '>=0.9.6 && <0.10'
   path-io: '>=1.8.2 && <1.9'
+  process: '>=1.6.26.1 && <1.7'
   stm: '>=2.5.3.1 && <2.6'
   text: '>=2.1.3 && <2.2'
   time: '>=1.12.2 && <1.13 || >=1.14 && <1.15'
+  unix: '>=2.8 && <2.9'
