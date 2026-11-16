@@ -27,6 +27,7 @@ all-versions:
 - 0.11.1.1
 - 0.12.0.0
 - 0.12.0.1
+- 0.13.0.0
 author: Devon Tomlin
 basic-deps:
   base: '>=4.22 && <5'
@@ -39,6 +40,7 @@ basic-deps:
   http-types: '>=0.12 && <0.13'
   nova-cache: '>=0'
   ram: '>=0.20 && <1'
+  stm: '>=2.5 && <2.6'
   text: '>=2.0 && <2.2'
   time: '>=1.9 && <1.17'
   unix: '>=2.8 && <2.9'
@@ -48,6 +50,18 @@ basic-deps:
   warp: '>=3.3 && <3.5'
 changelog: |
   # Changelog
+
+  ## 0.13.0.0 - 2026-11-16
+
+  - **The server removes entries and NARs itself: `DELETE /<hash>.narinfo` removes an entry, `POST /reclaim` removes the NARs no narinfo names and the abandoned multipart uploads, and `GET /reclaim` lists what it would remove.** No request removed anything, and the one removal path, `reclaim-nars --delete`, ran on the host against the store directory and shared no lock with the server, so it raced the server twice: a narinfo that arrived after its listing, for a NAR past the minimum age, lost that NAR, as upstream's `nix copy` can send one after skipping a NAR the cache holds, and a NAR uploaded again after its listing was removed despite its new modification time. The README asked for no push in progress during a run. The server now orders its removals against its uploads through a gate each `FileStore` carries: a narinfo upload holds it, alongside other uploads, from the check of its NAR through its write, each rename into `nar/` holds it for the rename, and a reclaim or a narinfo removal holds it alone, the reclaim from its scan through its last removal. So a narinfo is never stored naming a NAR a reclaim removes, and a NAR that arrives during a reclaim lands after it. A removal waiting for the gate lets nothing new take it, so a stream of uploads cannot hold it off; uploads wait while a reclaim reads the store, and no request body is read under the gate. A run's rules are unchanged: a minimum age of two weeks by modification time (`?min-age-hours=N` sets another, and any other query is refused with 400), a narinfo that cannot be resolved or a store with NARs and no narinfo blocks the run with 409, and a removal that fails makes the answer a 500. All three requests need the write key, which can already replace any entry. `DELETE` leaves the NAR to the reclaim, which removes it once nothing names it, as attic's garbage collection reaps a NAR once no object refers to it. A narinfo uploaded for a path the cache holds replaces the entry, which lets a push store a smaller encoding of the same NAR, and the NAR it displaces is reclaimed the same way. Upstream ships no garbage collection for binary caches, so there is no server behavior to match, only its client's: `BinaryCacheStore::narFromPath` turns a missing NAR into `SubstituteGone`, which a substitution logs as a warning before it tries the next substituter (2.35.6), so a client holding a narinfo whose NAR was removed sees a miss, not a failure. One server serves a store directory.
+  - **`nova-cache-server reclaim-nars` exits nonzero, naming the requests that replace it.** The server removes NARs itself. The subcommand's name is still recognized so that a script running it stops: the server ignores arguments it does not know, and would otherwise start a second server over the store.
+  - **`FileStore`'s constructor is no longer exported: `newFileStore` makes one, with the gate that orders the store's additions against its removals.** `fsRoot`, `fsStoreDir` and `fsPriority` remain fields, and a copy made by a record update shares the original's gate. `withoutRemoval` and `withRemoval` in `NovaCache.Store` hold it; `writeNar`, `writeNarStreaming` and `completeUpload` take it for their rename, and `removeNarInfo` and `NarInfoRemoveResult` are new. `fileStoreAt` goes, since its one caller was `reclaim-nars`, and `FileStore` loses its `Show` instance. In `NovaCache.Reclaim`, `scanStore` takes the clock it reads after its listings and lists the staged uploads into `StoreScan`'s new `scanStagedUploads`; `planStore`, `StorePlan`, `listReclaimable`, `reclaim` and `Reclaimed` are new. `NovaCache.Server` gains `storeNarInfo`, which checks, signs and writes a narinfo within one hold of the gate, `NarInfoWrite`, and `parseMinimumAge`. `stm` joins the dependencies, for the gate's `TVar`. These changes break the library's API, which is why this is a major version.
+  - **A NAR can be uploaded in parts, past a proxy's limit on request bodies: `POST /nar/<file>/uploads` begins an upload, `PUT /nar/<file>/uploads/<id>/<n>` sends part `n`, and `POST /nar/<file>/uploads/<id>` joins the parts into `nar/<file>`.** A NAR went up in one `PUT /nar/<file>`, and a proxy in front of the server can refuse a body over its own limit, as Cloudflare does over 100 MB on its Free and Pro plans, so a larger NAR could not reach a cache behind one. Upstream's `HttpBinaryCacheStore` also sends each file in one `PUT` (2.35.6), and only its S3 store uploads in parts, through S3's own API, so there is no upstream HTTP protocol to match. The requests follow S3's multipart upload in plain paths: the server issues the upload's id, parts are numbered from 1, a part sent again replaces the one held, and the completion declares the total size, which S3 makes optional (`x-amz-mp-object-size`) and this server requires. Each request is authenticated as the other writes are. Parts are staged under `uploads/`, outside `nar/`, each streamed to disk in constant memory and renamed into place whole, and they go in order: a part that would leave a gap is refused with 409. The completion's body declares the part count and the total size, as `Parts:` and `FileSize:` lines in narinfo's form, and is refused with 413 when the declared size is over the cap, or with 409 unless the upload holds that many parts and they join to that size; only a join that matches is renamed into `nar/`, so an upload in progress or abandoned never appears there, and the narinfo check verifies the joined file's `FileSize` and `FileHash` as before. An upload's parts together are held to the 4 GB of a single `PUT`, checked as each part arrives and again at completion, since two parts written at once can each pass the first check; an upload holds at most 10,000 parts, S3's limit, and a name too long to stage (its directory's name is the NAR's with the 32-digit id before it) is refused with 400. `POST /reclaim` also removes an upload nothing has been written to for its minimum age: no narinfo can name a staged upload's parts, so removing them never leaves a narinfo without its NAR. `newFileStore` creates `uploads/`. The library gains the upload's store operations in `NovaCache.Store` (`beginUpload`, `writeUploadPart`, `completeUpload`, `listStagedUploads`, `removeUpload`) with the types they take and return, `UploadId` and `PartNumber`'s parse and render functions, and `maxUploadParts`; `selectAbandoned` and `UploadPlan` in `NovaCache.Reclaim`; and the completion body's `parseUploadTotals`, `renderUploadTotals` and `maxUploadTotalsBodySize` in `NovaCache.Server`.
+  - **`nova-cache-server` serves no landing page of its own: `GET /` answers the library's line of plain text, or, given `--root-page FILE`, that file as HTML.** The executable served cache.novavero.ai's branded page to every operator who ran it, with that deployment's name, styling and links, where the library has kept the root page per deployment through `scRootResponse` all along. A deployment's page is now a file it ships beside its unit, as upstream's cache.nixos.org serves a static page at its root; the public cache's is `deploy/index.html`, styled by novavero.ai's stylesheets. The server reads the file once at startup and refuses to start if it cannot. The executable's page also showed the signing key's public half and a count of stored paths; the plain-text line shows neither, and the server prints the public key in its startup log. The library gains `htmlRootResponse` in `NovaCache.Server`. Nix clients never request `/`, so substitution is unchanged.
+  - **The server writes its log to stdout line by line.** Under systemd its stdout is a pipe to the journal, where GHC buffered it by block, so the startup lines reached the journal only when the first request's log line flushed it, or, with `LOG_REQUESTS=0`, when a block filled.
+  - **When `serialiseFromPath` or `withNarSource` fails to read an entry's status, a symlink's target, a directory's listing or a regular file, it throws `NarWalkError`, naming the access, the entry and the `IOException` beneath.** A failure in any of these four accesses escaped as GHC's bare `IOException`, so a caller could tell which access failed on which entry only by parsing GHC's text. Upstream's `PosixSourceAccessor` at 2.24.9 words each access its own way (`opening file '/d/tree/sub/locked': Permission denied`, `reading directory /d/tree/sub: Permission denied`), and a caller reporting failures as upstream does needs the access as a value. `WalkAccess` says which of the four failed (a file's open, size and reads are one access), `nwePath` is the entry's on-disk path, and `nweCause` is the `IOException` itself. `withNarSource` throws a file's read failure from the pull that reads it. Only an `IOException` is wrapped: an asynchronous exception passes through as itself, and whatever an `ExecBitResolver` throws arrives as thrown. A caller that catches `IOException` around a walk no longer catches these failures, which is why this is a major version.
+  - **`serialiseFromPath` and `withNarSource` refuse a FIFO, a socket or a device with upstream's error at 2.24.9, `file '<path>' has an unsupported type`.** The walk took every entry that is not a directory or a symlink for a regular file, through `doesFileExist`, which is true for anything that is not a directory, so the refusal written for these types never ran. `serialiseFromPath` then read the entry with `ByteString.readFile`, which reads anything that is not a regular file to its end of input: a FIFO with no writer, or `/dev/null`, archived as an empty regular file, and a device with no end, such as `/dev/zero`, was read without bound. `withNarSource` failed at the pull for the entry's contents, with the `IOException` `hFileSize` raises for a file that is not regular, after earlier pulls had returned part of the archive, and a socket failed both entry points as a file read. Each entry's type now comes from one `lstat`, classified by its file mode as upstream's `SourceAccessor::dumpPath` classifies it, and any type but a regular file, a directory or a symlink is refused before it is read; `withNarSource` refuses before its continuation runs. The refusal is an `IOException`, as the walk's other refusals of what it finds are, not a `NarWalkError`: no access failed, and no `IOException` lies beneath it. An entry that vanishes mid-walk fails the access that finds it gone, as a `NarWalkError`, unless the first read to find it gone is `defaultExecBitResolver`'s own status read, which throws its bare `IOException` as any resolver's failure arrives. Windows has no file mode, and its classification is unchanged.
+  - **A failed `withNarSource` pull stays failed: every later pull rethrows the same exception, as the xz, zstd and bzip2 sources' pulls do.** A pull that found a file shorter than the size it had read marked the source drained before it threw, so the next pull returned the empty chunk that marks a clean end, and a consumer that caught the failure and pulled again took a truncated archive for a complete one. Any exception raised while a pull runs now latches, asynchronous ones included, since a pull interrupted after its read consumed bytes it never returned leaves the archive as torn as a failed one. An asynchronous exception that arrives as a pull returns, after the source has moved past the chunk it was returning, is not latched, so a consumer must not pull again after an asynchronous exception. A pull after any other failure, such as a file that could not be opened, rethrows it as well, where it used to carry on from where the failure left the source. The file a failed pull held open is closed as the failure latches, not when the continuation exits.
 
   ## 0.12.0.1 - 2026-11-05
 
@@ -179,9 +193,8 @@ changelog: |
     protocol endpoint documentation. The cache protocol routes are unchanged;
     the page is briefly cacheable (`max-age=300, must-revalidate`) since its
     stats change as paths are added.
-  - **Correctness and hardening sweep** (a post-0.4.0.0 audit; note: shipped in
-    this release without individual entries at tag time - recorded here for the
-    honest history):
+  - **Correctness and hardening** (shipped in this release without individual
+    entries at tag time, and recorded here after it):
     - `Base32.decode` rejects non-canonical encodings (overflow bits must be zero).
     - NAR deserialisation is strict on untrusted input: trailing bytes rejected,
       regular nodes require a `contents` token, directory entry names must be
@@ -415,13 +428,13 @@ description: |
   ## Installation
 
   ```cabal
-  build-depends: nova-cache >= 0.12 && < 0.13
+  build-depends: nova-cache >= 0.13 && < 0.14
   ```
 
   The codecs are separate sublibraries, named alongside the main library:
 
   ```cabal
-  build-depends: nova-cache:{nova-cache, xz, zstandard} >= 0.12 && < 0.13
+  build-depends: nova-cache:{nova-cache, xz, zstandard} >= 0.13 && < 0.14
   ```
 
   libbz2 and libzstd are bundled. liblzma comes from the `xz` package, which
@@ -484,11 +497,16 @@ description: |
   ```
 
   Without `CACHE_API_KEY` the server refuses to start. `--allow-open-writes` runs
-  it with unauthenticated writes, for local testing only.
+  it with unauthenticated writes and removals, for local testing only.
+
+  `GET /` answers a line of plain text. `--root-page FILE` serves `FILE` there
+  as HTML instead, such as a page about the cache; the server reads it once at
+  startup and refuses to start if it cannot.
 
   The protocol lives in the `NovaCache.Server` library module as a WAI
   `Application`, so the cache can be embedded in another server with its own
-  root page. The bundled executable is one such embedding.
+  root page. The bundled executable is one such embedding. One server serves a
+  store directory: it orders its own removals against its own uploads.
 
   ### Configuration
 
@@ -497,7 +515,7 @@ description: |
   | `PORT` | Listen port (default: 5000; also `--port`) |
   | `HOST` | Bind host (default: all interfaces; also `--host`) |
   | `NIX_CACHE_DIR` | Store directory (default: `./nix-cache`; also `--store`) |
-  | `CACHE_API_KEY` | Bearer token required for `PUT`. The server refuses to start without it unless `--allow-open-writes` is passed. |
+  | `CACHE_API_KEY` | Bearer token for the requests marked authenticated below. The server refuses to start without it unless `--allow-open-writes` is passed. |
   | `SIGNING_KEY_FILE` | Ed25519 secret key file for server-side narinfo signing |
   | `LOG_REQUESTS` | Set to `0` to disable request logging |
 
@@ -505,52 +523,118 @@ description: |
 
   | Method | Path | Description |
   | --- | --- | --- |
-  | `GET` | `/` | Landing page: live stats and the cache public key |
+  | `GET` | `/` | A line of plain text, or the `--root-page` file |
   | `GET` | `/nix-cache-info` | Cache metadata |
   | `GET` | `/narinfo-hashes` | All cached narinfo hashes, newline-delimited (authenticated) |
   | `GET` | `/<hash>.narinfo` | Fetch a narinfo |
   | `GET` | `/nar/<file>` | Fetch a NAR (streamed from disk) |
   | `PUT` | `/<hash>.narinfo` | Upload a narinfo (authenticated, validated; refused unless the NAR its `URL` names is stored with its `FileSize` and `FileHash`) |
   | `PUT` | `/nar/<file>` | Upload a NAR (authenticated, streamed to disk) |
+  | `DELETE` | `/<hash>.narinfo` | Remove a narinfo; its NAR stays until a reclaim (authenticated) |
+  | `GET` | `/reclaim` | List what `POST /reclaim` would remove (authenticated) |
+  | `POST` | `/reclaim` | Remove the NARs no narinfo names and abandoned uploads (authenticated) |
+  | `POST` | `/nar/<file>/uploads` | Begin a multipart upload of a NAR (authenticated) |
+  | `PUT` | `/nar/<file>/uploads/<id>/<n>` | Upload part `n` of it (authenticated, streamed to disk) |
+  | `POST` | `/nar/<file>/uploads/<id>` | Complete it: join the parts into `nar/<file>` (authenticated) |
 
   `HEAD` is answered wherever `GET` is.
 
-  ### Reclaiming unreferenced NARs
+  ### Uploading a NAR in parts
 
-  A client uploads each NAR before its narinfo, so a NAR whose narinfo was
-  refused, or never sent because the push died, stays under `nar/` with nothing
-  referencing it. No endpoint deletes anything. The `reclaim-nars` subcommand
-  does, run on the host against the store directory:
+  A proxy in front of the server can refuse a request body over its own limit,
+  as Cloudflare does over 100 MB on its Free and Pro plans. A NAR over such a
+  limit is uploaded in parts, one request each:
+
+  1. `POST /nar/<file>/uploads` answers `201` with the upload's id, followed by
+     a newline, as the body, and `Location: uploads/<id>`.
+  2. `PUT /nar/<file>/uploads/<id>/<n>` sends part `n` as the body. Parts are
+     numbered from 1 and go in order: part `n` is accepted once parts 1 to
+     `n - 1` are held. A part sent again replaces the one held, so a part whose
+     response was lost can be sent again.
+  3. `POST /nar/<file>/uploads/<id>` completes the upload. Its body declares
+     how many parts were sent and how many bytes they hold together:
+
+     ```
+     Parts: 3
+     FileSize: 107200936
+     ```
+
+     The server joins the parts into `nar/<file>` only if it holds that many
+     parts and they join to that size. Nothing of an upload is under `nar/`
+     before then. The narinfo follows as for a NAR sent in one request.
+
+  Each part is as large as the client chooses. The parts of an upload together
+  are held to the 4 GB of a single `PUT /nar/<file>`, and an upload to 10,000
+  parts.
+
+  | Status | Meaning |
+  | --- | --- |
+  | `400` | The file name, the part number or the completion body is not valid |
+  | `401` | The write key is missing or wrong |
+  | `404` | No such upload of that file: never begun, completed, or reclaimed |
+  | `409` | The part would leave a gap, or the server holds other parts or another size than the completion declares |
+  | `413` | The parts would hold more than 4 GB, the completion declares a `FileSize` over 4 GB, or its body is over 1 KB |
+
+  A part whose response is lost can be sent again. To a client that sends its
+  parts in order, a `404` or `409` for a part means the server no longer holds
+  the parts sent before it, such as an upload a reclaim removed, so it begins a new
+  upload. Completion joins the whole NAR before it answers, so its
+  response can be lost, or a retry can meet the first attempt still joining:
+  whenever the completion is answered with anything but `200`, or not at all, the
+  client uploads the narinfo, whose check of the NAR's `FileSize` and `FileHash`
+  decides whether it is stored, and begins a new upload if the narinfo is refused
+  for want of its NAR.
+
+  ### Removing entries and reclaiming NARs
+
+  `DELETE /<hash>.narinfo` removes an entry. Its NAR stays under `nar/`, still
+  served, until a reclaim removes it. A narinfo uploaded for a path the cache
+  holds replaces the entry, as for a smaller encoding of the same NAR, and the
+  NAR the old narinfo named likewise stays until a reclaim.
+
+  A reclaim removes the NARs no narinfo names, and the multipart uploads nothing
+  has been written to, once each is old enough. `GET /reclaim` lists what
+  `POST /reclaim` removes. Both answer with a report in plain text.
 
   ```bash
-  nova-cache-server reclaim-nars --store /var/lib/nix-cache           # list
-  nova-cache-server reclaim-nars --store /var/lib/nix-cache --delete  # remove
+  auth="Authorization: Bearer $CACHE_API_KEY"
+  curl -fsS -X DELETE -H "$auth" https://cache.example/<hash>.narinfo  # remove an entry
+  curl -fsS -H "$auth" https://cache.example/reclaim                   # list
+  curl -fsS -X POST -H "$auth" https://cache.example/reclaim           # remove
   ```
 
-  - A NAR is eligible only once it is at least `--min-age-hours` old (default
-    336, two weeks), measured from its modification time. A NAR is unreferenced
-    until its push sends the narinfo, and a push can run for hours.
+  - A NAR or an upload is eligible once it is at least `min-age-hours` old
+    (default 336, two weeks), measured from its modification time, as in
+    `POST /reclaim?min-age-hours=24`. A NAR is unreferenced until its push sends
+    the narinfo, and a push can run for hours. Any other query is refused with
+    `400`.
   - If any narinfo cannot be read or parsed, or its `URL` is not `nar/<file>`,
-    the run prints those narinfos, lists and deletes nothing, and exits nonzero:
-    the NAR such a narinfo names is unknown, so no NAR can be called unreferenced.
-  - If the store holds NARs and no narinfo at all, the run lists and deletes
-    nothing and exits nonzero: a store that lost its narinfos looks the same as
-    one whose every NAR is unreferenced.
-  - A run is not atomic with the server, so run it with no push in progress. A
-    narinfo that arrives during a run for a NAR past the minimum age loses that
-    NAR, which leaves a signed narinfo with nothing behind it.
-  - A deletion that fails is reported for that file, and the exit status is
-    nonzero.
-  - The store root comes from `--store`, then `NIX_CACHE_DIR`, then
-    `./nix-cache`, as for the server. A missing `narinfo/` or `nar/` directory is
-    an error, never an empty store.
+    the reclaim answers `409` naming those narinfos and removes nothing: the NAR
+    such a narinfo names is unknown, so no NAR can be called unreferenced.
+  - If the store holds NARs and no narinfo at all, the reclaim answers `409` and
+    removes nothing: a store that lost its narinfos looks the same as one whose
+    every NAR is unreferenced. Removing every entry leaves a store like that;
+    stop the server to remove its NARs.
+  - A reclaim can run while pushes are in progress. A narinfo is never stored
+    naming a NAR the reclaim removes, and a NAR uploaded during a reclaim is
+    kept. A narinfo that arrives for a NAR the reclaim removed is refused, as
+    when a client skipped uploading a NAR the cache held, which upstream's
+    `nix copy` does; the client's next attempt uploads the NAR.
+  - Uploads wait while a reclaim or a `DELETE` runs, and a reclaim reads every
+    narinfo, so on a store with many entries a reclaim holds pushes up for as
+    long as that read takes.
+  - A Nix client holding a narinfo that names a removed NAR treats it as a
+    missing substitute and tries its next substituter.
+  - A removal that fails is reported for that file, and the reclaim answers
+    `500`.
 
   ### Public cache
 
-  A public instance runs at `cache.novavero.ai`. It serves the closure of
-  nova-nix's Windows `hello` recipe, which nova-nix's CI publishes on every push
-  to its main branch. To use it from Nix, add it to `/etc/nix/nix.conf`. On a
-  multi-user install, Nix ignores substituters set by users it does not trust.
+  A public instance runs at `cache.novavero.ai`. It serves the sources
+  nova-nix's Windows packages are built from and the closure of its Windows
+  `hello` recipe, which nova-nix's CI publishes on every push to its main
+  branch. To use it from Nix, add it to `/etc/nix/nix.conf`. On a multi-user
+  install, Nix ignores substituters set by users it does not trust.
 
   ```
   extra-substituters = https://cache.novavero.ai
@@ -571,9 +655,9 @@ description: |
 
   Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 description-type: markdown
-hash: c35ab1c397bd44dd85213c4727c89c6b3973dc42aaefce7298b0de1c6922d8ac
+hash: 290adc81ccc9398c04b8294f0da18911b91fb683c6b6f4312ba073a4f1cc2909
 homepage: https://github.com/Novavero-AI/nova-cache
-latest: 0.12.0.1
+latest: 0.13.0.0
 license-name: Apache-2.0
 maintainer: devon.tomlin@novavero.ai
 synopsis: 'Nix binary cache protocol: NAR, narinfo, signing and a WAI server'
@@ -584,11 +668,13 @@ test-bench-deps:
   bytestring: '>=0.11 && <0.13'
   containers: '>=0.6 && <0.9'
   crypton: '>=1.1 && <2'
-  directory: '>=1.3 && <1.4'
+  directory: '>=1.3.1.0 && <1.4'
   http-types: '>=0.12 && <0.13'
+  network: '>=3.0 && <3.3'
   nova-cache: '>=0'
   ram: '>=0.20 && <1'
   text: '>=2.0 && <2.2'
   time: '>=1.9 && <1.17'
+  unix: '>=2.8 && <2.9'
   wai: '>=3.2 && <3.3'
   wai-extra: '>=3.1 && <3.2'
