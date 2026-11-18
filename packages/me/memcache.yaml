@@ -10,6 +10,7 @@ all-versions:
 - 0.3.0.2
 - 0.4.0.0
 - 0.4.2.0
+- 0.4.2.1
 author: David Terei <code@davidterei.com>
 basic-deps:
   base: '>=4.16 && <5'
@@ -25,6 +26,47 @@ basic-deps:
   unliftio: '>=0.2.25.0'
   vector: '>=0.12.3.1'
 changelog: |
+  # 0.4.2.1 - November 18th, 2026
+
+  No API changes from 0.4.2.0.
+
+  - `set`, `add`, `replace`, `cas`, `append` and `prepend` reject a value
+    larger than 1GiB, memcached's largest possible item size, with
+    `OpError ErrValueTooLarge` before sending anything. A value of about 2GiB
+    or more (longer than 2147483645 bytes) previously made memcached run the
+    value's bytes as commands, so storing untrusted data could run commands on
+    the server, and a value over 1GiB could time out, be sent again and mark
+    the server dead. Such a value no longer reaches the server, so it no
+    longer makes memcached delete the key's existing value, as memcached does
+    whenever it rejects a store as too large; a value within 1GiB but over the
+    server's own limit (`-I`, 1MiB by default) still does. Every operation
+    that sends a value now evaluates it first, before its timeout starts: an
+    exception it throws is no longer retried and no longer marks the server
+    dead, and time spent computing it no longer counts towards
+    `optsServerTimeout`. The request encoders in `Database.Memcache.Socket`
+    still encode a value of any length; don't send one longer than 1GiB.
+  - memcached 1.6.10 or later is now required (previously documented as
+    1.6.0). memcached before 1.6.10 rejects the meta set command this library
+    stores values with, without reading the value that follows it, and then
+    runs the value's bytes as commands, so storing untrusted data could run
+    commands on the server. Each new connection now asks the server for its
+    version before it is used: until that check passes, the only requests sent
+    are the authentication exchange, when credentials are set, and `version`.
+    A server older than 1.6.10, or any other reply that is neither an error
+    nor a readable version, is refused with `ProtocolError (UnknownOp ...)`,
+    whose message quotes the reply; the connection is closed, and the refusal
+    is not retried and doesn't mark the server dead. An error reply, such as
+    `CLIENT_ERROR unauthenticated`, throws what it throws for any request, and
+    so does a reply that can't be parsed, such as an empty line or an overlong
+    one, which counts against the server. This covers ElastiCache discovery,
+    which now fails for a cluster running a memcached older than 1.6.10.
+    Through a proxy, the check sees only the proxy's version, so every
+    memcached behind it must be 1.6.10 or later too. Each new connection that
+    an operation opens takes one more round trip, which counts towards
+    `optsServerTimeout`. Connections made directly with
+    `Database.Memcache.Socket.newConnection` are not checked; send
+    `storeRequest` and `modifyRequest` only to 1.6.10 or later.
+
   # 0.4.2.0 - October 20th, 2026
 
   No API changes from 0.4.0.0. This is the first Hackage release since 0.4.0.0,
@@ -212,8 +254,20 @@ description: |
   connecting to a cluster, consistent hashing is used for routing requests to
   the appropriate server.
 
-  **This library requires memcached 1.6.0 or newer**, the first release with the
-  meta commands. Against older servers every operation is rejected with `ERROR`.
+  **This library requires memcached 1.6.10 or newer.** Older servers reject the
+  meta set command this library stores values with, without reading the value
+  that follows it, and then run the value's bytes as commands. So each new
+  connection asks the server for its version before it is used: until that check
+  passes, the only requests sent are the authentication exchange, when
+  credentials are set, and `version`. Unless the server reports 1.6.10 or later,
+  the connection is closed and the operation fails with
+  `ProtocolError (UnknownOp message)`, where the message quotes the server's
+  reply, or, if the server answered with an error such as
+  `CLIENT_ERROR unauthenticated`, with the error that reply gives any request. A
+  refused version isn't retried, and doesn't mark the server as failed. The
+  check sees only the server the client connects to: through a proxy, such as
+  memcached's own `-o proxy_config` mode, it sees the proxy's version, so every
+  memcached behind a proxy must be 1.6.10 or newer too.
 
   Authentication uses a memcached auth file with `-Y authfile`, an experimental
   ASCII-protocol auth mode added in memcached 1.5.15; the old binary protocol
@@ -314,6 +368,9 @@ description: |
     mc <- EC.newClient M.def (60 * 1000000) endpoint
   ```
 
+  Discovery connects to the configuration endpoint like any other server, so it
+  fails for a cluster running a memcached older than 1.6.10.
+
   ## Licensing
 
   This library is BSD-licensed.
@@ -385,7 +442,7 @@ description: |
   - `spec` holds the unit and property tests, which run against an in-process
     mock server and need nothing installed.
   - `integration` starts its own `memcached` servers on free local ports and
-    tests against them, so it needs memcached 1.6 or newer on your `PATH`.
+    tests against them, so it needs memcached 1.6.10 or newer on your `PATH`.
     Without it, the suite reports a single pending test instead of failing.
     memcached refuses to run as root without `-u`, so run the suite as an
     ordinary user.
@@ -416,9 +473,9 @@ description: |
   - Joel McCracken
   - Steven Leiva
 description-type: markdown
-hash: 1aa271847ea66ab931d625fb067f1366cc22c03dc10c15e5c7caa4eaa4e62d9e
+hash: 4658cd8dfd90d3818e2395a1f16f076bf3866b1b6c5f68184f4dfc000faced21
 homepage: https://github.com/dterei/memcache-hs#readme
-latest: 0.4.2.0
+latest: 0.4.2.1
 license-name: BSD-3-Clause
 maintainer: David Terei <code@davidterei.com>
 synopsis: A memcached client library.
