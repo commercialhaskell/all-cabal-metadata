@@ -339,6 +339,7 @@ all-versions:
 - 1.16.0
 - 1.16.1
 - 1.16.2
+- 1.16.3
 author: JP Rupp
 basic-deps:
   aeson: '>=2.2.5.1 && <2.3'
@@ -380,6 +381,7 @@ basic-deps:
   time: '>=1.14 && <1.15'
   time-manager: '>=0.4.2 && <0.5'
   transformers: '>=0.6.3.0 && <0.7'
+  unix: '>=2.8.8.0 && <2.9'
   unordered-containers: '>=0.2.21 && <0.3'
   vault: '>=0.3.2.0 && <0.4'
   wai: '>=3.2.5 && <3.3'
@@ -392,18 +394,24 @@ basic-deps:
 changelog: "# Changelog\nAll notable changes to this project will be documented in
   this file.\n\nThe format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)\nand
   this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)\n\n##
-  [1.16.2] - 2026-11-18\n\n### Changed\n- **RocksDB gets a background job a core**,
-  from 2 to 16, instead of its\n  default of two. `--background-jobs` (`BACKGROUND_JOBS`)
-  still overrides it,\n  and 0 still means RocksDB's default. A fresh sync of Bitcoin
-  Cash froze at\n  height 436,814 because compactions fell behind and RocksDB stopped
-  writes.\n  `max_subcompactions` stays at 1: `rocksdb-haskell-jprupp` 2.8.0 cannot
-  set\n  it.\n\n### Added\n- **Write stalls are visible.** The new `Haskoin.Store.Database.Stalls`\n
-  \ polls RocksDB every five seconds and logs a warning when it delays or stops\n
-  \ writes, with the bytes of compaction pending, and a line when they recover.\n
-  \ `/health` reports it under `\"database\"`; stopped writes make the store\n  unhealthy,
-  delayed ones do not. StatsD gauges `db.pending_compaction_bytes`\n  and `db.write_delayed`.\n\n##
-  [1.16.1] - 2026-11-18\n\n### Changed\n- **The stall follows the syncing peer's pace.**
-  A peer is passed over when\n  it has sent nothing for four of its recent gaps between
+  [1.16.3] - 2026-11-18\n\n### Added\n- **The API can listen on a Unix socket.** `--socket
+  PATH` (`SOCKET`) makes\n  one, with the mode of `--socket-mode` (`SOCKET_MODE`,
+  `0660` by default),\n  removes a stale one at start and refuses a path in use. A
+  socket passed\n  by systemd socket activation (`LISTEN_FDS`) wins over both and
+  over\n  `--host` and `--port`. The new `Haskoin.Store.Web.Listen` has both. The\n
+  \ access log shows `unix` for a client on such a socket.\n\n## [1.16.2] - 2026-11-18\n\n###
+  Changed\n- **RocksDB gets a background job a core**, from 2 to 16, instead of its\n
+  \ default of two. `--background-jobs` (`BACKGROUND_JOBS`) still overrides it,\n
+  \ and 0 still means RocksDB's default. A fresh sync of Bitcoin Cash froze at\n  height
+  436,814 because compactions fell behind and RocksDB stopped writes.\n  `max_subcompactions`
+  stays at 1: `rocksdb-haskell-jprupp` 2.8.0 cannot set\n  it.\n\n### Added\n- **Write
+  stalls are visible.** The new `Haskoin.Store.Database.Stalls`\n  polls RocksDB every
+  five seconds and logs a warning when it delays or stops\n  writes, with the bytes
+  of compaction pending, and a line when they recover.\n  `/health` reports it under
+  `\"database\"`; stopped writes make the store\n  unhealthy, delayed ones do not.
+  StatsD gauges `db.pending_compaction_bytes`\n  and `db.write_delayed`.\n\n## [1.16.1]
+  - 2026-11-18\n\n### Changed\n- **The stall follows the syncing peer's pace.** A
+  peer is passed over when\n  it has sent nothing for four of its recent gaps between
   blocks, at least\n  two seconds, instead of always `--block-stall` seconds, which
   is now the\n  longest stall. A store that imports hundreds of small blocks a second\n
   \ waited ten seconds on a peer that had gone quiet; it now waits two. The\n  pure
@@ -2407,6 +2415,8 @@ description: |
   | Option | Environment | Default | Meaning |
   | --- | --- | --- | --- |
   | `--host` / `--port` | `HOST` / `PORT` | `*` / `3000` | Address the API listens on |
+  | `--socket` | `SOCKET` | none | Listen on a Unix socket at this path instead of `--host` and `--port` ([Unix sockets](#unix-sockets)) |
+  | `--socket-mode` | `SOCKET_MODE` | `0660` | Permissions of that socket, in octal |
   | `--noweb` | `NO_WEB` | off | Index only, no API |
   | `--tls-cert` / `--tls-key` | `TLS_CERT` / `TLS_KEY` | none | Serve HTTPS with this certificate chain and private key, both files in PEM |
   | `--no-blockchain-info` | `NO_BLOCKCHAIN_INFO` | off | Disable the `/blockchain/` endpoints and price lookups |
@@ -2636,6 +2646,45 @@ description: |
     public service usually has a proxy in front that holds the certificate;
     this is for a server by itself. The files are read at start, so a
     renewed certificate takes a restart.
+
+  ### Unix sockets
+
+  A store with its proxy on the same machine needs no TCP port. On a Unix
+  socket, who may connect is set by the file's owner and mode, and nothing
+  on the network can reach the store by mistake. There are two ways to get
+  one:
+
+  - **`--socket PATH`**: the store makes the socket, with the mode of
+    `--socket-mode` (`0660` by default: owner and group), and removes it when
+    it stops. A socket left by a store that did not stop cleanly is removed
+    at start if nothing answers on it; a store already listening there, or a
+    file that is not a socket, stops the new one instead. The path may be at
+    most 107 bytes long.
+  - **Socket activation by systemd**: a `.socket` unit makes the socket and
+    owns its path and permissions, and the store takes it from systemd
+    (`LISTEN_FDS`). Clients that connect while the store restarts wait
+    instead of failing. A socket from systemd wins over `--socket`, which
+    wins over `--host` and `--port`, so adding the unit needs no change to
+    the store's options. For a user service:
+
+    ```ini
+    # ~/.config/systemd/user/haskoin-store-bch.socket
+    [Socket]
+    ListenStream=%t/haskoin-store/bch.sock
+    SocketMode=0660
+
+    [Install]
+    WantedBy=sockets.target
+    ```
+
+    A `.socket` unit starts the `.service` of the same name.
+
+  Test it with `curl --unix-socket /run/user/1000/haskoin-store/bch.sock
+  http://localhost/health`. nginx reaches it with
+  `server unix:/run/user/1000/haskoin-store/bch.sock;` in an `upstream`. A
+  client on a Unix socket has no address, so the access log shows `unix` for
+  it unless the proxy sends `X-Forwarded-For`. Nothing else in the store
+  looks at the client's address, and WebSocket events work the same.
 
   ### Endpoints at a glance
 
@@ -2955,6 +3004,7 @@ description: |
   | `Haskoin.Store.Fleet.Member`, `Haskoin.Store.Fleet.XPub` | A fleet, and its cache |
   | `Haskoin.Store.Web`, `Haskoin.Store.Web.Events` | The web server, and `/events` |
   | `Haskoin.Store.Web.Pieces` | Answers that are sent while they are read |
+  | `Haskoin.Store.Web.Listen` | A Unix socket to listen on, made by the store or passed by systemd |
   | `Haskoin.Store.Web.Admission` | The limit on long requests answered at once, and the line in front of it (CoDel) |
   | `Haskoin.Store.Web.Congestion` | The delay of GHC's scheduler, and the controller that moves the limit with it |
   | `Haskoin.Store.Runtime` | GHC's garbage collector, as StatsD metrics |
@@ -3242,7 +3292,8 @@ description: |
   - **Every request**, with `--access-log`, which is off by default:
     `203.0.113.7 GET /block/best HTTP/1.1: 200 OK, 0.4 ms`. A public
     server usually has a proxy in front that keeps this log better. The
-    address is the first of `X-Forwarded-For` when a proxy sent one.
+    address is the first of `X-Forwarded-For` when a proxy sent one, and
+    `unix` for a client on a [Unix socket](#unix-sockets) without one.
 
   An outage of Redis is one warning when it starts, `Could not … Going on
   without`, and one line when it is over, `Can … again`. The attempts in
@@ -3458,9 +3509,9 @@ description: |
 
   Haskoin Store is released under the [MIT License](LICENSE).
 description-type: markdown
-hash: ba8ff0f8b9f36ff3adf675d35c6106494fd65fd18f341c94cefb079d06080f5b
+hash: 47115cfda9e5df3d9e90f9a074b590fa98dbfe055dafd8593d69d43965c3fd83
 homepage: https://github.com/jprupp/haskoin-store#readme
-latest: 1.16.2
+latest: 1.16.3
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Storage and index for Bitcoin and Bitcoin Cash
@@ -3509,6 +3560,7 @@ test-bench-deps:
   time: '>=1.14 && <1.15'
   time-manager: '>=0.4.2 && <0.5'
   transformers: '>=0.6.3.0 && <0.7'
+  unix: '>=2.8.8.0 && <2.9'
   unordered-containers: '>=0.2.21 && <0.3'
   vault: '>=0.3.2.0 && <0.4'
   vector: '>=0.13.2.0 && <0.14'
