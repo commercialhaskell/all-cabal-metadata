@@ -342,6 +342,7 @@ all-versions:
 - 1.16.3
 - 1.16.4
 - 1.16.5
+- 1.16.6
 author: JP Rupp
 basic-deps:
   aeson: '>=2.2.5.1 && <2.3'
@@ -396,46 +397,107 @@ basic-deps:
 changelog: "# Changelog\nAll notable changes to this project will be documented in
   this file.\n\nThe format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)\nand
   this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)\n\n##
-  [1.16.5] - 2026-11-19\n\n### Added\n- **`hsq`, a command-line client for people**
-  (`tools/hsq/hsq`, Python,\n  standard library only): a coloured summary of `/health`,
-  refreshed with\n  `-w`, and any API path as laid-out JSON, over a Unix socket, HTTP
-  or\n  HTTPS, with a configuration per network. `docs/hsq.md` explains it. It is\n
-  \ not part of the Haskell package.\n\n### Changed\n- **Clear messages when the store
-  cannot start.** A new module,\n  `Haskoin.Store.Startup`, turns each usual failure
-  into one line that\n  says what is wrong and what to do, printed without a backtrace,
-  with\n  exit status 1: no Redis or Valkey listening, an unknown Redis host, a\n
-  \ Redis that wants a password or another one (it used to start and answer\n  503
-  to everything), a URL that is not Redis's, a data directory that\n  cannot be made,
-  a database held by another store, a port in use or below\n  1024, a host that is
-  not this machine's, a Unix socket in use, missing\n  HTTPS files, and an unknown
-  `--net`. Redis is now connected first, before\n  the database opens, and with a
-  timeout of five seconds.\n- **The warning when Redis stops answering gives the reason**,
-  and says\n  that the store answers 503 until Redis is back (it said, wrongly, that\n
-  \ the store answered from the database).\n- **\"Not synchronized with the network\"**:
-  the message of the 503 that a\n  store answers without the block to answer from,
-  with haskoin-store-data\n  3.0.1, which it now requires. The code stays `behind-fleet`.\n\n##
-  [1.16.4] - 2026-11-18\n\n### Fixed\n- **A reorganisation no longer loses the transactions
-  of the abandoned\n  blocks.** A store alone in its fleet that reverted a block between
-  its\n  report and its move of the fleet tip found the reported block off its\n  main
-  chain, took that as a way it did not know, and moved the tip with an\n  emptied
-  pool. The transactions of the abandoned blocks that no node had\n  any more were
-  lost, and answered 404. Such a store now leaves the tip for\n  its next turn (`Unsettled`
-  in `Haskoin.Store.Fleet.Member`). The\n  transactions still come back only in the
-  commit that moves the tip, so\n  none is ever both confirmed at the tip and in the
-  pool. This was the\n  intermittent failure of the integration test \"sends again
-  a payment that\n  the nodes forgot and the store lists\"; a test of the fleet's
-  cache now\n  makes the race happen every time.\n\n## [1.16.3] - 2026-11-18\n\n###
-  Added\n- **The API can listen on a Unix socket.** `--socket PATH` (`SOCKET`) makes\n
-  \ one, with the mode of `--socket-mode` (`SOCKET_MODE`, `0660` by default),\n  removes
-  a stale one at start and refuses a path in use. A socket passed\n  by systemd socket
-  activation (`LISTEN_FDS`) wins over both and over\n  `--host` and `--port`. The
-  new `Haskoin.Store.Web.Listen` has both. The\n  access log shows `unix` for a client
-  on such a socket.\n\n## [1.16.2] - 2026-11-18\n\n### Changed\n- **RocksDB gets a
-  background job a core**, from 2 to 16, instead of its\n  default of two. `--background-jobs`
-  (`BACKGROUND_JOBS`) still overrides it,\n  and 0 still means RocksDB's default.
-  A fresh sync of Bitcoin Cash froze at\n  height 436,814 because compactions fell
-  behind and RocksDB stopped writes.\n  `max_subcompactions` stays at 1: `rocksdb-haskell-jprupp`
-  2.8.0 cannot set\n  it.\n\n### Added\n- **Write stalls are visible.** The new `Haskoin.Store.Database.Stalls`\n
+  [1.16.6] - 2026-11-19\n\n### Fixed\n- **The pool no longer stops at a transaction
+  that pays an output of value\n  0.** Taking such an output out of an address's summary
+  added `-0`, which\n  Redis does not read as an integer. The script failed at every
+  turn of the\n  fleet, and the pool took in nothing more until the next restart of
+  the\n  pool. Pay-to-anchor outputs, which Bitcoin Core relays since version 29,\n
+  \ have value 0. Since Redis keeps what a failed script wrote before its\n  error,
+  the summaries of the addresses that the stuck turn touched could\n  drift; emptying
+  the pool clears them.\n- **A store no longer keeps every transaction it ever offered
+  in memory.**\n  The fleet member kept a set of what it had offered to the pool,
+  emptied\n  only when the pool was started again or Redis lost its data: about half\n
+  \ a million transactions a day on Bitcoin. It also made the store refuse,\n  silently,
+  a transaction that left the pool and was sent again, such as\n  one that a replacement
+  pushed out. The set is gone: the fleet's seen set\n  in Redis already keeps stores
+  from fetching what the pool decided on.\n- **Orphans no longer stop the store from
+  offering transactions.** A\n  transaction whose parent never came waited in memory
+  for ever, and a\n  round offers the 2,000 oldest that wait: once that many orphans
+  had piled\n  up, nothing else was offered. An orphan is now let go 20 minutes after\n
+  \ the store heard of it, as Bitcoin Core does.\n- **A restart of the pool no longer
+  drops what the store was about to\n  offer.**\n- **A restart of the pool fills it
+  again.** After a reorganisation deeper\n  than 50 blocks, the pool was emptied and
+  its transactions came back only\n  in a block, since the fleet had seen them and
+  no store fetched them\n  again. The restart now empties the seen set too, and every
+  store reads\n  its node's mempool over RPC (`--node-rpc`) and asks its peers for
+  theirs,\n  as after a loss of Redis.\n- **A store no longer loses its Bitcoin Core
+  peers after Redis loses its\n  data.** From the first refill on, the store asked
+  every peer that\n  connected for its mempool. Bitcoin Core disconnects a peer that
+  asks\n  unless it whitelists it or serves bloom filters, which it does not by\n
+  \ default; so the store lost its public Core peers one after the other.\n  It now
+  asks only the peers connected at the refill, once.\n- **README: memory for indexes
+  and filters.** They come to about 0.9% of the\n  database (16 GB for Bitcoin, 4
+  GB for Bitcoin Cash, measured on\n  api.haskoin.com), not 0.34%; and they, Bloom
+  filters included, are held\n  outside the block cache, not in it. The `--block-cache-mb`
+  help said the\n  same wrong thing and is fixed too.\n- **Documentation brought up
+  to date with Redis being required.** The\n  package description, the README's Docker
+  quick start (it started the\n  store without Redis, which cannot work), the help
+  of `/health` in\n  `swagger.yaml` (the `redis` and `database` fields are always
+  there; a\n  store without Redis answers 503), and comments throughout the code that\n
+  \ still described an optional Redis, a store's own mempool, the token\n  design
+  or functions that no longer exist.\n- **`swagger.yaml`**: version 1.16.5; `request-too-large`
+  (413) is sent;\n  the health check runs every second and at each block, not every
+  30\n  seconds; the 202 body of `POST /transactions` has a `message`.\n- **README**:
+  `nocache` is accepted and ignored on xpub routes; `stack.yaml`\n  may pin git commits;
+  the integration image is under `integration/`; the\n  code map lists every module;
+  links point at the document that has what\n  they promise.\n- **Messages about pending
+  transactions** (the `/health` log, the help of\n  `--max-pending-txs`, the reference):
+  they count transactions requested\n  from peers and not received yet, not transactions
+  waiting to be imported.\n  The log line of the migration from version 20 says the
+  transactions were\n  taken out of the chain, not moved.\n\n### Removed\n- **The
+  stress test of the cache** (`stress/`, `scripts/stress-cache.sh`,\n  `scripts/stress-report.py`,
+  the `haskoin-store-stress` benchmark, and\n  wrk in the test image). It no longer
+  ran against the current server and\n  measured a cache that no longer exists. `scripts/heap-profile-summary.py`\n
+  \ stays; the README says how to use it on its own.\n- **The StatsD gauge `store.queued_txs`**:
+  it counted transactions waiting\n  to be imported, which the block store no longer
+  holds, and was always 0.\n- **Dead code**: what the block store kept of transactions
+  received from\n  peers, which nothing put there (`Haskoin.Store.BlockStore.Pending`
+  now\n  holds only the requests); `insertReplaced`; `BlockStoreConfig`'s\n  `mempoolTimeout`;
+  and unused fields of the fleet member.\n\n### Changed\n- **`hsq --help` fits the
+  terminal.** The usage text is laid out for the\n  terminal's width (at most 100
+  columns): prose reflows, the command and\n  option lists stay aligned when there
+  is room and stack when there is\n  not, and examples and the sample configuration
+  are kept as written.\n\n## [1.16.5] - 2026-11-19\n\n### Added\n- **`hsq`, a command-line
+  client for people** (`tools/hsq/hsq`, Python,\n  standard library only): a coloured
+  summary of `/health`, refreshed with\n  `-w`, and any API path as laid-out JSON,
+  over a Unix socket, HTTP or\n  HTTPS, with a configuration per network. `docs/hsq.md`
+  explains it. It is\n  not part of the Haskell package.\n\n### Changed\n- **Clear
+  messages when the store cannot start.** A new module,\n  `Haskoin.Store.Startup`,
+  turns each usual failure into one line that\n  says what is wrong and what to do,
+  printed without a backtrace, with\n  exit status 1: no Redis or Valkey listening,
+  an unknown Redis host, a\n  Redis that wants a password or another one (it used
+  to start and answer\n  503 to everything), a URL that is not Redis's, a data directory
+  that\n  cannot be made, a database held by another store, a port in use or below\n
+  \ 1024, a host that is not this machine's, a Unix socket in use, missing\n  HTTPS
+  files, and an unknown `--net`. Redis is now connected first, before\n  the database
+  opens, and with a timeout of five seconds.\n- **The warning when Redis stops answering
+  gives the reason**, and says\n  that the store answers 503 until Redis is back (it
+  said, wrongly, that\n  the store answered from the database).\n- **\"Not synchronized
+  with the network\"**: the message of the 503 that a\n  store answers without the
+  block to answer from, with haskoin-store-data\n  3.0.1, which it now requires. The
+  code stays `behind-fleet`.\n\n## [1.16.4] - 2026-11-18\n\n### Fixed\n- **A reorganisation
+  no longer loses the transactions of the abandoned\n  blocks.** A store alone in
+  its fleet that reverted a block between its\n  report and its move of the fleet
+  tip found the reported block off its\n  main chain, took that as a way it did not
+  know, and moved the tip with an\n  emptied pool. The transactions of the abandoned
+  blocks that no node had\n  any more were lost, and answered 404. Such a store now
+  leaves the tip for\n  its next turn (`Unsettled` in `Haskoin.Store.Fleet.Member`).
+  The\n  transactions still come back only in the commit that moves the tip, so\n
+  \ none is ever both confirmed at the tip and in the pool. This was the\n  intermittent
+  failure of the integration test \"sends again a payment that\n  the nodes forgot
+  and the store lists\"; a test of the fleet's cache now\n  makes the race happen
+  every time.\n\n## [1.16.3] - 2026-11-18\n\n### Added\n- **The API can listen on
+  a Unix socket.** `--socket PATH` (`SOCKET`) makes\n  one, with the mode of `--socket-mode`
+  (`SOCKET_MODE`, `0660` by default),\n  removes a stale one at start and refuses
+  a path in use. A socket passed\n  by systemd socket activation (`LISTEN_FDS`) wins
+  over both and over\n  `--host` and `--port`. The new `Haskoin.Store.Web.Listen`
+  has both. The\n  access log shows `unix` for a client on such a socket.\n\n## [1.16.2]
+  - 2026-11-18\n\n### Changed\n- **RocksDB gets a background job a core**, from 2
+  to 16, instead of its\n  default of two. `--background-jobs` (`BACKGROUND_JOBS`)
+  still overrides it,\n  and 0 still means RocksDB's default. A fresh sync of Bitcoin
+  Cash froze at\n  height 436,814 because compactions fell behind and RocksDB stopped
+  writes.\n  `max_subcompactions` stays at 1: `rocksdb-haskell-jprupp` 2.8.0 cannot
+  set\n  it.\n\n### Added\n- **Write stalls are visible.** The new `Haskoin.Store.Database.Stalls`\n
   \ polls RocksDB every five seconds and logs a warning when it delays or stops\n
   \ writes, with the bytes of compaction pending, and a line when they recover.\n
   \ `/health` reports it under `\"database\"`; stopped writes make the store\n  unhealthy,
@@ -2214,15 +2276,18 @@ description: |
   git clone https://github.com/jprupp/haskoin-store.git
   cd haskoin-store
   docker build -t haskoin-store .
-  docker run -d --name haskoin-store -p 3000:3000 \
-    -e NET=btc -e DISCOVER=true \
+  docker network create haskoin
+  docker run -d --name valkey --network haskoin valkey/valkey
+  docker run -d --name haskoin-store --network haskoin -p 3000:3000 \
+    -e NET=btc -e DISCOVER=true -e REDIS_URL=redis://valkey:6379 \
     -v haskoin-store-data:/home/haskoin/.haskoin-store \
     haskoin-store
   curl -s 'http://localhost:3000/block/best' | jq
   ```
 
-  The first sync downloads and indexes the whole chain, which takes a long
-  time and a lot of disk. The API answers while it syncs; `/health` reports
+  The store needs a Redis or Valkey server, here in a container of its own:
+  without one it does not start. The first sync downloads and indexes the
+  whole chain, which takes a long time and a lot of disk. The API answers while it syncs; `/health` reports
   whether the node is in sync.
 
   ## Building from source
@@ -2269,6 +2334,10 @@ description: |
   Give it either `--discover` or at least one `--peer`; with neither it turns
   discovery on by itself. Data goes in a directory named after the network inside
   `--dir`, so one data directory can hold several networks.
+
+  It needs a Redis or Valkey server, at `redis://localhost:6379` unless
+  `--redis-url` names another, and stops at start with a message if there is
+  none ([Redis: the fleet](#redis-the-fleet)).
 
   For a big public deployment, also set `MALLOC_ARENA_MAX=2` (the Docker image
   does) to keep glibc from fragmenting RocksDB's memory.
@@ -2409,7 +2478,8 @@ description: |
     answers 429 with `Retry-After`, the same on every store: ask again then.
   - **The cache keeps the costly ones longest**, up to `--redis-max-xpubs`.
     The cache cannot be turned off; that option sets only its size, at least
-    1. There is no `nocache`: an answer from the cache is always exact.
+    1. `nocache` is accepted and ignored: an answer from the cache is always
+    exact.
 
   `docs/xpub-indexing.md` has the details.
 
@@ -2459,7 +2529,7 @@ description: |
   | `--target-delay` | `TARGET_DELAY` | `25` | Milliseconds that a thread ready to run may wait for a core before the limit comes down |
   | `--request-queue` | `REQUEST_QUEUE` | `64` | Long requests that may wait for a slot; more are refused with 429 |
   | `--request-wait` | `REQUEST_WAIT` | `1` | Seconds that a long request may wait for a slot; then it is refused with 429 |
-  | `--node-rpc` | `NODE_RPC` | none | JSON-RPC URL of a full node, such as `http://user:password@127.0.0.1:8332/`, to publish transactions through, and to fill the shared mempool from again after Redis loses its data; without it, or when it does not answer, transactions go to the peers |
+  | `--node-rpc` | `NODE_RPC` | none | JSON-RPC URL of a full node, such as `http://user:password@127.0.0.1:8332/`, to publish transactions through, and to fill the shared mempool from again after it is emptied; without it, or when it does not answer, transactions go to the peers |
   | `--def-item-count` | `DEF_ITEM_COUNT` | `100` | Items in a list when no `limit` is given |
   | `--xpub-gap` | `XPUB_GAP` | `32` | Unused addresses kept after the last used one of each chain of an xpub; payments further away are not seen |
   | `--xpub-gap-init` | `XPUB_GAP_INIT` | `20` | Addresses looked at for an xpub with no transactions; an xpub with none used among them counts as unused |
@@ -2495,11 +2565,16 @@ description: |
     unhealthy, and stops counting after ten seconds without a report, so
     that it holds nobody up.
   - **When Redis loses its data**, the stores notice it by an epoch key that
-    is gone or changed. Each forgets what it offered, reports unhealthy until
-    the fleet has a tip again, and asks its peers for their mempools again;
-    with `--node-rpc` it also reads the node's mempool (`getrawmempool`),
-    2,000 transactions every two seconds. Xpub entries are built again as
-    requests ask for them.
+    is gone or changed. Each forgets the fleet tip, reports unhealthy until
+    the fleet has a tip again, and fills the pool again. Xpub entries are
+    built again as requests ask for them.
+  - **When the pool starts again**, after a reorganisation deeper than 50
+    blocks, the stores fill it again too.
+  - **Filling the pool again** works best with `--node-rpc`: each store reads
+    its node's mempool (`getrawmempool`), 2,000 transactions every two
+    seconds. Each also asks its peers for their mempools, once. Bitcoin Cash
+    Node answers; Bitcoin Core answers only a store it whitelists, and
+    disconnects any other that asks (`docs/fleet-mempool.md`).
   - **`/events` is the same stream on every store**, written to Redis with
     each change of the pool and each move of the tip.
   - **Xpubs** are cached for the whole fleet (`docs/xpub-indexing.md`).
@@ -2509,7 +2584,7 @@ description: |
   | Option | Environment | Default | Meaning |
   | --- | --- | --- | --- |
   | `--max-lagging-blocks` | `MAX_LAGGING_BLOCKS` | `3` | Most blocks the index may lag behind the headers |
-  | `--max-pending-txs` | `MAX_PENDING_TXS` | `10000` | Most transactions waiting to be imported |
+  | `--max-pending-txs` | `MAX_PENDING_TXS` | `10000` | Most transactions requested from peers and not received yet |
   | `--min-peers` | `MIN_PEERS` | `1` | Fewest connected peers |
   | `--block-timeout` | `BLOCK_TIMEOUT` | `14400` | Most seconds since the last block |
   | `--tx-timeout` | `TX_TIMEOUT` | `1800` | Most seconds since the last transaction |
@@ -2541,9 +2616,8 @@ description: |
   Memory used by RocksDB is roughly the block cache plus the memtables, on top of
   the Haskell heap. `/dbstats` shows where it goes.
 
-  Every table file stays open by default, and the index and the filter of
-  each are written in pieces of 4 KiB that the block cache holds as they are
-  needed.
+  Every table file stays open by default, and keeps its index and its
+  filter in memory while it is open.
 
   - **Why all files open:** a lookup in a file that is not open opens it
     first, which reads its footer and properties again. A store of Bitcoin
@@ -2556,8 +2630,10 @@ description: |
     outside the block cache, so that data blocks cannot push them out: when
     they were in the cache and a busy store evicted them, nearly every
     lookup read megabytes back, 0.8 ms of processor time each and 18 seconds
-    to import a block of Bitcoin. They come to about 0.34% of the database:
-    some 6 GB for Bitcoin and 1.6 GB for Bitcoin Cash. Keep all files open
+    to import a block of Bitcoin. They come to about 0.9% of the database:
+    16 GB for Bitcoin (a database of 1.7 TB) and 4 GB for Bitcoin Cash
+    (461 GB) on api.haskoin.com, on Thu 19 Nov 2026 (`/dbstats`, table
+    readers). Keep all files open
     (above) so that they are read once, when the store starts, which takes
     longer on a large database. The block cache (`--block-cache-mb`) holds
     data blocks only.
@@ -2599,9 +2675,10 @@ description: |
   - **What has them:** the data that is read by key: transactions, spenders,
     unspent outputs, blocks and balances. The two indices by
     address, which are scanned, do not.
-  - **What they cost:** about 1.25 bytes for each key, held in the block
-    cache. On a chain with billions of keys that is gigabytes: size
-    `--block-cache-mb` for it, or turn them off with `--no-bloom`.
+  - **What they cost:** about 1.25 bytes for each key, held in memory with
+    the indexes, outside the block cache (above). On a chain with billions
+    of keys that is gigabytes: plan memory for it, or turn them off with
+    `--no-bloom`.
   - **An existing database** gets filters for the table files that are
     written from now on, so their memory comes gradually, as RocksDB
     compacts. The migration to database version 22 rewrites nearly every
@@ -2901,7 +2978,8 @@ description: |
   - **Each request reads one snapshot** of the database, at the fleet tip, so
     everything in an answer is of the same moment.
 
-  `docs/one-fleet.md` has the reasons, the measurements and the tests.
+  `docs/one-fleet.md` has the reasons, and `docs/fleet-mempool.md` the pool
+  in detail and its tests.
   The layout of the keys is described in `Haskoin.Store.Database.Types`.
 
   ### Upgrading an existing database
@@ -2957,7 +3035,7 @@ description: |
   What changed for clients in version 23: nothing in the answers. A balance
   or the spenders of a transaction that recent blocks changed take a few
   microseconds more to read until RocksDB has compacted them:
-  `docs/one-fleet.md` has the figures.
+  `docs/block-import.md` explains why.
 
   What changed for clients in version 22:
 
@@ -3009,19 +3087,21 @@ description: |
 
   An entry also holds a gap's worth of addresses after the window, derived
   ahead of time, so a payment to the next address of a wallet is in its
-  entry as soon as the pool takes it. `docs/one-fleet.md` has the design and
-  the tests.
+  entry as soon as the pool takes it. `docs/xpub-indexing.md` has the design.
 
   ### Where the code is
 
   | Module | What it does |
   | --- | --- |
   | `Haskoin.Store.BlockStore` | Downloads and imports blocks, and hands transactions from peers to the fleet's pool |
+  | `Haskoin.Store.BlockStore.Sync` | The state of the block download, as a pure state machine |
+  | `Haskoin.Store.BlockStore.Pending` | Transactions that peers announce, on their way to the pool |
   | `Haskoin.Store.Logic` | The rules that import and revert blocks |
   | `Haskoin.Store.Database.Writer` | A batch of writes, with its read cache and its reads ahead |
   | `Haskoin.Store.Database.Table` | The hash tables of a batch, whose keys are hashed quickly |
   | `Haskoin.Store.Database.Merge` | The merge operators of balances and spenders, which are C functions (`cbits/`) |
   | `Haskoin.Store.Database.Query` | The queries of the chain's column families |
+  | `Haskoin.Store.Database.Reader` | Opening the database, with its migration, column families and metrics |
   | `Haskoin.Store.Database.Query.Pooled` | The queries of the chain with the fleet's pool on top |
   | `Haskoin.Store.Database.Views` | Views of the database at recent blocks, one of them the fleet tip |
   | `Haskoin.Store.Database.Slices` | Stored blocks and transactions read in part, for what an answer needs |
@@ -3032,13 +3112,20 @@ description: |
   | `Haskoin.Store.XPub.Lock` | The lock in Redis that keeps two stores from reading the same xpub |
   | `Haskoin.Store.XPub.Service` | The door to the fleet's cache of xpubs: a hit answers, a miss asks the indexer |
   | `Haskoin.Store.Fleet.Member`, `Haskoin.Store.Fleet.XPub` | A fleet, and its cache |
+  | `Haskoin.Store.Fleet`, `Haskoin.Store.Fleet.Pool` | The rules of the fleet tip and of the pool, as pure decisions |
+  | `Haskoin.Store.Fleet.Redis` | Those rules carried out in Redis, one Lua script per step |
   | `Haskoin.Store.Web`, `Haskoin.Store.Web.Events` | The web server, and `/events` |
+  | `Haskoin.Store.Web.Router` | Routing of requests to handlers, directly over WAI |
+  | `Haskoin.Store.Web.Docs` | The API reference that the server serves at its root |
   | `Haskoin.Store.Web.Pieces` | Answers that are sent while they are read |
   | `Haskoin.Store.Web.Listen` | A Unix socket to listen on, made by the store or passed by systemd |
   | `Haskoin.Store.Web.Admission` | The limit on long requests answered at once, and the line in front of it (CoDel) |
   | `Haskoin.Store.Web.Congestion` | The delay of GHC's scheduler, and the controller that moves the limit with it |
   | `Haskoin.Store.Runtime` | GHC's garbage collector, as StatsD metrics |
   | `Haskoin.Store.Exception` | Handlers that let a thread be stopped, and cleanups that cannot be cut short |
+  | `Haskoin.Store.Manager` | Wires a store together: Redis, RocksDB, the node, the block store and the fleet |
+  | `Haskoin.Store.Startup` | Errors that stop the store from starting, said so an operator can act |
+  | `Haskoin.Store.Outage` | Logs once that Redis or another dependency stopped working, and once that it is back |
   | `Haskoin.Store.Web.Publish` | Checking a transaction and handing it to the peers, or to a full node over RPC |
 
   The tests hold the cache to the queries of `Query.Pooled` at the fleet tip
@@ -3170,7 +3257,6 @@ description: |
   | `store.blocks` | gauge | Height of the best block |
   | `store.headers` | gauge | Height of the best header |
   | `store.peers` | gauge | Peers online |
-  | `store.queued_txs` | gauge | Transactions waiting to be imported |
   | `store.block` | timing | Milliseconds to import a block, with publishing its events |
   | `store.block_prepare` | timing | Of those, working out what the import needs of the block |
   | `store.block_prefetch` | timing | Reading ahead what the rules will read |
@@ -3281,7 +3367,9 @@ description: |
   The resident memory of the store is its GHC heap plus RocksDB.
 
   - **RocksDB:** the block cache and memtables fill up to `--block-cache-mb`
-    and `--write-buffer-mb`, then stay there.
+    and `--write-buffer-mb`, then stay there. The indexes and filters of the
+    open table files come on top, about 0.9% of the database (see
+    [RocksDB](#rocksdb)).
   - **The heap** gives memory back to the system as soon as it no longer
     needs it. The executable is built with
     `--disable-delayed-os-memory-return` for that. Without the flag, Linux
@@ -3399,12 +3487,13 @@ description: |
   scripts/bench-web.sh           # load-test the API with wrk
   stack bench haskoin-store:bench:haskoin-store-bench \
     --ba 'import +RTS -N4 -A64m' # time the import of full blocks
-  scripts/stress-cache.sh        # stress the Redis cache, with a report
+  scripts/heap-profile-summary.py FILE.hp  # what grew in a heap profile
   scripts/check-local-deps.sh    # what CI checks: no local paths in stack.yaml
   scripts/install-system-libraries.sh  # the C libraries, on Ubuntu or Debian
   ```
 
-  `stack.yaml` must pin released versions of every dependency. Pointing
+  `stack.yaml` must pin released versions, or git commits, of every
+  dependency. Pointing
   `extra-deps` at a sibling checkout such as `../haskoin-core` is fine for
   local testing, but CI rejects it.
 
@@ -3420,7 +3509,7 @@ description: |
   - The first run builds the image `localhost/haskoin-store-test`, which needs
     network access: Ubuntu 26.04 pinned by digest, Valkey from a fixed snapshot of
     the Ubuntu archive, and the release tarballs of both nodes, checked against
-    SHA-256 hashes pinned in `test/Haskoin/Store/Integration/Image.hs`. No
+    SHA-256 hashes pinned in `integration/Haskoin/Store/Integration/Image.hs`. No
     third-party image is used.
   - Containers are removed when the tests end, data lives in tmpfs mounts and
     under `/dev/shm`, and every container has a memory limit.
@@ -3433,53 +3522,12 @@ description: |
   than `haskoin-store.cabal`, which
   [hpack](https://github.com/sol/hpack) generates.
 
-  ### Stress test of the cache
+  ### Looking for a leak
 
-  `scripts/stress-cache.sh [OUT_DIR] [-- OPTIONS]` measures the cache while it
-  works hard.
-
-  What it runs:
-
-  1. A regtest chain of Bitcoin Core, Valkey and wrk, in Podman containers
-     from the test image, and the `haskoin-store` binary with the cache on.
-  2. A few wallets, whose keys the stress program (`stress/Main.hs`) holds,
-     make hundreds of thousands of transactions between them. The program
-     signs them and sends them to the node in batches, with a block after
-     each batch.
-  3. Every transaction changes two cached xpubs, so the cache reloads them
-     over and over. Meanwhile wrk asks the server about the xpubs on five
-     endpoints: summary, balances, transactions, unspent outputs and
-     multiaddr.
-  4. At the end it compares the cached answers with those of the database.
-
-  `scripts/stress-report.py` then writes `OUT_DIR/report.md`, with:
-
-  - how fast the transactions went in, and how far the server fell behind;
-  - how many reloads the cache did, how many read the whole xpub, and how
-    long they took as the xpubs grew;
-  - the CPU and memory of the server, and the memory of Valkey;
-  - the commands that blocked Redis for 10 ms or more, from its slow log;
-  - the latencies of each endpoint over time.
-
-  - The defaults are 200,000 transactions between 4 wallets of 200 receiving
-    and 200 change addresses, 2,000 per block; pass `-- --help` for the
-    options, and `-- --txs 20000` for a run of a few minutes. A default run
-    takes about half an hour and up to about 7 GiB of memory.
-  - The raw measurements stay in `OUT_DIR` as JSON lines (`rounds.jsonl`,
-    `samples.jsonl`, `wrk.jsonl`), with `summary.json` and the log of the
-    server.
-  - No container is left behind, even if the script is interrupted or
-    killed: the program removes its containers when it ends, and the script
-    removes any that carry its label and stops the server.
-  - To look for a leak, run the server with a heap profile by type, which needs
-    no profiling build, and summarise it: the live heap over time and the types
-    of closure that grew most.
-
-    ```sh
-    scripts/stress-cache.sh /tmp/run -- --txs 60000 \
-      --server-rts '-N4 -M2g -T -hT -i10 -po/tmp/heap'
-    scripts/heap-profile-summary.py /tmp/heap.hp
-    ```
+  Run the server with a heap profile by type, which needs no profiling build,
+  for example `haskoin-store ... +RTS -hT -i10 -po/tmp/heap`, and summarise it
+  with `scripts/heap-profile-summary.py /tmp/heap.hp`: the live heap over time,
+  and the types of closure that grew most.
 
   ### Measurements for importing blocks
 
@@ -3515,8 +3563,9 @@ description: |
   - Format the code with `scripts/format` (Ormolu), and keep every line of
     code shorter than 120 columns.
   - Put scripts in files of their own rather than embedding them: Lua for
-    Redis under `src/Haskoin/Store/Fleet/lua/`, shell under `scripts/`, called
-    from CI rather than written into the workflow.
+    Redis under `src/Haskoin/Store/Fleet/lua/` or `src/Haskoin/Store/XPub/lua/`,
+    shell under `scripts/`, called from CI rather than written into the
+    workflow.
   - Catch any error with `catchAny`, `handleAny` or `tryAny` of
     `Haskoin.Store.Exception`, and clean up with its `bracket`, `finally` and
     `onException`, not with those of `Control.Exception`. A request that
@@ -3545,9 +3594,9 @@ description: |
 
   Haskoin Store is released under the [MIT License](LICENSE).
 description-type: markdown
-hash: 2d0773e23912a0c21a78898c40c8f6ece517038a971b6a853d1305890cf378d8
+hash: 09622dc8a05ce4a4852333e08235d6b4f609a34945b7d17ea241aab5f4e993a6
 homepage: https://github.com/jprupp/haskoin-store#readme
-latest: 1.16.5
+latest: 1.16.6
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Storage and index for Bitcoin and Bitcoin Cash
@@ -3584,7 +3633,6 @@ test-bench-deps:
   mtl: '>=2.3.2 && <2.4'
   network: '>=3.2.12.0 && <3.3'
   nqe: '>=0.7.0 && <0.8'
-  optparse-applicative: '>=0.19.0.0 && <0.20'
   process: '>=1.6.26.1 && <1.7'
   random: '>=1.3.1 && <1.4'
   rocksdb-haskell-jprupp: '>=2.8.0 && <2.9'
