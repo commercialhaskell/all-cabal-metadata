@@ -25,6 +25,7 @@ all-versions:
 - 0.24.0.0
 - 0.25.0.0
 - 0.25.1.0
+- 0.26.0.0
 author: Nadeem Bitar
 basic-deps:
   aeson: '>=2.2.1 && <2.3'
@@ -35,7 +36,7 @@ basic-deps:
   directory: '>=1.3 && <1.4'
   filepath: '>=1.4 && <1.6'
   keiki: '>=0.9 && <0.10'
-  keiro-core: ^>=0.25.1.0
+  keiro-core: ^>=0.26.0.0
   keiro-dsl: '>=0'
   megaparsec: '>=9.6 && <9.9'
   mmzk-typeid: '>=0.7 && <0.8'
@@ -53,6 +54,152 @@ changelog: |
   [Haskell Package Versioning Policy](https://pvp.haskell.org/).
 
   ## [Unreleased]
+
+  ## 0.26.0.0 — 2026-11-18
+
+  ### Breaking Changes
+
+  - `Keiro.Dsl.Grammar.ContractType` gains the constructor `COptional`, and
+    `ContractNode.discriminator` changes from `Name` to the new `ContractDiscriminator`
+    (`DiscriminatorBodyKey` or `DiscriminatorEnvelope`). `contractIsOptional` and
+    `contractBodyDiscriminator` are new. `DiagnosticCode` inserts
+    `ContractOptionalFieldAdded` and `ContractOptionalFieldUsedAsKey`, and
+    `LanguageFeature` adds `ContractOptionalFieldSyntax` and
+    `ContractEnvelopeDiscriminatorSyntax`. There is no compatibility shim: exhaustive
+    matches and record construction must handle the new constructors. Generated modules for
+    existing sources are byte-identical. (ExecPlan 345, IR-64)
+  - `Keiro.Dsl.Grammar.InputDecl` gains the field `source :: Maybe InputSource`; direct
+    record construction must supply it (`Nothing` keeps the previous meaning).
+    `DiagnosticCode` adds `InputSourceUnresolvedIntake` and `InputSourceEventNotAccepted`,
+    and `LanguageFeature` adds `InputSourceSyntax`, so exhaustive matches must handle them.
+  - `Keiro.Dsl.DiffReport.Remedy` adds `RemedyDeployKeyWritersFirst` and
+    `RemedyDrainBeforeStricterReader`; exhaustive matches must handle them.
+
+  ### New Features
+
+  - Candidate Language 6 contract fields may be `Optional <scalar>` for `typeid "prefix"`,
+    a declared `id`, `text` or `int`. The generated field is `Maybe`; the encoder omits the
+    key when absent and the decoder reads an omitted key or `null` as absent, while any
+    other value must satisfy the scalar's parser. `Optional List`, `List Optional` and other
+    nesting are refused. An optional field cannot be a publisher `outboxId` or intake
+    `dedupe` key (`ContractOptionalFieldUsedAsKey`). `diff` reports an added optional field
+    as the warning `ContractOptionalFieldAdded` without a `schemaVersion` bump: the wire is
+    compatible, and `consumer-build=advisory` asks for a re-scaffold because the generated
+    constructor gains a `Maybe` argument; the default gate passes. A change between required
+    and optional is breaking in both directions: required to optional is `producer-last`,
+    optional to required (keeping the scalar, or moving between a literal TypeID and a
+    declared ID of equal prefix and admission) is `producer-first` with `drain-required`.
+    (IR-64)
+  - Candidate Language 6 contracts may declare `discriminator from envelope`. The generated
+    encoder writes no discriminator key, and the module exports
+    `parse<Contract>PayloadAs :: Text -> Value -> Either Text <Contract>Payload`, which takes
+    the envelope's event type and rejects one the contract does not declare. A change of
+    discriminator source is breaking `ContractDiscriminatorChanged`: body key to envelope is
+    `producer-last`, envelope to body key is `producer-first` with `drain-required`.
+    `keiro-dsl topology` writes `discriminator: null` for such a contract; both topology
+    schemas admit `null`. (IR-64)
+  - `keiro-dsl diff --explain` renders a public-contract finding's rollout from its vector.
+    A `producer-first` finding now advises deploying the writers of the newly required key
+    first and draining retained messages that omit it before the stricter reader runs;
+    previously every contract finding advised `producer-last`. (ExecPlan 345)
+
+  - The generated service conformance runner accepts `--behavior-complete`. After the
+    unchanged default output, it evaluates every declared behavior key of every aggregate
+    against its `BehaviorHoles` witnesses. It prints one `FAIL` row per pending, missing,
+    duplicate, or stale key and per failed witness, plus one summary row per aggregate, and
+    any failing row exits nonzero. Unverified but correct evidence still passes, as under
+    `behaviorConformancePassed`. Without the flag the runner behaves exactly as before and
+    evaluates no extra witnesses. `--help` describes both modes; any other argument exits
+    with status 2. The service facade adds `runServiceBehaviorChecks :: IO [(String, Bool)]`
+    and every generated `BehaviorContract` adds `behaviorConformanceRows`. `BehaviorHoles`
+    and `BehaviorContract` stay private in the Cabal fragment. Regenerating rewrites each
+    `BehaviorContract.hs`, the facade and the runner `Main.hs`; hand-owned files are
+    unchanged. The library adds `Keiro.Dsl.Scaffold.aggregateHasBehaviorContract`, the
+    predicate that decides which aggregates get a `BehaviorContract`.
+  - `keiro-dsl topology <source-or-workspace> --format json` exports the service
+    topology as one canonical JSON document with schema id
+    `keiro-dsl/service-topology/1`. It has a node for every aggregate, process,
+    workflow, router, contract, intake, emit, publisher, workqueue, dispatch, read model
+    and operation, and for the projection catalog (projection targets, rebuild groups,
+    projection owners, projection revisions and external reads). It has an edge for each
+    relation between them, such as `dispatches`, `projects`, `publishes`, `subscribes`,
+    `consumes`, `writes` and `observes`. Each source member carries a `sha256` digest
+    of its exact bytes. The bytes do not depend on the working directory or on how the
+    path was typed. Reordering top-level declarations changes only member digests and
+    node lines. The command refuses a service with error diagnostics and prints nothing
+    on standard output. The library exports `Keiro.Dsl.Topology`
+    (`buildServiceTopology`, `encodeServiceTopology`, `topologySchemaId`,
+    `memberDigest`). Existing commands and outputs are unchanged.
+  - `keiro-dsl scaffold … --topology-out FILE` also writes the service topology,
+    byte-identical to `keiro-dsl topology` for the same input. The document is computed
+    before scaffold writes anything and written only after it succeeds. A path that names a
+    scaffold input, a planned module or a `keiro-dsl-*` record under `--out` is refused. The
+    file is not recorded in the scaffold ledger, and scaffold without the flag is unchanged.
+  - `keiro-dsl topology SOURCE --check FILE` prints nothing and exits zero when `FILE` equals
+    the regenerated document. Otherwise it exits 1 and names each changed, new or removed
+    member, or, when every digest matches, the recorded and current generator versions.
+  - The contract is documented in `docs/user/keiro-dsl-service-topology.md` with the JSON
+    Schema `docs/user/schemas/keiro-dsl-service-topology-1.schema.json`. The repository gate
+    `just topology-schema-validate` (part of `just verify`, using `check-jsonschema` from the
+    development shell) validates every golden document against the schema its `schema` field
+    names.
+  - Every aggregate node of the topology now carries `details.machine`, the aggregate's
+    keiki state machine: `ownership` (`generated` or `legacy-hole`), `initial`, `states`
+    with terminal flags, and every edge with its `source`, keiki `edgeIndex`, `target`,
+    `mode` (`Live` or `ReplayOnly`), `command` and `events`. It is an added field within
+    `keiro-dsl/service-topology/1`. The new conformance suite
+    `keiro-dsl-conformance-topology-machine` proves the export equal to the generated keiki
+    transducers walked with keiki's accessors. The keiki edge index now comes from one shared
+    layout function used by the transducer builder, the behavior source map and the export;
+    generated code is unchanged.
+  - Candidate Language 6 input sources: a router input, a legacy process input or any
+    reaction-process input may declare `from intake <Intake> event <Event>…` between its
+    name and its body. `check` reports `InputSourceUnresolvedIntake` for an undeclared intake
+    and `InputSourceEventNotAccepted` for each named event the intake does not accept.
+    Languages 1 to 5 refuse the clause with `LanguageFeatureRequiresVersion`. A declared
+    source changes no generated module, fingerprint, scaffold ledger or `diff` verdict.
+    `keiro-dsl topology` exports each source as a `feeds` edge from the intake. A document
+    with a `feeds` edge uses schema id `keiro-dsl/service-topology/2`; every other document
+    stays `/1` and is byte-identical. The library exports `InputSource` and the new `source`
+    field of `InputDecl`.
+  - Every aggregate node of the topology now carries `details.category`, the stream
+    category its generated inspector is mounted under (a saga aggregate's own category, not
+    the process's saga category), and every dispatch node carries `details.dedupReadModel`.
+    Both are optional fields within the existing schema ids. A committed topology document
+    must be regenerated with `scaffold --topology-out` after the upgrade, because
+    `topology --check` reports it stale. The library exports
+    `Keiro.Dsl.Scaffold.aggregateStreamCategory`; generated code is unchanged.
+  - `scaffold --topology-out FILE` now writes the document to `FILE.keiro-dsl-tmp` before
+    the scaffold writes anything and renames it onto `FILE` after success. A `FILE` that is
+    a directory, is `--out` or cannot be created fails with
+    `--topology-out FILE cannot be written: <reason>; nothing was written` instead of an
+    uncaught exception after the generated tree was written. A refused scaffold removes
+    the temporary file.
+  - `topology --check` no longer blames the keiro-dsl version when the versions are equal.
+    A changed workspace service name or manifest file name is reported as
+    `the service or manifest changed (recorded service 'A', current 'B')`; any other
+    difference with matching digests and version says so. Workspace member digests are now
+    computed from the bytes the loader parsed, read once and decoded as UTF-8 independent
+    of the locale.
+  - New conformance proof `keiro-dsl-conformance-intake-delegated-noop`
+    (`test/fixtures/intake-delegated-noop.keiro`): a generated candidate Language 6
+    delegated intake feeds an outcome-enabled aggregate with a typed no-op edge through the
+    hand-written `Keiro.Inbox.Delegated.delegatedDomainCommand` handler against PostgreSQL.
+    It checks the accepted marker receipt, the completed inbox row for a typed no-op, a
+    duplicate redelivery without dispatch, and the untyped adapter's refusal of the same
+    silent edge. The intake grammar and generated runner are unchanged. (ExecPlan 344, IR-65)
+  - The `DelegatedInboxDedupeOnlyPersistence` diagnostic now says that the delegated intake
+    owns no inbox storage for `persist = dedupe-only` to describe, and that a typed no-op
+    receipt row's persistence is chosen by the handler through `DelegatedNoOpReceipt`. The
+    rule and its code are unchanged. (ExecPlan 344)
+
+  ### Bug Fixes
+
+  - A generated contract encoder no longer binds an unused `payload` for a fieldless event,
+    and imports `(.=)` only when an encoder entry uses it. A fieldless event in a
+    body-discriminated contract, and an envelope-discriminated contract whose events are all
+    fieldless, previously failed to compile under `-Wall -Werror`. Output for events with
+    fields is unchanged. (ExecPlan 345)
 
   ## 0.25.1.0 — 2026-11-16
 
@@ -1847,9 +1994,9 @@ description: |-
   symbol-free deterministic layer plus typed holes, never a keiki symbolic
   operator (the firewall invariant).
 description-type: haddock
-hash: 47265682b047a1dbe04e2307a45357af55a0e9ae412bbdbce63980d5eb9f567b
+hash: 30ff217c8d4cf9b3c519c97bca218d3deed2c5193100a7629924cfb5b280dd4a
 homepage: ''
-latest: 0.25.1.0
+latest: 0.26.0.0
 license-name: BSD-3-Clause
 maintainer: nadeem@gmail.com
 synopsis: Typed specification toolchain for keiro services
@@ -1867,8 +2014,8 @@ test-bench-deps:
   hasql-transaction: '>=1.1 && <1.3'
   hspec: '>=2.11'
   keiki: '>=0.9 && <0.10'
-  keiro: '>=0.25.1.0 && <0.26'
-  keiro-core: '>=0.25.1.0 && <0.26'
+  keiro: '>=0.26.0.0 && <0.27'
+  keiro-core: '>=0.26.0.0 && <0.27'
   keiro-dsl: '>=0'
   keiro-pgmq: '>=0'
   keiro-test-support: '>=0'
