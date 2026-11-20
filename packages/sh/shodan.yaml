@@ -2,6 +2,7 @@ all-versions:
 - 0.1.0.0
 - 0.2.0.0
 - 0.3.0.0
+- 0.4.0.0
 author: Joonkyu Park
 basic-deps:
   aeson: '>=2.1 && <2.3'
@@ -16,6 +17,37 @@ changelog: |
   # Changelog
 
   This package follows the [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.4.0.0 — 2026-11-21
+
+  ### Breaking changes
+
+  - Add `InvalidDomain` to `ShodanError`; exhaustive handlers need a new case.
+  - Append timestamp, hostname, domain, ALPN, and certificate DNS name fields to the public `SearchMatch`
+    constructor. Positional construction and patterns need five additional fields;
+    this datatype change requires a PVP major bump.
+
+  ### Additions
+
+  - Add `getDomainInfo`, `DomainInfo`, and `DnsRecord` for a single page of domain
+    DNS information, with explicit page selection and validation before HTTP.
+  - Add `shodan-domain DOMAIN [PAGE]`, including subdomains, records, last-seen
+    timestamps, and the next-page flag. Each lookup uses one query credit;
+    history and record-type filters are not implemented yet.
+  - Add domain parsing, HTTP, and argument validation tests and documentation.
+    Verify a live domain lookup manually; use `domainMore` rather than assuming
+    a fixed number of records per page.
+  - Add `matchTimestamp` (UTC collection time preserved as text), `matchHostnames`,
+    `matchDomains`, and nested `ssl.alpn` as `matchAlpn`.
+  - Missing or null metadata becomes `Nothing`; empty lists remain `Just []`.
+    Incorrect JSON types are rejected. Timestamp syntax is not validated.
+  - Show collection time, hostnames, domains, and ALPN in the search executable.
+  - Add `matchCertificateNames` and a `CERTIFICATE_NAMES` column for DNS names
+    from the leaf certificate SAN, including wildcards. Decode DER and escaped
+    byte representations; omit non-DNS entries and reject malformed SAN data.
+    Certificate names are candidates, not verified DNS mappings or live sites.
+  - Add local parsing tests and document the meaning and limits of the metadata.
+  - Verify search metadata manually; automated tests remain local.
 
   ## 0.3.0.0 — 2026-11-20
 
@@ -72,12 +104,13 @@ description: |
 
   Licensed under the [BSD 3-Clause License](LICENSE).
 
-  Current version: **0.3.0.0**. See the [changelog](CHANGELOG.md)
+  Current version: **0.4.0.0**. See the [changelog](CHANGELOG.md)
   for additions and the `SearchMatch` constructor change requiring a PVP major bump.
 
   This project supports `GET /api-info` (`ApiInfo` and `UsageLimits`),
   `GET /shodan/host/count` (`CountResult`), and one-page
-  `GET /shodan/host/search` (`SearchResult`). The API-info example fields and
+  `GET /shodan/host/search` (`SearchResult`), plus one-page
+  `GET /dns/domain/{domain}` (`DomainInfo`). The API-info example fields and
   the count response's `total` field are required; unknown fields are ignored.
   Numeric values use `Integer`; count totals must be nonnegative.
 
@@ -220,9 +253,90 @@ description: |
   required; the total is a nonnegative `Integer`. Facets follow the same parsing
   rules as `CountResult`.
 
+  Search metadata is also available through `matchTimestamp :: Maybe Text`,
+  `matchHostnames :: Maybe [Text]`, `matchDomains :: Maybe [Text]`, and
+  `matchAlpn :: Maybe [Text]`. The timestamp is the UTC banner collection time,
+  preserved as text without date validation. Hostnames are based on reverse DNS;
+  these lists do not enumerate all websites hosted on an IP.
+
+  `matchAlpn` reads the nested `ssl.alpn` list (for example `h2`, `http/1.1`).
+  It records Shodan's observation, not the protocol used for our API request.
+  Missing ALPN data does not establish that HTTP/2 or HTTP/3 is unsupported.
+  See the [banner specification](https://datapedia.shodan.io/) and
+  [TLS fields](https://datapedia.shodan.io/property/ssl.html).
+
+  All four metadata fields allow absent or null values as `Nothing`. Missing or
+  null `ssl` also produces `Nothing` for ALPN. A present non-null `ssl` must be an
+  object; non-text timestamps and lists containing non-text elements are rejected.
+  List order is preserved, and `Just []` is distinct from missing data.
+  The CLI adds `COLLECTED_UTC`, `HOSTNAMES`, `DOMAINS`, and `ALPN` columns.
+  Lists use commas, empty lists display `[]`, and missing values display `-`.
+
+  `matchCertificateNames :: Maybe [Text]` extracts DNS names from the leaf
+  certificate's `ssl.cert.extensions` entry named `subjectAltName` (SAN).
+  The search example displays them in `CERTIFICATE_NAMES`. Wildcards such as
+  `*.example.com` and list order are preserved; IP, URI, and email SAN entries
+  are omitted. These are certificate name candidates, not verified DNS mappings,
+  live sites, or a complete subdomain inventory. No DNS lookup or extra API call
+  is made, and the certificate common name is not used as a fallback.
+
+  Missing/null certificate or extensions, or no SAN extension, yields `Nothing`
+  (displayed as `-`). A present SAN containing no DNS names yields `Just []`
+  (displayed as `[]`). The parser handles DER bytes represented as JSON text and
+  literal Python-style byte escapes, as in the official Shodan example. Invalid
+  extension structure, non-text SAN data, and malformed DER reject the response.
+  Other extension contents are ignored. This reads names only; it does not validate
+  certificate signatures, expiry, or domain-name syntax.
+
   Optional facet requests and field selection are not supported yet. Search
   tests use local JSON fixtures and a mock HTTP server, and do not consume Shodan
   query credits. A one-page live search has also succeeded manually.
+
+  ## Domain DNS information
+
+  Retrieve one page of Shodan's observed subdomains and DNS records:
+
+  ```haskell
+  getDomainInfo :: Client -> Text -> Int -> IO (Either ShodanError DomainInfo)
+  ```
+
+  With `SHODAN_API_KEY` set, run:
+
+  ```sh
+  cabal run shodan-domain -- example.com
+  cabal run shodan-domain -- example.com 2
+  ```
+
+  The optional page defaults to 1. Shodan documents pages of 100 DNS records,
+  but live responses can contain more; use `domainMore`, not the record count,
+  to decide whether another page is available.
+  According to the [official DNS API documentation](https://developer.shodan.io/api),
+  each lookup uses one query credit. No extra pages or retries are automatic.
+  Check `domainMore` before requesting the next page. This endpoint queries
+  Shodan's stored DNS information, not a live DNS lookup, and cannot guarantee
+  that every subdomain is known or that a mapping is still current.
+
+  `DomainInfo` contains `domainName`, `domainTags`, `domainRecords`,
+  `domainSubdomains` (relative names as returned), and `domainMore`.
+  Each `DnsRecord` contains `dnsSubdomain`, `dnsType`, `dnsValue`, and
+  `dnsLastSeen`. All response fields are required; missing/null fields and wrong
+  JSON types are rejected, while unknown fields are ignored. List order and
+  wildcards are preserved. DNS types, values, and timestamps remain text without
+  syntax validation or IP-only assumptions. An empty record subdomain means the
+  apex domain. The CLI prints fully qualified record names, types, values, and
+  last-seen timestamps, plus relative subdomains and the `More` flag.
+
+  Supply an ASCII domain name (punycode for international names), without a URL
+  or trailing dot. Labels must have 1–63 letters, digits, or hyphens, without a
+  leading/trailing hyphen; the whole name must be at most 253 characters.
+  Invalid names return `Left InvalidDomain` and pages below 1 return
+  `Left InvalidPage`, before any HTTP request. The API key is handled through
+  the same client and redacted errors as the other endpoints.
+
+  This first implementation uses the API defaults: no history and no DNS
+  record-type filter. `/dns/resolve` and `/dns/reverse` are not implemented.
+  Automated DNS parsing and HTTP tests use fixtures and a local server; no
+  query credits are needed. A live domain lookup has also succeeded manually.
 
   ## Build
 
@@ -254,7 +368,7 @@ description: |
   ```sh
   stylish-haskell -i src/Shodan.hs test/*.hs examples/api-info/Main.hs
   stylish-haskell -i examples/count/Main.hs
-  stylish-haskell -i examples/search/Main.hs
+  stylish-haskell -i examples/search/Main.hs examples/domain/Main.hs
   cabal test
   ```
 
@@ -268,6 +382,8 @@ description: |
   - `examples/count/Main.hs`: count-query executable using the same environment variable.
   - `examples/search/Main.hs`: one-page search executable with an optional page argument.
   - `test/Main.hs`: response parsing and HTTP tests against a local mock server.
+  - `examples/domain/Main.hs`: one-page domain DNS lookup executable.
+  - `test/DnsTests.hs`: domain and DNS record parsing tests.
   - `test/SearchTests.hs`: search-response JSON parsing tests.
 
   No API key is needed to build or test. Automated tests do not call Shodan.
@@ -281,9 +397,9 @@ description: |
   numeric and null values, zero and large counts, lists of buckets, unknown fields,
   and malformed or invalid buckets.
 description-type: markdown
-hash: 8803a36eee65d72fe0ae2b87d06801038642a076066d2539a0aeb29941bce20d
+hash: aa58379d237db9f0c1b793ea59c3feb46fb73548e937e6bec410fc1675b80dcd
 homepage: https://github.com/nattybear/shodan
-latest: 0.3.0.0
+latest: 0.4.0.0
 license-name: BSD-3-Clause
 maintainer: vpark45@gmail.com
 synopsis: A simple Haskell client for the Shodan API
