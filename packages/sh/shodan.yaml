@@ -1,0 +1,195 @@
+all-versions:
+- 0.1.0.0
+author: Joonkyu Park
+basic-deps:
+  aeson: '>=2.1 && <2.3'
+  base: '>=4.19 && <5'
+  containers: '>=0.6 && <0.8'
+  http-client: '>=0.7 && <0.8'
+  http-client-tls: '>=0.3 && <0.4'
+  http-types: '>=0.12 && <0.13'
+  shodan: '>=0'
+  text: '>=2.1 && <2.2'
+changelog: ''
+changelog-type: ''
+description: |
+  # shodan
+
+  A small Haskell client for the [Shodan API](https://developer.shodan.io/api).
+
+  Licensed under the [BSD 3-Clause License](LICENSE).
+
+  This project currently supports `GET /api-info` (`ApiInfo` and `UsageLimits`)
+  and `GET /shodan/host/count` (`CountResult`). The API-info example fields and
+  the count response's `total` field are required; unknown fields are ignored.
+  Numeric values use `Integer`; count totals must be nonnegative.
+
+  ## Usage
+
+  The executable example in `examples/api-info/Main.hs` reads the API key from
+  `SHODAN_API_KEY`, calls `/api-info`, and prints the plan and remaining query/scan
+  credits. In Bash, enter the key without displaying it or putting it in a command:
+
+  ```sh
+  read -r -s -p "Shodan API key: " SHODAN_API_KEY
+  printf '\n'
+  export SHODAN_API_KEY
+  cabal run shodan-api-info
+  ```
+
+  Missing or blank keys are rejected before making a request. Errors go to stderr
+  with a nonzero exit status; the key is not printed. This command calls the live
+  Shodan API when a key is present.
+
+  To use the library in your own program:
+
+  ```haskell
+  import qualified Data.Text as Text
+  import Shodan
+  import System.Environment (getEnv)
+
+  main :: IO ()
+  main = do
+    key <- Text.pack <$> getEnv "SHODAN_API_KEY"
+    client <- newClient key
+    result <- getApiInfo client
+    case result of
+      Left err -> print err
+      Right info -> print (apiInfoPlan info, apiInfoQueryCredits info)
+  ```
+
+  Reuse the client for multiple calls. `newClient` creates a TLS manager with
+  certificate verification. `newClientWithManager` lets applications share their
+  own TLS-capable `http-client` manager.
+
+  `getApiInfo` returns `IO (Either ShodanError ApiInfo)`. Errors distinguish
+  transport failures (`NetworkError`), non-200 HTTP statuses (`HttpError status`),
+  and invalid successful responses (`InvalidResponse`). Raw requests, response
+  bodies, and exception messages are omitted from errors to avoid exposing the
+  key. Showing a `Client` also hides its key. Custom manager hooks can access the
+  request and must not log the key.
+
+  Each request has a 30-second response timeout. Redirects are not followed and
+  there are no automatic retries. Thread cancellation is allowed to propagate.
+
+  ## Count matching results
+
+  With `SHODAN_API_KEY` set, run:
+
+  ```sh
+  cabal run shodan-count -- 'port:443 country:KR'
+  ```
+
+  Pass the query as one argument, quoting it when it contains spaces. The example
+  prints only the total count. Missing/blank queries or keys are rejected; API
+  errors are printed to stderr with a nonzero exit status.
+
+  The library function is:
+
+  ```haskell
+  countHosts :: Client -> Text -> IO (Either ShodanError CountResult)
+  ```
+
+  Read the total with `countTotal`. Optional facet requests and individual search
+  results are not supported yet. According to the [official count endpoint
+  documentation](https://developer.shodan.io/api), this call uses no query credits.
+
+  ## Facet response type
+
+  `Facet` represents a single statistics bucket such as
+  `{"value":"Amazon.com","count":3012386}`. Its `FromJSON` instance is available
+  for standalone parsing and is used by `CountResult`:
+
+  ```haskell
+  data CountResult = CountResult
+    { countTotal  :: Integer
+    , countFacets :: Map Text [Facet]
+    }
+  ```
+
+  `countFacets` groups buckets by name, such as `country` or `port`. Use
+  `Data.Map.Strict.lookup "country" (countFacets result)` to read a breakdown.
+  An absent `facets` field or an empty object produces an empty map. A present
+  `facets` field must be an object of lists: nulls, incorrect shapes, and invalid
+  buckets are rejected. Bucket order in each list is preserved.
+
+  `countHosts` still sends only the query and key; requesting facets over HTTP
+  will be added separately.
+
+  - `facetValue :: Value` preserves the JSON value, including strings, numbers,
+    and explicit nulls, without coercing it to text.
+  - `facetCount :: Integer` stores a nonnegative result count.
+
+  Both fields are required. Unknown fields are ignored, while missing fields,
+  invalid counts, and non-object buckets are rejected.
+
+  ## Build
+
+  The initial development compiler is GHC 9.8.4.
+
+  ```sh
+  cabal build
+  cabal test
+  ```
+
+  ## Approach
+
+  - Use ordinary records, sum types, and explicit IO functions.
+  - Add dependencies and language extensions only when needed.
+  - Keep API keys out of logs and error messages.
+  - Implement one endpoint at a time, beginning with `GET /api-info`.
+
+  ## Formatting
+
+  Use stylish-haskell 0.14.6.0 with the checked-in `.stylish-haskell.yaml`.
+  To install it with GHC 9.8:
+
+  ```sh
+  cabal install stylish-haskell-0.14.6.0 --flags=-ghc-lib --constraint='ghc-lib-parser-ex +no-ghc-lib'
+  ```
+
+  With the Cabal executable directory on `PATH`, run from the project directory:
+
+  ```sh
+  stylish-haskell -i src/Shodan.hs test/Main.hs examples/api-info/Main.hs
+  stylish-haskell -i examples/count/Main.hs
+  cabal test
+  ```
+
+  ## Files
+
+  - `shodan.cabal`: package and library settings.
+  - `cabal.project`: local Cabal project settings.
+  - `src/Shodan.hs`: client, errors, response records, and JSON parsing.
+  - `examples/api-info/Main.hs`: executable example using an environment variable.
+  - `examples/count/Main.hs`: count-query executable using the same environment variable.
+  - `test/Main.hs`: response parsing and HTTP tests against a local mock server.
+
+  No API key is needed to build or test. Automated tests do not call Shodan.
+  They check request encoding, successful responses, HTTP errors, invalid JSON,
+  redirect handling, a simulated transport failure, and count responses (including
+  zero, large totals, malformed responses, and query encoding). Live authenticated
+  HTTPS calls to `/api-info` and `/shodan/host/count` have also succeeded manually;
+  live calls are not part of the automated test suite.
+
+  Standalone facet parsing tests also cover the documented organization example,
+  numeric and null values, zero and large counts, lists of buckets, unknown fields,
+  and malformed or invalid buckets.
+description-type: markdown
+hash: ec9843de09efb3f2fbe0204a22ab4c15658c87a183d339befe2a2c3db72b6b2e
+homepage: https://github.com/nattybear/shodan
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: vpark45@gmail.com
+synopsis: A simple Haskell client for the Shodan API
+test-bench-deps:
+  aeson: '>=2.1 && <2.3'
+  base: '>=4.19 && <5'
+  bytestring: '>=0.12 && <0.13'
+  containers: '>=0.6 && <0.8'
+  http-client: '>=0.7 && <0.8'
+  http-types: '>=0.12 && <0.13'
+  shodan: '>=0'
+  text: '>=2.1 && <2.2'
+  wai: '>=3.2 && <3.3'
+  warp: '>=3.3 && <3.5'
