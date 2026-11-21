@@ -3,6 +3,7 @@ all-versions:
 - 0.1.0.1
 - 0.2.0.0
 - 0.2.1.0
+- 0.3.0.0
 author: IC Rainbow
 basic-deps:
   base: '>=4.16 && <5'
@@ -20,6 +21,93 @@ changelog: |
   The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   and this project adheres to the
   [Haskell Package Versioning Policy](https://pvp.haskell.org/).
+
+  ## 0.3.0.0 - 2026-11-17
+
+  Updated `kb_text_shape` to 2.32.
+
+  Breaking, following upstream:
+  - `Glyph.decomposition` is gone from both `KB.Text.Shape.Glyph` and `Structs.Glyph`.
+  - `FONT_INFO_STRING_ID_COUNT` is split into `FONT_INFO_STRING_ID_COUNT0`, the size of the deprecated
+    `Strings` arrays, and `FONT_INFO_STRING_ID_COUNT1`, one past the last ID.
+  - `FontInfoStringId` wraps a `Word32` and is `Storable`.
+  - Language pattern typos fixed: `LANGUAGE_AZERBAIJANI`, `LANGUAGE_ESPERANTO`, `LANGUAGE_KOREAN_OLD_HANGUL`.
+  - `Structs.CodepointIterator.codepoint` is an opaque `Ptr ()`. The iterator now points into kbts internals.
+  - `.kbts` blobs written by earlier versions do not load. Regenerate them with `Font.extractBlob` or `ttf2kbts`.
+
+  Breaking, error handling:
+  - Failures throw `ShapeException` instead of `error`.
+    - `ContextError` means the context failed for good. kbts never clears the error.
+    - `FontError` means a font was rejected. The context stays usable.
+  - `run` throws `ContextError` when the context failed. It used to return truncated or empty results.
+  - `pushFont` and `withFont_` throw `FontError` for a font without a blob. Before, the C side skipped the push
+    silently. The matching pop then removed the font below it.
+  - `popFont` throws `ContextError` on a failed context.
+  - `pushFontFromFile` and `pushFontFromMemory` pop a font that fails validation. They no longer count it as kept.
+  - `kbts_ShapeError` returns `IO ShapeError`. The pure import could be read before the call it reports on.
+
+  Changed:
+  - `Font.getFontInfo` reads name strings through `kbts_LookupFontString` with US English.
+    Fonts that only carry Windows-platform names, like the bundled Ubuntu-R, now report them.
+    Fonts whose names are only Mac-platform, or only in other Windows languages, now report none.
+    The typographic family and subfamily no longer fall back to the plain ones.
+  - `withFont_` and `withFeature_` take their font or override off the stack when the section throws.
+    kbts keeps both stacks across runs.
+  - `withFont_` returns the section's result, like `withFeature_`.
+  - Every import that can reach the allocator is `safe`. A Haskell allocator from `Allocator.mkAllocator` now
+    works with the context API. Before, a callback from an `unsafe` call deadlocked the RTS on a GC.
+    The cost was measured `unsafe` against `safe` on the same tree, over two rounds.
+    Long texts shape 3-9% slower through `text_` and about 5% slower through `char_`.
+    Direct shaping is up to 5% slower. It calls the now `safe` `kbts_PushGlyph` once per codepoint.
+    Short texts stay within noise.
+
+  Added:
+  - `Font.lookupFontString` for name strings in any Windows language.
+  - `Enums.WindowsLanguageId` with `kbts_WindowsIdsForLanguage`.
+  - Variable font bindings:
+    - Context API: `kbts_ShapePushFontFromFile2`, `kbts_ShapePushFontFromMemory2`, `kbts_ShapePushFont2`,
+      `kbts_ShapeSetFontVariationVector`, `kbts_ShapeSetFontVariations`, `kbts_ShapeSetFontVariation`,
+      `kbts_ShapePushGlobalVariation`, `kbts_ShapePopGlobalVariation`, `kbts_ShapeRun2`.
+    - Direct API: `kbts_ShapeDirect2`, `kbts_GetVariationInfo`, `kbts_GetVariationAxisInfo`, `kbts_GetVariationInstance`,
+      `kbts_NormalizeVariationVector`, `kbts_SizeOfShapeConfig2`, `kbts_PlaceShapeConfig2`, `kbts_CreateShapeConfig2`,
+      `kbts_ShapeConfigUid`.
+    - `Structs.Variation`, `Run2`, `Uid`, `VariationAxisInfo`, `VariationInstanceInfo`, `Handles.ContextFontHandle`.
+    - `Flags.VariationAxisFlags`, `VariationInstanceFlags`, `Enums.VARIATION_VALUE_UNSET`.
+  - `Structs.Codepoint2` with `kbts_ShapeCodepointIteratorNext2` and `kbts_ShapeGetShapeCodepoint2`.
+  - `SHAPE_ERROR_GENERATED_TOO_MANY_GLYPHS`, `VERSION_2_28`, `BLOB_VERSION_REMOVED_SUBTABLE_INFOS_ALIGNED_TABLES`,
+    `Flags.DecodeUtf16Flags`, and the new `FONT_INFO_STRING_ID_*` names.
+  - `ShapeException`, `Enums.fourcc` for packing tags, and `Handles.CONTEXT_FONT_HANDLE_INVALID`.
+  - Variable fonts without FFI imports:
+    - `pushFontVariations` and `withFontVariations` push a font with axis values around whole runs.
+      An axis listed more than once takes its last value.
+    - `withFontVariations_` does the same for a section of input, with the caveats of `withFont_`.
+    - `KB.Text.Shape` re-exports `Variation` and `fourcc`.
+    - `Font.variationAxes` lists a font's axes, and `KB.Text.Shape.Font` re-exports `VariationAxisInfo`.
+
+  Fixed:
+  - Padding garbage in blob data.
+
+  Fixed upstream, local patches dropped:
+  - Break positions after look-ahead (fixed in 2.28e).
+  - `kbts_ShapePopFeature` reporting and stack corruption.
+
+  Fixed in upstream with local patches:
+  - `kbts_BreakEntireString*` holes, carried over from 0.2.1.0.
+  - UTF-16 surrogates in name strings decode correctly, paired or not.
+  - `kbts_ShapePopGlobalVariation` keeps the entries below the popped one.
+  - `kbts_ShapePushFontFromMemory2` writes its `ContextFontHandle` output.
+  - Failed loads in `kbts_ShapePushFontFromFile2` and `kbts_ShapePushFontFromMemory2` write `CONTEXT_FONT_HANDLE_INVALID`.
+  - A font push into a context out of memory reports `SHAPE_ERROR_OUT_OF_MEMORY`.
+  - The v1 codepoint accessors report the paragraph direction, not the run direction.
+  - A feature stack with a repeated tag applies the latest override for it, and keeps the overrides above it.
+
+  Known upstream issues (as of 2.32), see `upstream-fixme/`:
+  - Global variations are collected but never applied to fonts.
+  - `VARIATION_VALUE_UNSET` is not special-cased. It clamps the axis to its minimum.
+  - A popped font's `ContextFontHandle` can come back for the next pushed font.
+  - Fonts pushed mid-input still take effect a segment early.
+    A font section at the end of the input shapes its tail in the font below.
+    A short section can lose its font entirely. Wrap `run` in `withFontVariations` to shape a whole run in one font.
 
   ## 0.2.1.0 - 2026-08-15
 
@@ -79,7 +167,7 @@ changelog-type: markdown
 description: |
   # kb-text-shape
 
-  Haskell wrapper for the [kb_text_shape.h] unicode segmentation and shaping library (v2.24).
+  Haskell wrapper for the [kb_text_shape.h] unicode segmentation and shaping library (v2.32).
 
   [kb_text_shape.h]: https://github.com/JimmyLefevre/kb/blob/main/kb_text_shape.h
 
@@ -125,12 +213,15 @@ description: |
 
   ```
   Distilling 1047Kb of TTF
-  Distilled into 618Kb blob
+  Distilled into 626Kb blob
   ```
+
+  Blobs are tied to the kb_text_shape version that wrote them.
+  Regenerate them after upgrading. Blobs from 2.24 do not load with 2.32.
 description-type: markdown
-hash: 4580166fadc763141bab08fa60371e0f3b8bb6ffb90b95f606ff8dee18c46506
-homepage: https://github.com/dpwiz/kb-text-shape#readme
-latest: 0.2.1.0
+hash: 307124afa381e934defe8c1ba741d5c744647d36ad68b592e4028af82f37552d
+homepage: ''
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: aenor.realm@gmail.com
 synopsis: Unicode segmentation and shaping using kb_text_shape
