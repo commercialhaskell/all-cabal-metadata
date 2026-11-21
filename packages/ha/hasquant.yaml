@@ -3,6 +3,7 @@ all-versions:
 - 0.6.0.0
 - 0.7.0.0
 - 0.8.0.0
+- 0.9.0.0
 author: Sergei Khorev <sergey.khorev@gmail.com>
 basic-deps:
   base: '>=4.14 && <5'
@@ -15,11 +16,34 @@ basic-deps:
   time: '>=1.9.3 && <1.17'
   vector: '>=0.12.3 && <0.14'
 changelog: |
+  ## 0.9.0.0 (2026)
+
+  Supports QuantLib 1.43 and 1.44; 1.44 is now the default for development, documentation and
+  release builds. Most changes below are breaking.
+
+  - Bootstrapped curves keep their calibration. The piecewise yield, spread, default and
+    inflation curve constructors return typed piecewise leaves whose calibrated nodes
+    `bootstrappedNodes` reads; `addBootstrappedCurve` accepts only such a leaf, and
+    `rateHelperPillarDate` inspects helper pillars before bootstrapping.
+  - Credit-curve scenarios: `shiftedHazardRateCurve` replaces the spreaded hazard curves and adds
+    live key-rate and bucket shifts; `conditionalSurvivalCurve` conditions an existing curve on
+    survival to a later date.
+  - Volatility: piecewise Black variance surfaces accept per-expiry strike slices, caplet variance
+    curves and variance surfaces can extrapolate, YoY optionlet stripping uses one model-selected
+    constructor with an optional root bracket, and YoY price surfaces can be booked at the
+    evaluation date.
+  - Added a curve-observing FX cash spot quote (`fxCashSpotQuote`) and the accrual fractions of
+    compounded coupons (`fixingAccrualFractions`).
+  - `QuantLib.Math` exports `Matrix` abstractly, with checked constructors and plain inspector
+    functions.
+  - API consistency pass: uniform naming, `IO` getters on live objects, more precise return
+    types, coordinate ADTs instead of per-coordinate query variants, and capability classes
+    instead of per-type names (`QuantLib.Index.fixing` now reads every index).
+
   ## 0.8.0.0 (2026)
 
   - Added value-based Settings snapshots with checked restoration, preserving floating dates
     and observer settings, and native fixing-history name normalization for context owners.
-
   - Added QuantLib 1.44 support, while retaining compatibility with 1.43. New bindings include
     Rough Heston pricing, mark-to-market cross-currency basis swaps, FX reset cash flows, and
     Gaussian1d (GSR) swaptions on overnight-indexed swaps. Calls requiring 1.44, and non-default
@@ -170,7 +194,7 @@ description: |
 
   Add a `HACKAGE_TOKEN` repository secret containing an API token from a Hackage
   account with permission to upload `hasquant`. The Release workflow uses the existing
-  Linux CI image (GHC 9.10.3 / QuantLib 1.43) to build source and Haddock tarballs.
+  Linux CI image (GHC 9.10.3 / QuantLib 1.44) to build source and Haddock tarballs.
 
   1. Push a version tag matching `hasquant.cabal` (`v.0.8.0.0`, `v0.8.0.0`, or
      `0.8.0.0`), then dispatch **Release** from the default branch with that `tag`
@@ -246,8 +270,10 @@ description: |
   - Build a declarative embedded DSL as a sibling project to define contracts, portfolios, market data, and calculation scenarios (unpublished WIP), use it for XVA and other complext calculations
   - Expose that DSL through an agent-callable tool, so an LLM can construct and price products through validated hasquant operations rather than generated pricing logic.
   - Keep the exact-mean H1-HW backport (`cbits/qlExactMeanH1HwEngine.h`) until both supported QuantLib release series provide `AnalyticH1HWEngine::VarianceRootMean::Exact`; `ExactMean` already selects the native engine when the linked headers expose it.
+  - Drop the two restated upstream YoY routines in `cbits/qlTermStructureAux.cpp` (`BracketedYoyOptionletStripper::initialize`, `FixedStartYoyPriceSurface`) once QuantLib exposes the stripper's root bracket and a fixed-start price surface; `tools/check-yoy-upstream-copies.py` guards them until then
   - On adopting QuantLib 1.45 (dropping 1.43):
     - remove the `ItalyExchange` calendar, deprecated in 1.44 (replacement: `TARGET`);
+    - delete the two 1.43-only `dynamic_cast` guards: `qlOvernightUnderlyingSupported` (`cbits/qlInstrument.cpp`) and `CheckedFdEngine` (`cbits/qlCheckedFdEngine.h`);
     - drop the boost branches of `cbits/qlStdCompat.h` and spell `std::optional`/`std::any` directly;
       its versioned-argument macro then becomes unconditional or moves to the 1.45 pair.
   - See [github issues](https://github.com/khorser/hasquant/issues) for more formalized tasks
@@ -279,15 +305,15 @@ description: |
 
   GHC 9.10 is the primary development version. GHC 8.10.6 (`base >= 4.14`) is the supported floor and is checked against Stackage lts-18.8. GitHub CI also tests with GHC 9.6.7, 9.8.4, 9.12.4, 9.14.1.
 
-  Install QuantLib 1.43 or 1.44: [Linux](https://www.quantlib.org/install/linux.shtml), [macOS](https://www.quantlib.org/install/macosx.shtml), or [CMake](https://www.quantlib.org/install/cmake.shtml).
+  QuantLib 1.44 is the default; 1.43 remains supported. Install either version: [Linux](https://www.quantlib.org/install/linux.shtml), [macOS](https://www.quantlib.org/install/macosx.shtml), or [CMake](https://www.quantlib.org/install/cmake.shtml).
 
   Linux and macOS are the primary, well-tested platforms. Windows builds work too, but QuantLib has to be rebuilt with GHC's own bundled Clang first — see [`WINDOWS.md`](WINDOWS.md) for the recipe.
 
   hasquant never uses intraday dates, so prefer a QuantLib built without `QL_HIGH_RESOLUTION_DATE` (check `ql/config.hpp`). With it, every `Date` operation goes through boost `posix_time`. In a GSR-calibration-heavy workload that was 59% of CPU, and turning it off cut run times from 309 s to 156 s and from 76 s to 28 s, with bit-identical results. Homebrew's formula turns it on (`--enable-intraday`); CMake leaves it off by default:
 
   ```
-  cmake -S QuantLib-1.43 -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/opt/quantlib-1.43 \
-    -DCMAKE_INSTALL_NAME_DIR=$HOME/opt/quantlib-1.43/lib -DQL_BUILD_EXAMPLES=OFF -DQL_BUILD_TEST_SUITE=OFF
+  cmake -S QuantLib-1.44 -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/opt/quantlib-1.44 \
+    -DCMAKE_INSTALL_NAME_DIR=$HOME/opt/quantlib-1.44/lib -DQL_BUILD_EXAMPLES=OFF -DQL_BUILD_TEST_SUITE=OFF
   cmake --build build -j && cmake --install build
   brew unlink quantlib
   ```
@@ -373,9 +399,9 @@ description: |
   intermediate families. A homogeneous subtype list can be passed directly to `cashFlowLeg`;
   heterogeneous lists explicitly materialize `CashFlow` elements with `asCashFlow` first.
 description-type: markdown
-hash: 7dd9ff89eecf2b7193235432c11e80be4877da926e98111dce68020cf9d059ba
+hash: 8209cd3fbf26618243702fe46bf5018eeff6b5eccdfce8473b7347b965a549db
 homepage: https://github.com/khorser/hasquant#readme
-latest: 0.8.0.0
+latest: 0.9.0.0
 license-name: BSD-3-Clause
 maintainer: Sergei Khorev <sergey.khorev@gmail.com>
 synopsis: Bindings to QuantLib
