@@ -1,17 +1,23 @@
 all-versions:
 - 0.1.0.0
+- 0.1.1.0
 author: Susumu Katayama
 basic-deps:
   base: '>=4.7 && <5'
   hasktorch: '>=0'
   hasktorch-CudaHashMap: '>=0'
   libtorch-ffi: '>=0'
-changelog: |
+changelog: |+
   # Revision history for CudaHashMap
 
   ## 0.1.0.0 -- 2026-11-10
 
   * First version. Released on an unsuspecting world.
+
+  ## 0.1.1.0 -- 2026-11-24
+
+  * Add capacityCudaHashMap and auto-rehash insert variants
+
 changelog-type: markdown
 description: |
   # hasktorch-CudaHashMap
@@ -19,6 +25,85 @@ description: |
   `hasktorch-CudaHashMap` provides a [HaskTorch](https://github.com/hasktorch/hasktorch) interface to the GPU-parallel hash map implementations (`cuco::dynamic_map` and `cuco::static_map`) in NVIDIA [cuCollections (`cuco`)](https://github.com/NVIDIA/cuCollections).
 
   It supports high-throughput batch insertions and lookups directly on GPU-resident `Tensor`s without round-tripping through host (CPU) memory.
+
+  ## Motivating Results
+
+  ```bash
+  $ cabal bench
+  (snip)
+  Benchmarking Torch.CudaHashMap vs Data.HashMap.Strict (unordered-containers)
+  ======================================================================================
+  Benchmark size: N = 10000 elements (Key: Int64, Value: Float / Index: Int64)
+  ======================================================================================
+
+  [1] Batch Insert (Int64 -> Float)
+    Data.HashMap.Strict (fromList)                  0.821 ms  (   12.18 Mops/s,   1.00x)
+    CudaHashMap insertBatch (GPU tensor)            0.218 ms  (   45.84 Mops/s,   3.76x)
+    CudaHashMap insertBatch (CPU -> GPU)            0.093 ms  (  107.50 Mops/s,   8.83x)
+
+  [2] Batch Lookup (Int64 -> Float, 50% hit / 50% miss)
+    Data.HashMap.Strict (lookupDefault)             0.314 ms  (   31.82 Mops/s,   1.00x)
+    CudaHashMap lookupBatch (dynamic_map, GPU)      0.007 ms  ( 1447.85 Mops/s,  45.50x)
+    [finalizeCudaHashMap: 0.267 ms]
+    CudaHashMap lookupBatch (static_map, GPU)       0.009 ms  ( 1092.68 Mops/s,  34.34x)
+    CudaHashMap lookupBatch (static_map, CPU<->GPU)      0.054 ms  (  183.60 Mops/s,   5.77x)
+
+  [3] Key-to-Index Assignment (insertKeys) & Lookup (lookupIndices)
+    Data.HashMap.Strict (key -> 0..K-1 insert)      0.936 ms  (   10.68 Mops/s,   1.00x)
+    CudaHashMap insertKeys (GPU tensor)             0.302 ms  (   33.14 Mops/s,   3.10x)
+    Data.HashMap.Strict (index lookup)              0.411 ms  (   24.33 Mops/s,   1.00x)
+    CudaHashMap lookupIndices (static_map, GPU)      0.011 ms  (  936.21 Mops/s,  38.48x)
+
+  ======================================================================================
+  Benchmark size: N = 100000 elements (Key: Int64, Value: Float / Index: Int64)
+  ======================================================================================
+
+  [1] Batch Insert (Int64 -> Float)
+    Data.HashMap.Strict (fromList)                  3.441 ms  (   29.06 Mops/s,   1.00x)
+    CudaHashMap insertBatch (GPU tensor)            0.115 ms  (  868.33 Mops/s,  29.88x)
+    CudaHashMap insertBatch (CPU -> GPU)            0.304 ms  (  328.95 Mops/s,  11.32x)
+
+  [2] Batch Lookup (Int64 -> Float, 50% hit / 50% miss)
+    Data.HashMap.Strict (lookupDefault)             3.650 ms  (   27.40 Mops/s,   1.00x)
+    CudaHashMap lookupBatch (dynamic_map, GPU)      0.014 ms  ( 7085.77 Mops/s, 258.60x)
+    [finalizeCudaHashMap: 0.313 ms]
+    CudaHashMap lookupBatch (static_map, GPU)       0.017 ms  ( 5914.50 Mops/s, 215.86x)
+    CudaHashMap lookupBatch (static_map, CPU<->GPU)      0.386 ms  (  259.17 Mops/s,   9.46x)
+
+  [3] Key-to-Index Assignment (insertKeys) & Lookup (lookupIndices)
+    Data.HashMap.Strict (key -> 0..K-1 insert)      6.311 ms  (   15.84 Mops/s,   1.00x)
+    CudaHashMap insertKeys (GPU tensor)             0.460 ms  (  217.42 Mops/s,  13.72x)
+    Data.HashMap.Strict (index lookup)              4.129 ms  (   24.22 Mops/s,   1.00x)
+    CudaHashMap lookupIndices (static_map, GPU)      0.028 ms  ( 3592.65 Mops/s, 148.35x)
+
+  ======================================================================================
+  Benchmark size: N = 1000000 elements (Key: Int64, Value: Float / Index: Int64)
+  ======================================================================================
+
+  [1] Batch Insert (Int64 -> Float)
+    Data.HashMap.Strict (fromList)                 31.486 ms  (   31.76 Mops/s,   1.00x)
+    CudaHashMap insertBatch (GPU tensor)            0.364 ms  ( 2744.43 Mops/s,  86.41x)
+    CudaHashMap insertBatch (CPU -> GPU)            1.740 ms  (  574.73 Mops/s,  18.10x)
+
+  [2] Batch Lookup (Int64 -> Float, 50% hit / 50% miss)
+    Data.HashMap.Strict (lookupDefault)            45.611 ms  (   21.92 Mops/s,   1.00x)
+    CudaHashMap lookupBatch (dynamic_map, GPU)      0.100 ms  (10010.48 Mops/s, 456.59x)
+    [finalizeCudaHashMap: 1.327 ms]
+    CudaHashMap lookupBatch (static_map, GPU)       0.101 ms  ( 9897.56 Mops/s, 451.44x)
+    CudaHashMap lookupBatch (static_map, CPU<->GPU)      2.612 ms  (  382.84 Mops/s,  17.46x)
+
+  [3] Key-to-Index Assignment (insertKeys) & Lookup (lookupIndices)
+    Data.HashMap.Strict (key -> 0..K-1 insert)     68.774 ms  (   14.54 Mops/s,   1.00x)
+    CudaHashMap insertKeys (GPU tensor)             1.424 ms  (  702.45 Mops/s,  48.31x)
+    Data.HashMap.Strict (index lookup)             36.981 ms  (   27.04 Mops/s,   1.00x)
+    CudaHashMap lookupIndices (static_map, GPU)      0.120 ms  ( 8314.39 Mops/s, 307.47x)
+
+  Benchmark CudaHashMap-bench: FINISH
+  $ nvidia-smi |grep RTX
+  |   0  NVIDIA RTX A5000               Off |   00000000:01:00.0 Off |                  Off |
+  $ grep model\ name /proc/cpuinfo |uniq
+  model name      : 12th Gen Intel(R) Core(TM) i9-12900
+  ```
 
   ## Features
 
@@ -185,12 +270,16 @@ description: |
   | `newCudaHashMapOnDevice` | `Device -> Int -> IO CudaHashMap` | Create a new GPU hash map pinned to a specific CUDA `Device` (e.g. `Device CUDA 1`). |
   | `hashMapDevice` | `CudaHashMap -> IO Device` | Query the CUDA `Device` associated with the hash map. |
   | `sizeCudaHashMap` | `CudaHashMap -> IO Int` | Return the number of unique keys currently stored in the map. |
+  | `capacityCudaHashMap` | `CudaHashMap -> IO Int` | Return the current slot capacity of the map (`0` before the first insertion). |
   | `finalizeCudaHashMap` | `CudaHashMap -> IO ()` | Convert the internal `cuco::dynamic_map` into a single `cuco::static_map` for faster lookups. |
   | `insertBatch` | `CudaHashMap -> Tensor -> Tensor -> IO ()` | Insert or overwrite (`insert_or_assign`) key-value pairs (`Int32`, `Int64`, `Float`, `Double`). |
+  | `insertBatchWithRehash` | `CudaHashMap -> Double -> Tensor -> Tensor -> IO Bool` | Like `insertBatch`, but automatically rehashes a finalized `static_map` before insertion if the projected load factor exceeds the given threshold in `(0.0, 1.0]`. Returns `True` if rehashing occurred. |
   | `lookupBatch` | `CudaHashMap -> Tensor -> IO Tensor` | Look up values for a tensor of keys. Missing keys yield `-1` (`Int32`/`Int64`) or `NaN` (`Float`/`Double`). |
   | `insertKeys` | `CudaHashMap -> Tensor -> IO Tensor` | Assign 0-based sequential `Int64` indices to unseen keys and return the `Int64` index tensor for all input keys. |
+  | `insertKeysWithRehash` | `CudaHashMap -> Double -> Tensor -> IO (Tensor, Bool)` | Like `insertKeys`, but automatically rehashes a finalized `static_map` before insertion if the projected load factor exceeds the given threshold in `(0.0, 1.0]`. Returns `(indices, rehashed)`. |
   | `lookupIndices` | `CudaHashMap -> Tensor -> IO Tensor` | Look up 0-based `Int64` indices for input keys without inserting (`-1` for missing keys). |
   | `hashMapIndexPut` | `CudaHashMap -> Bool -> Tensor -> Tensor -> Tensor -> IO Tensor` | Map keys via `insertKeys` and update a table tensor using `indexPut`. |
+  | `hashMapIndexPutWithRehash` | `CudaHashMap -> Double -> Bool -> Tensor -> Tensor -> Tensor -> IO (Tensor, Bool)` | Like `hashMapIndexPut`, using `insertKeysWithRehash` to auto-rehash finalized `static_map`s when the load factor threshold is exceeded. Returns `(updatedTable, rehashed)`. |
   | `hashMapIndexSelect` | `CudaHashMap -> Int -> Tensor -> Tensor -> IO Tensor` | Map keys via `lookupIndices` and gather from a table tensor using `indexSelect`. |
 
   ### Sentinel Value Conventions
@@ -205,9 +294,9 @@ description: |
 
   BSD-3-Clause (see [LICENSE](LICENSE)).
 description-type: markdown
-hash: c5a0cb7608bbd617cea36780fcdf53c9fb7d6eb5631cf3899f5228876af053da
+hash: 48b82bccd2a46f9acdf979e2f34e7237704e2e32709f50ae85ac4b1a052dc9f2
 homepage: ''
-latest: 0.1.0.0
+latest: 0.1.1.0
 license-name: BSD-3-Clause
 maintainer: skata@cs.miyazaki-u.ac.jp
 synopsis: HaskTorch interface to the GPU-parallel hashmap in cuCollections
