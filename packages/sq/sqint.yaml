@@ -1,0 +1,459 @@
+all-versions:
+- 0.1.0.1
+author: José Lorenzo Rodríguez
+basic-deps:
+  aeson: '>=2.3 && <2.4'
+  base: '>=4.21 && <5'
+  bytestring: '>=0.12 && <0.13'
+  containers: '>=0.7 && <0.8'
+  hasql: '>=2.0 && <2.1'
+  libpg-query: ^>=0.1
+  opt-env-conf: '>=0.15 && <0.18'
+  pqi: '>=1.1 && <1.2'
+  pqi-ffi: '>=1.0 && <1.1'
+  process: '>=1.6 && <1.7'
+  proto-lens: '>=0.7 && <0.8'
+  rio: '>=0.1.22 && <0.2'
+  sqint: '>=0'
+  sqitch-plan: ^>=0.1
+  string-interpolate: '>=1.0 && <1.1'
+  text: '>=2.1 && <2.2'
+  vector: '>=0.13 && <0.14'
+changelog: |
+  # Changelog
+
+  ## 0.1.0.1
+
+  * Parse with libpg_query 18 (PostgreSQL 18's grammar), through
+    `libpg-query` on Hackage instead of Kronor's `pg-query` fork.
+  * Read PL/pgSQL trigger bodies again under libpg_query 18.0.0 and 18.1.0,
+    whose JSON for a trigger's implicit variables does not decode.
+
+  ## 0.1.0.0
+
+  First release.
+changelog-type: markdown
+description: |
+  # sqint
+
+  sqint lints [sqitch](https://sqitch.org) deploy scripts for PostgreSQL migrations that are dangerous on a busy database: statements that hold heavy locks while they scan or rewrite a table, queries that stop using an index, settings silently lost between transactions, and functions left broken between one change and the next.
+
+  ```console
+  $ cat deploy/add_orders_status.sql
+  -- Deploy shop:add_orders_status to pg
+
+  begin;
+
+  alter table public.orders add column status text not null default 'pending';
+  alter table public.orders add constraint orders_amount_positive check (amount > 0);
+  create index orders_customer on public.orders (customer_id);
+
+  commit;
+
+  $ sqint --database-root . deploy/add_orders_status.sql
+  BLOCK deploy/add_orders_status.sql:6 [lock/add-constraint] ADD CONSTRAINT CHECK — scans every row under AccessExclusiveLock
+  WARN deploy/add_orders_status.sql:7 [lock/create-index] CREATE INDEX (non-concurrent) — Share lock blocks writes for the duration of the build
+  1 informational or suppressed finding hidden — pass --verbose to show.
+  ```
+
+  The `add column` is fine (a constant default is a catalog-only change since PostgreSQL 11), so it is only reported with `--verbose`. The check constraint reads every row while it holds a lock that blocks all reads and writes, and the index build blocks every write until it finishes.
+
+  sqint has two passes:
+
+  - **The static pass** reads only the SQL. It parses each statement with PostgreSQL's own parser ([libpg_query](https://github.com/pganalyze/libpg_query)), including the bodies of PL/pgSQL functions, so it needs no database and is fast enough for a pre-commit hook.
+  - **The dynamic pass** runs when you give it a database (`--with-postgres`) and the last change already deployed there (`--baseline-change`). It deploys every change after that one in plan order and, before each, runs its statements in a transaction it rolls back while a second connection reads `pg_locks`. It reports the locks actually taken and table rewrites, asks the planner whether a cast really costs an index, and reports SQL functions a change leaves broken. Meant for CI.
+
+  ## Contents
+
+  1. [Install](#install)
+  2. [Running it](#running-it)
+  3. [What it catches](#what-it-catches)
+     1. [Locks held while a table is scanned or rewritten](#locks-held-while-a-table-is-scanned-or-rewritten)
+     2. [Queries that cannot use an index](#queries-that-cannot-use-an-index)
+     3. [Settings lost at COMMIT](#settings-lost-at-commit)
+     4. [Functions broken between changes](#functions-broken-between-changes)
+     5. [Locks observed while deploying](#locks-observed-while-deploying)
+     6. [Unfinished deferred backfills (opt-in)](#unfinished-deferred-backfills-opt-in)
+  4. [Opting out](#opting-out)
+  5. [Severities and exit status](#severities-and-exit-status)
+  6. [Options](#options)
+  7. [Rule reference](#rule-reference)
+  8. [Limits](#limits)
+  9. [Tests](#tests)
+
+  ## Install
+
+  Install it from the flake. CI builds it for x86_64-linux, aarch64-linux and aarch64-darwin and pushes the builds to the `kronor-open` cachix cache, which the flake names, so nix downloads sqint rather than building it once you accept the flake's settings.
+
+  ```bash
+  nix run github:kronor-io/sqint -- --help
+  ```
+
+  ```bash
+  nix profile install github:kronor-io/sqint
+  ```
+
+  Each version tag also publishes an image for amd64 and arm64, with sqitch and psql beside sqint for the dynamic pass:
+
+  ```bash
+  docker run --rm -v "$PWD:/work" ghcr.io/kronor-io/sqint --help
+  ```
+
+  On Linux without nix, each [release](https://github.com/kronor-io/sqint/releases) has a static binary for x86_64 and aarch64, which runs on any distribution. The tarball holds `bin/sqint` and its bash, zsh and fish completions under `share/`, so unpacking it into `~/.local` (or `/usr/local`) installs both:
+
+  ```bash
+  curl -fsSL "https://github.com/kronor-io/sqint/releases/latest/download/sqint-$(uname -m)-linux.tar.xz" | tar -xJ -C ~/.local
+  ```
+
+  The binary is sqint alone: the dynamic pass also needs `sqitch` on `PATH`.
+
+  In a clone, `nix build` puts the binary in `result/bin`, `nix build .#dockerImage` the image, and `scripts/build-static` the release tarball, in `dist-static/`. `nix develop` gives a shell with GHC, cabal, libpg_query, Postgres and sqitch, where `cabal build` and `cabal test` work.
+
+  ## Running it
+
+  Give sqint the deploy scripts to check, usually the ones a branch adds or changes, and the sqitch top directory (the one holding `deploy/`, `database` unless you say otherwise):
+
+  ```bash
+  sqint --database-root db $(git diff --name-only main -- db/deploy)
+  ```
+
+  That is the static pass. For the dynamic pass, deploy the target branch to a scratch database first, then run sqint on the branch under review from the directory holding `sqitch.conf`. sqint runs `sqitch deploy --to-change <change> --verify` for each new change, so give sqitch the same database through the `PG*` variables:
+
+  ```bash
+  git switch main
+  sqitch deploy db:pg://postgres@localhost/scratch
+  baseline=$(awk '!/^[%#@]/ && NF { change = $1 } END { print change }' db/sqitch.plan)
+
+  git switch my-branch
+  PGHOST=localhost PGUSER=postgres PGDATABASE=scratch \
+    sqint --database-root db \
+      --with-postgres "postgres://postgres@localhost/scratch" \
+      --baseline-change "$baseline" \
+      $(git diff --name-only main -- db/deploy)
+  ```
+
+  Every change after the baseline is deployed for real, one at a time, so use a database you can throw away.
+
+  ## What it catches
+
+  Every example below is sqint's own output for the SQL above it.
+
+  ### Locks held while a table is scanned or rewritten
+
+  Most DDL takes a lock on the table. A lock held for a catalog change is released in microseconds; the danger is a lock held while PostgreSQL reads or rewrites every row, because every query that needs a conflicting lock queues behind it, and everything else queues behind those.
+
+  **Adding columns.** A nullable column, or one with a constant default, is a catalog change. A `not null` column without a default makes PostgreSQL check every row, and so does a column whose type is a domain with a `check`:
+
+  ```sql
+  alter table public.orders add column note text;
+  alter table public.orders add column shipped_at timestamptz not null;
+  alter table public.customers add column contact public.email;  -- create domain public.email as text check (…)
+  ```
+
+  ```console
+  INFO db/deploy/add_columns.sql:3 [lock/add-column] ADD COLUMN — quick catalog-only change
+  BLOCK db/deploy/add_columns.sql:4 [lock/add-column] ADD COLUMN ... NOT NULL without DEFAULT — every row must satisfy the constraint immediately
+  BLOCK db/deploy/add_columns.sql:5 [lock/add-column] ADD COLUMN of a CHECK-bearing domain — every existing row is validated under AccessExclusiveLock
+  ```
+
+  sqint finds the domains with a `check` by reading every file under `deploy/`, so a domain created in another change counts.
+
+  **Constraints.** `check` and `foreign key` constraints are validated against every existing row under an `ACCESS EXCLUSIVE` lock, and a `check` added to a domain scans every column of that type:
+
+  ```sql
+  alter table public.orders add constraint orders_amount_positive check (amount > 0);
+  alter table public.orders add constraint orders_customer_fk foreign key (customer_id) references public.customers (id);
+  alter domain public.email add constraint email_lowercase check (value = lower(value));
+  ```
+
+  ```console
+  BLOCK db/deploy/constraints.sql:3 [lock/add-constraint] ADD CONSTRAINT CHECK — scans every row under AccessExclusiveLock
+  BLOCK db/deploy/constraints.sql:4 [lock/add-constraint] ADD CONSTRAINT FOREIGN KEY — scans every row under AccessExclusiveLock
+  BLOCK db/deploy/constraints.sql:6 [lock/alter-domain] ALTER DOMAIN ADD CONSTRAINT — scans every column of every table using the domain
+  ```
+
+  Add the constraint `not valid`, which only applies it to new rows, and validate it afterwards. `validate constraint` takes a `SHARE UPDATE EXCLUSIVE` lock, which lets reads and writes continue while it scans:
+
+  ```sql
+  alter table public.orders add constraint orders_amount_positive check (amount > 0) not valid;
+  alter table public.orders validate constraint orders_amount_positive;
+  ```
+
+  ```console
+  INFO db/deploy/safe.sql:3 [lock/add-constraint] ADD CONSTRAINT CHECK ... NOT VALID — existing rows are not re-checked
+  ```
+
+  **Changing a column's type** rewrites the table and every index on it, unless the old type converts to the new one without any change on disk (`varchar(10)` to `varchar(20)` or `text`, for example):
+
+  ```sql
+  alter table public.orders alter column amount type numeric(12, 2);
+  ```
+
+  ```console
+  BLOCK db/deploy/retype.sql:3 [lock/alter-column-type] ALTER COLUMN TYPE — table rewrite under AccessExclusiveLock unless binary-coercible
+  ```
+
+  The static pass cannot tell which conversions are free; the dynamic pass sees whether the table was rewritten.
+
+  **Indexes.** `create index` blocks writes for as long as the build takes; `drop index` takes an `ACCESS EXCLUSIVE` lock, briefly:
+
+  ```sql
+  create index orders_customer on public.orders (customer_id);
+  drop index public.orders_created;
+  ```
+
+  ```console
+  WARN db/deploy/indexes.sql:3 [lock/create-index] CREATE INDEX (non-concurrent) — Share lock blocks writes for the duration of the build
+  ```
+
+  Build and drop them `concurrently` instead, in a change of their own without `begin`/`commit`, since neither can run inside a transaction. sqint then reports both only with `--verbose`:
+
+  ```console
+  INFO db/deploy/indexes_concurrently.sql:3 [lock/create-index] CREATE INDEX CONCURRENTLY — concurrent with DML
+  INFO db/deploy/indexes_concurrently.sql:4 [lock/drop-index] DROP INDEX CONCURRENTLY — concurrent with DML
+  ```
+
+  ### Queries that cannot use an index
+
+  A column wrapped in a cast or a function call in a `where`, `join … on`, `merge` or `on conflict` predicate is compared as an expression, so a plain index on the column cannot be used and PostgreSQL scans the table instead. sqint looks for this in top-level statements and in the statements of PL/pgSQL function bodies, such as triggers that run on every write:
+
+  ```sql
+  create function public.link_payment() returns trigger language plpgsql as $$
+  begin
+      update public.orders set paid = true where id::text = new.order_reference;
+      return new;
+  end;
+  $$;
+
+  delete from public.sessions where date_trunc('day', created_at) < current_date - 30;
+  ```
+
+  ```console
+  WARN db/deploy/lookup.sql:10 [index/function-on-column] function call on a column may defeat an index
+          A column is wrapped in a function call inside a WHERE/JOIN predicate,
+          so Postgres compares the function result rather than the column and a
+          plain index on the column cannot be used. Rewrite so the bare column
+          is compared (move the function to the other side), or add a matching
+          expression index. Suppress with `-- lint:ignore reason="…"` if the
+          column is unindexed.
+  WARN db/deploy/lookup.sql:5 [index/cast-on-column] cast on a column reference may defeat an index
+          A column is cast to another type inside a WHERE/JOIN predicate, which
+          forces Postgres to treat the column as an expression and prevents
+          normal index lookups on it. If the column has an index, drop the cast
+          (cast the other side of the comparison instead) or add a matching
+          expression index. Suppress with `-- lint:ignore reason="…"` if the
+          column is unindexed.
+  ```
+
+  Write `id = new.order_reference::bigint` and `created_at < current_date - 30` instead. A cast or function in a select list, `returning`, `set` or `having` does not affect how rows are found and is not reported.
+
+  The static pass does not know which columns are indexed, so these are warnings. The dynamic pass asks the planner: it runs `explain` on the statement as written and with the cast removed, and when only the version without the cast uses an index, the warning becomes a `BLOCK`:
+
+  ```console
+  BLOCK deploy/link_payments.sql:9 [index/defeated] Cast on a column forces a sequential scan on orders
+          Postgres EXPLAIN confirms a cast in this statement prevents the planner from using an index on orders. With the column cast removed the planner picks an Index Scan; with the cast in place it falls back to Seq Scan. Cast the other side of the comparison instead, or add an expression index. Suppress with `-- lint:ignore reason="…"` if the cast is intentional.
+  ```
+
+  ### Settings lost at COMMIT
+
+  A procedure that commits between batches loses every `set local` (and `set_config(…, true)`) at the first `commit`, so every batch after the first runs with the server's default:
+
+  ```sql
+  create procedure public.archive_orders() language plpgsql as $$
+  begin
+      set local lock_timeout = '1s';
+      loop
+          delete from public.orders where id in (select id from public.orders where archived limit 1000);
+          exit when not found;
+          commit;
+      end loop;
+  end;
+  $$;
+  ```
+
+  ```console
+  BLOCK db/deploy/batches.sql:5 [txn/set-local-across-commit] transaction-scoped setting in a block that COMMITs
+          `set local lock_timeout = '1s'` is scoped to the current transaction, and this block COMMITs. Only the first iteration runs with it; every one after that falls back to the cluster default (for lock_timeout, 0 -- wait forever). Use session scope instead: set_config(name, value, false).
+  ```
+
+  ### Functions broken between changes
+
+  Sqitch commits each change on its own. When a change drops or renames something a function uses and a later change fixes the function, every call to it fails in between. The dynamic pass checks every SQL function after each deploy:
+
+  ```sql
+  -- deploy/orders.sql, already deployed:
+  create function public.customer_spend(customer bigint) returns numeric
+  language sql stable as $$
+      select sum(amount) from public.orders where customer_id = customer;
+  $$;
+
+  -- deploy/rename_amount.sql, new:
+  alter table public.orders rename column amount to total;
+  ```
+
+  ```console
+  BLOCK ./deploy/rename_amount.sql:3 [function/broken-body] `customer_spend(bigint)` is broken after deploying `rename_amount`
+          Postgres rejects the current definition of `customer_spend(bigint)` once `rename_amount` is deployed: column "amount" does not exist. No later change in this PR fixes it, so it stays broken after the deploy. Sqitch commits each change on its own, so every call to the function fails for as long as it is broken. Redefine the function in the same change that breaks it (for a new column, inside the migration's transaction).
+  ```
+
+  Redefine the function in the same change, inside its transaction. A function already broken before the baseline is not reported.
+
+  ### Locks observed while deploying
+
+  The dynamic pass reports the locks each statement actually took, which covers statements the static pass has no rule for, and whether the table was rewritten. Locks held only for a catalog change are informational:
+
+  ```console
+  INFO ./deploy/rename_amount.sql:5 [lock/observed-access-exclusive] Acquired AccessExclusiveLock on public.orders (catalog-only)
+          SAFE: AccessExclusiveLock held only briefly for a catalog-only change (no scan, no rewrite).
+  INFO ./deploy/link_payments.sql:14 [lock/observed-share-row-exclusive] Acquired ShareRowExclusiveLock on public.payments
+  ```
+
+  A rewrite under `ACCESS EXCLUSIVE`, or a scan under a lock that blocks writes, is reported like its static counterpart. Statements that cannot run inside a transaction, such as `create index concurrently`, cannot be observed and are reported as `deploy/non-transactional`, with the static findings still applying.
+
+  ### Unfinished deferred backfills (opt-in)
+
+  Some projects fill a new column on a large table in batches, outside the migration, and register the backfill in a table. With `--deferred-backfills`, sqint supports that convention: a change registers a backfill with `insert into deferred.migration (name, source_table) values (…)`, and a later change that validates a constraint or sets `not null` on that table must first `call deferred.ensure_finished('<name>', …)`. Otherwise it passes against the empty tables of development and CI, then fails in production on the rows not yet converted.
+
+  ```sql
+  -- deploy/register_backfill.sql
+  alter table public.orders add column region text;
+  insert into deferred.migration (name, source_table)
+  values ('orders_region_backfill', 'public.orders');
+
+  -- deploy/region_not_null.sql
+  alter table public.orders alter column region set not null;
+  ```
+
+  ```console
+  $ sqint --database-root db --deferred-backfills db/deploy/region_not_null.sql
+  BLOCK db/deploy/region_not_null.sql:3 [deferred/unfinished-backfill] constraint depends on a deferred backfill that this change does not finalise
+          A deferred backfill named `orders_region_backfill` is registered for this table. Validating the constraint without first calling deferred.ensure_finished('orders_region_backfill', …) passes in dev and CI, where the table is empty, and in production fails on unconverted rows.
+  ```
+
+  Projects without that convention leave the flag off, and the rule never runs.
+
+  ## Opting out
+
+  **For one statement**, put `-- lint:ignore reason="…"` on the line above it, or at the end of any of its lines:
+
+  ```sql
+  -- lint:ignore reason="orders is empty until launch"
+  alter table public.orders add constraint orders_amount_positive check (amount > 0);
+
+  create index orders_customer on public.orders (customer_id); -- lint:ignore reason="built during the maintenance window"
+
+  -- lint:ignore
+  create index orders_status on public.orders (status);
+  ```
+
+  ```console
+  $ sqint --database-root db --verbose db/deploy/suppressed.sql
+  WARN db/deploy/suppressed.sql:8 [suppression/missing-reason] lint:ignore annotation missing reason="…"
+          Annotation is ignored. Add `reason="why this is safe"` so the suppression is audited.
+  SUPPRESSED db/deploy/suppressed.sql:4 [lock/add-constraint] ADD CONSTRAINT CHECK — scans every row under AccessExclusiveLock
+          reason: orders is empty until launch
+  SUPPRESSED db/deploy/suppressed.sql:6 [lock/create-index] CREATE INDEX (non-concurrent) — Share lock blocks writes for the duration of the build
+          reason: built during the maintenance window
+  WARN db/deploy/suppressed.sql:9 [lock/create-index] CREATE INDEX (non-concurrent) — Share lock blocks writes for the duration of the build
+  ```
+
+  - The annotation silences every finding on that statement, static and dynamic, and nothing else: never the next statement, and never the rest of the file.
+  - The reason is required. Without one the annotation does nothing and is itself reported, so every suppression says why it is safe.
+  - Suppressed findings are hidden by default; `--verbose` lists them with their reasons, and `--format json` marks them `"suppressed": true` with `"suppressedReason"`.
+
+  **For a whole pass or rule:**
+
+  - Without `--with-postgres`, only the static pass runs.
+  - The `deferred/` rule runs only with `--deferred-backfills`.
+  - sqint only reads the files you name, so a file you leave out is not checked (the deploy tree is still read for domains and backfill registrations).
+
+  There is no configuration file and no way to turn off a single rule for a whole run: a finding is either fixed or suppressed, with its reason, next to the statement it is about.
+
+  ## Severities and exit status
+
+  | Severity | Meaning | Shown | Exit status |
+  |---|---|---|---|
+  | `BLOCK` | The statement blocks other sessions, or breaks something, on a table with rows. | Always | 1 |
+  | `WARN` | Likely a problem, but sqint cannot be sure: a cast that may defeat an index, an index build that blocks writes. | Always | 0 |
+  | `INFO` | Safe, or a check sqint could not run. | `--verbose` | 0 |
+
+  A suppressed finding never affects the exit status. `setup/` findings mean sqint could not run a check (SQL it could not parse, a plan it could not read, a baseline not in the plan); they say nothing about the migration, so check that they are not hiding something.
+
+  With `--format json`, sqint prints one array of findings for tools:
+
+  ```json
+  [{"detail":"","endCol":65,"endLine":3,"path":"db/deploy/retype.sql","ruleId":"lock/alter-column-type","severity":"BLOCK","startCol":1,"startLine":3,"suppressed":false,"suppressedReason":null,"title":"ALTER COLUMN TYPE — table rewrite under AccessExclusiveLock unless binary-coercible"}]
+  ```
+
+  ## Options
+
+  | Option | |
+  |---|---|
+  | `FILE...` | Deploy scripts to lint. |
+  | `--database-root DIR` | The sqitch top directory, which holds `deploy/`. Default `database`. |
+  | `--plan-file FILE` | The plan that orders changes for the dynamic pass. Default `DIR/sqitch.plan`. |
+  | `--with-postgres DSN` | A libpq connection string (`postgres://…` or `key=value`) to a database deployed up to the baseline. Turns on the dynamic pass. |
+  | `--baseline-change CHANGE` | The last change of the target branch's plan. Every change after it is new and is deployed in order. |
+  | `--deferred-backfills` | Turn on the `deferred/` rule. |
+  | `--format text\|json` | Text for people, JSON for tools. |
+  | `--verbose` | Also print `INFO` and suppressed findings. |
+
+  ## Rule reference
+
+  | Rule | Pass | Severity | Reports |
+  |---|---|---|---|
+  | `lock/add-column` | static | BLOCK, INFO | A `not null` column without a default, or a column of a domain with a `check`. |
+  | `lock/add-constraint` | static | BLOCK, INFO | A `check` or `foreign key` constraint added without `not valid`. |
+  | `lock/alter-domain` | static | BLOCK, INFO | A `check` added to a domain without `not valid`. |
+  | `lock/alter-column-type` | static | BLOCK | A column type change, which may rewrite the table. |
+  | `lock/create-index` | static | WARN, INFO | An index built without `concurrently`. |
+  | `lock/drop-index` | static | INFO | An index dropped, with or without `concurrently`. |
+  | `lock/observed-<mode>` | dynamic | BLOCK, WARN, INFO | A lock a statement was seen to take, such as `lock/observed-access-exclusive`, and whether it scanned or rewrote the table. |
+  | `index/cast-on-column` | static | WARN | A cast on a column in a predicate. |
+  | `index/function-on-column` | static | WARN | A function call on a column in a predicate. |
+  | `index/defeated` | dynamic | BLOCK | A cast the planner confirms turns an index scan into a sequential scan. |
+  | `txn/set-local-across-commit` | static | BLOCK | A transaction-scoped setting in a PL/pgSQL block that commits. |
+  | `function/broken-body` | dynamic | BLOCK | A SQL function a change leaves failing. |
+  | `deferred/unfinished-backfill` | static, opt-in | BLOCK | A constraint validated, or `not null` set, before a registered backfill on the table is finished. |
+  | `suppression/missing-reason` | static | WARN | A `lint:ignore` without a reason. |
+  | `deploy/non-transactional` | dynamic | INFO | A statement that cannot run in a transaction, so its locks were not observed. |
+  | `deploy/statement-not-observed` | dynamic | INFO | A statement the dynamic pass could not run on its own. |
+  | `deploy/failed` | dynamic | BLOCK | `sqitch deploy` failed on a change; the changes after it are not checked. |
+  | `function/check-skipped` | dynamic | WARN | The broken-function check could not run. |
+  | `index/plan-check-skipped` | dynamic | INFO | A statement the planner check could not plan. |
+  | `setup/unparsable-sql` | static | WARN | A file libpg_query could not parse. |
+  | `setup/unparsable-domain-file` | static | INFO | A deploy file sqint could not read for domains. |
+  | `setup/unparsable-plan` | dynamic | INFO | A `sqitch.plan` sqint could not read. |
+  | `setup/baseline-missing` | dynamic | INFO | A `--baseline-change` that is not in the plan. |
+
+  ## Limits
+
+  - The static pass knows nothing about the database: not which columns are indexed, how big a table is, or which type changes are free. It errs towards reporting; the dynamic pass and `lint:ignore` settle the rest.
+  - Index rules look at the statements of PL/pgSQL bodies but not inside `language sql` bodies, `perform` or dynamic SQL run with `execute`. Only a cast or call directly on the compared column is reported, not one nested deeper in an expression.
+  - libpg_query parses PostgreSQL 18's grammar, so syntax newer than that is reported as `setup/unparsable-sql`.
+  - The dynamic pass deploys with sqitch and checks locks one statement at a time, inside a transaction it rolls back; it says nothing about how long a statement takes on production data.
+
+  ## Tests
+
+  `cabal test` (or `nix flake check`) runs the static rules against SQL written in the tests. The dynamic pass needs a running PostgreSQL and is not covered by them.
+
+  ## Licence
+
+  MIT
+description-type: markdown
+hash: 5bcfa8e91d04e73c8fa1e63afdbb63ee018c95d44e90e65011882e0ecc0ff16c
+homepage: https://github.com/kronor-io/sqint
+latest: 0.1.0.1
+license-name: MIT
+maintainer: lorenzo@kronor.io
+synopsis: Lint sqitch migrations for PostgreSQL lock and rewrite hazards
+test-bench-deps:
+  bytestring: '>=0'
+  containers: '>=0'
+  rio: '>=0'
+  sqint: '>=0'
+  sqitch-plan: ^>=0.1
+  string-interpolate: '>=0'
+  tasty: '>=0'
+  tasty-hunit: '>=0'
+  text: '>=0'
