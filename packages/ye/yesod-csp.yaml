@@ -10,11 +10,14 @@ all-versions:
 - 0.2.7.0
 - 0.2.7.1
 - 0.2.8.0
+- 0.3.0.0
 author: Bob Long
 basic-deps:
   attoparsec: '>=0.14.4 && <0.15'
   base: <5
+  base64-bytestring: '>=1.2.1 && <1.3'
   case-insensitive: '>=1.2.1 && <1.3'
+  entropy: '>=0.4.1.10 && <0.5'
   mime: '>=0.4.0.0 && <0.5'
   mono-traversable: '>=1.0.15 && <1.1'
   network-uri: '>=2.6.4 && <2.7'
@@ -27,6 +30,24 @@ basic-deps:
   yesod-core: '>=1.6.25 && <1.7'
 changelog: |
   # Changelog
+
+  ## Version 0.3.0.0
+
+  + **Breaking:** `BaseUri` now takes a `SourceList` instead of an `EscapedURI`, so `base-uri 'none'` and `base-uri 'self'` can be expressed
+  + Fix directive injection via `report-to`: characters that are not valid in an HTTP token are now dropped from the group name
+  + Restrict nonces to base64 and base64url characters; commas, line breaks and other characters are now dropped
+  + Escape commas in URIs so they can no longer split the header into several policies
+  + Fix directive injection via `plugin-types`: only `type/subtype` is rendered, restricted to valid MIME type characters
+  + Add hash sources, `'unsafe-hashes'` and `'wasm-unsafe-eval'`
+  + Add `upgrade-insecure-requests`, `require-trusted-types-for` and `trusted-types`
+  + Add the remaining sandbox flags, such as `allow-popups` and `allow-modals`
+  + Add `cspPolicyReportOnly` and `cspMiddlewareReportOnly` for `Content-Security-Policy-Report-Only`
+  + Add `cspWarnings`, which lists risky combinations such as `data:` in `script-src`
+  + `escapeAndParseURI` keeps a leading `*.` in the host, so wildcard subdomains such as `https://*.example.com` can be expressed
+  + Add `getCspNonce`, which returns a random nonce per request, and use it in the examples instead of a fixed nonce
+  + Accept the standard quoted keywords `'unsafe-inline'`, `'unsafe-eval'` and `'strict-dynamic'` in the `csp` quasi-quoter
+  + Stop rendering a trailing space for `MetaSource`
+  + Document that `*` and `'none'` drop other sources, that `plugin-types` and `prefetch-src` are obsolete, and that `cspMiddleware` keeps headers set by handlers
 
   ## Version 0.2.8.0
 
@@ -44,23 +65,92 @@ changelog: |
 
   + Fixes compilation failure with ghc-9.0.2 or newer (see https://github.com/bobjflong/yesod-csp/issues/8)
 changelog-type: markdown
-description: Add CSP headers to Yesod apps. This helps reduce exposure to XSS attacks
-  and bad assets.
-description-type: haddock
-hash: 954e8e1eb056152e8fe49df6cff274742e610ec6e5d0d66d15fec20543a6f68e
+description: |
+  # yesod-csp
+
+  The aim of this library is to make it easy to add correct [Content Security Policy](https://content-security-policy.com/) headers to your responses. This reduces the risk of loading bad assets or scripts.
+
+  ## Using the data types
+
+  The following code:
+
+  ```haskell
+  getHomeR :: Handler Html
+  getHomeR = do
+    cspPolicy [ScriptSrc (Self :| []), StyleSrc (Https :| [Self])]
+    defaultLayout [whamlet|hello|]
+  ```
+
+  will ensure that a `Content-Security-Policy: script-src 'self'; style-src https: 'self'` header is set. In this example we only want to load scripts from our own domain, and we only want styles that come from our domain or over https.
+
+  Use `getCspPolicy` to see the header a policy produces, and check that it matches what you need.
+
+  ## Adding a policy to every response
+
+  `cspMiddleware` is a WAI middleware that adds the same policy to every response:
+
+  ```haskell
+  main :: IO ()
+  main = toWaiApp App >>= run 3000 . cspMiddleware [DefaultSrc (Self :| [])]
+  ```
+
+  A header set by a handler with `cspPolicy` is kept as well. The browser then enforces both policies, so a resource must be allowed by each.
+
+  ## Nonces
+
+  A nonce only protects you if it is unpredictable and changes with every response. `getCspNonce` returns a random nonce for the current request, and returns the same value on every call within that request:
+
+  ```haskell
+  getHomeR :: Handler Html
+  getHomeR = do
+    n <- getCspNonce
+    cspPolicy [ScriptSrc (nonce n :| [])]
+    defaultLayout [whamlet|<script nonce=#{n}>alert("hi");|]
+  ```
+
+  ## Template Haskell support
+
+  The `csp` quasi-quoter from `Yesod.Csp.TH` lets you write policies in the familiar CSP syntax instead of building the data types yourself. The policy is parsed at compile time, so a malformed policy is a compile error:
+
+  ```haskell
+  getHomeR :: Handler Html
+  getHomeR = do
+    cspPolicy [csp|img-src 'self' https:; script-src https://foo.com|]
+    ...
+  ```
+
+  You can add URLs and nonces from the surrounding scope with `$`:
+
+  ```haskell
+  getHomeR :: Handler Html
+  getHomeR = do
+    let url = fromJust (escapeAndParseURI "https://cdn.example.com")
+    n <- getCspNonce
+    cspPolicy [csp|img-src 'self' $url; script-src $nonce-n|]
+    ...
+  ```
+
+  ## Examples
+
+  [This module](https://github.com/pSub/yesod-csp/blob/master/src/Yesod/Csp/Example.hs) contains a host of runnable example Yesod handlers which set various CSP headers.
+description-type: markdown
+hash: a02bdda651ead869990183432ec96559d8e79f5942265d99d2c65e7bd7279023
 homepage: ''
-latest: 0.2.8.0
+latest: 0.3.0.0
 license-name: MIT
 maintainer: Pascal Wittmann <mail@pascal-wittmann.de>
 synopsis: Add CSP headers to Yesod apps
 test-bench-deps:
   attoparsec: '>=0'
   base: '>=0'
+  bytestring: '>=0'
   hspec: '>=0'
   mime: '>=0'
   network-uri: '>=0'
   semigroups: '>=0'
   template-haskell: '>=0'
+  text: '>=0'
+  wai-extra: '>=0'
   yesod: '>=0'
   yesod-csp: '>=0'
   yesod-test: '>=0'

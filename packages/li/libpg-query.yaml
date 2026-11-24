@@ -1,0 +1,225 @@
+all-versions:
+- 0.1.0.0
+author: rhizomic, José Lorenzo Rodríguez
+basic-deps:
+  base: '>=4.0 && <5.0'
+  bytestring: '>=0.11 && <1.0'
+  proto-lens: '>=0.7.1.5 && <1.0'
+  proto-lens-runtime: '>=0.7.0.6 && <1.0'
+  text: '>=2.0 && <3.0'
+changelog: |
+  # Changelog
+
+  ## 0.1.0.0 -- 2026-11-24
+
+  * First release on Hackage, as `libpg-query`. This is Kronor's fork of
+    [rhizomic's `pg-query`](https://git.sr.ht/~rhizomic/pg-query) at 0.0.2.0:
+    the same `PgQuery` modules, plus the changes below. `pg-query` on Hackage
+    is upstream's.
+
+  ## 0.0.2.0 -- 2026-05-28
+
+  * Upgraded the bundled libpg_query to `18.0.0` (PostgreSQL 18). The
+    vendored `PgQuery.proto` and the generated `PgQuery.Internal.Proto.*`
+    modules were regenerated to match; the parse-tree AST now follows
+    PostgreSQL 18's grammar.
+  * Added `parsePlpgsql` (and the internal `getPlpgsqlParseResult`) wrapping
+    libpg_query's `pg_query_parse_plpgsql`. Returns the JSON the C library
+    produces; callers parse the JSON themselves since libpg_query does not
+    expose the plpgsql AST via protobuf.
+  * Added `deparseProtobuf` (and the internal `getDeparseResult`) wrapping
+    libpg_query's `pg_query_deparse_protobuf`. Re-serializes a `ParseResult`
+    to SQL — the supported way to mutate an AST and produce a SQL variant
+    of an input query.
+
+  ## 0.0.1.1 -- 2024-11-18
+
+  * Adjusted the Haddocks for `parseSql` as well as the references in
+    `PgQuery.Internal.Proto.PgQuery`.
+
+  ## 0.0.1.0 -- 2024-11-18
+
+  * First version.
+changelog-type: markdown
+description: |
+  # libpg-query
+
+  `libpg-query` offers Haskell bindings for [libpg_query](https://github.com/pganalyze/libpg_query),
+  which makes use of the actual PostgreSQL server source to parse SQL queries and
+  return the internal PostgreSQL parse tree.
+
+  > **Note on this fork.** This repository is a fork of
+  > [rhizomic's `pg-query`](https://git.sr.ht/~rhizomic/pg-query) maintained
+  > by [Kronor](https://kronor.io), published on Hackage as `libpg-query`
+  > (`pg-query` there is upstream's). The modules keep their `PgQuery` names. It tracks upstream `v0.0.1.1` and adds:
+  >
+  > - `parsePlpgsql` (wraps `pg_query_parse_plpgsql`)
+  > - `deparseProtobuf` (wraps `pg_query_deparse_protobuf`)
+  > - `StrictData` default-extension on the library
+  > - Drop of the `proto-lens-protoc` cabal `build-tool` (the generated
+  >   modules are committed; regenerate with `make generate-protobuf`)
+  >
+  > Each of these is on a single, self-contained commit, intended to be
+  > mailed upstream as a patch series. See `CHANGELOG.md` for the running
+  > log of fork changes.
+
+  ## Example
+
+  ```hs
+  {-# LANGUAGE NoImplicitPrelude #-}
+
+  import Data.Either (Either (Left, Right))
+  import GHC.Base (error)
+  import GHC.IO (IO)
+  import PgQuery (parseSql)
+  import System.IO (print)
+
+  main :: IO ()
+  main = do
+    eResult <- parseSql "select u.name, u.address from users u where u.id = $1"
+    case eResult of
+      Left err -> error err
+      Right result -> print result
+  ```
+
+  You should see output that looks like this (formatted for clarity):
+
+  ```
+  { version: 160001
+    stmts {
+      stmt {
+        select_stmt {
+          target_list {
+            res_target {
+              val {
+                column_ref {
+                  fields {
+                    string { sval: "u" }
+                  }
+                  fields {
+                    string { sval: "name" }
+                  }
+                  location: 7
+                }
+              }
+              location: 7
+            }
+          }
+          target_list {
+            res_target {
+              val {
+                column_ref {
+                  fields {
+                    string { sval: "u" }
+                  }
+                  fields {
+                    string { sval: "address" }
+                  }
+                  location: 15
+                }
+              }
+              location: 15
+            }
+          }
+          from_clause {
+            range_var {
+              relname: "users"
+              inh: true
+              relpersistence: "p"
+              alias { aliasname: "u" }
+              location: 30
+            }
+          }
+          where_clause {
+            a_expr {
+              kind: AEXPR_OP
+              name {
+                string { sval: "=" }
+              }
+              lexpr {
+                column_ref {
+                  fields {
+                    string { sval: "u" }
+                  }
+                  fields {
+                    string { sval: "id" }
+                  }
+                  location: 44
+                }
+              }
+              rexpr {
+                param_ref {
+                  number: 1
+                  location: 51
+                }
+              }
+              location: 49
+            }
+          }
+          limit_option: LIMIT_OPTION_DEFAULT
+          op: SETOP_NONE
+        }
+      }
+    }
+  }
+  ```
+
+  Interacting with the parse tree is made possible through the use of
+  [proto-lens](https://github.com/google/proto-lens). Some examples can be seen
+  in `test/PgQuery/`.
+
+  ## Installation
+
+  Install [libpg_query](https://github.com/pganalyze/libpg_query) 18 (the
+  `18.x` releases) first: the generated `PgQuery.Internal.Proto` modules match
+  its protobuf schema, and another major version decodes statements into the
+  wrong nodes. Install `postgres_deparse.h` beside `pg_query.h`, which
+  libpg_query's own `make install` leaves out. `flake.nix` shows both.
+
+  ## Development
+
+  ### Building
+
+  ```
+  make build
+  ```
+
+  ### Testing
+
+  ```
+  make test
+  ```
+
+  ### Regenerating the protobuf modules
+
+  The generated proto-lens modules under `src/PgQuery/Internal/Proto/` are
+  committed in the repository so downstream consumers can build `libpg-query`
+  without `protoc` or `proto-lens-protoc` on their PATH (the package no
+  longer declares `proto-lens-protoc` as a cabal `build-tool`).
+
+  When `PgQuery.proto` changes, regenerate the modules:
+
+  ```
+  make generate-protobuf
+  ```
+
+  This requires `protoc` and `proto-lens-protoc` to be available; the
+  nix dev shell (`nix develop`) provides them.
+description-type: markdown
+hash: 5dd8e449176180e951b4e9bd4a10392ffc7aaabcbbce202b2a518ae680721396
+homepage: https://github.com/kronor-io/pg-query
+latest: 0.1.0.0
+license-name: BSD-3-Clause
+maintainer: lorenzo@kronor.io
+synopsis: 'Parse PostgreSQL DDL and DML: Haskell bindings for libpg_query'
+test-bench-deps:
+  base: '>=4.0 && <5.0'
+  bytestring: '>=0.11 && <1.0'
+  hspec: '>=0'
+  hspec-contrib: '>=0'
+  hspec-expectations-pretty-diff: '>=0'
+  lens: '>=0'
+  libpg-query: '>=0'
+  proto-lens: '>=0.7.1.5 && <1.0'
+  proto-lens-runtime: '>=0.7.0.6 && <1.0'
+  text: '>=2.0 && <3.0'
