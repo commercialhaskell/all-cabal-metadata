@@ -1,0 +1,121 @@
+all-versions:
+- 0.1.0.0
+author: Nadeem Bitar
+basic-deps:
+  async: ^>=2.2
+  base: '>=4.21 && <4.22'
+  bytestring: '>=0.12 && <0.13'
+  containers: '>=0.7 && <0.8'
+  directory: ^>=1.3
+  effectful-core: '>=2.6.1 && <2.7 || >=2.7.1.1 && <2.8'
+  entropy: '>=0.4.1 && <0.5'
+  filepath: ^>=1.5
+  hedis: '>=0.16.4 && <0.17'
+  hs-opentelemetry-api: ^>=1.0
+  shibuya-core: '>=0.13.0.1 && <0.14'
+  shibuya-redis-adapter: '>=0'
+  stm: ^>=2.5
+  streamly-core: ^>=0.3
+  temporary: ^>=1.3
+  text: '>=2.1 && <2.2'
+  unordered-containers: ^>=0.2
+changelog: |
+  # Changelog
+
+  ## Unreleased
+
+  ## 0.1.0.0 — 2027-01-06
+
+  ### New Features
+
+  - Add independent Redis Streams readers with ordered checkpoints and consumer-group workers with fenced recovery.
+  - Support delayed retries and idempotent dead-letter records, including exhausted retries and consumer trace context.
+  - Propagate W3C trace context to Shibuya’s OpenTelemetry consumer spans, with configurable reader and worker correlation policies.
+
+  ### Other Changes
+
+  - Provide optional reader and worker examples. The compatibility matrix covers Redis 7.2.17 and 8.10.1 on GHC 9.12.4.
+  - Include integration guides and a capability catalog in the source distribution.
+changelog-type: markdown
+description: |
+  # Shibuya Redis Streams adapter
+
+  This Haskell library connects Shibuya processors to one Redis Stream per adapter on a single primary.
+
+  | Use case | Constructor | Progress |
+  |---|---|---|
+  | A projection or live subscriber needs its own ordered copy | `newReader` and `readerProcessor` | Completed cursor with optional application-managed checkpoint |
+  | Workers share jobs and recover abandoned assignments | `newGroupWorker` and `groupProcessor` | Redis group position, pending entries and fenced attempt state |
+
+  Both constructors accept a raw binary entry or a typed decoder. They preserve field order and duplicate names. The envelope's stable message ID is an application idempotency key. Commit external effects with that key in durable application storage when they must survive replay.
+
+  See the [adapter guides and reference](docs/user/index.md) for integration details and the [capability catalog](docs/capabilities/index.md) for the behavior and limits of each feature.
+
+  ## Run both examples
+
+  The package builds its library by default. The repository's `cabal.project` and Nix build enable the `examples` flag. Use `-fexamples` when building from the source archive.
+
+  Start the project-local Redis service in one terminal. Stop it with Ctrl-C after the demo.
+
+  ```sh
+  nix develop
+  process-compose -U up -t=false
+  ```
+
+  In another terminal, start from the repository root. Use a fresh stream and checkpoint file.
+
+  ```sh
+  nix develop
+  stream="shibuya-demo-$(date +%s)"
+  checkpoint=".dev/${stream}.cursor"
+  redis-cli -s "$REDIS_SOCKET" XADD "$stream" 1-0 item first
+  cabal run reader-example -- "$REDIS_SOCKET" "$stream" "$checkpoint" 1
+  cabal run worker-example -- "$REDIS_SOCKET" "$stream" thumbnails earliest 1
+
+  redis-cli -s "$REDIS_SOCKET" XADD "$stream" 2-0 item second
+  cabal run reader-example -- "$REDIS_SOCKET" "$stream" "$checkpoint" 1
+  cabal run worker-example -- "$REDIS_SOCKET" "$stream" thumbnails attach 1
+  ```
+
+  Both examples print entry `1-0` on their first invocation and `2-0` on their second, followed by the stable message ID. Each exits after processing the requested number of entries. The reader replaces its checkpoint file atomically and expects a single owner. The worker generates a new consumer name each time it starts. Use `tail` to create a missing group at the current end of its stream.
+
+  ## Integrate with an application
+
+  Use `withRedisRuntime` around processor construction, `runApp`, and the complete shutdown. Each runtime reserves one dedicated read connection alongside an owned or caller-borrowed command pool. Keep the borrowed pool open until finalizers drain.
+
+  Readers can start at `Earliest`, `After checkpoint`, or `Live`. A saved checkpoint takes precedence. Store the completed ID and any producer continuity evidence together under the reader's logical name and source identity. When attaching after a snapshot, pass the snapshot cursor and evidence to `After`, then check the next entry's generation or predecessor with `checkContinuity`. Use `onReaderGap` to stop, request a resnapshot, or accept the discontinuity explicitly.
+
+  Workers use explicit group creation or attachment and unique per-instance consumer names. Call the optional message lease's `leaseExtend` before a long-running handler becomes eligible for recovery. A worker can reclaim its own retried entry after the requested delay. A stale finalizer cannot acknowledge or modify a newer attempt. A stale handler may still finish an external effect, so transactionally deduplicate effects that must apply once.
+
+  On retry exhaustion, either mode writes a `MaxRetriesExceeded` record and advances when a dead-letter hash is configured. Without a hash, the processor stops with the reader checkpoint before the entry or the worker entry still pending.
+
+  The processor helpers set compatible Shibuya policies. Readers use strict serial processing, and workers use unordered processing up to the configured group capacity. A reader cannot supply a batch that waits for several unfinalized entries. Attach each processor to its own runtime. A second attachment fails with `RuntimeAlreadyAttached`. Import adapter constructors and configuration from `Shibuya.Adapter.Redis`. The `Internal` module exposes implementation helpers without a compatibility guarantee.
+
+  For OpenTelemetry correlation, producers can write W3C `traceparent` and optional `tracestate` as stream fields. Readers default to `LinkOnly`, which starts a linked trace for each delivery. Group workers default to `ParentAndLink`, which joins the producer trace and also links to its span. Set the mode configuration’s `telemetry` field to override the policy or use its trace-context extractor to read a custom field convention. Rejections from a traced finalizer retain the consumer span’s W3C context.
+
+  See [compatibility and operations](docs/compatibility.md) for tested versions, Redis permissions and recovery behavior.
+description-type: markdown
+hash: 3a7c8f169c4f9b001af277c85d4921639e1ec0e3dc3796eafc563080b4589d37
+homepage: https://github.com/shinzui/shibuya-redis-adapter
+latest: 0.1.0.0
+license-name: MIT
+maintainer: nadeem@gmail.com
+synopsis: Redis Streams adapter for Shibuya
+test-bench-deps:
+  async: '>=2.2 && <2.3'
+  base: '>=4.21 && <4.22'
+  bytestring: '>=0.12 && <0.13'
+  directory: '>=1.3 && <1.4'
+  effectful-core: '>=2.6.1 && <2.7 || >=2.7.1.1 && <2.8'
+  filepath: '>=1.5 && <1.6'
+  hedis: '>=0.16.4 && <0.17'
+  hs-opentelemetry-api: '>=1.0 && <1.1'
+  hs-opentelemetry-exporter-in-memory: ^>=1.0
+  hs-opentelemetry-sdk: ^>=1.0
+  process: '>=1.6 && <1.7'
+  shibuya-core: '>=0.13.0.1 && <0.14'
+  shibuya-redis-adapter: '>=0'
+  streamly-core: '>=0.3 && <0.4'
+  temporary: '>=1.3 && <1.4'
+  text: '>=2.1 && <2.2'
+  unordered-containers: ^>=0.2
