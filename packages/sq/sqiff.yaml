@@ -1,0 +1,356 @@
+all-versions:
+- 0.1.3.1
+author: José Lorenzo Rodríguez
+basic-deps:
+  Diff: ^>=1.0.2
+  aeson: ^>=2.3.1.0
+  base: '>=4.21 && <5'
+  bytestring: ^>=0.12.2.0
+  containers: ^>=0.7
+  crypton: ^>=1.1.4
+  file-embed: ^>=0.0.16.0
+  filepath: ^>=1.5.5.0
+  hasql: ^>=2.0.1.0
+  hasql-th-kronor: ^>=0.5.1.1
+  opt-env-conf: ^>=0.15.0.2
+  pqi-ffi: ^>=1.0.1.0
+  rio: '>=0.1.25.0 && <0.2'
+  sqiff: '>=0'
+  string-interpolate: '>=1.0.0.0 && <1.1'
+  text: '>=2.1.4 && <2.2'
+  time: ^>=1.14
+  typed-process: ^>=0.2.13.0
+  vector: ^>=0.13.2.0
+  yaml: ^>=0.11.11.2
+changelog: ''
+changelog-type: ''
+description: "# sqiff\n\nsqiff compares PostgreSQL schemas and writes the difference
+  as [sqitch](https://sqitch.org) changes.\n\nIn a sqitch project, a table's deploy
+  file says what the table *was* when it was first created. Every change after that
+  is a migration someone wrote by hand: an `alter table`, a revert for it, the views
+  that have to be dropped and created again around it, an index that has to be built
+  concurrently in its own change. With sqiff you edit the `create table` file instead,
+  as if you were writing the table today, and sqiff writes the migration that gets
+  an existing database there:\n\n```console\n$ git diff deploy/public/table/orders.sql\n-
+  \   amount integer not null,\n+    amount numeric(12,2) not null,\n+    status text
+  not null default 'pending',\n     created_at timestamptz not null default now()\n
+  );\n+\n+create index if not exists orders_customer_email on public.orders (customer_email);\n\n$
+  sqiff table deploy/public/table/orders.sql\n-- public.orders.amount\n--   dropped
+  and created again around it\n--     view public.daily_revenue\n\n-- table column
+  public.orders.amount\n-- hazard: rewrites the table and its indexes\n-- hazard:
+  holds an ACCESS EXCLUSIVE lock, which blocks reads and writes, while it runs\n--
+  hazard: fails when an existing value does not convert to the new type\n-- hazard:
+  recreating a view fails when its query relies on the old type; then edit the view\ndrop
+  view public.daily_revenue;\nalter table public.orders alter column amount type numeric(12,2)
+  using amount::numeric(12,2);\ncreate view public.daily_revenue as\nSELECT (created_at)::date
+  AS day,\n    sum(amount) AS revenue\n   FROM public.orders\n  GROUP BY ((created_at)::date);\n\n--
+  table column public.orders.status\nalter table public.orders add column status text
+  not null default 'pending'::text;\n\n-- index public.orders_customer_email\n-- outside
+  a transaction\n-- hazard: builds an index\ndo $$ ... $$;   -- stops if an earlier
+  concurrent build left an invalid index\nCREATE INDEX CONCURRENTLY orders_customer_email
+  ON public.orders USING btree (customer_email);\n```\n\nAdd `--write` and sqiff adds
+  these as sqitch changes, with their reverts, and reworks the table's change so that
+  the file you edited stays the one that creates the table.\n\nWhat sqiff takes care
+  of:\n\n- **Dependents.** It finds the views, functions, constraints and policies
+  that depend on what changes, drops and recreates them in order, and keeps their
+  comments and grants.\n- **Hazards.** Every step says what it costs: table rewrites,
+  locks, lost data, casts that can fail, `not null` columns on tables with rows.\n-
+  **Safe defaults.** Indexes are built `concurrently`, outside a transaction and in
+  a change of their own. Constraints are validated in their own transaction. Serial
+  columns become identity columns without losing the sequence's value or grants.\n-
+  **Renames.** A dropped column and a new one of the same type might be a rename.
+  sqiff asks you which instead of dropping data.\n- **Reverts.** Each migration gets
+  a revert script that undoes it, view recreation included.\n- **Real catalogs.**
+  sqiff reads both schemas from PostgreSQL itself rather than parsing SQL. Your edit
+  is built in a transaction that is rolled back, so it is never left in the database.\n\nsqiff
+  is one of a set of tools for keeping a PostgreSQL schema in sqitch, with [sqint](https://github.com/kronor-io/sqint),
+  [create-migration](https://github.com/kronor-io/sqitch-with-templates) and [psql-retry](https://github.com/kronor-io/psql-retry).
+  [sqitchcraft](https://kronor-io.github.io/sqitchcraft/) shows how they fit together:
+  the repository layout they assume, one change from an edited file to a deploy, and
+  instructions for coding agents.\n\n## Contents\n\n1. [Install](#install)\n2. [A
+  walkthrough](#a-walkthrough)\n   1. [Look at a database](#1-look-at-a-database)\n
+  \  2. [Compare two databases](#2-compare-two-databases)\n   3. [Get the SQL](#3-get-the-sql)\n
+  \  4. [Write it as sqitch changes](#4-write-it-as-sqitch-changes)\n   5. [Change
+  a table by editing its file](#5-change-a-table-by-editing-its-file)\n   6. [Renames](#6-renames)\n
+  \  7. [When the database and the file disagree](#7-when-the-database-and-the-file-disagree)\n
+  \  8. [Compare with master](#8-compare-with-master)\n3. [Commands](#commands)\n4.
+  [Settings](#settings)\n5. [Tests](#tests)\n\n## Install\n\nInstall it from the flake.
+  CI builds it for x86_64-linux, aarch64-linux and aarch64-darwin and pushes the builds
+  to the `kronor-open` cachix cache, which the flake names, so nix downloads sqiff
+  rather than building it once you accept the flake's settings.\n\n```bash\nnix run
+  github:kronor-io/sqiff -- --help\n```\n\n```bash\nnix profile install github:kronor-io/sqiff\n```\n\nEach
+  version tag also publishes an image for amd64 and arm64, with sqitch, psql and git
+  beside sqiff (but not docker, so `sqiff baseline` is not available in it):\n\n```bash\ndocker
+  run --rm -v \"$PWD:/work\" ghcr.io/kronor-io/sqiff --help\n```\n\nOn Linux without
+  nix, each [release](https://github.com/kronor-io/sqiff/releases) has a static binary
+  for x86_64 and aarch64, which runs on any distribution. The tarball holds `bin/sqiff`
+  and its bash, zsh and fish completions under `share/`, so unpacking it into `~/.local`
+  (or `/usr/local`) installs both:\n\n```bash\ncurl -fsSL \"https://github.com/kronor-io/sqiff/releases/latest/download/sqiff-$(uname
+  -m)-linux.tar.xz\" | tar -xJ -C ~/.local\n```\n\nThe binary is sqiff alone: install
+  sqitch, psql and git (and docker for `--from master`) beside it.\n\nIn a clone,
+  `nix build .#sqiff` puts the binary in `result/bin`, `nix build .#dockerImage` the
+  image, and `scripts/build-static` the release tarball, in `dist-static/`. `nix develop`
+  gives a shell with GHC, cabal, Postgres, sqitch and git, where `cabal build` and
+  `cabal install` work with the dependency versions in `cabal.project.freeze`.\n\nsqiff
+  needs a reachable Postgres, given with `--db` (`--from` and `--to` for `diff`, `plan`
+  and `sqitch`) or with libpq's `PG*` variables. It also runs `git` and `sqitch`,
+  and `docker` for `--from master`.\n\nThe PL/pgSQL body checks need the [plpgsql_check](https://github.com/okbob/plpgsql_check)
+  extension in the database. Without it, sqiff skips them and prints a note on stderr,
+  which is left out of the examples below:\n\n```console\nsqiff: plpgsql_check is
+  not installed; PL/pgSQL body dependencies are left out\n```\n\n## A walkthrough\n\nThe
+  examples use a small shop database. Every output below is what sqiff printed for
+  it.\n\n```sql\ncreate table public.orders (\n    id bigint generated always as identity
+  primary key,\n    customer_email text not null,\n    amount integer not null,\n
+  \   created_at timestamptz not null default now()\n);\n\ncreate view public.daily_revenue
+  as\n    select created_at::date as day, sum(amount) as revenue\n    from public.orders
+  group by 1;\n```\n\n`shop_prod` has this schema. `shop_dev` has it with three changes:
+  `amount` is `numeric(12,2)`, a `status` column is added, and an index is added on
+  `customer_email`.\n\n### 1. Look at a database\n\n`describe` reads one database
+  and counts its objects by kind:\n\n```console\n$ sqiff describe --db \"dbname=shop_dev\"\n1\textension\n1\tindex\n3\tschema\n1\tsequence\n2\ttable\n5\ttable
+  column\n1\ttable constraint\n2\tview\n```\n\nWith `--out`, it writes one file per
+  object, with grants and comments in files of their own. You can commit the folder
+  and review a schema change as an ordinary git diff:\n\n```console\n$ sqiff describe
+  --db \"dbname=shop_dev\" --out schema\n$ find schema -type f | sort\nschema/extension/plpgsql.sql\nschema/index/public/orders_customer_email.sql\nschema/schema/public.comment\nschema/schema/public.privileges\nschema/schema/public.sql\nschema/sequence/public/orders_id_seq.privileges\nschema/.sqiff\nschema/table-column/public/orders/amount.sql\nschema/table-column/public/orders/created_at.sql\nschema/table-column/public/orders/customer_email.sql\nschema/table-column/public/orders/id.sql\nschema/table-column/public/orders/status.sql\nschema/table-constraint/public/orders/orders_pkey.sql\nschema/table/public/orders.privileges\nschema/table/public/orders.sql\nschema/view/public/daily_revenue.privileges\nschema/view/public/daily_revenue.sql\n\n$
+  cat schema/table-column/public/orders/amount.sql\ntype numeric(12,2)\nnot null\n```\n\n`--out`
+  needs an empty or new folder. To refresh a folder that sqiff wrote earlier (the
+  `.sqiff` file marks it), pass `--replace`.\n\n### 2. Compare two databases\n\n`diff`
+  lists what turns `--from` into `--to`. Under each change it lists what depends on
+  the changed object:\n\n```console\n$ sqiff diff --from \"dbname=shop_prod\" --to
+  \"dbname=shop_dev\"\nadded   index public.orders_customer_email\nchanged table column
+  public.orders.amount\n  - type integer\n  + type numeric(12,2)\n  depended on by:\n
+  \   view public.daily_revenue\nadded   table column public.orders.status\n2 added,
+  0 dropped, 1 changed\n```\n\nIt exits with code 1 when the databases differ and
+  0 when they match, so it can fail a CI job when a database has drifted from the
+  schema in git:\n\n```console\n$ sqiff diff --from \"dbname=shop_dev\" --to \"dbname=shop_dev\"\n0
+  added, 0 dropped, 0 changed\n```\n\n### 3. Get the SQL\n\n`plan` prints the migration.
+  Steps are ordered so that each one can run. Above each step, comments name the object
+  and say how the step runs and what it can do to a live system:\n\n```console\n$
+  sqiff plan --from \"dbname=shop_prod\" --to \"dbname=shop_dev\"\n-- table column
+  public.orders.amount\n-- hazard: may rewrite the table\n-- hazard: holds an ACCESS
+  EXCLUSIVE lock, which blocks reads and writes, while it runs\n-- hazard: fails when
+  an existing value does not convert to the new type\n-- hazard: recreating a view
+  fails when its query relies on the old type; then edit the view\ndrop view public.daily_revenue;\nalter
+  table public.orders alter column amount type numeric(12,2) using amount::numeric(12,2);\ncreate
+  view public.daily_revenue as\nSELECT (created_at)::date AS day,\n    sum(amount)
+  AS revenue\n   FROM public.orders\n  GROUP BY ((created_at)::date);\n\n-- table
+  column public.orders.status\nalter table public.orders add column status text not
+  null default 'pending'::text;\n\n-- index public.orders_customer_email\n-- outside
+  a transaction\n-- hazard: builds an index\ndo $$\nbegin\n    if exists (\n        select
+  from pg_index\n        where indexrelid = to_regclass('public.orders_customer_email')
+  and not indisvalid\n    ) then\n        raise exception using message = 'index public.orders_customer_email
+  is invalid from an earlier failed build; drop it first';\n    end if;\nend\n$$;\n\nCREATE
+  INDEX CONCURRENTLY orders_customer_email ON public.orders USING btree (customer_email);\n```\n\nSome
+  things to notice:\n\n- `daily_revenue` reads `amount`, so PostgreSQL would refuse
+  to retype the column under it. sqiff drops the view and creates it again around
+  the `alter`, with its comment.\n- The index is built `CONCURRENTLY`, so writes to
+  `orders` are not blocked while it builds. That cannot run inside a transaction,
+  so it is marked `outside a transaction`. The `do` block stops a rerun from treating
+  an invalid index left by an earlier failed build as done.\n- Other cases have their
+  own recipes. For example, a `serial` column that becomes an identity column keeps
+  the sequence's current value and grants, and a `NOT VALID` constraint that becomes
+  valid is validated in its own transaction. The fixtures in [`test/fixtures`](test/fixtures)
+  show many more: each has `from.sql`, `to.sql` and the `diff` and `plan` sqiff prints
+  for them.\n\n### 4. Write it as sqitch changes\n\n`sqitch` writes the plan into
+  a sqitch project. Run it from the project's root. `--dry-run` lists the changes
+  it would write:\n\n```console\n$ sqiff sqitch --from \"dbname=shop_prod\" --to \"dbname=shop_dev\"
+  --dry-run\nadd\tmigrations/2026/11/2026-11-19-151823-alter-public.orders.amount-status\t2
+  statements\tmigration: alter public.orders.amount-status\nadd\tpublic/table/orders/index/orders_customer_email\t1
+  statements\tadd_index: add index public.orders.orders_customer_email\n```\n\nWithout
+  `--dry-run`, sqiff calls `sqitch add` (or `sqitch rework`) for each change and fills
+  in its deploy and revert scripts. The index gets a change of its own, because it
+  has to run outside a transaction. sqiff checks the whole batch before writing anything,
+  and if a write fails part-way, it leaves the project as it was. The change names
+  come from the `names` patterns in [`sqiff.yaml`](#settings).\n\n### 5. Change a
+  table by editing its file\n\nIn everyday work you usually don't have a second database
+  to compare with. You have the table's deploy file, and you want the table to look
+  different. That is what `sqiff table` is for.\n\nsqiff expects each table to have
+  a deploy file of its own at `deploy/<schema>/table/<name>.sql` (the `names.table`
+  pattern sets this). The file should use `create table if not exists` and `create
+  index if not exists`. When sqiff reworks the change, sqitch runs the new file on
+  databases that already have the table, and there it should do nothing:\n\n```sql\n--
+  deploy/public/table/orders.sql\nBEGIN;\n\ncreate table if not exists public.orders
+  (\n    id bigint generated always as identity primary key,\n    customer_email text
+  not null,\n    amount integer not null,\n    created_at timestamptz not null default
+  now()\n);\n\nCOMMIT;\n```\n\n**Step 1: edit the file.** On a branch, change the
+  file to say what the table should be:\n\n```sql\ncreate table if not exists public.orders
+  (\n    id bigint generated always as identity primary key,\n    customer_email text
+  not null,\n    amount numeric(12,2) not null,\n    status text not null default
+  'pending',\n    created_at timestamptz not null default now()\n);\n\ncreate index
+  if not exists orders_customer_email on public.orders (customer_email);\n```\n\n**Step
+  2: see the migration.** `sqiff table` reads the file as it is on `master` (or `--base
+  REV`). In one transaction that it rolls back, it builds the table from that version
+  and from your edit, compares the two, and prints what it takes to get from one to
+  the other. `--db` (or `PG*`) only needs to be a database with the project deployed.
+  Nothing in it is changed:\n\n```console\n$ sqiff table deploy/public/table/orders.sql\n--
+  public.orders.amount\n--   dropped and created again around it\n--     view public.daily_revenue\n\n--
+  table column public.orders.amount\n-- hazard: rewrites the table and its indexes\n...\n```\n\nThe
+  output starts with what else the edit touches: here, the view that has to be recreated.
+  When a dependent object would break and sqiff cannot recreate it, the output lists
+  it and `--write` refuses, so that you change or drop the dependent first. With plpgsql_check
+  installed, this also covers PL/pgSQL functions whose bodies use the table.\n\n**Step
+  3: write it.** Run the same command with `--write`:\n\n```console\n$ sqiff table
+  deploy/public/table/orders.sql --write\nCreated deploy/migrations/2026/11/2026-11-19-151805-alter-public.orders.amount-status.sql\nCreated
+  revert/migrations/2026/11/2026-11-19-151805-alter-public.orders.amount-status.sql\nCreated
+  verify/migrations/2026/11/2026-11-19-151805-alter-public.orders.amount-status.sql\nAdded
+  \"migrations/2026/11/2026-11-19-151805-alter-public.orders.amount-status\" to ./sqitch.plan\nCreated
+  deploy/public/table/orders/index/orders_customer_email.sql\n...\nTagged \"public/table/orders/index/orders_customer_email\"
+  with @2026-11-19_sqiff in ./sqitch.plan\nAdded \"public/table/orders [public/table/orders@2026-11-19_sqiff]\"
+  to ./sqitch.plan.\n...\nadded migrations/2026/11/2026-11-19-151805-alter-public.orders.amount-status\nadded
+  public/table/orders/index/orders_customer_email\nreworked public/table/orders\n```\n\nThe
+  plan now ends with:\n\n```text\nmigrations/2026/11/2026-11-19-151805-alter-public.orders.amount-status
+  \  # migration: alter public.orders.amount-status\npublic/table/orders/index/orders_customer_email
+  \                        # add_index: add index public.orders.orders_customer_email\n@2026-11-19_sqiff
+  \                                                      # sqiff: before the changes
+  it writes\npublic/table/orders [public/table/orders@2026-11-19_sqiff]              #
+  sqiff: public/table/orders as edited\n```\n\n- **The migration** alters existing
+  databases. Its revert drops `status`, changes `amount` back to `integer` and recreates
+  the view around that change too.\n- **The index change** builds the index concurrently.\n-
+  **The rework of `public/table/orders`** keeps your edited file as the one that creates
+  the table. On a new database it creates the table as it is now. On an existing one,
+  `if not exists` makes it do nothing, because the migrations before it have already
+  done the work.\n\n**Step 4: deploy as usual.**\n\n```console\n$ sqitch deploy\nDeploying
+  changes to db:pg:shop\n  + migrations/2026/11/2026-11-19-151805-alter-public.orders.amount-status
+  .. ok\n  + public/table/orders/index/orders_customer_email @2026-11-19_sqiff .......
+  ok\n  + public/table/orders .....................................................
+  NOTICE:  relation \"orders\" already exists, skipping\nNOTICE:  relation \"orders_customer_email\"
+  already exists, skipping\nok\n```\n\nThe two notices are the `if not exists` guards
+  at work: the migrations before the rework have already brought the table up to date.\n\n`sqitch
+  revert` takes the table back to `integer` without `status`.\n\nIf you edit the file
+  again on the same branch, run `sqiff table` again. It treats the changes the branch
+  already added for this table as done, and moves the rework after the new migration.\n\n###
+  6. Renames\n\nFrom the file alone, a renamed column looks the same as a dropped
+  column and a new column of the same type. sqiff says so, and without your answer
+  it does not write anything that drops data:\n\n```console\n$ sqiff table deploy/public/table/orders.sql
+  \     # customer_email renamed to email\n-- customer_email is dropped and email
+  added with the same type; pass --rename customer_email:email if it is a rename,
+  or --drop-and-add if it is not\n\n-- table column public.orders.customer_email\n--
+  hazard: deletes data\nalter table public.orders drop column customer_email;\n...\n\n$
+  sqiff table deploy/public/table/orders.sql --write\nsqiff: a column is dropped and
+  another added with the same type; say whether it is a rename with --rename or --drop-and-add\n\n$
+  sqiff table deploy/public/table/orders.sql --rename customer_email:email\n-- table
+  column public.orders.email\n-- hazard: breaks running code that still uses the old
+  name\nalter table public.orders rename column customer_email to email;\n```\n\nRepeat
+  `--rename OLD:NEW` for each renamed column. `rename-hint` in `sqiff.yaml` adds your
+  team's advice to the rename warning, for example how to rename in two deploys.\n\n###
+  7. When the database and the file disagree\n\nSometimes a database has drifted from
+  the file: someone added a column by hand, or a migration was never folded back into
+  the file. There are two ways to deal with it.\n\n**Compare with the live table**
+  instead of the file on `master`. sqiff then also shows what is in the database but
+  not in the file. It leaves those things alone unless you pass `--allow-drops`:\n\n```console\n$
+  psql -c \"alter table public.orders add column note text\"\n$ sqiff table deploy/public/table/orders.sql
+  --against-database\n-- left alone: table column public.orders.note: in the database
+  but not in the file; --allow-drops drops it\n-- the file matches the table\n```\n\n**Rewrite
+  the file from the table**, so that the file says what the database already has:\n\n```console\n$
+  sqiff table deploy/public/table/orders.sql --rewrite-file\n-- Deploy shop:public/table/orders
+  to pg\n\nBEGIN;\n\ncreate table if not exists public.orders (\n    id bigint generated
+  always as identity primary key,\n    customer_email text not null,\n    amount integer
+  not null,\n    created_at timestamptz not null default now(),\n    note text\n);\n\nCOMMIT;\n```\n\nThe
+  rewrite keeps the file's text wherever it already matches the table, and changes
+  only what differs. With `--write`, sqiff writes the file and reworks the change.
+  `--live-from CONNINFO` reads the table, read-only, from another database, such as
+  a production replica. sqiff refuses if that database has not yet deployed planned
+  changes that touch the table, because the rewrite would undo them.\n\n### 8. Compare
+  with master\n\n`diff`, `plan` and `sqitch` can build the `--from` side themselves.
+  `--from master`, or `--from rev:REV`, checks out that revision and deploys its sqitch
+  plan into a scratch Postgres started with Docker Compose. sqiff then compares that
+  database with `--to`:\n\n```bash\nsqiff diff --from master --to \"dbname=app_dev\"\n```\n\nThat
+  answers \"what does my dev database have that master's plan does not?\". sqiff keeps
+  the scratch database and updates it on later runs. Each repository gets its own,
+  shared by its worktrees and jj workspaces, under `~/.cache/sqiff`. The `baseline`
+  section of [`sqiff.yaml`](#settings) says how to start it.\n\n## Commands\n\nRun
+  every command from the root of the sqitch project, where `sqitch.conf` and `sqiff.yaml`
+  are. `table` and `sqitch` also take `--project DIR`.\n\n| Command | What it does
+  |\n| --- | --- |\n| `sqiff describe [--db C] [--out DIR [--replace]]` | Count one
+  database's objects, or write one file per object. |\n| `sqiff diff --from C\\|master\\|rev:REV
+  [--to C]` | List what differs and what depends on it. Exits 1 when something differs.
+  |\n| `sqiff plan --from … [--to C]` | Print the SQL that turns `--from` into `--to`.
+  |\n| `sqiff sqitch --from … [--to C] [--dry-run] [--tag NAME]` | Write that SQL
+  as sqitch changes. |\n| `sqiff table FILE [--db C]` | Print the migration for an
+  edited table deploy file. |\n| `sqiff table FILE --write` | Add that migration with
+  sqitch and rework the table's change. |\n| `sqiff table FILE --rename OLD:NEW` /
+  `--drop-and-add` | Say whether a dropped and added column is a rename. |\n| `sqiff
+  table FILE --against-database [--allow-drops]` | Compare with the live table instead
+  of the file at `--base`. |\n| `sqiff table FILE --rewrite-file [--live-from C] [--write]`
+  | Rewrite the file to create the table as the database has it. |\n\n`diff`, `plan`,
+  `sqitch` and `describe` also take `--exclude-schema SCHEMA` (repeatable), `--include-partitions`
+  and `--no-body-check`. `sqiff COMMAND --help` lists every option.\n\nExit codes:
+  0 when the command succeeds, 1 when `diff` finds differences (or `--rewrite-file`
+  leaves some), and 2 when there is an error, with a one-line `sqiff: …` message on
+  stderr.\n\n## Settings\n\n**Databases.** `--db`, `--from` and `--to` take a libpq
+  connection string. When `--db` or `--to` is left out, libpq's environment names
+  the database: `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, or `PGSERVICE` with a
+  service file.\n\n**sqitch layout.** The top directory and plan file come from `sqitch
+  config` (`core.top_dir`, `core.plan_file`); `--top-dir` and `--plan-file` override
+  them.\n\n**`sqiff.yaml`**, next to `sqitch.conf`, holds the rest. Every key is optional;
+  an unknown key is an error.\n\n```yaml\nexclude-schemas: [audit]             # left
+  out of every comparison\nrename-hint: \"...\"                   # added to the warning
+  on a column rename\ntemplates: sqitch/templates          # sqitch templates for
+  new changes: add_column, add_index, validate_constraint, migration\n\nnames:                               #
+  change names; the defaults are shown\n  table: \"{schema}/table/{name}\"\n  function:
+  \"{schema}/function/{name}\"\n  view: \"{schema}/view/{name}\"\n  trigger: \"{schema}/trigger/{table}/{name}\"\n
+  \ index: \"{schema}/table/{table}/index/{name}\"\n  type: \"{schema}/type/{name}\"\n
+  \ migration: \"migrations/{stamp}-{slug}\"\n  migration-stamp: \"%Y/%m/%Y-%m-%d-%H%M%S\"\n\nbaseline:
+  \                           # the scratch database --from master builds\n  compose-file:
+  docker-compose.yaml  # read from the revision's checkout\n  service: postgres\n
+  \ port-variable: PG_PORT             # the compose file's variable for the published
+  port\n  port: 0                            # 0 lets Docker pick a free port\n  container-port:
+  5432\n  environment: {}                    # more variables for docker compose\n
+  \ user: postgres\n  database: postgres\n  password-variable: PG_PASSWORD     # or
+  password: ...; left out, trust auth, PGPASSWORD or ~/.pgpass\n  sqitch: host                       #
+  host, or service to run sqitch inside the service\n  deploy:                            #
+  sqitch calls that deploy the revision\n    - sqitch: [deploy]\n      if-exists:
+  sqitch.plan         # skip the call when this path is missing\n  status: [status]
+  \                  # the sqitch call that finds changes the plan no longer has\n```\n\nIn
+  `deploy` and `status` arguments, `{host}`, `{port}`, `{user}` and `{database}` are
+  where that sqitch reaches the baseline: the port Docker published when sqitch runs
+  on the host, `container-port` when it runs in the service. sqitch reads `PGHOST`
+  and `PGPORT` only for what a target's URI leaves out, so a target with a fixed URI
+  needs one, for example:\n\n```yaml\n  deploy:\n    - sqitch: [deploy, \"db:pg://{user}@{host}:{port}/{database}\"]\n
+  \ status: [status, \"db:pg://{user}@{host}:{port}/{database}\"]\n```\n\nThe password
+  reaches sqitch as `PGPASSWORD` and sqiff's own connections in the connection string;
+  it is never put in sqitch's arguments.\n\nWith `templates`, `--write` adds a change
+  that adds a column, adds an index or validates a constraint from the matching template,
+  passing `schema`, `table_name` and `column_name`, `index_name` or `constraint_name`;
+  other new migrations use `migration`. In `add_column`, sqiff puts the column's type
+  and options where `__your_type_here__ null` is, and it expects `add_index` to name
+  the index `idx_<table_name>_<index_name>`. create-migration's templates already
+  fit, so `templates` can point at them. Without `templates`, `--write` uses sqitch's
+  own templates and writes the scripts itself.\n\n## Tests\n\n```bash\ncabal test\n```\n\nThe
+  unit tests are pure. The integration tests start a throwaway PostgreSQL cluster
+  (`initdb` from `PATH`, or the directory in `SQIFF_TEST_PG_BIN`), and for each directory
+  under `test/fixtures` they build `from.sql` and `to.sql` and compare `sqiff diff`
+  and `sqiff plan` with the golden files. They then apply the plan to `from` and expect
+  `diff` to find nothing left, and do the same through `sqitch deploy`, verify and
+  revert (`sqitch` from `PATH`, or the directory in `SQIFF_TEST_SQITCH_BIN`). A `known-bug`
+  file marks a fixture that fails today, and a `revert-gap` file one whose changes
+  PostgreSQL cannot fully revert; each says why. Refresh golden files with `cabal
+  test --test-options=--accept`.\n"
+description-type: markdown
+hash: b581340795f703fda54f7db59543c86347df89ffd8cfff8835282d55c57f72ab
+homepage: https://github.com/kronor-io/sqiff
+latest: 0.1.3.1
+license-name: MIT
+maintainer: lorenzo@kronor.io
+synopsis: Describe and diff PostgreSQL schemas from their catalogs
+test-bench-deps:
+  aeson: '>=0'
+  base: '>=0'
+  bytestring: '>=0'
+  containers: '>=0'
+  directory: '>=0'
+  filepath: '>=0'
+  hasql: '>=0'
+  hasql-th-kronor: '>=0'
+  hedgehog: '>=0'
+  rio: '>=0'
+  sqiff: '>=0'
+  string-interpolate: '>=0'
+  tasty: '>=0'
+  tasty-expected-failure: '>=0'
+  tasty-golden: '>=0'
+  tasty-hedgehog: '>=0'
+  tasty-hunit: '>=0'
+  temporary: '>=0'
+  text: '>=0'
+  time: '>=0'
+  typed-process: '>=0'
