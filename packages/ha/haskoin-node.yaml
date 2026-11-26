@@ -90,6 +90,7 @@ all-versions:
 - 2.5.1
 - 2.6.0
 - 2.6.1
+- 2.7.0
 author: JP Rupp
 basic-deps:
   async: '>=2.2 && <2.3'
@@ -99,8 +100,8 @@ basic-deps:
   conduit: '>=1.3 && <1.4'
   conduit-extra: '>=1.3 && <1.4'
   containers: '>=0.6 && <0.8'
-  fast-logger: '>=3.2 && <3.3'
-  haskoin-core: '>=2.0.1 && <2.1'
+  fast-logger: '>=3.2 && <3.4'
+  haskoin-core: '>=3.0 && <3.1'
   network: '>=3.1 && <3.3'
   nqe: '>=0.7.0 && <0.8'
   random: '>=1.2 && <1.4'
@@ -118,6 +119,206 @@ changelog: |
 
   The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
   and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+
+  ## [Unreleased]
+
+  ## [2.7.0] - 2026-11-25
+
+  Peers on Unix sockets, a model of the node at the other end of each
+  connection, and haskoin-core 3.0, for haskoin-store 2.0.0.
+
+  Configured peers are kept. This breaks code that builds an `OnlinePeer`
+  or a `Limits` by hand: `OnlinePeer` has a new field, and `maxLife` of
+  `Limits` is a `Maybe`.
+
+  ### Added
+  - **A model of each peer's node.** Every connection runs the state machine
+    of haskoin-core's `Haskoin.Network.Protocol` for its network: Bitcoin
+    Core 32.1 or Bitcoin Cash Node 29.2.0, translated from their source, with
+    this node as the peer (`Haskoin.Node.Peer.Remote`). `sendMessage`
+    judges every message as it queues it, so that the model sees the messages
+    in the order in which they go out. One that the node would punish
+    (ban score, discouragement, a ban, or a disconnection for a rule of the
+    protocol) is not sent, and the log says why, with the upstream line. A
+    request in `getData`, `getBlocks` or `getTxs` that the node would drop
+    without an answer gives `Nothing` at once rather than wait for the
+    timeout. `judgeMessage` asks without sending. The model takes the options
+    of the node from its version message (Bloom filters, pruning, blocks-only)
+    and plays the messages sent before it again with them. It takes the node
+    to have every block it is asked for, and leaves to happen what depends on
+    the guessed state of the node, such as its upload limit.
+  - `permissions` in `NodeConfig` and `PeerMgrConfig`: the permissions that
+    the nodes of `peers` grant this node with `-whitelist` or `-whitebind`,
+    such as `PermMempool`. Nothing in the protocol tells a peer, so the
+    operator says it. Discovered peers grant none. `Permission` and
+    `Permissions` are re-exported from `Haskoin.Node`.
+  - `expectsReject`: whether the node of a network answers a transaction that
+    it refuses with a `reject` message (BIP 61), as Bitcoin Cash Node does and
+    Bitcoin Core never does, asked of the model.
+  - `newPeer` builds a `Peer` handle with a free lock, no pending messages and
+    the model of its configuration.
+  - `seenAs` in `Haskoin.Node.Address`: the address network of a peer and
+    whether the node sees this node at a local address, for its model.
+  - Tests: the model's rules for the mempool request, the handshake order,
+    filtered blocks and the replay after the version. In regtest, against
+    both nodes: the messages that the node sends up to its verack are the
+    ones that the model predicts, a mempool request goes only where the node
+    takes it, and a node that whitelists the store with `mempool` answers it.
+  - **Peers on Unix sockets.** A configured peer can be a Unix socket, written
+    `unix:PATH` as Bitcoin Core writes the socket of a proxy, and
+    `withConnection` opens it. Neither Bitcoin Core nor Bitcoin Cash Node
+    listens on one, so something joins the socket to a node, such as socat or
+    the bridge of a test in a container: tests that run at once then reach
+    their nodes without taking a port of the machine. Such a peer is in the
+    local network group, and the version message gives it the zero address,
+    with the new `peerHostAddress`: haskoin-core's `sockToHostAddress` stops
+    the program on an address that is not IPv4 or IPv6. A peer or a DNS seed
+    can never give a Unix address.
+  - `chainHasHeaders`: whether a peer is connected and headers are awaited
+    from none. Unlike `chainIsSynced` it does not ask that the best block be
+    recent, and it is not kept once true: it tells a node that is still
+    taking headers from one that has them, on a network where no block was
+    found for hours too.
+  - `configured` in `OnlinePeer`: whether the peer is one of the
+    configuration.
+
+  ### Fixed
+  - **A peer is announced before its messages.** A peer's messages come from
+    its reader and its announcement from the peer manager, through one queue
+    with no order between them. Messages sent right behind the handshake could
+    reach the chain and the application before `PeerConnected`, and the chain
+    dropped the headers of a peer it did not know yet. The router now runs a
+    pure machine (`Haskoin.Node.Router`) that holds such messages until the
+    announcement comes through the queue: for each peer, `PeerConnected` comes
+    before any message past the handshake, and `PeerDisconnected` after all
+    of them.
+  - **A disconnection always ends.** `killPeer` queued `KillPeer` behind the
+    messages to send, and a writer blocked on a peer that stopped reading
+    never took it: the connection kept its slot and network group forever,
+    and `PeerDisconnected` never came. The process now races its connection
+    against a `closing` flag that `killPeer` sets, and the peer manager
+    cancels the thread of a process that is still there a timeout after it
+    was told to disconnect (the new `Abort` action of
+    `Haskoin.Node.PeerMgr.Lifecycle`). `killPeer` no longer sends the
+    messages queued before it.
+  - **Requests end when their peer goes.** `getData`, `getBlocks`, `getTxs`
+    and `pingPeer` give `Nothing` or `False` at once when `PeerDisconnected`
+    comes for their peer, or when the peer is closing as they start, rather
+    than wait for the timeout.
+  - **Requests on one peer no longer disturb each other.** Two at once took
+    each other's blocks and failed as out of order, and so did a request after
+    one that timed out, from its late answers. Requests now run one at a time
+    per peer, the timeout counting the wait, and a request first ignores what
+    the peer sends until the pong of the request before it, if that is still
+    owed.
+  - **The model of a peer never sees time go back.** Two threads sending at
+    once read the clock before their transactions and could commit in the
+    other order. The model keeps the latest time it has seen, and judges with
+    the later of that and the time of the facts (`remoteClock`).
+
+  ### Changed
+  - **fast-logger 3.3 is accepted** (`>= 3.2 && < 3.4`, where it was
+    `< 3.3`), which Stackage asked for
+    ([stackage#8183](https://github.com/commercialhaskell/stackage/issues/8183)).
+    No code changes. Tested: the whole suite passes with fast-logger 3.3.0,
+    against both nodes too. `stack.yaml` still builds with 3.2.9, the
+    version of its snapshot.
+  - **Every concurrent protocol is a pure machine.** The new
+    [docs/concurrency.md](docs/concurrency.md) says, for every thread, what it
+    owns, the machine that decides what it does, and why no two threads can
+    race. The README links it.
+  - `Stage`: `Disconnecting` holds when the disconnection began, as
+    `Disconnecting reason time`. `PeerInput`: `GotHandshake` and `Refused`
+    take the time first. `PeerAction` has `Abort`.
+  - `Haskoin.Node.Peer.Request`: `stepRequest` takes a `RequestInput`
+    (`Received` a message, or `Disconnected`), and `newRequest` takes first
+    the nonce of the ping that the request before it is still owed, if any.
+    A notfound or block for an item not asked for is ignored, as before; the
+    rule is now written down.
+  - `Peer` has three new fields, `closing`, `requestLock` and `owed`.
+    `wrapPeer` is gone: `newPeer` is the one way to build a `Peer`.
+  - `peerMessageDone` documents its invariant: once for each message, by one
+    consumer. The router disposes of every message exactly once.
+  - Tests: QuickCheck properties of the router over arbitrary interleavings of
+    three peers, of the abort of a disconnection, of requests after an owed
+    pong and of the model's clock; a peer process that stops while its writer
+    is blocked; requests that end when their peer goes; overlapping requests
+    and the late answers of a request that timed out; and a node that
+    publishes a peer before the burst it sends right behind its handshake.
+  - `PeerConfig` has two new fields, `bestBlock` and `remote` (the model when
+    the connection opens). `Peer` has two, `remote` and `facts`. Build a
+    `Peer` with `newPeer`.
+    `PeerMessage` has a new constructor, `NotSent`, for a message that the
+    model refused, which the peer process logs.
+  - **Tests of an honest peer run against real nodes.** What the mock peers
+    of the unit tests did as an honest node would, the regtest tests now
+    check against Bitcoin Core and Bitcoin Cash Node in Podman: a block as the
+    node keeps it, with its witness; a block of more than 2 MiB on Bitcoin
+    Cash; a peer that hangs (a node stopped with `SIGSTOP`), whose blocks and
+    pings give nothing and which is dropped; a peer kept past its longest
+    life; the pings of the node; a pruned node, refused; the wait before
+    trying a failed peer again; the minimum chain work; the parents of a
+    block; and no more requests for headers once the node has them all. The
+    mock versions are gone. Peers that break the rules stay scripted in
+    memory, since no real node does, and every peer of a test is named by a
+    Unix socket, not by an address and a port. Each node has two groups of
+    regtest tests, its chain and its one peer, which run at the same time.
+  - Needs haskoin-core 3.0, for its protocol machines. 3.0 also reads the
+    token prefix of Bitcoin Cash outputs (CashTokens) and adds a field to
+    `Network`, which change nothing here: haskoin-node passes outputs on as
+    they are, and builds no `Network` of its own.
+  - CI runs through the workflow that the Haskell packages of jprupp share in
+    [jprupp/tools](https://github.com/jprupp/tools), with the check of
+    `stack.yaml` for local paths (`check-stack-paths`) and the cache of the
+    Nix build kept per release of nixpkgs.
+  - `scripts/check-local-deps.sh` is gone: `check-stack-paths`, from
+    jprupp/tools, replaces it.
+  - `haskell-dev`, from jprupp/tools, is the fast loop of work on the code:
+    `build`, `test` and `docs`, without optimisation and with the unit tests
+    in several processes. What it needs to know about this package, the slow
+    spec modules, is in the new `haskell-dev.toml`.
+  - `.gitignore` ignores `TAGS` and `dist-newstyle/` again, which ran
+    together on one line, and the documentation's work folder.
+  - The regtest tests run their containers through
+    [podman-test](https://github.com/jprupp/podman-test), in place of the code
+    of their own in `Regtest.Podman`: each container is in a pod with no
+    network, the peer-to-peer port of each of its nodes is bridged to a Unix
+    socket, and the node under test reaches the nodes as the peers
+    `unix:PATH`. Inside the container the ports are fixed, where they were
+    random. `PODMAN_TEST_SKIP` skips the tests, as `HASKOIN_NODE_SKIP_REGTEST`
+    still does, and the Containerfile makes its script executable as it
+    copies it, since podman-test writes the files of the context without
+    their modes.
+  - The regtest tests are in the `spec` suite (`Haskoin.Node.RegtestSpec`),
+    so that `stack test` and `haskell-dev test` run every test; the `regtest`
+    suite is gone. They are still skipped without Podman or with
+    `HASKOIN_NODE_SKIP_REGTEST` set, and CI still runs them in a job of their
+    own. The container of the nodes may use 2 GiB of memory.
+  - **The peers of the configuration are sticky.** They are the peers that
+    the operator trusts, and the only reason for one to have no connection
+    is now that it takes none.
+    - **Never rotated.** `maxPeerLife` no longer applies to a configured
+      peer. Rotation defends against peers that nobody chose. `maxLife` of
+      `Limits` is `Nothing` for such a connection.
+    - **Tried again within ten seconds, for ever.** A configured address
+      that failed waited twice as long each time, up to ten minutes, and
+      ten minutes after its peer broke the protocol. It now waits ten
+      seconds at most, whatever ended the last connection
+      (`configuredBackoff`). A node of the operator that restarts is a peer
+      again within seconds.
+    - **Its slot is kept.** While a configured peer had no connection, seed
+      and gossiped addresses filled every slot, and the peer found none
+      when it came back, until one of them left. A slot is now kept for
+      each configured peer that has no connection, and no other address
+      takes it (`roomForOthers`). One name is one peer, whatever it
+      resolves to.
+    - Tested: the two rules of the address book, as examples and with a
+      property; that a connection without a longest life is not dropped
+      for its age; and, against Bitcoin Core and Bitcoin Cash Node, that a
+      configured peer stays past `maxPeerLife`, where the same test said
+      before that it was dropped. Not tested end to end: a store with
+      discovery whose configured peer is away, which needs a network of
+      strangers.
 
   ## [2.6.1] - 2026-11-18
 
@@ -1109,6 +1310,18 @@ description: |
     written down as a pure state machine. A message that does not fit the current
     state is refused instead of handled by accident, and every rule is tested
     without a network.
+  - **Races ruled out by construction.** Every concurrent protocol, from the
+    threads of one connection to the routing of events, is a pure state
+    machine; the threads only carry out what it decides. Each piece of state has
+    one owner, or changes in one STM transaction per decision, or keeps its
+    order through a single queue. [docs/concurrency.md](docs/concurrency.md)
+    says which, protocol by protocol.
+  - **The rules of the other node, not guesses.** Bitcoin Core and Bitcoin
+    Cash Node decide what a peer may send, and much of it is in no BIP. Every
+    message to a peer is first judged by a model of the node at the other end,
+    the state machines that haskoin-core translates from the source of both
+    nodes. A message that the node would punish is not sent, and the log cites
+    the upstream line of the rule. See [What a peer allows](#what-a-peer-allows).
   - **Plain `IO`.** Every function runs in `IO`, with no monad transformers and
     no `MonadIO` or `MonadUnliftIO` constraints. Types say exactly what runs, GHC
     has nothing to specialise, and long-running loops cannot leak through an
@@ -1126,10 +1339,11 @@ description: |
   | --------------- | ---------------------------------------------------------------------------------------------- |
   | Networks        | Every network of haskoin-core: Bitcoin and Bitcoin Cash mainnet, testnets and regtest           |
   | Peer discovery  | DNS seeds and addresses relayed by peers, or a static list of peers                             |
-  | Peer management | Version handshake, ping-based latency, peers sorted by median ping, rotation after a maximum age, retry backoff and bans for bad addresses, random choice among learned addresses with one connection per network group |
+  | Peer management | Version handshake, ping-based latency, peers sorted by median ping, rotation after a maximum age, retry backoff and bans for bad addresses, random choice among learned addresses with one connection per network group; configured peers kept: never rotated, tried again within ten seconds for ever, with a slot kept for each while it is away |
   | Header sync     | Headers downloaded from one peer at a time, with a deadline per turn, connected to the chain with the most work, stored in RocksDB; new blocks followed whether peers announce them with headers or inventory, announcing peers asked at once, and peers polled after a quiet period |
   | Events          | Best header changes, sync completion, peer connections and every message received              |
   | Data requests   | Fetch blocks and transactions from a peer, with a timeout; every block checked against its header's Merkle root and witness commitment |
+  | Protocol model  | Every outgoing message judged by a model of the node at the other end (Bitcoin Core 32.1 or Bitcoin Cash Node 29.2.0, from haskoin-core): what the node would punish is not sent, and a request it would drop fails at once |
   | Protection      | Strict parsing, per-command size limits, linear-time reads, back-pressure, bounded address pool, explicit handshake states, connect timeout |
 
   ### What is not included
@@ -1269,7 +1483,8 @@ description: |
                       timeout = 120,
                       maxPeerLife = 48 * 3600,
                       connect = withConnection,
-                      logger = logger
+                      logger = logger,
+                      permissions = mempty
                     }
             withNode cfg $ \_node -> forever $
               receive events >>= \case
@@ -1385,9 +1600,12 @@ description: |
   | `Haskoin.Node.Chain.Sync`        | Which peer to ask for headers, and when headers count as synced |
   | `Haskoin.Node.Peer.Request`      | Receiving requested blocks and transactions                    |
   | `Haskoin.Node.Peer.Lock`         | Who may hold a peer for a long conversation                    |
+  | `Haskoin.Node.Router`            | The order of each peer's events: announced before its messages |
 
   The processes store the state and carry out what a transition says. Time is an
   input to the transitions, so every timing rule is tested without waiting.
+  [docs/concurrency.md](docs/concurrency.md) has, for every thread, what it owns
+  and why no two threads get in each other's way.
 
   `Haskoin.Node.Block` is a pure check of another kind: whether the
   transactions of a block are the ones its header commits to. Every block a peer
@@ -1409,7 +1627,10 @@ description: |
   | `PeerEvent (PeerMessage peer msg)`      | An online peer sent a message: `MInv`, `MBlock`, `MTx` and so on |
 
   Messages are published only from peers that are online, except `version` and
-  `verack`, which are the handshake itself. A block in an `MBlock` message has
+  `verack`, which are the handshake itself. For each peer, `PeerConnected` comes
+  before any other message of the peer, and `PeerDisconnected` after all of
+  them, even when the peer sends right behind its handshake: the node holds such
+  messages until the announcement has gone out (`Haskoin.Node.Router`). A block in an `MBlock` message has
   passed `blockMutation`: its transactions hash to the Merkle root of its header,
   and its witness data matches its coinbase when the node knows its parent.
   Nothing else about it is checked, and a transaction in an `MTx` message is not
@@ -1462,17 +1683,23 @@ description: |
 
   `getBlocks`, `getTxs` and `getData` return `Nothing` if the peer does not send
   everything, in order, before the timeout in seconds. Unrelated messages that the
-  peer sends in between are ignored. `pingPeer` measures a round trip.
+  peer sends in between are ignored. If the peer disconnects, they return
+  `Nothing` at once. Requests on one peer run one after the other, and the
+  timeout counts the wait: two at once would take each other's blocks for their
+  own. The late answers of a request that timed out do not disturb the next one.
+  `pingPeer` measures a round trip, and gives `False` at once if the peer
+  disconnects.
 
   A block that `getBlocks` returns holds the transactions its header commits to.
   A peer that sends another block under the requested header is disconnected,
-  and the request gives `Nothing` when it times out. The transactions are not
+  and the request gives `Nothing`. The transactions are not
   validated otherwise. A transaction from `getTxs` is matched by its id, which
   does not cover its witness, so treat its witness data as unauthenticated until
   you find the transaction in a block.
 
   `getPeers` leaves out peers that are being disconnected, even before their
-  connection closes.
+  connection closes. `killPeer` closes a connection at once, without sending the
+  messages still queued for it, even when the peer has stopped reading.
 
   For a conversation that spans many messages, such as downloading a long run of
   blocks, reserve the peer first so that no other task uses it at the same time.
@@ -1519,9 +1746,69 @@ description: |
   ### Custom connections
 
   `connect` decides how to open a connection. `withConnection` opens a plain TCP
-  socket, and gives up if it does not open within five seconds (`connectTimeout`,
-  as in Bitcoin Core). Replace it to go through a proxy, or to plug in mock peers
-  in tests, as the test suite does.
+  socket, or a Unix socket for a peer written `unix:PATH`, and gives up if it
+  does not open within five seconds (`connectTimeout`, as in Bitcoin Core).
+  Replace it to go through a proxy, or to plug in scripted peers in tests, as the
+  test suite does.
+
+  ### Peers on Unix sockets
+
+  A peer in `peers` can be a Unix socket, written `unix:PATH`, as Bitcoin Core
+  writes the socket of a proxy. Neither Bitcoin Core nor Bitcoin Cash Node
+  listens on a Unix socket, so something joins the socket to a node: socat, or
+  the bridge of a test that runs its node in a container, such as
+  [podman-test](https://github.com/jprupp/podman-test). Tests that run at once
+  then reach their nodes through sockets of their own, with no port of the
+  machine taken. The version message gives such a peer the zero address, as
+  Bitcoin Core does when it does not know one. A peer or a DNS seed can never
+  give the node a Unix address: relayed addresses are IPv4 or IPv6.
+
+  ### What a peer allows
+
+  Bitcoin Core and Bitcoin Cash Node punish a peer for things that no BIP
+  mentions. Ask either for its mempool without being whitelisted, and unless
+  it offers Bloom filters it closes the connection. haskoin-core translates
+  both nodes into pure state machines (`Haskoin.Network.Protocol`), and every
+  peer runs one, as a model of the node at the other end
+  (`Haskoin.Node.Peer.Remote`). Each message is judged on its way out:
+
+  - `Allowed`: the node takes it, and answers it if it is a request.
+  - `Unanswered`: the node drops it without a word. `getData`, `getBlocks` and
+    `getTxs` give `Nothing` at once rather than wait for their timeout.
+  - `Refused`: the node would add to this node's ban score, discourage it,
+    ban it, or close the connection. The peer process does not send it, and
+    logs a warning with the reason and the upstream line, such as
+    `not sending cmd "mempool": the node would disconnect (ProtocolViolation):
+    mempool request with bloom filters disabled (src/net_processing.cpp:5195)`.
+
+  To ask before sending, use `judgeMessage`:
+
+  ```haskell
+  judgeMessage peer MMempool >>= \case
+    Allowed -> MMempool `sendMessage` peer
+    verdict -> putStrLn ("Not asking: " <> T.unpack (judgementText verdict))
+  ```
+
+  The model learns the options of the node from its version message: whether
+  it offers Bloom filters, whether it is pruned, whether it relays
+  transactions. What the node does not say is which permissions it gave this
+  node with `-whitelist` or `-whitebind`. If you run the nodes of `peers`, say
+  it in `permissions`:
+
+  ```haskell
+  cfg {peers = ["127.0.0.1:8335"], permissions = Set.fromList [PermMempool, PermNoBan]}
+  ```
+
+  The permissions apply to the configured peers only, since a peer found
+  through discovery has granted none.
+
+  The model knows the protocol exactly and the chain of the node only as well
+  as this node does. It takes the node to have every block it is asked for, so
+  it never fails a request on a guess that the node lacks a block. It also
+  does not refuse a message over a disconnection that depends on the state of
+  the node, such as an upload limit it reached. The haskoin-core report
+  [`doc/protocol`](https://github.com/jprupp/haskoin-core/tree/master/doc/protocol)
+  describes the rules of both nodes in prose.
 
   ### Logging
 
@@ -1545,15 +1832,16 @@ description: |
   | `maxPeers`    | Maximum number of peers to connect to                                     |
   | `db`          | RocksDB handle for the headers                                            |
   | `cf`          | Column family for the headers, or `Nothing` for the default one           |
-  | `peers`       | Static peers, as `host`, `host:port` or `[ipv6]:port`                     |
+  | `peers`       | Static peers, as `host`, `host:port`, `[ipv6]:port` or `unix:PATH`        |
   | `discover`    | Use DNS seeds and addresses relayed by peers                              |
   | `address`     | This node's address, sent in version messages                             |
   | `net`         | Network constants from haskoin-core (`btc`, `bch`, `btcTest`, ...)        |
   | `pub`         | Publisher that receives every `NodeEvent`                                 |
   | `timeout`     | Seconds of silence, without a pong, or without completing the handshake, before a peer is dropped; also how long the syncing peer may take to send headers, and the quiet period after which every peer is asked for headers |
-  | `maxPeerLife` | Seconds after which a peer is dropped, so that connections rotate         |
+  | `maxPeerLife` | Seconds after which a peer is dropped, so that connections rotate. Not the peers of `peers`: a configured peer is kept |
   | `connect`     | How to open a connection; usually `withConnection`                        |
   | `logger`      | Where to log; see `withLogger`                                            |
+  | `permissions` | Permissions that the nodes of `peers` grant this node with `-whitelist` or `-whitebind`, such as `PermMempool`; see [What a peer allows](#what-a-peer-allows) |
 
   ## Module overview
 
@@ -1562,10 +1850,11 @@ description: |
   | Part           | Contents                                                                    |
   | -------------- | --------------------------------------------------------------------------- |
   | Node           | `NodeConfig`, `NodeEvent`, `Node`, `withNode`, `withConnection`              |
-  | Peers          | `Peer`, `PeerEvent`, `PeerException`, `sendMessage`, `getBlocks`, `getTxs`, `getData`, `pingPeer`, `killPeer`, `newOwner`, `reservePeer`, `releasePeer` |
+  | Peers          | `Peer`, `PeerEvent`, `PeerException`, `sendMessage`, `judgeMessage`, `getBlocks`, `getTxs`, `getData`, `pingPeer`, `killPeer`, `newOwner`, `reservePeer`, `releasePeer`, `newPeer` |
+  | Models of peers | `Judgement`, `judgementText`, `expectsReject`, `Permission`, `Permissions` |
   | Blocks         | `blockMutation`, `BlockMutation`, `witnessCheck`, `WitnessCheck`, `segWitHeight` |
   | Peer manager   | `PeerMgr`, `OnlinePeer`, `PeerState`, `Stage`, `DisconnectReason`, `getPeers`, `getOnlinePeer`, `toSockAddr`, `isRoutable` |
-  | Chain          | `Chain`, `ChainEvent`, `chainGetBest`, `chainGetBlock`, `chainGetAncestor`, `chainGetParents`, `chainGetSplitBlock`, `chainBlockMain`, `chainIsSynced`, `chainRunHeaders` |
+  | Chain          | `Chain`, `ChainEvent`, `chainGetBest`, `chainGetBlock`, `chainGetAncestor`, `chainGetParents`, `chainGetSplitBlock`, `chainBlockMain`, `chainIsSynced`, `chainHasHeaders`, `chainRunHeaders` |
   | Logging        | `Logger`, `LogLevel`, `withLogger`, `withSource`, `logDebug` ... `logError`  |
 
   The lower-level functions that feed messages to the peer manager and the chain
@@ -1577,7 +1866,9 @@ description: |
   | -------------------------------- | ----------------------------------------------------------- |
   | `Haskoin.Node.Peer`              | The process that talks to one peer, and data requests       |
   | `Haskoin.Node.Peer.Request`      | State machine for receiving requested blocks and transactions |
+  | `Haskoin.Node.Peer.Remote`       | The model of the node at the other end, which judges each message sent to it |
   | `Haskoin.Node.Peer.Lock`         | State machine for reserving a peer                          |
+  | `Haskoin.Node.Router`            | State machine for the order of each peer's events           |
   | `Haskoin.Node.Block`             | Whether a block holds the transactions its header commits to |
   | `Haskoin.Node.PeerMgr`           | Finds, connects, ranks and drops peers                      |
   | `Haskoin.Node.PeerMgr.Lifecycle` | State machine for the life of a connection                  |
@@ -1629,6 +1920,9 @@ description: |
     gossip cannot crowd out the seeds. When the room for one is full, a new
     address replaces one that has failed to connect.
   - A connection that does not open within five seconds is given up.
+  - A peer that stops reading cannot keep its slot: a connection told to close
+    closes at once, even with a write blocked, and the peer manager cancels the
+    process of one still there `timeout` seconds later.
   - An address whose connection fails waits twice as long after each failure
     before it is tried again, up to ten minutes. A relayed address whose peer
     broke the protocol is not tried again for a day. Static peers are never
@@ -1658,50 +1952,75 @@ description: |
   On NixOS, or with `stack --nix`, the `nix` section of `stack.yaml` provides
   RocksDB and libsecp256k1.
 
+  These commands build the library as it is released, with optimisation. For
+  the time between two commits there is a faster loop: `haskell-dev`, from
+  [jprupp/tools](https://github.com/jprupp/tools), on your `PATH`.
+
+  ```sh
+  haskell-dev build          # build without optimisation
+  haskell-dev test PeerMgr   # run the tests in several processes at once
+  haskell-dev docs           # build the documentation and check its comments
+  ```
+
+  `haskell-dev test` runs every test, those against real nodes too, in about
+  50 seconds. `haskell-dev.toml` tells it which spec modules are slow, so that it shares them between the
+  test processes. Do not mix the two kinds of build in one folder: the flags
+  differ, so each switch compiles everything again. Never time code with
+  `haskell-dev`.
+
   `package.yaml` is the source of the package description. Change it rather than
   `haskoin-node.cabal`, which [hpack](https://github.com/sol/hpack) generates.
 
   The package also builds with [Cabal](https://www.haskell.org/cabal)
   (`cabal build`, `cabal test`).
 
-  There are two test suites, using [hspec](https://hspec.github.io/) and
-  [QuickCheck](https://hackage.haskell.org/package/QuickCheck):
+  The tests are one suite, `spec`, using [hspec](https://hspec.github.io/) and
+  [QuickCheck](https://hackage.haskell.org/package/QuickCheck), and
+  `stack test` runs all of them:
 
-  - `spec` (`test/unit`) tests the state machines with properties, and runs the
-    peer, peer manager, chain and node against in-memory mock peers. It needs no
-    Internet access.
-
-    ```sh
-    stack test haskoin-node:spec
-    ```
-
-  - `regtest` (`test/regtest`) runs the node against
+  - The unit tests (`test/unit`) test the state machines with properties, and
+    run the peer, peer manager, chain and node against peers scripted in
+    memory, which break the rules as no real node does: wrong magic,
+    oversized messages, forged blocks, a second `verack`. They need no
+    Internet access, and name their peers by Unix sockets, never by a port.
+    What an honest node does, the regtest tests show with real ones.
+  - The regtest tests (`Haskoin.Node.RegtestSpec`) run the node against
     [Bitcoin Core](https://bitcoincore.org) and
     [Bitcoin Cash Node](https://bitcoincashnode.org) in regression test mode. The
     nodes run in a [Podman](https://podman.io) container built from
     `test/regtest/Containerfile`, whose script `test/regtest/install-nodes.sh`
     installs the official release binaries on Ubuntu after checking their SHA-256
-    hashes. The image is built the first time
-    the suite runs. Nodes use random ports, so runs do not collide. The suite is
-    skipped if Podman is missing or `HASKOIN_NODE_SKIP_REGTEST` is set.
+    hashes. The image is built the first time the tests run, which needs
+    Internet access. The containers run through
+    [podman-test](https://github.com/jprupp/podman-test), each in a pod with no
+    network: the peer-to-peer port of each node is bridged to a Unix socket of
+    the pod, and the node under test connects to it as the peer `unix:PATH`.
+    So runs never collide, and no port of the machine is taken. A peer that
+    hangs is a node stopped with `SIGSTOP`. A container may use 2 GiB of
+    memory. The tests are skipped if Podman is missing, or if
+    `HASKOIN_NODE_SKIP_REGTEST` or `PODMAN_TEST_SKIP` is set.
 
     ```sh
-    stack test haskoin-node:regtest
+    stack test --ta '--match /Haskoin.Node.Regtest/'   # only these
+    HASKOIN_NODE_SKIP_REGTEST=1 stack test               # all but these
     ```
 
   Set `HASKOIN_TEST_LOG` to see the node's logs while tests run.
 
-  CI builds and tests every change with the OS libraries, with `stack --nix`,
-  and against the regtest nodes. Its steps call the scripts in `scripts/`, which
-  you can also run locally: `scripts/check-local-deps.sh` fails if `stack.yaml`
-  points at a package outside the repository, which CI cannot build, and
-  `scripts/install-system-libraries.sh` installs the C libraries on Ubuntu.
+  CI builds and tests every change with the OS libraries and with
+  `stack --nix`, through the workflow that the packages of this family share in
+  [jprupp/tools](https://github.com/jprupp/tools), without the regtest tests,
+  and runs those in a job of its own. You can run its checks locally: `check-stack-paths`, from
+  jprupp/tools, fails if `stack.yaml` points at a package outside the
+  repository, which CI cannot build, and `scripts/install-system-libraries.sh`
+  installs the C libraries on Ubuntu.
 
   ### Contributing
 
   Pull requests are welcome.
 
-  - Format the code with [Ormolu](https://github.com/tweag/ormolu).
+  - Format the code with [Ormolu](https://github.com/tweag/ormolu):
+    `haskell-format`, from [jprupp/tools](https://github.com/jprupp/tools).
   - Add tests for the behaviour you change.
   - Keep lines of code, including scripts, workflows and the examples in the
     documentation, shorter than 120 columns.
@@ -1726,9 +2045,9 @@ description: |
   Haskoin Node is released under the
   [MIT License](https://github.com/jprupp/haskoin-node/blob/master/LICENSE).
 description-type: markdown
-hash: e78b40a4f894df4e6ea64e45e634522b514546f03b857f107f790e6f0374491c
+hash: 297dc1f6542b0c322e10152e51e8f087718686c11fbb66f6e20a7ccb19ee2af9
 homepage: https://github.com/jprupp/haskoin-node#readme
-latest: 2.6.1
+latest: 2.7.0
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: P2P library for Bitcoin and Bitcoin Cash
@@ -1741,6 +2060,7 @@ test-bench-deps:
   bytestring: '>=0'
   cereal: '>=0'
   conduit: '>=0'
+  containers: '>=0'
   data-default: '>=0'
   directory: '>=0'
   haskoin-core: '>=0'
@@ -1748,6 +2068,7 @@ test-bench-deps:
   hspec: '>=2.10'
   network: '>=0'
   nqe: '>=0'
+  podman-test: '>=0'
   process: '>=0'
   random: '>=0'
   rocksdb-haskell-jprupp: '>=0'
