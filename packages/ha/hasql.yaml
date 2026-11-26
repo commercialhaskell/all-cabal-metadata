@@ -137,13 +137,14 @@ all-versions:
 - 2.0.0.2
 - 2.0.0.3
 - 2.0.1.0
+- 2.1.0.0
 author: Nikita Volkov <nikita.y.volkov@mail.ru>
 basic-deps:
   aeson: '>=2 && <3'
   bytestring: '>=0.10 && <0.13'
   bytestring-strict-builder: '>=0.4.5.4 && <0.5'
   hasql: '>=0'
-  iproute: '>=1.7 && <1.8'
+  iproute: '>=1.7 && <1.9'
   postgresql-binary: ^>=0.15
   postgresql-connection-string: ^>=0.1
   pqi: '>=1.0 && <1.2'
@@ -151,26 +152,110 @@ basic-deps:
   text-builder: '>=1 && <1.1'
   unordered-containers: '>=0.2 && <0.3'
   vector: '>=0.10 && <0.14'
-changelog: "# v2.0.1.0\n\n## New Features\n\n- `IsError` gained a `toSqlState` method,
-  exposing the SQLSTATE the server reported for an error, or `Nothing` where the error
-  carries no server code. It saves consumers from pattern-matching their way down
-  to the nested `ServerError` — a dig that has to be rewritten every time the error
-  types gain a constructor.\n\n  ```haskell\n  case Errors.toSqlState err of\n    Just
-  \"23505\" -> handleUniqueViolation\n    _ -> rethrow err\n  ```\n\n  The method
-  has a default implementation returning `Nothing`, so existing instances keep compiling.
-  Instances for error types that *wrap* another error type must override it and delegate
-  to the wrapped value, otherwise they silently report `Nothing` for codes they do
-  carry.\n\n# v2.0.0.3\n\n## Fixes\n\n- Work around the bug in Cabal due to which
-  documentation does not get generated for definitions reexported from sublibs.\n\n#
-  v2.0.0.2\n\nWork around the bugs in Cabal/Haddock that cause missing documentation
-  for two-hop reexported internal modules.\n\n# v2.0.0.1\n\nSupport for `pqi-1.1`.\n\n#
-  v2.0.0.0\n\nNew era: the transport layer is now pluggable via [`pqi`](https://github.com/nikita-volkov/pqi),
-  and an alpha pure-Haskell backend, [`pqi-native`](https://github.com/nikita-volkov/pqi-native),
-  is available for early adopters. Goal: a reliable, performant, no-C-dependency replacement
-  for libpq.\n\n## Breaking\n\n- `Hasql.Connection.acquire` now takes an explicit
-  adapter as its first argument, ahead of `Settings`. To keep prior behaviour, depend
-  on [`pqi-ffi`](https://hackage.haskell.org/package/pqi-ffi) and pass `Pqi.Ffi.adapter`.
-  To try the native backend, depend on [`pqi-native`](https://hackage.haskell.org/package/pqi-native)
+changelog: "# v2.1.0.0\n\n## Breaking\n\n- `Hasql.Decoders.rowVector` now decodes
+  into any `Data.Vector.Generic` vector (`Vector`, unboxed, storable, primitive) instead
+  of only the boxed `Data.Vector.Vector`, picked by the type the result is consumed
+  as. Call sites that left the vector type to be inferred with nothing pinning it
+  down (no type signature, no boxed-`Vector`-specific downstream use) will now hit
+  an ambiguous type error and need an explicit annotation. (#336)\n\n- `Hasql.Connection.use`
+  now returns `UseError` instead of a single session-error type. `UseError` has two
+  constructors:\n\n  - `SessionUseError` wraps a `SessionError` - the session ran
+  but reported a recoverable error (a server error, a decode failure). The connection
+  is still live.\n  - `ConnectionUseError` - the connection is gone, for any reason:
+  a dropped socket, a request libpq refused to send outright, an unexpected response,
+  a bug in Hasql. `use` has closed the handle before returning; every subsequent `use`
+  on the same `Connection` reports this error again.\n\n  Code that pattern-matched
+  on the old session-error type now matches on `UseError`. The `SessionUseError` arm
+  covers the recoverable errors that `SessionError` already expressed; `ConnectionUseError`
+  replaces every constructor that meant the connection was gone.\n\n- `Hasql.Errors.IsError`
+  no longer has an `isTransient` method. Whether a failure is worth retrying depends
+  on the caller's retry policy and, for server errors, the SQLSTATE reported through
+  `toSqlState` - not on a verdict the driver hands out. No replacement is provided.\n\n-
+  `Hasql.Connection.acquire` now returns `AcquireError` instead of a plain `Text`
+  message. The five constructors are organized by which stage of `acquire` failed
+  - connecting, checking the server version, or initializing session settings - since
+  that is what the driver actually observes, rather than by a best-effort classification
+  of `libpq`'s (locale-dependent, adapter-dependent) error text:\n\n  - `ConnectionAcquireError`
+  - the connection could not be established, and no structured signal exists to say
+  why. This is the residual case at the connection stage: DNS failure, connection
+  refused, TLS negotiation failure, a rejected password, a missing database, and any
+  other rejection all land here alike.\n  - `ConnectionPasswordRequiredAcquireError`
+  - the server demanded a password and none was available, reported from `libpq`'s
+  own flag rather than inferred from message text.\n  - `VersionTooOldAcquireError`
+  - the server's version is below the minimum this driver supports, carrying the server's
+  major, minor and patch version as `Int`s rather than formatted prose.\n  - `InitializationConnectionLossAcquireError`
+  - session initialization failed and the connection died, with prose and nothing
+  else.\n  - `InitializationServerErrorAcquireError` - session initialization failed
+  and the server said why, carrying a structured `ServerError` with a SQLSTATE.\n\n-
+  A `ConnectionUseError` now closes the connection before returning. `Hasql.Connection.release`
+  on a spent handle does nothing. Pools already discarded connections on fatal errors,
+  so this makes the driver keep the contract its callers were already assuming.\n\n
+  \ As a consequence `Hasql.Connection.release` is idempotent, and a released connection
+  can no longer be reached through `use`. Both were undefined behaviour before: `libpq`
+  forbids touching a connection after `PQfinish`, and the driver already closed connections
+  it could not clean up.\n\n  The driver no longer attempts to repair a connection
+  it failed to send on. There is nothing it can assume about the protocol state of
+  such a connection, and the only repair available - pushing a Sync - has the side
+  effect of flushing and committing whatever the failed session had queued. Closing
+  it is both simpler and more honest.\n\n- An exception that cuts a session short
+  - one thrown by the session itself, or an interruption delivered from another thread
+  by `timeout`, `race` or `killThread` - now closes the connection. It propagates
+  as before, but the handle it fired on is spent from then on, so a `timeout` around
+  a session costs a connection rather than returning one. Pools reconnect; code holding
+  a `Hasql.Connection.Connection` directly has to acquire a new one. Server-side session
+  state - anything `set` on the connection - goes with it, where it used to be deliberately
+  preserved across an interruption.\n\n  The driver used to bring such a connection
+  back to a clean state instead - draining results, aborting the transaction, deallocating
+  prepared statements. That repair is blocking network IO performed under a mask,
+  so on a connection whose peer has gone away it never returns and the very interruption
+  being handled never lands. It could also report its own failure as a returned error
+  without rethrowing, which made `timeout` yield `Just (Left _)` instead of `Nothing`.
+  Neither is worth the connection it saves.\n\n## Non-breaking\n\n- Support `iproute-1.8`.\n\n-
+  Prepared statement names are now content-addressed (`hasql_` plus a SHA-256 digest
+  of the SQL and parameter OIDs) rather than per-connection counters. The Haskell
+  API is unchanged. (#324)\n\n- `42P05` (\"prepared statement already exists\") no
+  longer forces the driver to evict the statement cache entry, and the mapping survives
+  it. (#331)\n\n## Fixes\n\n- `Hasql.Connection.acquire` now finishes the underlying
+  connection on every failure path, and no longer ignores the result of its session-init
+  statements.\n\n- Send requests libpq refuses outright (e.g. over 65535 parameters)
+  now close the connection, so a retry wrapper cannot resend the identical rejected
+  request against the same handle forever. (#327)\n\n- A send failure partway through
+  a pipeline left the connection stuck in pipeline mode with undrained results, so
+  every later session on it failed too. The connection is now closed rather than handed
+  back. (#326)\n\n- A pipeline whose send fails partway through no longer applies
+  the statements preceding the failure. In pipeline mode libpq buffers until a Sync,
+  so those statements had not reached the server; what put them there was the recovery
+  attempt, whose Sync flushed and committed them on the way to reclaiming the connection.
+  Such a pipeline is now discarded whole, matching what a pipeline that fails on a
+  server error already did.\n\n- A session that catches a pipeline failure and carries
+  on no longer runs the rest of itself against a connection the send failed on. The
+  remaining operations report `ConnectionUseError` instead, and the connection is
+  closed however the session ends - including when it swallows the failure and succeeds.
+  Previously the first serial statement after such a catch blocked forever on results
+  the server had never been asked for.\n\n- A connection lost while receiving results
+  is now reported as `ConnectionUseError`, matching how the send side already classified
+  a lost socket. It used to surface as a `StatementSessionError` carrying `UnexpectedRowCountStatementError`
+  - \"expected 1 row, got 0\" - which is not transient, so retry wrappers did not
+  retry it and pools returned the dead connection for reuse.\n\n# v2.0.1.0\n\n## New
+  Features\n\n- `IsError` gained a `toSqlState` method, exposing the SQLSTATE the
+  server reported for an error, or `Nothing` where the error carries no server code.
+  It saves consumers from pattern-matching their way down to the nested `ServerError`
+  — a dig that has to be rewritten every time the error types gain a constructor.\n\n
+  \ ```haskell\n  case Errors.toSqlState err of\n    Just \"23505\" -> handleUniqueViolation\n
+  \   _ -> rethrow err\n  ```\n\n  The method has a default implementation returning
+  `Nothing`, so existing instances keep compiling. Instances for error types that
+  *wrap* another error type must override it and delegate to the wrapped value, otherwise
+  they silently report `Nothing` for codes they do carry.\n\n# v2.0.0.3\n\n## Fixes\n\n-
+  Work around the bug in Cabal due to which documentation does not get generated for
+  definitions reexported from sublibs.\n\n# v2.0.0.2\n\nWork around the bugs in Cabal/Haddock
+  that cause missing documentation for two-hop reexported internal modules.\n\n# v2.0.0.1\n\nSupport
+  for `pqi-1.1`.\n\n# v2.0.0.0\n\nNew era: the transport layer is now pluggable via
+  [`pqi`](https://github.com/nikita-volkov/pqi), and an alpha pure-Haskell backend,
+  [`pqi-native`](https://github.com/nikita-volkov/pqi-native), is available for early
+  adopters. Goal: a reliable, performant, no-C-dependency replacement for libpq.\n\n##
+  Breaking\n\n- `Hasql.Connection.acquire` now takes an explicit adapter as its first
+  argument, ahead of `Settings`. To keep prior behaviour, depend on [`pqi-ffi`](https://hackage.haskell.org/package/pqi-ffi)
+  and pass `Pqi.Ffi.adapter`. To try the native backend, depend on [`pqi-native`](https://hackage.haskell.org/package/pqi-native)
   and pass `Pqi.Native.adapter`.\n\n# 1.10\n\nMajor revision happened.\n\n## New Features\n\n-
   **OID by name resolution**.\n\n  Encoders and decoders now support resolving PostgreSQL
   type OIDs by their names at runtime. This enables working with custom types (enums,
@@ -259,161 +344,207 @@ changelog: "# v2.0.1.0\n\n## New Features\n\n- `IsError` gained a `toSqlState` m
   Added column number to `RowError` (breaking change).\n- Added `MonadReader Connection`
   instance for Session.\n"
 changelog-type: markdown
-description: "# Hasql\n\n[![Hackage](https://img.shields.io/hackage/v/hasql.svg)](https://hackage.haskell.org/package/hasql)\n[![Continuous
-  Haddock](https://img.shields.io/badge/haddock-master-blue)](https://nikita-volkov.github.io/hasql/)\n\nPostgreSQL
-  driver for Haskell, that prioritizes:\n\n- Reliability\n- Flexibility\n- Performance\n\n#
-  Status\n\nHasql is production-ready, actively maintained and the API is moderately
-  stable. It's used by many companies and most notably by the [Postgrest](https://github.com/PostgREST/postgrest)
-  project.\n\n# Pluggable Transport\n\nHasql's transport is pluggable via [`pqi`](https://github.com/nikita-volkov/pqi).
-  Hasql itself carries no C dependency. It programs against the `pqi` interface, and
-  you pick the adapter that implements it. That means you depend on two packages,
-  not one:\n\n```cabal\nbuild-depends:\n  hasql,\n  pqi-ffi,  -- or pqi-native\n```\n\n`Hasql.Connection.acquire`
-  then takes the adapter explicitly, as its first argument:\n\n```haskell\nimport
-  Pqi.Ffi qualified    -- the C-backed libpq transport\nimport Pqi.Native qualified
-  -- alpha: pure-Haskell, no C dependency, interchangeable with Pqi.Ffi\n\nconnection
-  <- Hasql.Connection.acquire Pqi.Ffi.adapter settings\n-- or\nconnection <- Hasql.Connection.acquire
-  Pqi.Native.adapter settings\n```\n\n[`pqi-ffi`](https://github.com/nikita-volkov/pqi-ffi)
-  is the stable, production-proven default. It binds the C `libpq` library, so it
-  requires `libpq` of at least version 14 to be installed to compile - which typically
-  just means having a recent PostgreSQL distro installed. Through it Hasql is tested
-  against a wide range of PostgreSQL servers, starting from version 9.\n\n[`pqi-native`](https://github.com/nikita-volkov/pqi-native)
-  is a from-scratch, pure-Haskell implementation of the Postgres wire protocol, with
-  no C dependency at all. It is thoroughly tested: [`pqi-conformance`](https://github.com/nikita-volkov/pqi-conformance)
-  runs it side by side with `libpq` on the same inputs and checks that the results
-  agree, and the test-suites of `hasql`, [`hasql-pool`](https://github.com/nikita-volkov/hasql-pool)
-  and [`hasql-transaction`](https://github.com/nikita-volkov/hasql-transaction) now
-  run against both adapters, so the whole stack above the transport is exercised on
-  `pqi-native` too. **It's still labelled alpha** - not yet proven at production scale.
-  The two adapters are fully interchangeable: swapping between them is a one-line
-  change (a different `Adapter` value, nothing else), so you can try `pqi-native`
-  today with no lock-in and no rewrite to fall back if needed.\n\n# Ecosystem\n\nHasql
-  is not just a single library, it is a granular ecosystem of composable libraries,
-  each isolated to perform its own task and stay simple.\n\n- [\"hasql\"](https://github.com/nikita-volkov/hasql)
-  - the root of the ecosystem, which provides the essential abstraction over the PostgreSQL
-  client functionality and mapping of values. Everything else revolves around that
-  library.\n\n- [\"hasql-transaction\"](https://github.com/nikita-volkov/hasql-transaction)
-  - an STM-inspired composable abstraction over database transactions providing automated
-  conflict resolution.\n\n- [\"hasql-pool\"](https://github.com/nikita-volkov/hasql-pool)
-  - a Hasql-specialized abstraction over the connection pool.\n\n- [\"hasql-postgresql-types\"](https://github.com/nikita-volkov/hasql-postgresql-types)
-  - integration with the [\"postgresql-types\"](https://github.com/nikita-volkov/postgresql-types)
-  library, which is a collection of Haskell types precisely modeling PostgreSQL types
-  without data loss or compromise.\n\n- [\"hasql-dynamic-statements\"](https://github.com/nikita-volkov/hasql-dynamic-statements)
-  - a toolkit for generating statements based on the parameters.\n\n- [\"hasql-th\"](https://github.com/nikita-volkov/hasql-th)
-  - Template Haskell utilities, providing compile-time syntax checking and easy statement
-  declaration. \n\n- [\"hasql-cursor-query\"](https://github.com/nikita-volkov/hasql-cursor-query)
-  - a declarative abstraction over cursors.\n\n- [\"hasql-cursor-transaction\"](https://github.com/nikita-volkov/hasql-cursor-transaction)
-  - a lower-level abstraction over cursors, which however allows to fetch from multiple
-  cursors simultaneously. Generally though \"hasql-cursor-query\" is the recommended
-  alternative.\n\n- [\"hasql-migration\"](https://github.com/tvh/hasql-migration)
-  - A port of postgresql-simple-migration for use with hasql.\n\n- [\"hasql-listen-notify\"](https://github.com/awkward-squad/hasql-listen-notify)
-  / [\"hasql-notifications\"](https://github.com/diogob/hasql-notifications) - Support
-  for PostgreSQL asynchronous notifications.\n\n- [\"hasql-optparse-applicative\"](https://github.com/sannsyn/hasql-optparse-applicative)
-  - \"optparse-applicative\" parsers for Hasql.\n\n- [\"hasql-implicits\"](https://github.com/nikita-volkov/hasql-implicits)
-  - implicit definitions, such as default codecs for standard types.\n\n- [\"hasql-interpolate\"](https://github.com/awkward-squad/hasql-interpolate)
-  - a QuasiQuoter that supports interpolating Haskell expressions into Hasql queries.\n\n<sup>Want
-  to list your package or correct something here? Make a PR.</sup>\n\n## Transport
-  adapters\n\nUnlike the extension libraries above, which are optional, a transport
-  adapter is mandatory: Hasql needs one to talk to the server at all. See [Pluggable
-  Transport](#pluggable-transport) for how to pick one.\n\n- [\"pqi\"](https://github.com/nikita-volkov/pqi)
-  - the driver-agnostic interface that Hasql programs against. Pulled in automatically.
-  You don't depend on it directly.\n\n- [\"pqi-ffi\"](https://github.com/nikita-volkov/pqi-ffi)
-  - the stable adapter, backed by the C `libpq` library.\n\n- [\"pqi-native\"](https://github.com/nikita-volkov/pqi-native)
-  - an alpha pure-Haskell adapter speaking the PostgreSQL wire protocol directly,
-  with no C dependency.\n\n## Why make it an ecosystem?\n\n- **Focus.**\nEach library
-  in isolation provides a simple API, which is focused on a specific task or a few
-  related tasks.\n\n- **Flexibility.**\nThe user picks and chooses the features, thus
-  precisely matching the level of abstraction that he needs for his task.\n\n- **Much
-  more stable and descriptive semantic versioning.**\nE.g., a change in the API of
-  the \"hasql-transaction\" library won't affect any of the other libraries and it
-  gives the user a more precise information about which part of his application he
-  needs to update to conform.\n\n- **Interchangeability and competition of the ecosystem
-  components.**\nE.g., [not everyone will agree](https://github.com/nikita-volkov/hasql/issues/41)
-  with the restrictive design decisions made in the \"hasql-transaction\" library.
-  However those decisions are not imposed on the user, and instead of having endless
-  debates about how to abstract over transactions, another extension library can simply
-  be released, which will provide a different interpretation of what the abstraction
-  over transactions should be.\n\n- **Horizontal scalability of the ecosystem.**\nInstead
-  of posting feature- or pull-requests, the users are encouraged to release their
-  own small extension-libraries, with themselves becoming the copyright owners and
-  taking on the maintenance responsibilities. Compare this model to the classical
-  one, where some core-team is responsible for everything. One is scalable, the other
-  is not.\n\n# Documentation\n\n- [**Data-Access Architecture**](https://github.com/nikita-volkov/hasql-docs/blob/main/data-access-architecture.md)
-  — a normative reference for organising database integration code built on Hasql.
-  It specifies how to layer types, statements, transactions and sessions, where the
-  application domain enters the picture, how the three error channels differ, and
-  what to test at each level. Every rule carries its rationale and derives from the
-  capability differences between Hasql's four constructs.\n\nThe reference is written
-  to be consumed directly by coding agents as well as by people. Point an agent at
-  [the raw file](https://raw.githubusercontent.com/nikita-volkov/hasql-docs/main/data-access-architecture.md)
-  and it has the whole system in context, with the rules numbered so they can be cited
-  back in review.\n\n# Short Example\n\nFollowing is a complete application, which
-  performs some arithmetic in Postgres using Hasql.\n\n```haskell\n{-# LANGUAGE OverloadedStrings,
-  QuasiQuotes #-}\n\nimport Data.Functor.Contravariant\nimport Data.Int\nimport Hasql.Session
-  (Session)\nimport Prelude\nimport qualified Hasql.Connection as Connection\nimport
-  qualified Hasql.Connection.Settings as Settings\nimport qualified Hasql.Decoders
-  as Decoders\nimport qualified Hasql.Encoders as Encoders\nimport qualified Hasql.Session
-  as Session\nimport qualified Hasql.Statement as Statement\nimport qualified Pqi.Ffi
-  -- from \"pqi-ffi\" (stable). Swap for \"Pqi.Native\" from \"pqi-native\" (alpha,
-  fully interchangeable) to try the pure-Haskell backend\n\nmain :: IO ()\nmain =
-  do\n  Right connection <- Connection.acquire Pqi.Ffi.adapter connectionSettings\n
-  \ result <- Connection.use connection (sumAndDivModSession 3 8 3)\n  print result\n
-  \ where\n    connectionSettings =\n      mconcat\n        [ Settings.hostAndPort
-  \"localhost\" 5432,\n          Settings.user \"postgres\",\n          Settings.password
-  \"postgres\",\n          Settings.dbname \"postgres\"\n          -- Prepared statements
-  are enabled by default.\n          -- To disable them (e.g., for pgbouncer compatibility):\n
-  \         -- Settings.noPreparedStatements True\n        ]\n\n-- * Sessions\n\n--
-  Session abstracts over the execution of operations on a database connection.\n--
-  It is composable and has a Monad instance.\n-------------------------\n\nsumAndDivModSession
-  :: Int64 -> Int64 -> Int64 -> Session (Int64, Int64)\nsumAndDivModSession a b c
-  = do\n  -- Get the sum of a and b\n  sumOfAAndB <- Session.statement (a, b) sumStatement\n
-  \ -- Divide the sum by c and get the modulo as well\n  Session.statement (sumOfAAndB,
-  c) divModStatement\n\n-- * Statements\n\n-- Statement is a definition of an individual
-  SQL-statement,\n-- accompanied by a specification of how to encode its parameters
-  and\n-- decode its result.\n-------------------------\n\n-- | A statement with two
-  integer parameters and an integer result.\nsumStatement :: Statement.Statement (Int64,
-  Int64) Int64\nsumStatement = Statement.preparable sql encoder decoder\n  where\n
-  \   -- The SQL of the statement, with $1, $2, ... placeholders for parameters.\n
-  \   sql =\n      \"select $1 + $2\"\n    -- Specification of how to encode the parameters
-  of the statement\n    -- where the association with placeholders is achieved by
-  order.\n    encoder =\n      mconcat\n        [ -- Encoder of the first parameter
-  as a non-nullable int8.\n          -- It extracts the first element of the tuple
-  using the contravariant functor\n          -- instance.\n          fst >$< Encoders.param
-  (Encoders.nonNullable Encoders.int8),\n          -- Encoder of the second parameter,\n
-  \         -- which extracts the second element of the tuple.\n          snd >$<
-  Encoders.param (Encoders.nonNullable Encoders.int8)\n        ]\n    -- Specification
-  of how to decode the result of the statement.\n    -- States that we expect a single
-  row with a single non-nullable int8 column.\n    decoder =\n      Decoders.singleRow\n
-  \       (Decoders.column (Decoders.nonNullable Decoders.int8))\n\ndivModStatement
-  :: Statement.Statement (Int64, Int64) (Int64, Int64)\ndivModStatement = Statement.preparable
-  sql encoder decoder\n  where\n    sql =\n      \"select $1 / $2, $1 % $2\"\n    encoder
-  =\n      mconcat\n        [ fst >$< Encoders.param (Encoders.nonNullable Encoders.int8),\n
-  \         snd >$< Encoders.param (Encoders.nonNullable Encoders.int8)\n        ]\n
-  \   -- Decoder that expects a single row with two non-nullable int8 columns,\n    --
-  returning the result as a tuple.\n    -- Uses the applicative functor instance to
-  combine two column decoders.\n    decoder =\n      Decoders.singleRow\n        (
-  (,)\n            <$> Decoders.column (Decoders.nonNullable Decoders.int8)\n            <*>
-  Decoders.column (Decoders.nonNullable Decoders.int8)\n        )\n```\n\nFor the
-  general use-case it is advised to prefer declaring statements using the \"hasql-th\"
-  library, which validates the statements at compile-time and generates codecs automatically.
-  So the above two statements could be implemented the following way:\n\n```haskell\nimport
-  qualified Hasql.TH as TH -- from \"hasql-th\"\n\nsumStatement :: Statement.Statement
-  (Int64, Int64) Int64\nsumStatement =\n  [TH.singletonStatement|\n    select ($1
-  :: int8 + $2 :: int8) :: int8\n  |]\n\ndivModStatement :: Statement.Statement (Int64,
-  Int64) (Int64, Int64)\ndivModStatement =\n  [TH.singletonStatement|\n    select\n
-  \     (($1 :: int8) / ($2 :: int8)) :: int8,\n      (($1 :: int8) % ($2 :: int8))
-  :: int8\n  |]\n```\n\n# Discussions\n\nJoin [GitHub Discussions](https://github.com/nikita-volkov/hasql/discussions)
-  to ask questions, provide feedback, suggest and vote on features, and help shape
-  the future of Hasql.\n\n# Support Policy\n\nThis policy is intended to balance stability
-  for users with the ability to evolve the library.\n\nEach major release of Hasql
-  is supported for at least **one year** from the date of its first release. During
-  this period, fixes are backported to the latest minor version of that major release.\n\nAfter
-  the support period ends, the release may continue to work but is no longer guaranteed
-  to receive fixes.\n\nYou're welcome to post requests to change the policy or issues
-  if you believe something is not being addressed.\n"
+description: |
+  # Hasql
+
+  [![Hackage](https://img.shields.io/hackage/v/hasql.svg)](https://hackage.haskell.org/package/hasql)
+  [![Continuous Haddock](https://img.shields.io/badge/haddock-master-blue)](https://nikita-volkov.github.io/hasql/)
+
+  PostgreSQL driver for Haskell, that prioritizes:
+
+  - **Reliability.** Failures come back as values, and the type says whether the connection survived them. See [Errors](#errors).
+  - **Flexibility.** Sessions compose, codecs are assembled from parts, and even the transport is a choice you make. See [Ecosystem](#ecosystem).
+  - **Performance.** Statements are prepared by default and can be pipelined into a single round-trip via `Hasql.Session.pipeline`.
+
+  Hasql is production-ready and actively maintained. It's used by many companies and most notably by the [Postgrest](https://github.com/PostgREST/postgrest) project. The API changes at major versions and each major release is supported for at least a year, as described under [Support policy](#support-policy). Every change is recorded in the [changelog](CHANGELOG.md).
+
+  Upgrading from 1.x? `Hasql.Connection.acquire` now takes a transport adapter as its first argument, so switching is a one-argument change, and the error types have been reshaped. The [changelog](CHANGELOG.md) lists every break.
+
+  ## Getting started
+
+  Hasql carries no C dependency. It programs against the ["pqi"](https://github.com/nikita-volkov/pqi) interface, and you pick the adapter that implements it. That means you depend on two packages, not one:
+
+  ```cabal
+  build-depends:
+    hasql,
+    pqi-ffi,  -- or pqi-native
+  ```
+
+  `Hasql.Connection.acquire` then takes the adapter explicitly, as its first argument:
+
+  ```haskell
+  connection <- Hasql.Connection.acquire Pqi.Ffi.adapter settings
+  ```
+
+  ["pqi-ffi"](https://github.com/nikita-volkov/pqi-ffi) is the stable, production-proven default. ["pqi-native"](https://github.com/nikita-volkov/pqi-native) is a pure-Haskell alpha with no C dependency at all. [Transport adapters](#transport-adapters) covers how to choose.
+
+  ## Example
+
+  Following is a complete application, which sums three numbers in Postgres by running one statement twice on the same connection.
+
+  ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import Data.Functor.Contravariant
+  import Data.Int
+  import Hasql.Session (Session)
+  import Prelude
+  import qualified Hasql.Connection as Connection
+  import qualified Hasql.Connection.Settings as Settings
+  import qualified Hasql.Decoders as Decoders
+  import qualified Hasql.Encoders as Encoders
+  import qualified Hasql.Session as Session
+  import qualified Hasql.Statement as Statement
+  import qualified Pqi.Ffi
+
+  main :: IO ()
+  main = do
+    acquisition <- Connection.acquire Pqi.Ffi.adapter settings
+    case acquisition of
+      Left err -> fail (show err)
+      Right connection -> do
+        result <- Connection.use connection (sumSession 3 8 4)
+        print result
+    where
+      settings =
+        mconcat
+          [ Settings.hostAndPort "localhost" 5432,
+            Settings.user "postgres",
+            Settings.password "postgres",
+            Settings.dbname "postgres"
+            -- Prepared statements are enabled by default.
+            -- To disable them (e.g., for pgbouncer compatibility):
+            -- Settings.noPreparedStatements True
+          ]
+
+  -- | Session abstracts over the execution of operations on a connection.
+  -- It has a Monad instance, so statements compose.
+  sumSession :: Int64 -> Int64 -> Int64 -> Session Int64
+  sumSession a b c = do
+    ab <- Session.statement (a, b) sumStatement
+    Session.statement (ab, c) sumStatement
+
+  -- | Statement is a definition of an individual SQL-statement, accompanied by
+  -- a specification of how to encode its parameters and decode its result.
+  sumStatement :: Statement.Statement (Int64, Int64) Int64
+  sumStatement = Statement.preparable sql encoder decoder
+    where
+      sql =
+        "select $1 + $2"
+      encoder =
+        mconcat
+          [ fst >$< Encoders.param (Encoders.nonNullable Encoders.int8),
+            snd >$< Encoders.param (Encoders.nonNullable Encoders.int8)
+          ]
+      decoder =
+        Decoders.singleRow
+          (Decoders.column (Decoders.nonNullable Decoders.int8))
+  ```
+
+  [Your First Statement](https://github.com/nikita-volkov/hasql-docs/blob/main/your-first-statement.md) is the same program with the annotations left in, explaining the encoder and decoder vocabulary line by line.
+
+  ## Errors
+
+  Every operation reports its failures as values. There are three error types, in `Hasql.Errors`, and which one you get tells you what state you're left in.
+
+  `Hasql.Connection.acquire` returns `AcquireError`, organized by the stage that failed: connecting, checking the server version, or initializing session settings.
+
+  `Hasql.Connection.use` returns `UseError`, which splits on the only distinction the caller can act on:
+
+  ```haskell
+  result <- Connection.use connection session
+  case result of
+    Right a -> pure a
+    -- The session failed, the connection is still live and reusable.
+    Left (Errors.SessionUseError err) -> ...
+    -- The connection is gone. Hasql has already closed it.
+    Left (Errors.ConnectionUseError reason) -> ...
+  ```
+
+  A `ConnectionUseError` means the handle is spent. Hasql finished the connection before returning, so every later `use` on it reports the same error and `release` is a no-op. Pools must discard it rather than return it. A `SessionUseError` carries a `SessionError` and leaves the connection untouched.
+
+  All three types implement `IsError`, which renders a message and details for logging and exposes the server's SQLSTATE through `toSqlState` where one was reported.
+
+  ## Documentation
+
+  The long-form material lives in [hasql-docs](https://github.com/nikita-volkov/hasql-docs).
+
+  - [**Your First Statement**](https://github.com/nikita-volkov/hasql-docs/blob/main/your-first-statement.md) - an annotated walkthrough of a complete Hasql program, explaining the encoder and decoder vocabulary line by line. Start here if the [Example](#example) above went past too fast.
+
+  - [**Data-Access Architecture**](https://github.com/nikita-volkov/hasql-docs/blob/main/data-access-architecture.md) - a normative reference for organizing database integration code built on Hasql. It specifies how to layer types, statements, transactions and sessions, where the application domain enters the picture, how the three error channels differ, and what to test at each level. Every rule carries its rationale and derives from the capability differences between Hasql's four constructs.
+
+  - [**Why Make It an Ecosystem?**](https://github.com/nikita-volkov/hasql-docs/blob/main/why-an-ecosystem.md) - the rationale for splitting Hasql into many small, separately-versioned libraries instead of one large one.
+
+  The architecture reference is written to be consumed directly by coding agents as well as by people. Point an agent at [the raw file](https://raw.githubusercontent.com/nikita-volkov/hasql-docs/main/data-access-architecture.md) and it has the whole system in context, with the rules numbered so they can be cited back in review.
+
+  Per-module API docs are on [Hackage](https://hackage.haskell.org/package/hasql), and the [continuous Haddock](https://nikita-volkov.github.io/hasql/) tracks `master`.
+
+  ## Ecosystem
+
+  Hasql is not just a single library, it is a granular ecosystem of composable libraries, each isolated to perform its own task and stay simple. Each one is separately versioned and separately owned, so a change in one doesn't ripple into the others and anyone can publish an alternative without asking. Instead of debating how transactions or cursors should be abstracted, the ecosystem carries competing answers side by side. [Why Make It an Ecosystem?](https://github.com/nikita-volkov/hasql-docs/blob/main/why-an-ecosystem.md) gives the full argument.
+
+  <!-- TODO: curate this list. Every published extension is still on a pre-2.x
+       release, and at least one entry below redirects the reader elsewhere. -->
+
+  - ["hasql"](https://github.com/nikita-volkov/hasql) - the root of the ecosystem, which provides the essential abstraction over the PostgreSQL client functionality and mapping of values. Everything else revolves around that library.
+
+  - ["hasql-transaction"](https://github.com/nikita-volkov/hasql-transaction) - an STM-inspired composable abstraction over database transactions providing automated conflict resolution.
+
+  - ["hasql-pool"](https://github.com/nikita-volkov/hasql-pool) - a Hasql-specialized abstraction over the connection pool.
+
+  - ["hasql-postgresql-types"](https://github.com/nikita-volkov/hasql-postgresql-types) - integration with the ["postgresql-types"](https://github.com/nikita-volkov/postgresql-types) library, which is a collection of Haskell types precisely modeling PostgreSQL types without data loss or compromise.
+
+  - ["hasql-dynamic-statements"](https://github.com/nikita-volkov/hasql-dynamic-statements) - a toolkit for generating statements based on the parameters.
+
+  - ["hasql-th"](https://github.com/nikita-volkov/hasql-th) - Template Haskell utilities, providing compile-time syntax checking and easy statement declaration.
+
+  - ["hasql-cursor-query"](https://github.com/nikita-volkov/hasql-cursor-query) - a declarative abstraction over cursors.
+
+  - ["hasql-cursor-transaction"](https://github.com/nikita-volkov/hasql-cursor-transaction) - a lower-level abstraction over cursors, which however allows to fetch from multiple cursors simultaneously. Generally though "hasql-cursor-query" is the recommended alternative.
+
+  - ["hasql-migration"](https://github.com/tvh/hasql-migration) - A port of postgresql-simple-migration for use with hasql.
+
+  - ["hasql-listen-notify"](https://github.com/awkward-squad/hasql-listen-notify) / ["hasql-notifications"](https://github.com/diogob/hasql-notifications) - Support for PostgreSQL asynchronous notifications.
+
+  - ["hasql-optparse-applicative"](https://github.com/sannsyn/hasql-optparse-applicative) - "optparse-applicative" parsers for Hasql.
+
+  - ["hasql-implicits"](https://github.com/nikita-volkov/hasql-implicits) - implicit definitions, such as default codecs for standard types.
+
+  - ["hasql-interpolate"](https://github.com/awkward-squad/hasql-interpolate) - a QuasiQuoter that supports interpolating Haskell expressions into Hasql queries.
+
+  <sup>Want to list your package or correct something here? Make a PR.</sup>
+
+  ### Transport adapters
+
+  Unlike the extension libraries above, which are optional, a transport adapter is mandatory: Hasql needs one to talk to the server at all.
+
+  - ["pqi"](https://github.com/nikita-volkov/pqi) - the driver-agnostic interface that Hasql programs against. Pulled in automatically. You don't depend on it directly.
+
+  - ["pqi-ffi"](https://github.com/nikita-volkov/pqi-ffi) - the stable adapter, backed by the C "libpq" library. It requires "libpq" of at least version 14 to be installed to compile, which typically just means having a recent PostgreSQL distro installed. Through it Hasql is tested against a wide range of PostgreSQL servers, starting from version 9.
+
+  - ["pqi-native"](https://github.com/nikita-volkov/pqi-native) - a from-scratch, pure-Haskell implementation of the Postgres wire protocol, with no C dependency at all.
+
+  "pqi-native" is thoroughly tested: ["pqi-conformance"](https://github.com/nikita-volkov/pqi-conformance) runs it side by side with "libpq" on the same inputs and checks that the results agree, and the test-suites of "hasql", ["hasql-pool"](https://github.com/nikita-volkov/hasql-pool) and ["hasql-transaction"](https://github.com/nikita-volkov/hasql-transaction) now run against both adapters, so the whole stack above the transport is exercised on it too. It's still labelled **alpha**, because it is not yet proven at production scale. That status lifts when it gets traction and successful usage reports.
+
+  The two adapters are fully interchangeable. Swapping between them is a one-argument change, nothing else, so you can try "pqi-native" today with no lock-in and fall back without a rewrite.
+
+  ## Discussions
+
+  Join [GitHub Discussions](https://github.com/nikita-volkov/hasql/discussions) to ask questions, provide feedback, suggest and vote on features, and help shape the future of Hasql.
+
+  ## Support policy
+
+  This policy is intended to balance stability for users with the ability to evolve the library.
+
+  Each major release of Hasql is supported for at least **one year** from the date of its first release. During this period, fixes are backported to the latest minor version of that major release.
+
+  After the support period ends, the release may continue to work but is no longer guaranteed to receive fixes.
+
+  You're welcome to post requests to change the policy or issues if you believe something is not being addressed.
 description-type: markdown
-hash: 424f5ce423d132d2d883682cc7a3738b2608c4fc48da14d613386cbf8149a411
+hash: e0257eba86bfba98e89a86ff4cb25f70712012100b604ee57115dc58d238e991
 homepage: https://github.com/nikita-volkov/hasql
-latest: 2.0.1.0
+latest: 2.1.0.0
 license-name: MIT
 maintainer: Nikita Volkov <nikita.y.volkov@mail.ru>
 synopsis: Fast PostgreSQL driver with a flexible mapping API
@@ -421,16 +552,18 @@ test-bench-deps:
   QuickCheck: '>=0'
   aeson: '>=0'
   base: '>=4.14 && <5'
+  bytestring: '>=0.10 && <0.13'
   criterion: '>=1.6 && <2'
   hasql: '>=0'
   hspec: '>=2.11.12 && <2.12'
   iproute: '>=0'
   pqi: '>=1.0 && <1.2'
   pqi-ffi: '>=1.0 && <1.1'
-  pqi-native: '>=1.0 && <1.1'
+  pqi-native: '>=1.0.1.0 && <1.1'
   quickcheck-instances: '>=0.3.11 && <0.4'
   random: '>=1.3.1 && <1.4'
   rerebase: '>=1 && <2'
+  testcontainers: ^>=0.5
   testcontainers-postgresql: '>=0.2 && <0.3'
   text-builder: '>=1 && <1.1'
   unordered-containers: '>=0.2 && <0.3'
