@@ -344,6 +344,7 @@ all-versions:
 - 1.16.5
 - 1.16.6
 - 1.16.7
+- 2.0.0
 author: JP Rupp
 basic-deps:
   aeson: '>=2.2.5.1 && <2.3'
@@ -363,11 +364,12 @@ basic-deps:
   filepath: '>=1.5.5.0 && <1.6'
   hashable: '>=1.5.1.0 && <1.6'
   hashtables: '>=1.4.2 && <1.5'
-  haskoin-core: '>=2.0.1 && <2.1'
-  haskoin-node: '>=2.6.1 && <2.7'
+  haskoin-core: '>=3.0.0 && <3.1'
+  haskoin-node: '>=2.7.0 && <2.8'
   haskoin-store: '>=0'
-  haskoin-store-data: '>=3.0.1 && <3.1'
+  haskoin-store-data: '>=4.0.0 && <4.1'
   hedis: '>=0.16.4 && <0.17'
+  http-client: '>=0.7.19 && <0.8'
   http-types: '>=0.12.6 && <0.13'
   lens: '>=5.3.6 && <5.4'
   monad-control: '>=1.0.3.1 && <1.1'
@@ -398,47 +400,591 @@ basic-deps:
 changelog: "# Changelog\nAll notable changes to this project will be documented in
   this file.\n\nThe format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)\nand
   this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html)\n\n##
-  [1.16.7] - 2026-11-20\n\n### Fixed\n- **A Bitcoin store no longer loses its peers
-  when the pool fills again.**\n  A refill asked every connected peer for its mempool,
-  and Bitcoin Core\n  disconnects a peer that asks unless it whitelists it: on groot
-  the btc\n  store lost its three peers at once and answered 503 for seven seconds.\n
-  \ On Bitcoin only the peers given with `--peer` are asked now, since an\n  operator
-  whitelists those; on Bitcoin Cash every peer still is, since\n  Bitcoin Cash Node
-  answers anyone.\n\n## [1.16.6] - 2026-11-19\n\n### Fixed\n- **The pool no longer
-  stops at a transaction that pays an output of value\n  0.** Taking such an output
-  out of an address's summary added `-0`, which\n  Redis does not read as an integer.
-  The script failed at every turn of the\n  fleet, and the pool took in nothing more
-  until the next restart of the\n  pool. Pay-to-anchor outputs, which Bitcoin Core
-  relays since version 29,\n  have value 0. Since Redis keeps what a failed script
-  wrote before its\n  error, the summaries of the addresses that the stuck turn touched
-  could\n  drift; emptying the pool clears them.\n- **A store no longer keeps every
-  transaction it ever offered in memory.**\n  The fleet member kept a set of what
-  it had offered to the pool, emptied\n  only when the pool was started again or Redis
-  lost its data: about half\n  a million transactions a day on Bitcoin. It also made
-  the store refuse,\n  silently, a transaction that left the pool and was sent again,
-  such as\n  one that a replacement pushed out. The set is gone: the fleet's seen
-  set\n  in Redis already keeps stores from fetching what the pool decided on.\n-
-  **Orphans no longer stop the store from offering transactions.** A\n  transaction
-  whose parent never came waited in memory for ever, and a\n  round offers the 2,000
-  oldest that wait: once that many orphans had piled\n  up, nothing else was offered.
-  An orphan is now let go 20 minutes after\n  the store heard of it, as Bitcoin Core
-  does.\n- **A restart of the pool no longer drops what the store was about to\n  offer.**\n-
-  **A restart of the pool fills it again.** After a reorganisation deeper\n  than
-  50 blocks, the pool was emptied and its transactions came back only\n  in a block,
-  since the fleet had seen them and no store fetched them\n  again. The restart now
-  empties the seen set too, and every store reads\n  its node's mempool over RPC (`--node-rpc`)
-  and asks its peers for theirs,\n  as after a loss of Redis.\n- **A store no longer
-  loses its Bitcoin Core peers after Redis loses its\n  data.** From the first refill
-  on, the store asked every peer that\n  connected for its mempool. Bitcoin Core disconnects
-  a peer that asks\n  unless it whitelists it or serves bloom filters, which it does
-  not by\n  default; so the store lost its public Core peers one after the other.\n
-  \ It now asks only the peers connected at the refill, once.\n- **README: memory
-  for indexes and filters.** They come to about 0.9% of the\n  database (16 GB for
-  Bitcoin, 4 GB for Bitcoin Cash, measured on\n  api.haskoin.com), not 0.34%; and
-  they, Bloom filters included, are held\n  outside the block cache, not in it. The
-  `--block-cache-mb` help said the\n  same wrong thing and is fixed too.\n- **Documentation
-  brought up to date with Redis being required.** The\n  package description, the
-  README's Docker quick start (it started the\n  store without Redis, which cannot
+  [Unreleased]\n\n## [2.0.0] - 2026-11-25\n\nThis release brings the tokens of Bitcoin
+  Cash (CashTokens,\n`docs/cashtokens.md`): the store reads the tokens of every output,
+  keeps the\ntoken balance of every address and category, indexes each category, and\nanswers
+  four new endpoints, counting the mempool. Outputs with tokens now\nhave their addresses,
+  so the history and the balances of those addresses\nare whole.\n\nBefore upgrading,
+  take a copy of the database: the migration to version 24\ncannot be undone, and
+  on Bitcoin Cash it reads every block since May 2023,\nwhich takes hours. Upgrade
+  every store of a fleet together, since the\nscripts of the shared pool take token
+  entries. It needs haskoin-core 3.0,\nhaskoin-store-data 4.0 and haskoin-node 2.7.
+  A store whose `--peer` nodes\nwhitelist it must now say what they grant (`--peer-permission`,
+  or\n`PEER_PERMISSIONS=mempool,noban` for `whitebind=mempool,noban@…`): without\n`mempool`
+  there, a Bitcoin store no longer asks them for their mempools.\n\n### Added\n- **The
+  path of a transaction into the shared mempool is one machine,\n  specified and checked**
+  (`docs/mempool-ingestion.md`,\n  `Haskoin.Store.Ingest`, run by `Haskoin.Store.Ingest.Run`).
+  It replaces\n  five stages that each lost transactions in a way of their own: the
+  queue\n  of announcements, the set of requests, the member's list of what waited,\n
+  \ its offers by turn, and the question to the peers at the start.\n  - Every transaction
+  id has one place, and leaves it settled or given up\n    for a counted reason (`ingest.given_up.*`).
+  A store that gave\n    something up reads the whole mempool of its **sources** again:
+  the\n    RPC of its node (`--node-rpc`), and the peers whose node gives its\n    mempool
+  when asked. It also reads them when\n    one connects, when the pool lost what it
+  had, and every ten minutes.\n    So a loss is temporary, where it lasted until a
+  block: a node\n    announces a transaction to a peer once.\n  - What a peer names
+  is asked of the pool before anything is fetched, so\n    reading a mempool that
+  the pool has costs the list of its ids.\n  - Each peer has a window of requests
+  out, from 16 to 4,096, that grows\n    as the peer answers and halves when it does
+  not, in place of asking a\n    node for its whole mempool at once.\n  - A transaction
+  is offered when it arrives, each after those that it\n    spends from: a chain enters
+  root first, in any order of arrival.\n  - What peers name while the store is a block
+  behind is kept, and asked\n    for once it is in sync, where it was dropped.\n  The
+  document says what the path guarantees and how each claim is\n  established: by
+  construction, proved by Liquid Haskell for every state\n  (`proofs/`: that nothing
+  leaves in silence, the bounds on memory, and\n  that every step ends, with where
+  each id is kept in a module of its\n  own, `Haskoin.Store.Ingest.Ledger`),\n  checked
+  through every order of events of small worlds by a model\n  checker in the test
+  suite (`Haskoin.Store.Ingest.Model`,\n  `scripts/check-ingest.sh`), or tested against
+  Bitcoin Core and Bitcoin\n  Cash Node in Podman (`Haskoin.Store.MempoolSpec`, and\n
+  \ `Haskoin.Store.NodeAxiomsSpec` for what is assumed of a node). A store\n  with
+  no source, as one whose peers are all strangers on Bitcoin and\n  that has no RPC,
+  says so in its log and in `/health`.\n- **The RPC of the node is a source of that
+  path** (`--node-rpc`,\n  `Haskoin.Store.NodeRpc`): the store reads the node's whole
+  mempool\n  through it when it starts, whenever it may have missed a transaction,\n
+  \ when the pool lost what it had, and every ten minutes, as it does of a\n  peer
+  that gives its mempool. So a store of Bitcoin Core that its node\n  does not whitelist
+  no longer needs a block to get back what it missed.\n  To the machine the RPC is
+  one more peer that is a source, asked within\n  a window that follows what the node
+  delivers, so nothing of the machine\n  or of its proofs is particular to it. Before,
+  the RPC was read only\n  after the pool had been emptied, 2,000 transactions every
+  two seconds,\n  and a call that failed was taken for an empty mempool: a node that
+  does\n  not answer now says nothing about what it has, and is tried again after\n
+  \ a second, then two, up to a minute.\n- **`/health` says in words what it found.**
+  Each check has a `text`,\n  such as \"The database is 4 blocks behind the best header,
+  at height\n  688,798, more than the 2 allowed: the store is syncing, or cannot import\n
+  \ blocks fast enough.\", and the top a `text` for the whole store: that it is\n
+  \ healthy, with its height and peers, or what is wrong. They come from\n  haskoin-store-data
+  4.0 (`healthText`), so a client writes the same.\n- **`/health` says how the store
+  stands with the mempool of its nodes**,\n  in `mempool`: how many sources it has
+  to read a whole mempool from\n  again, whether it may have missed transactions and
+  has not read a\n  source since, and what is on its way to the pool. A store with
+  no\n  source is healthy, and the `text` at the top says that what it misses\n  stays
+  missed until a block.\n- **The check of the database says more**: beside the state
+  of writes, the\n  compactions and flushes running, the full tables in memory waiting
+  for a\n  flush, the size of the files and of their live data, and the errors in\n
+  \ the background since the database opened, which say why writes are\n  slow. It
+  is now a field of `HealthCheck` in haskoin-store-data\n  (`DatabaseHealth`), so
+  the client reads it; the store added it to its\n  JSON outside the type before.\n-
+  **Tokens of Bitcoin Cash (CashTokens).** Outputs that hold tokens have\n  their
+  addresses now, with haskoin-core 3.0, and so are in the history,\n  the balance
+  and the unspent outputs of those addresses. Outputs, inputs\n  and unspent outputs
+  have a `token` field on Bitcoin Cash. New endpoints:\n  `/address/{address}/tokens`,
+  the token balances of an address, and\n  `/token/{category}/holders`, `/unspent`
+  and `/transactions`\n  (`docs/cashtokens.md`). They count the mempool, as an address's
+  balance\n  does: the fleet's pool in Redis keeps, for each category, its\n  transactions
+  and outputs, and for each address and category the sums of\n  a token balance. Every
+  store of a fleet must run this version, since\n  the pool's scripts take token entries.\n\n-
+  **Unix sockets for Redis, the node and its RPC.** `--redis-url\n  unix:PATH` reaches
+  a Redis on a Unix socket; a peer written `unix:PATH`\n  is a Unix socket, with haskoin-node's
+  peers on sockets; and\n  `--node-rpc-socket` sends the requests of `--node-rpc`
+  through a Unix\n  socket, with the user and password of its URL. Neither node listens
+  on a\n  socket itself, so it is something that joins one to the node, such as\n
+  \ socat. The courier of a published transaction gives such a peer the zero\n  address
+  in its version message, where haskoin-core's `sockToHostAddress`\n  stopped on it.\n\n-
+  **The store asks what each peer's node allows.** With haskoin-node 2.7,\n  every
+  peer runs a model of its node: the state machine of Bitcoin Core\n  32.1 or Bitcoin
+  Cash Node 29.2.0 that haskoin-core translates from their\n  source. A message that
+  the node would punish is not sent, and the log\n  says why, with the upstream line.
+  When the pool fills again, the store\n  asks for the mempool only the peers whose
+  node takes the request: one\n  that serves Bloom filters, as its version message
+  says, or one that\n  whitelists the store with `mempool`. That replaces a rule of
+  the store's\n  own, which asked every peer on Bitcoin Cash and only the `--peer`
+  peers\n  on Bitcoin. That rule lost a Bitcoin Cash peer that served no Bloom\n  filters,
+  and assumed that every `--peer` node whitelisted the store.\n  `--peer-permission`
+  (`PEER_PERMISSIONS`) says what the nodes of `--peer`\n  grant, by the names of `-whitelist`.\n-
+  **The courier knows which nodes say when they refuse.** The model of the\n  node
+  says whether it answers a refused transaction with a `reject`. A\n  `pong` with
+  no `reject` before it now means that a Bitcoin Cash Node kept\n  the transaction
+  (`Kept`), and still only that a Bitcoin Core node is done\n  with it (`Took`).\n\n-
+  **Documentation of the tokens.** The README has a section on the token\n  endpoints,
+  with their answers and what each field means, one on how the\n  store keeps tokens,
+  notes on upgrading to 2.0.0, and an example of the\n  Haskell client for tokens.
+  `swagger.yaml` has an example answer of each\n  token endpoint, taken from a regtest
+  chain.\n\n### Changed\n- The tests accept fast-logger 3.3 (`>= 3.2.9 && < 3.4`),
+  as haskoin-node\n  2.7.0 does for\n  [stackage#8183](https://github.com/commercialhaskell/stackage/issues/8183).\n
+  \ The store logs through haskoin-node, whose suite passes with 3.3.0. The\n  store's
+  own suite was not run with it: `stack.yaml` builds with 3.2.9.\n- **The shared mempool
+  is changed by decisions made in Haskell, each\n  carried out in Redis in one step
+  or not at all**\n  (`Haskoin.Store.Fleet.Atomic`, `Haskoin.Store.Fleet.Pool.Decide`,\n
+  \ `docs/concurrency.md`). Its rules were a Lua script of eight hundred\n  lines,
+  which had two faults. A script that fails after its first write\n  keeps what it
+  wrote, so an error in it left the pool half changed, as\n  the output of value 0
+  did on 19 November; and the rules were kept\n  twice, in Lua to run and in Haskell
+  to test against.\n  - A decision can only ask Redis questions and list writes, which
+  its\n    type says. One small script that decides nothing asks the questions\n    again
+  and carries out the writes only if every answer is the same;\n    otherwise it writes
+  nothing and the decision is made again. An error\n    in a decision is an exception
+  in Haskell before Redis is told\n    anything.\n  - The decisions are held to the
+  script that they replace, which no\n    store runs any more: the two side by side
+  in one Valkey, through\n    drawn sequences of offers, withdrawals, expiries and
+  moves of the\n    tip, with all that Redis has compared after every step\n    (`Haskoin.Store.Fleet.DecideSpec`).\n
+  \ - **The store that moves the tip has the floor.** A move of the tip\n    over
+  a block reads for a second or more, and a decision is carried\n    out only if nothing
+  that it read has changed: with transactions\n    offered all the time it would lose
+  every race. So while a store moves\n    the tip, an offer is late and is made again,
+  and withdrawals,\n    expiries, and drops and evictions of the cache wait for the
+  next\n    turn. A move costs in proportion to its block. A store whose move is\n
+  \   refused five turns in a row warns in its log, with how long the last\n    took
+  and which answer of Redis had changed.\n  - **The floor lasts as long as the move.**
+  The store says every two\n    seconds that it is at its move, in a key of its own
+  (`fx:beat`), and\n    has the floor for ten seconds from each time. The floor lasted
+  ten\n    seconds from when it was taken, and the move over a block of Bitcoin\n
+  \   took longer than that to decide on a server: it was refused at every\n    turn,
+  the tip staying where it was while the database went on. A\n    decision also judges
+  time by one clock, read at its start, where it\n    read the clock again each time
+  it asked Redis, and so found its own\n    lease of ten seconds run out. A store
+  says in its log when a move\n    took a second or more, since transactions wait
+  meanwhile, and\n    where the time went: reading the blocks, reading and writing
+  the\n    cache, deciding, the calls to Redis, carrying it out, and the\n    garbage
+  collector.\n  - **`haskoin-store-bench decide`** times what the move of the tip
+  over\n    a block costs to decide, without Redis: each pass over the decision,\n
+  \   its answers and writes, and what it allocates. Run it with\n    `+RTS -T -A64m`,
+  as a store runs. The figures of this section were\n    measured without `-A64m`,
+  where the collector goes over the model of\n    Redis three hundred times in a move:
+  they compare one build with\n    another, and are more than twice what the move
+  costs. With it the\n    move over 4,000 transactions is decided in 0.8 seconds.\n
+  \ - **The move of the tip is gone through once.** It names what it will\n    ask
+  before it starts, in steps, where it found its questions as it\n    went and was
+  gone through from its start for each step: five times\n    through a block in the
+  benchmark, and more on a server. Deciding the\n    move over 4,000 transactions
+  takes 1.3 seconds where it took 4.4,\n    on a desktop, and decides the same. What
+  it asks of the transactions\n    of the pool that a block is in conflict with is
+  named ahead too: on\n    a server, blocks with such transactions took nine and fifteen\n
+  \   seconds where the others took under five, and sixty of them made the\n    benchmark
+  go from 1.1 seconds to 5.4; it is 1.2 with them named.\n  - **A store takes whatever
+  its node has.** A transaction that a node\n    names is fetched and offered unless
+  the pool has it. It was also left\n    alone if the fleet remembered having seen
+  it, among the newest\n    100,000: a transaction that the pool had let go, for another
+  that\n    took its place, and that the node took again later, stayed out of\n    the
+  store for as long, through every reading of the node's mempool.\n    On a server
+  one stayed out for hours. Two stores of a fleet whose\n    nodes hold transactions
+  in conflict now each offer their own again\n    at every reading; the pool holds
+  the one offered last. The set of\n    what the fleet saw (`fleet:seen`) is no longer
+  kept: an offer writes\n    one thing less, and a member no longer trims it at each
+  turn. The\n    key of an older store is left unread, and can be deleted.\n  - **A
+  store asks its node for what a transaction spends from** when\n    the pool lacks
+  it, at once. It waited for it to come by itself,\n    trying the transaction again
+  after two seconds, four, eight, up to\n    twenty minutes, and a node names a transaction
+  to a peer once: a\n    parent that a store had lost kept everything that spent from
+  it out\n    of the pool until the next reading of the node's mempool. Bitcoin\n
+  \   Core sends a transaction that it never named to the peer; Bitcoin\n    Cash
+  Node says that it has it not, and there the store waits as it\n    did. The rule
+  is in the model of the path, with a check that a\n    machine without it fails,
+  and Liquid Haskell passes.\n  - **A store that has the RPC of its node reads it
+  again when it\n    connects to the node as a peer.** A node names to a peer nothing\n
+  \   that it took before the peer connected, and its RPC announces\n    nothing:
+  what the node took between the reading of the RPC and the\n    connection was in
+  neither, and stayed out of the store until the\n    next reading, ten minutes later.
+  It lost four transactions in one\n    run of a test in about forty. A peer that
+  connects and is no source\n    now makes the sources owe a reading. The model of
+  the path has a\n    node with its RPC and a peer, and fails without the rule.\n
+  \ - **A Grafana dashboard for the store's metrics**, read from InfluxDB\n    as
+  Telegraf's statsd input writes them, for a store that sends its\n    own statistics
+  (`--statsd-aggregates --statsd-no-events`):\n    `tools/grafana/haskoin-store.json`,
+  with the script that generates\n    it. Nine rows and 46 panels: requests, one kind
+  of request,\n    overload, blocks and peers, the database, the path into the\n    mempool,
+  the cache of xpubs and the runtime. Telegraf sums the\n    store's statistics up
+  a second time, which leaves counts, sums and\n    the longest right, and means,
+  rates and percentiles wrong: the\n    dashboard reads the first and works the rest
+  out, and\n    `docs/grafana.md` says how. Checked on a real Telegraf and InfluxDB\n
+  \   with a known load, which `tools/grafana/check/run.sh` does again,\n    and not
+  yet against a store in production. The README now lists the\n    metrics of the
+  web server and of the reads of the database, which\n    the store sent and the README
+  did not name, and what the statistics\n    of `--statsd-aggregates` are called.\n
+  \ - **A test of a store whose Valkey is emptied while it runs**, as by\n    `FLUSHALL`,
+  against Bitcoin Core and Bitcoin Cash Node\n    (`valkeyFlush` in `Haskoin.Store.MempoolSpec`).
+  Valkey goes on\n    answering, so nothing fails, and only the epoch tells the store
+  that\n    the pool is gone. The store must say so once, and have the mempool\n    of
+  its node again within fifteen seconds, without being started\n    again. A store
+  also reads the mempool of its node by the clock,\n    which alone brought the pool
+  back after 26 seconds in a store made\n    unable to notice: the test empties Valkey
+  right after that reading,\n    so that only the noticing meets its limit. It fails
+  for a store\n    that does not notice, and for one that notices and does not read\n
+  \   again. Tried once on servers too, under stores answering the\n    public, none
+  of which was started again: Bitcoin Cash and the\n    testnets had the mempool of
+  their node again in under three\n    seconds, and Bitcoin, with 65,962 transactions,
+  in 233\n    (`docs/fleet-mempool.md`).\n  - **A store at the head of the chain is
+  healthy, whatever the state of\n    its mempool.** `ok` of `/health`, and its status,
+  no longer depend\n    on the two checks that look at transactions: `last-tx`, that
+  one\n    came lately, and `pending-txs`, that few are asked for and not\n    received.
+  A store that had every block was unhealthy, and taken out\n    of service, when
+  its node went quiet or while it fetched a large\n    mempool. Both checks are still
+  made and still say whether they\n    pass. `--tx-timeout` and `--max-pending-txs`
+  set their limits as\n    before, and no longer decide anything.\n  - **A store takes
+  no mempool transaction in until it has the\n    blocks.** While it takes its blocks,
+  a store hears of new\n    transactions and cannot place one: what they spend is
+  in blocks\n    that it has not yet. A store that took 160,000 blocks in half an\n
+  \   hour fetched what its node named meanwhile, held thousands, and\n    gave them
+  up for seven minutes after it had its blocks, saying\n    `syncing` all that time.
+  Until a store first has its blocks, the\n    path into the pool now keeps nothing
+  that a peer names or sends\n    and asks for nothing; then it reads its sources.
+  And a store first\n    has its blocks only once its node has the headers of its
+  peers\n    (`chainHasHeaders`, of haskoin-node 2.7.0): the\n    database caught
+  up with the last header again and again while the\n    headers came, two thousand
+  at a time. A rule of the machine (`begun`), with a check\n    in the model and two
+  planted bugs that it finds; that a transaction\n    sent unasked is not kept either
+  is tested by an example and not\n    checked; tested against both nodes on\n    a
+  chain of 2,500 blocks, with a test that failed before.\n  - **A store no longer
+  shows the coinbase of a block that its node\n    took back.** A node publishes over
+  ZeroMQ the ids of the\n    transactions of a block that stops being part of its
+  chain, the\n    coinbase too, and gives that coinbase when asked, since it keeps\n
+  \   the block. A store with its node as a peer through the RPC and\n    ZeroMQ took
+  it on the word of its node: an unconfirmed transaction\n    that could never confirm,
+  until something emptied the pool. Two\n    were seen on each store of a testnet
+  of a server, after a\n    reorganisation of two blocks. A coinbase is no longer
+  taken in\n    when it arrives, whoever sent it: to the path into the pool, the\n
+  \   peer does not have it. And one that is not in the chain of the\n    store is
+  never offered to the pool. Tested against both\n    nodes, with a test that failed
+  before (`staleCoinbase`). One that\n    is in a pool already stays there until the
+  pool is emptied.\n  - **`/health` says how the mempool stands, in one word**\n    (`mempool.sync`):
+  `syncing`, `synced` or `unknown`. After a start,\n    or after Redis lost its data,
+  a store has its blocks at once and\n    its mempool a minute later, on Bitcoin:
+  it is healthy meanwhile and\n    shows fewer unconfirmed transactions than its node.
+  A deploy that\n    waited for `/health` gave a store traffic 70 seconds before its\n
+  \   mempool was full: it can wait for `synced`.\n    - The mempool is measured against
+  the nodes of the operator only.\n      It is `syncing` until each was asked for
+  its mempool and had\n      twenty seconds to answer, the store has missed nothing
+  of it\n      since, and the pool has decided on all that they named. A store\n      with
+  no such node says `unknown`: what a stranger names is\n      nothing to measure
+  a mempool against.\n    - It was a boolean, `filling`, for a few hours, measured
+  against\n      every source. A store whose peers were all strangers said that it\n
+  \     was filling for ever: a transaction that it could not verify kept\n      its
+  place for twenty minutes, and another came before it left.\n    - In the machine
+  of the path as T9 of `docs/mempool-ingestion.md`:\n      three checks in the model,
+  and five planted bugs that it finds.\n      That a store comes to say `synced` is
+  tested and not checked,\n      also on both nodes while transactions come without
+  a pause.\n    - Needs haskoin-store-data 4.0.0.\n  - **A source is read every minute
+  at least**, where it was every ten\n    minutes. While transactions come it is read
+  every thirty seconds,\n    as before.\n  - **A node as a peer, through its RPC and
+  its ZeroMQ socket**\n    (`--node-rpc` with `--node-zmq`, `NODE_ZMQ`; `docs/node-peer.md`).\n
+  \   The peer-to-peer protocol is made for strangers: a node names what\n    it takes
+  to a peer at its own pace, Bitcoin Core about fourteen a\n    second after a first
+  batch, and in a burst a store was behind until\n    it next read the mempool, every
+  thirty seconds. Somebody who runs\n    the node has its RPC, which answers anything,
+  and its ZeroMQ\n    socket, which says what the node takes as it takes it.\n    -
+  With both, the store has that node as one more peer\n      (`Haskoin.Store.NodePeer`):
+  a pipe in memory, with a thread at\n      the other end that answers the messages
+  of the peer-to-peer\n      protocol from the RPC (headers, blocks, transactions,
+  the\n      mempool) and announces what the node publishes (`hashtx`,\n      `hashblock`,
+  which both Bitcoin Core and Bitcoin Cash Node have).\n      Nothing else of the
+  store changes: the node counts as a peer in\n      `/health`, it is a node of the
+  operator, and it is a source.\n    - A store can run on it alone, with no `--peer`
+  and no\n      `--discover`: discovery is no longer turned on for such a store.\n
+  \   - Both connections are the peer. If the RPC fails or the socket\n      closes,
+  the peer is gone; a ping is answered only once the node\n      answered a call,
+  so a node that hangs is a peer that is silent;\n      and the node is asked for
+  its best block every thirty seconds, in\n      case the socket went quiet. When
+  messages may have been lost, the\n      whole mempool is named.\n    - The store
+  speaks the protocol of ZeroMQ itself (ZMTP 3.0,\n      `Haskoin.Store.NodeZmq`),
+  with no library of the system. A Unix\n      socket works as an address (`ipc://PATH`).\n
+  \   - Tested against both nodes: the subscriber; a store with no other\n      peer
+  that has 150 blocks, the mempool, what the node takes next\n      and its next block;
+  the same store when its node hangs and goes\n      on; and on Bitcoin Core, 800
+  transactions that the node took in\n      seconds, there within five seconds of
+  the last with no reading,\n      where the peer-to-peer protocol alone is late.
+  Not tested: a\n      first sync of a real chain this way, which takes one RPC call
+  for\n      each block.\n    - **The RPC alone makes the node a peer too** (`--node-rpc`
+  without\n      `--node-zmq`). Nothing publishes then, so the peer asks the node\n
+  \     every five seconds: for its best block, and, while no other node\n      of
+  the operator is a peer of the store, for the ids of its\n      mempool, of which
+  it names those that are new. While every other\n      peer is a stranger, that keeps
+  the store at most five seconds\n      behind a node that it trusts. Such a store
+  runs with no\n      peer-to-peer connection as well, and discovery is not turned
+  on\n      for it. Tested against both nodes (`polls`: three batches and a\n      block,
+  each there within twelve seconds, which fails when the\n      peer asks every sixty).
+  Not measured: what asking a mempool of\n      sixty thousand transactions every
+  five seconds costs the node.\n    - **A store can run without ever connecting to
+  a peer**, from no\n      chain at all: with the RPC of its node, and its ZeroMQ
+  socket or\n      not. Tested on both nodes, each way, on a chain of more than\n
+  \     2,500 blocks, which is more than a node gives of headers in one\n      answer
+  (`noPeerEver`). Not tested on a real chain.\n    - **A store that has the RPC and
+  not the ZeroMQ socket warns of\n      it**: the two are expected together. In the
+  log, when the store\n      starts and when the peer connects, and in `/health`,
+  as a\n      sentence in the new `warnings` and in `text`. A warning decides\n      nothing:
+  `ok` and the status stay as they are. It needs\n      haskoin-store-data 4.0.0.\n
+  \   - The web server no longer reads the RPC as a source of its own\n      (`nodeFeedLoop`):
+  the node peer is that source.\n    - The node of `--node-rpc` is a node of the operator
+  with\n      `--foreign-peers` too, which speaks of the nodes of `--peer`. It\n      was
+  taken for a stranger.\n  - **The peers that the operator gave are kept** (`--peer`,
+  and the\n    node of `--node-rpc`). They are the ones whose word the store takes,\n
+  \   and the only reason for one to have no connection is now that it\n    takes
+  none. From haskoin-node's branch `sticky-peers`:\n    - never dropped for its age:
+  `--max-peer-life` is for peers found by\n      discovery;\n    - tried again every
+  ten seconds at most when its connection ends,\n      for ever, where it waited up
+  to ten minutes;\n    - a slot kept for it while it is away: with `--discover`, peers\n
+  \     found on the network filled every slot meanwhile, and the node of\n      the
+  operator found none when it came back.\n    Tested in haskoin-node, the first against
+  both nodes. Not tested end\n    to end: a store with discovery whose own node is
+  away.\n  - **A stranger is not taken at its word.** A store verifies no script:\n
+  \   it takes a transaction because a node took it. It did so of every\n    peer,
+  and a peer found by discovery is anybody: it could send a\n    spend of somebody's
+  coins with a signature that does not verify,\n    and the store showed it, as a
+  payment that was never made or as\n    coins spent that were not. A test offers
+  such a transaction as the\n    store offered every one: it is taken.\n    - The
+  store now takes the nodes of `--peer`, and the node of\n      `--node-rpc`, for
+  nodes of its operator, and takes their word as\n      before. `--foreign-peers`
+  (`FOREIGN_PEERS`) says that the nodes\n      of `--peer` are not.\n    - What only
+  strangers name is looked at before it is offered. If\n      every signature of a
+  coin locked to one key verifies, it is\n      taken. If one does not, or it spends
+  more than it has, or its\n      tokens come from nowhere, it is given up with all
+  that spends\n      from it (`ingest.given_up.forged`). If it spends a coin locked
+  by\n      a script, which only a full node can judge, it is held until a\n      node
+  of the operator names it, twenty minutes at most, and not\n      shown meanwhile
+  (`ingest.given_up.not_vouched`).\n    - So a store with a node of its operator among
+  its peers misses\n      nothing, and one with only strangers shows a spend of a
+  script\n      when a block confirms it.\n    - The checks are in haskoin-core (`Haskoin.Transaction.Judge`,\n
+  \     `judgeRelayed`), with those of `POST /transactions`, which moved\n      there
+  from this package: they say nothing of a store, and other\n      programs can use
+  them. Only what no node can take is refused: a\n      rule of relay is the node's
+  own.\n    - The rule is in the machine of the path (T8 of\n      `docs/mempool-ingestion.md`),
+  and the model has seven worlds for\n      it, 26 in all, with five planted bugs
+  that it finds; its first\n      version had two of them. Liquid Haskell passes.
+  Tested with real\n      signatures against a real pool, and against Bitcoin Core:
+  a store\n      whose only peer is a stranger takes what the wallet of the node\n
+  \     signed and not what a script spends, and takes both once the peer\n      is
+  a node of its operator.\n    - It builds on haskoin-core's branch `judge-transactions`.\n
+  \ - **A store of Bitcoin has a whole mempool again in a minute and a\n    half,
+  where it took over three.** After each transaction that came,\n    the path into
+  the pool said how many ids it knew, and counted them\n    by making a set of them
+  all: 0.8 milliseconds for 65,000 on a\n    desktop, for each of 65,000 transactions.
+  A store whose Redis had\n    lost its data, or that started on a new pool, took
+  in 380\n    transactions a second with a core busy, its Redis idle and requests\n
+  \   out to its node all the time: 233 and 259 seconds on a server\n    answering
+  the public, 191 on one answering nobody. The count is the\n    size of a map now,
+  and the same store took in 2,300 a second and had\n    the 65,314 transactions of
+  its node after 87 seconds, 294 a second\n    from the first seconds and over 1,000
+  from the second minute. What\n    remains is the offers, one at a time.\n  - **A
+  store that is slow to fill its pool says where its time goes.**\n    Every ten seconds
+  in which the path into the pool was busy for five\n    or more, it says in its log
+  how many events, offers and questions to\n    the pool it went through, and how
+  many milliseconds went to the\n    machine, to the offers, to the questions, to
+  sending requests and to\n    saying its state, with the offers split into what each
+  reads: whether\n    a block has the transaction, the outputs that it spends from
+  the\n    database and from the pool, which of them are unspent, and the\n    pool's
+  decision. Nothing outside the store could tell. That line is\n    what found the
+  count above, after a cause reasoned from the shape of\n    a curve had been wrong.\n
+  \ - **A store that takes a whole mempool at once offers each\n    transaction to
+  the pool once.** A transaction that spends from one\n    that the store is still
+  fetching waits for it, and was offered to\n    the pool all the same two seconds
+  later, then four, eight and so\n    on, in case that one had been given up. The
+  pool could only refuse\n    it. A held transaction is now offered at its time only
+  if one of\n    those that it waits for has no place any more, which is what the\n
+  \   time is for (`docs/mempool-ingestion.md`). Given 65,000\n    transactions in
+  chains of 24 at once, with a millisecond for each\n    offer, the machine made 103,862
+  futile offers and took 169 seconds;\n    it makes none now, and takes the 65 seconds
+  of the offers\n    (`Haskoin.Store.IngestSpec`, in three seconds). Against Bitcoin\n
+  \   Core with 24,000, a store with an empty pool made 44,000 futile\n    offers
+  and had them all in 18 seconds; none and 13 seconds now. On a\n    server with 65,000
+  it changed nothing that could be measured: this\n    was not what made the store
+  slow there. The model checks the rule\n    both ways, with a planted bug for each,
+  and Liquid Haskell passes.\n  - **The tip moves at once, and the pool lets go of
+  the block's\n    transactions after it.** A move of the tip over a full block took\n
+  \   what the block confirmed out of the pool in the same step: more than\n    a
+  hundred thousand writes, for which the tip waited five to fifteen\n    seconds on
+  a server, nearly one of them inside Redis, which answers\n    nobody else meanwhile,
+  and more with every cached extended key. The\n    move now marks those transactions,
+  one write for each, and they\n    leave afterwards, two hundred at a time. A request
+  that would read\n    one of them takes it out first, so every answer is that of
+  a pool\n    that has let go of everything; nothing enters the pool until it has.\n
+  \   In the benchmark the move over 4,000 transactions is decided in 0.12\n    seconds
+  where it took 0.8, and 2.7 with a cached key at every\n    address. A move that
+  undoes a block is as it was.\n    `scripts/check-pool.sh` checks the three rules
+  in small worlds, with\n    the decisions themselves: every pool, every block and
+  every order of\n    taking out (`docs/tip-first.md`). And no decision can write
+  to the\n    pool or to the cache while a transaction is marked: every write to\n
+  \   one of their keys asks first, whatever the decision does for\n    itself. That
+  taking transactions out leaves the same pool in any\n    order is proved by Liquid
+  Haskell for the pool as a pure value\n    (`Haskoin.Store.Fleet.Pool.Order`).\n
+  \ - **A store reads the mempool of its node every thirty seconds while\n    transactions
+  come**, and twice as long after each reading that\n    follows none, up to the ten
+  minutes that it was. Bitcoin Core names\n    transactions to a peer at fourteen
+  a second after a first batch, to\n    a peer that it whitelists too, so a store
+  was minutes and thousands\n    of transactions behind its node whenever the node
+  took more: nothing\n    was lost, and all of it was late. Asked for its mempool,
+  the node\n    names everything at once. A store says in its log when going through\n
+  \   what a node named at once took a second or more.\n  - **`rbf` is true for every
+  unconfirmed transaction on Bitcoin, and\n    false elsewhere.** The nodes of Bitcoin
+  take a replacement of any\n    unconfirmed transaction, whatever it signals, since
+  Bitcoin Core 28,\n    and Bitcoin Cash has no such rule. The field said whether
+  a\n    transaction signalled replace-by-fee (BIP 125) or spent an\n    unconfirmed
+  one that did, which the pool worked out for every\n    transaction and kept right
+  as parents were confirmed and came back:\n    two sets in Redis, and questions about
+  the children of every\n    transaction that a block confirmed. None of that is kept
+  or asked\n    any more; the sets `pool:own` and `pool:rbf` of an older store are\n
+  \   left unread. The move over 4,000 transactions is decided in 1.1\n    seconds.\n
+  \ - **A decision of any size is carried out.** Its questions and writes\n    go
+  to Redis a thousand to an argument, without the writes that a\n    later delete
+  undoes and with one command for many members of a key.\n    They went as an argument
+  for each word, 1,008,352 for the move of\n    the tip over one block of Bitcoin,
+  and Redis closes the connection of\n    a command with more than 1,048,576.\n  -
+  **It costs Redis more:** an offer that is taken is two calls where it\n    was one,
+  and about 137 microseconds of Redis where the script took 74\n    (Valkey's own
+  count). That leaves room for some seven thousand offers\n    a second.\n  - **Breaking
+  for a fleet: keys start with `hs3:<network>:`**, where they\n    started with `hs2:`.
+  Stores of this version and older ones on one\n    Redis are two fleets, each with
+  its own pool. Upgrade every store of\n    a fleet together; the keys under `hs2:`
+  can be deleted afterwards.\n  - **The cache of extended public keys is written the
+  same way**\n    (`Haskoin.Store.Fleet.XPub.Decide`): building an entry, moving it\n
+  \   with the tip in pieces, dropping and evicting. A script that failed\n    among
+  the thousands of rows of a build left an entry half written. A\n    build of a key
+  with 20 addresses costs Redis about 1.5 milliseconds\n    where it cost 1.0. Its
+  reads are still one script and one call, and\n    write nothing but the note that
+  a key was used: a move of the tip\n    that its store left for ten seconds is no
+  longer ended by a read, but\n    by the build that follows the miss.\n  - **That
+  a decision sees its own writes rightly is proved** for what it\n    asks about one
+  cell: a field of a hash, a member of a set, the score\n    of a member, what a key
+  holds. What a write does to a cell is written\n    once (`Haskoin.Store.Fleet.Atomic.Cells`),
+  for the model of Redis and\n    for the decision, and Liquid Haskell checks, for
+  every list of\n    writes, that the cell in the model after them is what the decision\n
+  \   works out (`proofs/`). It assumes four facts of `Data.Map`. The rest\n    of
+  what a decision can ask is tested, as before.\n  - **A write of the wrong kind to
+  a key does not compile.** The script\n    that carries out a decision cannot fail
+  half way unless Redis\n    refuses a command, which it does for a key of another
+  kind and for an\n    addition to what is no number. A key now has its kind in its
+  type\n    (`Haskoin.Store.Fleet.Atomic.Keys`), and the decisions are written\n    with
+  questions and writes that each take keys of one kind.\n  The scripts of the reports
+  and of the move of the tip without the pool\n  are as they were.\n- **The testnet3
+  of Bitcoin Cash is `--net bchtest3`**, no longer\n  `bchtest`, as haskoin-core 3.0
+  renames it after `bchtest4`. Bitcoin Cash\n  Node still runs testnet3, and the store
+  keeps it, as it keeps Bitcoin\n  testnet3 (`btctest`), which haskoin-core deprecates.
+  The name is also\n  the store's data directory, its prefix in Redis, its StatsD
+  namespace\n  and its `network` in the API: before upgrading a store of testnet3,\n
+  \ rename `DIR/bchtest` to `DIR/bchtest3`, and set `NET=bchtest3`. Its\n  shared
+  mempool fills again under the new prefix. Addresses keep the\n  CashAddr prefix
+  `bchtest`. `hsq -n bchtest3` follows.\n- **The tests name no address or port, and
+  use only real nodes in\n  Podman.** The tests of downloading that a mock peer served
+  in memory\n  (`StoreSpec`) now sync from Bitcoin Cash Node in Podman\n  (`Haskoin.Store.DownloadSpec`):
+  the blocks asked 64 at a time, every\n  transaction of a block as the node has it,
+  a second node taking over from\n  one frozen with `SIGSTOP`, and a heap that stays
+  flat over 5000 blocks.\n  The web servers of the integration tests listen on Unix
+  sockets, which the\n  tests, the WebSocket client and the client of haskoin-store-data
+  reach;\n  the price service is a name that never resolves, and the RPC that does\n
+  \ not answer is a socket that nothing listens on. The test of HTTPS makes\n  its
+  certificate with openssl and its requests with curl in a container of\n  the test
+  image, not with the programs of the machine. The mock peer of\n  the benchmark,
+  and the peers of the tests of publishing, are named by\n  Unix sockets. The benchmark
+  compiles again: it lacked the field\n  `nodeRpcSocket` of its web server, and now
+  the permissions of its peer.\n- **The test of tokens queries the four endpoints**
+  through the client of\n  haskoin-store-data, with the transactions in the mempool
+  and then\n  confirmed: the balance of the address, the holders, the unspent outputs\n
+  \ and the transactions of the category, and the amounts as strings in the\n  JSON.\n-
+  **A store that does not sync in the integration tests explains\n  itself.** The
+  tests keep the last 400 lines of the log of each store,\n  whether they print it
+  or not, and when a store does not reach the best\n  block of its node in time they
+  print them, with what the node says of its\n  chain and of its peers and what the
+  store says of its health and peers.\n  A store stopped short of its node a few times
+  on Bitcoin Cash Node, too\n  seldom to be run again with its log.\n- **The example
+  of the client in the README compiles**: it needed\n  `OverloadedStrings` for the
+  text of its address.\n- **The integration tests run their containers through\n  [podman-test](https://github.com/jprupp/podman-test)**,
+  in place of the\n  code of their own in `integration/`: each environment is a pod
+  with\n  Valkey on a Unix socket and the node's RPC and peer-to-peer ports bridged\n
+  \ to sockets, and the store reaches all three through them, so the pod has\n  no
+  network. The tests are skipped with `PODMAN_TEST_SKIP`, in place of\n  `HASKOIN_STORE_NO_PODMAN`.
+  The Bitcoin Core node that does not whitelist the\n  store now gives it its mempool,
+  and the store is told so: without it the\n  node closed the store's connection over
+  the request, now and then during\n  a test. The test of\n  the Haskell client mines
+  a block at each look until the client hears\n  one, where it mined one and waited:
+  a client whose stream opened after\n  that block heard nothing.\n- **Database version
+  24.** On Bitcoin Cash the migration from version 23\n  indexes the outputs that
+  hold tokens since the upgrade of May 2023: hours,\n  once, and it carries on where
+  it was if stopped. On Bitcoin it writes the\n  new version. Four new column families
+  keep older stores out.\n- The checks of a published transaction read the token prefix
+  with\n  haskoin-core's parser.\n- **Builds on haskoin-core 3.0**, which reads the
+  token prefix and adds a\n  field to `Network`, with haskoin-node and haskoin-store-data
+  4.0 on it\n  too. Until they are on Hackage, `stack.yaml` pins commits of their\n
+  \ GitHub repositories. The Blockchain.info API gives the legacy addresses of the\n
+  \ Bitcoin Cash test networks with the prefixes of testnet4, which are\n  those of
+  testnet3, now that haskoin-core marks testnet3 as deprecated.\n- **Releasing and
+  formatting moved to\n  [jprupp/tools](https://github.com/jprupp/tools)**, shared
+  by the Haskell\n  packages of this family. `haskell-release` builds and tests the
+  package,\n  builds the source and documentation archives, then tags the commit,\n
+  \ pushes the tag and uploads both to Hackage. It leaves out the\n  documentation
+  of the internal library `integration`, whose file\n  `haskoin-store:integration.txt`
+  made Hackage refuse the archive, so a\n  release needs no step by hand. `haskell-format`
+  replaces `scripts/format`.\n- **CI runs through the workflow that the packages share**
+  in jprupp/tools,\n  which also keeps the cache of the Nix build per release of nixpkgs.\n
+  \ `check-stack-paths` from there replaces `scripts/check-local-deps.sh`.\n- **`haskell-dev`,
+  from jprupp/tools, is the fast loop of work on the\n  code**: `build`, `test` and
+  `docs`, without optimisation and with the\n  tests in eight processes, about 75
+  seconds in place of four minutes. The\n  five environments of `Haskoin.Store.IntegrationSpec`,
+  each a node, a\n  Valkey and a store in Podman, are now groups at the top of the
+  module, and\n  `haskell-dev.toml` names it, so that they run at the same time.\n\n###
+  Fixed\n- **Races found by an audit of every protocol that runs at once**\n  (`docs/concurrency.md`,
+  new, has each protocol, its machine, its owner,\n  the invariants and what changed):\n
+  \ - a peer passed over during a stall was disconnected for a block it was\n    asked
+  for once another brought the store in sync (`Sync.finish`);\n  - the refill ran
+  the block store's in-sync check on the web thread; it\n    goes through the mailbox
+  now;\n  - a peer could owe a block twice; a block of a branch the node had left\n
+  \   could be imported; a revert published no best block;\n  - two threads pruning
+  views could let go of the newest block's view;\n  - a store that was not live could
+  empty the fleet's pool while one other\n    store was live; a store emptied it where
+  the documentation said it\n    waits (`Unreadable`); a transaction in conflict could
+  be lost for the\n    fleet; expiry could withdraw a transaction that had just come
+  back;\n  - a request interrupted while it took the lock of an xpub left the job\n
+  \   reserved for good; the listener of builds spun while Redis was down,\n    grew
+  without bound and woke requests for builds that never happened;\n  - one slow answer
+  from Redis made every store answer 503; background\n    loops could die in silence;
+  an error skipped the asking of published\n    transactions;\n  - announcements of
+  transactions held up blocks on the block store's\n    thread; the transactions waiting
+  to be offered had no bound.\n- **New transactions and blocks show at once again.**
+  Since the pool moved\n  to Redis, a transaction from a peer waited for the member's
+  next turn,\n  up to two seconds, before it was in the pool and listed; it is offered\n
+  \ as soon as it comes now (`Haskoin.Store.Ingest`). A store that a block\n  made
+  well, as after a sync, took no turn for up to two seconds either:\n  the block woke
+  the member before the health check had run, and the\n  member slept until its timer.
+  It now takes a turn as soon as the store\n  is well (`Haskoin.Store.Fleet.turn`).
+  Measured in a downstream regtest\n  suite: 1.3 to 2.0 seconds for a transaction
+  against 0.3 to 0.4 on\n  1.12.1, and 2.0 seconds for 101 blocks after a start against
+  0.01.\n- **A store no longer falls behind the mempool of its node.** On a server,\n
+  \ a Bitcoin store fell 17,000 transactions behind its node: chains of 24\n  transactions
+  that the node took in one second were offered child first\n  and took 23 rounds;
+  announcements were dropped from a full queue, or\n  while the store was a block
+  behind; and nothing asked the node again\n  for what was missed. The path into the
+  pool is a new machine (see\n  Added).\n- **A Bitcoin Cash Node with `--node-rpc`
+  no longer waits half a minute\n  when it stops.** The store kept its RPC connection
+  open, and the node\n  waited until it had been idle for `-rpcservertimeout`. Every
+  RPC request\n  closes its connection now.\n\n## [1.16.7] - 2026-11-20\n\n### Fixed\n-
+  **A Bitcoin store no longer loses its peers when the pool fills again.**\n  A refill
+  asked every connected peer for its mempool, and Bitcoin Core\n  disconnects a peer
+  that asks unless it whitelists it: on groot the btc\n  store lost its three peers
+  at once and answered 503 for seven seconds.\n  On Bitcoin only the peers given with
+  `--peer` are asked now, since an\n  operator whitelists those; on Bitcoin Cash every
+  peer still is, since\n  Bitcoin Cash Node answers anyone.\n\n## [1.16.6] - 2026-11-19\n\n###
+  Fixed\n- **The pool no longer stops at a transaction that pays an output of value\n
+  \ 0.** Taking such an output out of an address's summary added `-0`, which\n  Redis
+  does not read as an integer. The script failed at every turn of the\n  fleet, and
+  the pool took in nothing more until the next restart of the\n  pool. Pay-to-anchor
+  outputs, which Bitcoin Core relays since version 29,\n  have value 0. Since Redis
+  keeps what a failed script wrote before its\n  error, the summaries of the addresses
+  that the stuck turn touched could\n  drift; emptying the pool clears them.\n- **A
+  store no longer keeps every transaction it ever offered in memory.**\n  The fleet
+  member kept a set of what it had offered to the pool, emptied\n  only when the pool
+  was started again or Redis lost its data: about half\n  a million transactions a
+  day on Bitcoin. It also made the store refuse,\n  silently, a transaction that left
+  the pool and was sent again, such as\n  one that a replacement pushed out. The set
+  is gone: the fleet's seen set\n  in Redis already keeps stores from fetching what
+  the pool decided on.\n- **Orphans no longer stop the store from offering transactions.**
+  A\n  transaction whose parent never came waited in memory for ever, and a\n  round
+  offers the 2,000 oldest that wait: once that many orphans had piled\n  up, nothing
+  else was offered. An orphan is now let go 20 minutes after\n  the store heard of
+  it, as Bitcoin Core does.\n- **A restart of the pool no longer drops what the store
+  was about to\n  offer.**\n- **A restart of the pool fills it again.** After a reorganisation
+  deeper\n  than 50 blocks, the pool was emptied and its transactions came back only\n
+  \ in a block, since the fleet had seen them and no store fetched them\n  again.
+  The restart now empties the seen set too, and every store reads\n  its node's mempool
+  over RPC (`--node-rpc`) and asks its peers for theirs,\n  as after a loss of Redis.\n-
+  **A store no longer loses its Bitcoin Core peers after Redis loses its\n  data.**
+  From the first refill on, the store asked every peer that\n  connected for its mempool.
+  Bitcoin Core disconnects a peer that asks\n  unless it whitelists it or serves bloom
+  filters, which it does not by\n  default; so the store lost its public Core peers
+  one after the other.\n  It now asks only the peers connected at the refill, once.\n-
+  **README: memory for indexes and filters.** They come to about 0.9% of the\n  database
+  (16 GB for Bitcoin, 4 GB for Bitcoin Cash, measured on\n  api.haskoin.com), not
+  0.34%; and they, Bloom filters included, are held\n  outside the block cache, not
+  in it. The `--block-cache-mb` help said the\n  same wrong thing and is fixed too.\n-
+  **Documentation brought up to date with Redis being required.** The\n  package description,
+  the README's Docker quick start (it started the\n  store without Redis, which cannot
   work), the help of `/health` in\n  `swagger.yaml` (the `redis` and `database` fields
   are always there; a\n  store without Redis answers 503), and comments throughout
   the code that\n  still described an optional Redis, a store's own mempool, the token\n
@@ -2261,6 +2807,7 @@ description: |
   | Networks        | Bitcoin and Bitcoin Cash: mainnet, testnets and regtest                                     |
   | Addresses       | Balances, transactions and unspent outputs (UTXO) of any address, alone or many at once      |
   | Xpubs           | Balances, transactions and UTXO of extended public keys, for legacy, nested SegWit and native SegWit addresses, from the fleet's cache in Redis |
+  | Tokens          | CashTokens on Bitcoin Cash: the tokens of every output, token balances of addresses, and the holders, transactions and UTXO of each category |
   | Blocks and txs  | Lookup by hash, height or time; raw serialized forms; transactions of a block               |
   | Mempool         | One pool in Redis shared by the fleet, by arrival time, with replace-by-fee on BTC and expiry |
   | Formats         | JSON                                                                                         |
@@ -2340,7 +2887,8 @@ description: |
   ```
 
   Give it either `--discover` or at least one `--peer`; with neither it turns
-  discovery on by itself. Data goes in a directory named after the network inside
+  discovery on by itself, unless it has your node as a peer through its RPC
+  (`--node-rpc`, which is meant to come with `--node-zmq`). Data goes in a directory named after the network inside
   `--dir`, so one data directory can hold several networks.
 
   It needs a Redis or Valkey server, at `redis://localhost:6379` unless
@@ -2501,15 +3049,17 @@ description: |
 
   | Option | Environment | Default | Meaning |
   | --- | --- | --- | --- |
-  | `-n`, `--net` | `NET` | `bch` | Network: `btc`, `bch`, or a test network (see `--help`) |
+  | `-n`, `--net` | `NET` | `bch` | Network: `btc`, `bch`, the testnets `btctest4`, `bchtest4`, `bchtest3` and `btctest` (Bitcoin testnet3, deprecated), or regtest `btcreg`, `bchreg` |
   | `-d`, `--dir` | `DIR` | `~/.haskoin-store` | Data directory |
   | `--discover` | `DISCOVER` | off | Discover peers through DNS seeds and relayed addresses; on regtest it finds none, so name a `--peer` |
-  | `-p`, `--peer` | `PEER` | none | Connect to `HOST[:PORT]`; repeat for more, space-separated in `PEER`. On Bitcoin, only these peers are asked for their mempools when the pool fills again: whitelist the store on them (`whitebind=mempool@…`) |
+  | `-p`, `--peer` | `PEER` | none | Connect to `HOST[:PORT]`, or to the Unix socket `unix:PATH`; repeat for more, space-separated in `PEER` |
+  | `--peer-permission` | `PEER_PERMISSIONS` | none | A permission that the nodes of `--peer` grant the store with `-whitelist` or `-whitebind`, by its name there: `mempool`, `noban`, `relay`, `forcerelay`, `download`, `bloomfilter`, `addr`; repeat for more, comma- or space-separated in `PEER_PERMISSIONS`. With `mempool`, the store asks them for their mempools when it starts and when the pool fills again |
+  | `--foreign-peers` | `FOREIGN_PEERS` | off | The nodes of `--peer` are not yours. The store takes a node of yours at its word, and looks first at what only strangers name: it does not take a transaction that it cannot verify from them (see [Whose word is taken](#whose-word-is-taken)) |
   | `--max-peers` | `MAX_PEERS` | `20` | Most peers to connect to |
   | `--peer-timeout` | `PEER_TIMEOUT` | `30` | Seconds before a peer that is silent, or that owes blocks, is dropped |
   | `--block-stall` | `BLOCK_STALL` | `10` | Longest wait, in seconds, for a block from the syncing peer before another peer is asked too; a quick peer gets four of its recent gaps between blocks, at least 2 s |
   | `--block-ping` | `BLOCK_PING` | `5` | Seconds that a peer has to answer a ping to be asked for blocks, unless none answers in time |
-  | `--max-peer-life` | `MAX_PEER_LIFE` | `172800` | Seconds after which a peer is dropped, so connections rotate |
+  | `--max-peer-life` | `MAX_PEER_LIFE` | `172800` | Seconds after which a peer is dropped, so connections rotate. Not the peers of `--peer`, which are kept |
   | `--block-window` | `BLOCK_WINDOW` | `64` | Blocks to request from the syncing peer at a time |
 
   ### Mempool
@@ -2537,7 +3087,9 @@ description: |
   | `--target-delay` | `TARGET_DELAY` | `25` | Milliseconds that a thread ready to run may wait for a core before the limit comes down |
   | `--request-queue` | `REQUEST_QUEUE` | `64` | Long requests that may wait for a slot; more are refused with 429 |
   | `--request-wait` | `REQUEST_WAIT` | `1` | Seconds that a long request may wait for a slot; then it is refused with 429 |
-  | `--node-rpc` | `NODE_RPC` | none | JSON-RPC URL of a full node, such as `http://user:password@127.0.0.1:8332/`, to publish transactions through, and to fill the shared mempool from again after it is emptied; without it, or when it does not answer, transactions go to the peers |
+  | `--node-rpc` | `NODE_RPC` | none | JSON-RPC URL of a full node, such as `http://user:password@127.0.0.1:8332/`, to publish transactions through, and to have that node as one more peer of the store: headers, blocks, transactions and the mempool come over it, and the store needs no peer-to-peer connection (`docs/node-peer.md`). Give `--node-zmq` with it: without it the store asks the node every five seconds, and warns of it in its log and in `/health`. Without `--node-rpc`, or when it does not answer, transactions go to the peers |
+  | `--node-rpc-socket` | `NODE_RPC_SOCKET` | none | Unix socket to send the requests of `--node-rpc` through, in place of the host and port of its URL; the URL still gives the user and password. Neither node listens on one itself: it is something that joins it to the node, such as socat |
+  | `--node-zmq` | `NODE_ZMQ` | none | Where the node of `--node-rpc` publishes over ZeroMQ, such as `tcp://127.0.0.1:28332` or `ipc:///run/node/zmq.sock`. Start the node with `-zmqpubhashtx` and `-zmqpubhashblock` at that address; for a Unix socket, Bitcoin Core wants it written `unix:/run/node/zmq.sock` and does not start with `ipc://` (`docs/node-peer.md`). The store then hears of a transaction and of a block as the node takes them, and does not have to ask (`docs/node-peer.md`). It needs `--node-rpc`, and is expected with it |
   | `--def-item-count` | `DEF_ITEM_COUNT` | `100` | Items in a list when no `limit` is given |
   | `--xpub-gap` | `XPUB_GAP` | `32` | Unused addresses kept after the last used one of each chain of an xpub; payments further away are not seen |
   | `--xpub-gap-init` | `XPUB_GAP_INIT` | `20` | Addresses looked at for an xpub with no transactions; an xpub with none used among them counts as unused |
@@ -2558,11 +3110,11 @@ description: |
 
   | Option | Environment | Default | Meaning |
   | --- | --- | --- | --- |
-  | `--redis-url` | `REDIS_URL` | `redis://localhost:6379` | Redis of the fleet, which every store needs: its tip, mempool and xpub cache |
+  | `--redis-url` | `REDIS_URL` | `redis://localhost:6379` | Redis of the fleet, which every store needs: its tip, mempool and xpub cache; `unix:PATH` for a Redis on a Unix socket |
   | `--redis-max-xpubs` | `REDIS_MAX_XPUBS` | `10000` | Size of the xpub cache, at least 1; evicted by cost to index again and by use |
 
   Redis is how stores agree, and every store is a member of a fleet, even a
-  fleet of one. Every key starts with `hs2:<network>:`.
+  fleet of one. Every key starts with `hs3:<network>:`.
 
   - **The block** is the newest that every live store has. A request is
     answered from it, from the store's view of its database at that block.
@@ -2578,25 +3130,108 @@ description: |
     built again as requests ask for them.
   - **When the pool starts again**, after a reorganisation deeper than 50
     blocks, the stores fill it again too.
-  - **Filling the pool again** works best with `--node-rpc`: each store reads
-    its node's mempool (`getrawmempool`), 2,000 transactions every two
-    seconds. Each also asks its peers for their mempools, once: every peer on
-    Bitcoin Cash, whose nodes answer anyone, and on Bitcoin only the peers
-    given with `--peer`, since Bitcoin Core disconnects a store that asks
-    unless it whitelists it (`docs/fleet-mempool.md`).
+  - **Filling the pool again** is reading the whole mempool of a
+    **source**, which a store does when it starts, whenever it may have
+    missed a transaction, when the pool lost what it had, and every
+    minute at least. With `--node-rpc` the node is a peer through its RPC, and a
+    source, whatever the node allows its peers. A peer is one when its node takes the request,
+    which a node closes the connection over unless it offers Bloom filters
+    or whitelists the store with `mempool`. The store knows which from a
+    model of each peer's node (`docs/fleet-mempool.md`): tell it what your
+    nodes grant with `--peer-permission`. A store with no source says so in
+    `/health`.
+  - **Your node as a peer, through its RPC and its ZeroMQ socket.** The
+    peer-to-peer protocol is made for strangers: a node names what it
+    takes to a peer at its own pace, Bitcoin Core about fourteen a second
+    after a first batch, so that in a burst a store is behind its node
+    until it next reads the mempool, every thirty seconds. With
+    `--node-rpc` and `--node-zmq` together, the store has that node as
+    one more peer, with no peer-to-peer connection to it: it asks it what
+    it asks any peer, and the answers come from the RPC and from what the
+    node publishes (`-zmqpubhashtx`, `-zmqpubhashblock`). It hears of a
+    transaction and of a block as the node takes them. With `--node-rpc`
+    alone the node is a peer too, and the store asks it every five
+    seconds for its best block and, while no other node of yours is a
+    peer, for its mempool. That works, costs the node a reading of its
+    whole mempool each time, and makes the store warn in its log and in
+    the `warnings` of `/health`: the two are meant to be given together. That peer counts
+    in `/health`, it is a node of yours, and a store can run on it alone,
+    with no `--peer` and no `--discover`. The ZeroMQ socket only
+    publishes, has no password, and drops what a slow subscriber does not
+    read: keep it on the machine of the node, and the store reads the
+    mempool again whenever something may have been lost. The store speaks
+    the protocol itself, and needs no ZeroMQ library.
+    [docs/node-peer.md](docs/node-peer.md) has the whole of it.
+  - <a id="whose-word-is-taken"></a>**Whose word is taken.** A store
+    verifies no script: it takes a transaction because a node took it.
+    That is right of a node of yours, and the store takes the nodes of
+    `--peer`, and the node of `--node-rpc`, for yours. Any other peer is a
+    stranger, as every peer found by `--discover` is. Of what only
+    strangers name, the store verifies what it can, which is every
+    signature of a coin locked to one key:
+
+    | A transaction that only strangers name | What the store does |
+    | --- | --- |
+    | Every signature verifies | Takes it |
+    | A signature does not verify, it spends more than it has, or its tokens come from nowhere | Refuses it, with all that spends from it (`ingest.given_up.forged`) |
+    | It spends a coin locked by a script, such as a multisig wallet | Holds it until a node of yours names it, for twenty minutes, and does not show it (`ingest.given_up.not_vouched`) |
+
+    The peers that you give are kept. A peer of `--peer`, and the node of
+    `--node-rpc`, is never dropped for its age, is tried again every ten
+    seconds at most when its connection ends, for as long as it takes,
+    and has a slot kept for it meanwhile: with `--discover` too, a peer
+    found on the network never takes the place of one of yours. The only
+    reason for one of them to have no connection is that it takes none.
+
+    So a store with a node of yours among its peers misses nothing, and a
+    store with only strangers shows a spend of a script when a block
+    confirms it. The node of `--node-rpc` is a node of yours, always. If the nodes that you give with `--peer` are not yours,
+    say so with `--foreign-peers`. Without this a stranger could show a
+    wallet a payment that was never made. The store says in its log, of
+    each peer that connects, which of the two it takes it for: check that
+    it knows your node.
   - **`/events` is the same stream on every store**, written to Redis with
     each change of the pool and each move of the tip.
   - **Xpubs** are cached for the whole fleet (`docs/xpub-indexing.md`).
 
   ### Health check
 
+  A store is healthy when it has the blocks of the network: its database
+  keeps up with the headers, the best header is recent, it has enough
+  peers, and its database takes writes. `/health` answers 503 otherwise.
+
+  Nothing of the mempool decides it. A store that is at the head of the
+  chain answers every request rightly from what it has. `/health` still
+  says when the last transaction came and how many are asked for and not
+  received, each with an `ok` of its own, and the health of the store does
+  not depend on them.
+
+  What to know of the mempool is in the `mempool` object of `/health`:
+
+  | Field | What it says |
+  | --- | --- |
+  | `sources` | How many nodes the store can read a whole mempool from |
+  | `sync` | How the mempool stands with the mempools of your nodes, in one word. `syncing`: the store has not yet read your node and taken in all that it named, since it started or since Redis lost its data, and shows fewer unconfirmed transactions than the node meanwhile; for twenty seconds at least after a start. `synced`: it has. `unknown`: the store has no node of yours to read a whole mempool from, only strangers or nobody, and cannot tell |
+  | `known`, `held` | How many transactions are on their way to the mempool, and how many of them the store holds |
+  | `dirty` | Whether the store gave something up and is about to read its sources again |
+
+  To give a new store traffic only once its mempool is full, wait for
+  `sync` to say `synced`. A store that has only strangers for peers never
+  says it: what a stranger names is nothing to measure a mempool against.
+
+  `/health` also has `warnings`, when there are any: what you should put
+  right in how the store is set up, a sentence each. A warning decides
+  nothing, and a store with warnings is as healthy as one without. There
+  is one so far: the store has the RPC of its node (`--node-rpc`) and not
+  its ZeroMQ socket (`--node-zmq`). The store logs the same as a warning.
+
   | Option | Environment | Default | Meaning |
   | --- | --- | --- | --- |
   | `--max-lagging-blocks` | `MAX_LAGGING_BLOCKS` | `3` | Most blocks the index may lag behind the headers |
-  | `--max-pending-txs` | `MAX_PENDING_TXS` | `10000` | Most transactions requested from peers and not received yet |
+  | `--max-pending-txs` | `MAX_PENDING_TXS` | `10000` | Most transactions requested from peers and not received yet, for the check `pending-txs`, which does not decide the health of the store |
   | `--min-peers` | `MIN_PEERS` | `1` | Fewest connected peers |
   | `--block-timeout` | `BLOCK_TIMEOUT` | `14400` | Most seconds since the last block |
-  | `--tx-timeout` | `TX_TIMEOUT` | `1800` | Most seconds since the last transaction |
+  | `--tx-timeout` | `TX_TIMEOUT` | `1800` | Most seconds since the last transaction, for the check `last-tx`, which does not decide the health of the store |
   | `--health-check-interval` | `HEALTH_CHECK_INTERVAL` | `1` | Seconds between checks; there is one at each new block too |
 
   ### Metrics and logging
@@ -2811,12 +3446,92 @@ description: |
   | Mempool | `/mempool` |
   | Addresses | `/address/:addr/{transactions,transactions/full,balance,unspent}` and the multi-address forms `/address/{transactions,transactions/full,balances,unspent}?addresses=…` |
   | Xpubs | `/xpub/:xpub`, `/xpub/:xpub/{transactions,transactions/full,balances,unspent}`, `DELETE /xpub/:xpub` (drop from cache); `derive=legacy\|compat\|segwit` picks the address type (`normal`, the old name of `legacy`, still works) |
+  | Tokens | `/address/:addr/tokens`, `/token/:category/{holders,unspent,transactions}`; outputs, inputs and UTXO have a `token` field on Bitcoin Cash (`docs/cashtokens.md`) |
   | Network | `/peers`, `/health` (503 when unhealthy, Redis included), `/dbstats` |
   | Events | `/events`, as JSON lines over HTTP or as a WebSocket; `after=` resumes, and a WebSocket client can filter by address, xpub or Bloom filter |
   | Blockchain.info | `/blockchain/multiaddr`, `/blockchain/balance`, `/blockchain/rawaddr/:addr`, `/blockchain/unspent`, `/blockchain/rawtx/:txid`, `/blockchain/rawblock/:hash`, `/blockchain/latestblock`, `/blockchain/unconfirmed-transactions`, `/blockchain/export-history`, `/blockchain/q/…` |
 
   Turn off the Blockchain.info endpoints with `--no-blockchain-info`. The xpub
   endpoints are always on: they answer from the fleet's cache in Redis.
+
+  ### Tokens of Bitcoin Cash
+
+  Since May 2023 an output on Bitcoin Cash can hold tokens (CashTokens): a
+  fungible amount of one category, a non-fungible token, or both. The store
+  reads them from every output, keeps a token balance for each address and
+  category, and indexes each category. On Bitcoin there are no tokens: the
+  token endpoints answer with empty lists, and the JSON has no `token` field.
+
+  The token balances of an address, one per category:
+
+  ```sh
+  curl http://localhost:3000/address/bitcoincash:qz.../tokens
+  ```
+
+  ```json
+  [
+    {
+      "address": "bitcoincash:qz...",
+      "category": "084c...93ae",
+      "confirmed": "1000",
+      "unconfirmed": "0",
+      "nfts": 0,
+      "utxo": 1,
+      "txs": 2,
+      "received": "2000"
+    }
+  ]
+  ```
+
+  - **Amounts are strings**, since a category can have up to 2^63 − 1 tokens,
+    more than a JSON number holds exactly in many languages.
+  - **They count the mempool**, as the balance of an address does: `confirmed`
+    is what blocks hold and the mempool does not spend, and `unconfirmed` what
+    the mempool adds. Their sum is what the address holds now.
+  - **`nfts`** is the number of non-fungible tokens, **`utxo`** the number of
+    unspent outputs that hold the category, **`txs`** the number of
+    transactions that moved it to or from the address, and **`received`**
+    every fungible token that the address ever received, spent ones included.
+
+  The category is the id of the transaction whose output 0 the first
+  transaction of the tokens spent. Its endpoints:
+
+  ```sh
+  curl 'http://localhost:3000/token/084c...93ae/holders?limit=10&offset=0'
+  curl 'http://localhost:3000/token/084c...93ae/unspent?limit=10'
+  curl 'http://localhost:3000/token/084c...93ae/transactions?limit=10'
+  ```
+
+  - **`/holders`**: a token balance for each address that holds the
+    category, in the order of the addresses' bytes, a page at a time with
+    `limit` and `offset`. Tokens in outputs without an address are in no
+    one's balance.
+  - **`/unspent`**: the unspent outputs that hold it, newest first: those of
+    the mempool, then those of blocks that the mempool does not spend. Pages
+    as an address's unspent outputs, with `limit`, `offset` and `height`.
+  - **`/transactions`**: the transactions that created, moved or burned it,
+    newest first, those of the mempool first, paged the same way.
+
+  Every output, input (the output it spends) and unspent output has a `token`
+  field on Bitcoin Cash: `null` without tokens, and otherwise the tokens as the
+  CashTokens test vectors and Bitcoin Cash Node's RPC write them:
+
+  ```json
+  "token": {
+    "category": "084c...93ae",
+    "amount": "1000",
+    "nft": {"capability": "minting", "commitment": "01"}
+  }
+  ```
+
+  `nft` is there only for an output that holds a non-fungible token. The
+  tokens are written at the front of an output's script, so its `pkscript`
+  has them too. The Haskell client of
+  [haskoin-store-data](https://github.com/jprupp/haskoin-store-data) has a
+  request for each endpoint (`GetAddrTokens`, `GetTokenHolders`,
+  `GetTokenUnspent` and `GetTokenTxs`), and `scriptTokens` reads the tokens of
+  a script. `swagger.yaml` describes every field, with an example of each
+  answer.
 
   ## How it works
 
@@ -2917,8 +3632,7 @@ description: |
   189 to 148 ms, and from 433 to 398 ms at the tip. Without the reads that
   checked a mined block, in a later set, a block of chains of transactions
   went from 161 to 138 ms. These were measured while the database still had
-  a mempool of its own, which it no longer has. `docs/block-import.md` has
-  the sets of numbers.
+  a mempool of its own, which it no longer has.
 
   A store of mainnet gains more than the benchmark shows. In the benchmark
   a read is 30 microseconds of CPU, as the files are in memory. On the
@@ -2927,9 +3641,8 @@ description: |
   at a time: its reads are slower than the benchmark's, and gain more from
   being made together.
 
-  `docs/block-import.md` has the design, what was measured, and what is left.
-  `docs/block-import.md` says what could bring a block well below a
-  second, and what each step would do to reads.
+  `docs/block-import.md` has the design, what was measured, and what was
+  not done, with the reason for each.
   The stages are timed for StatsD: see [StatsD](#statsd).
 
   ### Publishing
@@ -2960,13 +3673,17 @@ description: |
     unless there is an RPC to send it over; and so are the transactions that
     were measured to cost the store its connections.
   - **Whitelist the store on your nodes** (`-whitelist` in Bitcoin Core and
-    Bitcoin Cash Node). A node announces to a whitelisted peer without
+    Bitcoin Cash Node), and tell the store what they grant
+    (`--peer-permission`). A node announces to a whitelisted peer without
     delay, so the transaction shows in the store at once; otherwise Bitcoin
-    Core takes five seconds on average. And a node never closes the
+    Core takes five seconds on average. When a node takes transactions
+    faster than it names them, which for Bitcoin Core is more than
+    fourteen a second for a while, the store has them at its next reading
+    of the node's mempool, every thirty seconds while transactions come. And a node never closes the
     connections of a whitelisted peer.
 
-  `docs/publishing.md` has the design, what was measured on Bitcoin Core and
-  Bitcoin Cash Node, and how it differs from earlier versions.
+  `docs/publishing.md` has the design, and what was measured on Bitcoin
+  Core and Bitcoin Cash Node.
 
   ### The database
 
@@ -2987,15 +3704,36 @@ description: |
   - **Each request reads one snapshot** of the database, at the fleet tip, so
     everything in an answer is of the same moment.
 
-  `docs/one-fleet.md` has the reasons, and `docs/fleet-mempool.md` the pool
-  in detail and its tests.
+  `docs/README.md` lists every page about how the store works inside, the
+  question that each answers, and the words they use. Start with
+  `docs/one-fleet.md`, which has the reasons, then `docs/tip-first.md`,
+  which says what happens when a block arrives, and
+  `docs/fleet-mempool.md`, the pool in detail and its tests.
+  `docs/concurrency.md` says, for everything that runs at the same time,
+  in a store and across a fleet, who may change what, and why nothing
+  breaks.
   The layout of the keys is described in `Haskoin.Store.Database.Types`.
 
   ### Upgrading an existing database
 
-  This is version 23 of the database. The store migrates an older database
+  This is version 24 of the database. The store migrates an older database
   the first time it opens it. **There is no way back**: an older store
   cannot open the database afterwards, so take a copy first.
+
+  **Upgrading to 2.0.0**, which brings the tokens of Bitcoin Cash:
+
+  - **Take a copy of the database first.** The migration from version 23 is
+    the one below; on Bitcoin Cash it reads every block since May 2023, which
+    takes hours, and carries on where it was if it is stopped.
+  - **Upgrade every store of a fleet together.** The stores of 2.0.0 keep
+    the shared pool under keys that start with `hs3:`, where older stores
+    use `hs2:`: on one Redis the two are separate fleets, each with a pool
+    of its own, and their answers differ until all are upgraded. The new
+    pool starts empty and fills from the nodes. Once no older store runs,
+    the keys under `hs2:` are of no use: flush that Redis, or delete them
+    (`redis-cli --scan --pattern 'hs2:*' | xargs redis-cli unlink`).
+  - **Clients** that do not know the `token` field ignore it; on Bitcoin the
+    JSON is as it was.
 
   | From | What the migration does | How long |
   | --- | --- | --- |
@@ -3003,6 +3741,16 @@ description: |
   | 20 | Takes the unconfirmed transactions out of the chain's indices; the pool gets them again from the peers | Seconds to minutes |
   | 21 | Reads every transaction and writes nearly every one again | Many hours for Bitcoin |
   | 22 | Writes the new version | At once |
+  | 23 | Bitcoin Cash: indexes the outputs that hold tokens, under their addresses and in the token indexes, from the upgrade of May 2023 (`docs/cashtokens.md`). Others: writes the new version | Bitcoin Cash: hours, it reads every transaction since then. Others: at once |
+
+  **From 23 to 24 on Bitcoin Cash, outputs with tokens get their
+  addresses.** Until version 24 an output that holds tokens had no address,
+  so the addresses that held tokens were missing their history and part of
+  their balance. The migration walks the blocks since CashTokens began and
+  adds them, with the token balances and the indexes of each category. It
+  works in batches of 200 blocks, each written at once with its place, so
+  it can be stopped and carries on where it was. The four new column
+  families keep an older store out, as `merge-operators` does.
 
   **From 22 to 23 nothing in the database changes, and it is still one
   way.** From version 23 a block writes the balances of its addresses and
@@ -3053,6 +3801,20 @@ description: |
   - Reading one confirmed transaction in full takes a second key: 18
     microseconds where it took 11.5. Lists by address and by xpub cost the
     same as before.
+
+  ### Tokens
+
+  An output with tokens has the address of its locking script, read by
+  haskoin-core 3.0 after it takes off the token prefix, so the coins of one
+  script stay under one address with or without tokens. Importing a block
+  writes what its transactions do to tokens next to what they do to coins:
+  the token balance of each address and category, and for each category its
+  transactions and its unspent outputs, in column families of their own. The
+  holders of a category are the same balances under a second key, in a
+  column family of their own, so that listing them reads no other address. The shared mempool in Redis keeps the
+  same token entries for the transactions of the pool, which the endpoints
+  lay over those of the blocks. `docs/cashtokens.md` has the details, and why
+  each part is built as it is.
 
   ### Extended public keys
 
@@ -3122,7 +3884,12 @@ description: |
   | `Haskoin.Store.XPub.Service` | The door to the fleet's cache of xpubs: a hit answers, a miss asks the indexer |
   | `Haskoin.Store.Fleet.Member`, `Haskoin.Store.Fleet.XPub` | A fleet, and its cache |
   | `Haskoin.Store.Fleet`, `Haskoin.Store.Fleet.Pool` | The rules of the fleet tip and of the pool, as pure decisions |
-  | `Haskoin.Store.Fleet.Redis` | Those rules carried out in Redis, one Lua script per step |
+  | `Haskoin.Store.Fleet.Redis` | Those rules carried out in Redis, each change in one step |
+  | `Haskoin.Store.Fleet.Atomic` | A decision made in Haskell from what Redis says, and carried out only if Redis still says the same |
+  | `Haskoin.Store.Fleet.Atomic.Cells` | What a write does to one cell, said once, with the proof that a decision sees its own writes as the model of Redis has them |
+  | `Haskoin.Store.Fleet.Atomic.Keys` | The questions and writes of a decision, with the kind of each key in its type |
+  | `Haskoin.Store.Fleet.Pool.Decide` | Every change to the shared mempool, as such decisions |
+  | `Haskoin.Store.Fleet.XPub.Decide` | Every change to the cache of extended public keys, the same way |
   | `Haskoin.Store.Web`, `Haskoin.Store.Web.Events` | The web server, and `/events` |
   | `Haskoin.Store.Web.Router` | Routing of requests to handlers, directly over WAI |
   | `Haskoin.Store.Web.Docs` | The API reference that the server serves at its root |
@@ -3170,14 +3937,43 @@ description: |
 
   The checks are: how far the index is behind the headers, the age of the
   last block and of the last transaction, the transactions waiting to be
-  imported, the connected peers, and Redis (`"redis"` in the JSON).
+  imported, the connected peers, the database, and Redis (`"redis"` in the
+  JSON).
 
-  **Writes to the database** are in `"database"`: `"writes"` is `flowing`,
-  `delayed` or `stopped`, with `"pending-compaction-bytes"` and
-  `"delayed-write-rate"` (bytes a second, 0 when not delayed). RocksDB
-  delays writes and then stops them when its compactions fall behind
-  ([RocksDB](#rocksdb)); the store reads this every five seconds, and logs a
-  warning when writes are delayed or stopped and a line when they recover.
+  **Each check says in words what it found**, in its `"text"`, and the
+  `"text"` at the top says what that means for the whole store, such as:
+
+  > The store is not healthy. The database is 4 blocks behind the best
+  > header, at height 688,798, more than the 2 allowed: the store is
+  > syncing, or cannot import blocks fast enough.
+
+  They are for people looking at a store; a program should read `"ok"` and
+  the numbers, as the wording may change.
+
+  **The mempool of the nodes** is in `"mempool"`: `"sources"` is how many
+  things the store can read a whole mempool from again, `"dirty"` whether it
+  may have missed transactions and has not read a source since, and `"known"`
+  and `"held"` how many transaction ids are on their way to the shared
+  mempool and how many are held. It is no check and has no `"ok"`: a store
+  with no source is healthy. But a node announces a transaction to a peer
+  once, so such a store shows fewer unconfirmed transactions than its node
+  after it missed some, until a block has them, and the `"text"` at the top
+  says so. A source is the RPC of a node (`--node-rpc`), or a peer whose node
+  gives its mempool when asked: for Bitcoin Core, one that whitelists the
+  store with the permission `mempool`, named with `--peer` and declared with
+  `--peer-permission mempool` (`docs/mempool-ingestion.md`).
+
+  **The database** is in `"database"`, as RocksDB reports it every five
+  seconds: `"writes"` is `flowing`, `delayed` or `stopped`, with
+  `"pending-compaction-bytes"` and `"delayed-write-rate"` (bytes a second, 0
+  when not delayed), and the work that explains it: `"running-compactions"`,
+  `"running-flushes"`, `"immutable-memtables"` (full tables in memory waiting
+  to be flushed), `"size-bytes"` and `"live-data-bytes"` of the files, and
+  `"background-errors"` since the database opened. RocksDB delays writes and
+  then stops them when its compactions fall behind ([RocksDB](#rocksdb)).
+  Only stopped writes fail the check, as the store then imports nothing. The
+  store logs a warning when writes are delayed or stopped and a line when
+  they recover.
 
   - **Stopped writes make the store unhealthy:** it imports nothing until
     they flow again.
@@ -3259,6 +4055,46 @@ description: |
   | `fleet.cache.*` | What a server of a fleet does with the fleet's cache of xpubs |
   | `rts.*` | GHC's garbage collector |
 
+  Every name starts with the prefix and the network: `web.reruns` of a
+  store of Bitcoin is `haskoin_store.btc.web.reruns`.
+
+  With `--statsd-aggregates` the store also works out statistics of each
+  metric, every second, and sends those: a counter's count as
+  `stats.counters.<metric>.count`, a gauge as `stats.gauges.<metric>`,
+  and of a timing its count, sum, mean, longest, shortest and
+  percentiles, as `stats.timers.<metric>.count`, `.sum`, `.mean`,
+  `.upper`, `.lower`, `.upper_90` and so on
+  ([statsd-rupp](https://github.com/jprupp/statsd-rupp) has all of
+  them). `--statsd-no-events` leaves the single samples out, so that only
+  the statistics are sent: that is for a collector that keeps every line
+  it is given.
+
+  The metrics of the web server:
+
+  | Metric | Kind | Meaning |
+  | --- | --- | --- |
+  | `web.<kind>` | timing | Milliseconds to answer a request of one kind, one metric for each: `web.address_balance`, `web.xpub_balances`, `web.transaction`, `web.blockchain_multiaddr` and so on |
+  | `web.server_errors` | counter | Requests that failed with a server error |
+  | `web.client_errors` | counter | Requests that failed with a client error |
+  | `web.reruns` | counter | Requests answered again because a cached xpub that they read changed meanwhile |
+  | `web.events_connected` | gauge | Clients connected to the stream of events |
+
+  The reads of the database, each a count of the items read:
+
+  | Metric | Kind | Meaning |
+  | --- | --- | --- |
+  | `db.best_block` | counter | Reads of the best block |
+  | `db.blocks` | counter | Blocks |
+  | `db.txs` | counter | Transactions |
+  | `db.balances` | counter | Balances |
+  | `db.unspents` | counter | Unspent outputs |
+  | `db.address_txs` | counter | Address transactions |
+  | `db.xpub_balances` | counter | Xpub balances |
+  | `db.xpub_unspents` | counter | Xpub unspent outputs |
+  | `db.xpub_txs` | counter | Xpub transactions |
+  | `db.xpub_tx_count` | counter | Xpub transaction counts |
+  | `db.iterators` | gauge | Iterators open on RocksDB |
+
   The metrics of the block store:
 
   | Metric | Kind | Meaning |
@@ -3291,6 +4127,12 @@ description: |
 
   | Metric | Kind | Meaning |
   | --- | --- | --- |
+  | `ingest.settled` | counter | Transactions that peers named and that the pool decided on, or already had |
+  | `ingest.given_up.REASON` | counter | Transactions given up on their way to the pool, by reason: `node_has_not`, `unanswered`, `no_room`, `peer_gone`, `waited_too_long`, `unjudged`, `forged`, `not_vouched` (`docs/mempool-ingestion.md`). All but the first and the last two make the server read its sources again |
+  | `ingest.dropped` | counter | Messages of peers dropped because the path into the pool was behind; the sources are read again |
+  | `ingest.ids` | gauge | Transaction ids on their way to the pool: wanted, asked for, or held |
+  | `ingest.pending` | gauge | Transactions asked of peers and not received, what `/health` counts |
+  | `ingest.held` | gauge | Transactions held: being offered, or waiting for one that they spend from |
   | `fleet.cache.hits` | counter | Requests about an xpub whose balances the cache gave |
   | `fleet.cache.misses` | counter | Requests about an xpub that the cache did not have |
   | `fleet.cache.builds` | counter | Entries that this server built, or added addresses to |
@@ -3365,6 +4207,13 @@ description: |
   | `web.cap.<route>.waited` | timing | Milliseconds that a request waited for its slot |
   | `web.cap.<route>.held` | timing | Milliseconds that a request held its slot, to the last byte |
   | `web.cap.<route>.refused` | counter | Requests refused |
+
+  `tools/grafana/haskoin-store.json` is a Grafana dashboard for these,
+  read from InfluxDB, for a store that sends its own statistics
+  (`--statsd-aggregates --statsd-no-events`) to
+  [Telegraf](https://github.com/influxdata/telegraf). `docs/grafana.md`
+  says what it needs, how to install it, and what becomes of the store's
+  statistics when Telegraf sums them up a second time.
 
   ### Database statistics
 
@@ -3442,6 +4291,8 @@ description: |
   Query a running server with `haskoin-store-data`:
 
   ```haskell
+  {-# LANGUAGE OverloadedStrings #-}
+
   import Data.Default (def)
   import Haskoin (btc, textToAddr)
   import Haskoin.Store.WebClient
@@ -3457,6 +4308,30 @@ description: |
   `apiCall` answers `Right` the result or `Left` an error. `apiEvents`
   listens to `/events`, and `apiEventsAfter` takes up from an event.
 
+  The tokens of Bitcoin Cash, by address and by category:
+
+  ```haskell
+  {-# LANGUAGE OverloadedRecordDot #-}
+  {-# LANGUAGE OverloadedStrings #-}
+
+  import Data.Default (def)
+  import Haskoin (bch, hexToTxHash, textToAddr)
+  import Haskoin.Store.Data (SerialList (..), TokenBalance (..))
+  import Haskoin.Store.WebClient
+
+  main :: IO ()
+  main = do
+    let cfg = def {net = bch}
+        Just addr = textToAddr bch "bitcoincash:qz…"
+        Just category = hexToTxHash "084c…93ae"
+    -- the fungible tokens of each category that the address holds now
+    Right (SerialList balances) <- apiCall cfg (GetAddrTokens addr)
+    mapM_ (\b -> print (b.category, b.confirmedTokens + b.unconfirmedTokens)) balances
+    -- the first page of the holders of a category
+    Right (SerialList holders) <- apiCall cfg (GetTokenHolders category Nothing (OffsetParam 0))
+    print (length holders)
+  ```
+
   The client appends the network name to `host`, as in the layout of
   api.haskoin.com. To reach your own server, put it behind a proxy that maps
   `/btc/` (or the name of your network) to it.
@@ -3468,6 +4343,9 @@ description: |
   - The functions of `Haskoin.Store.Database.Query` query the chain in its
     database in `IO`, such as `getBalance store.db addr`, and `chainRead`
     gives them as a `StoreRead`.
+  - The token queries of a `StoreRead` (`getAddressTokens`,
+    `getTokenHolders`, `getTokenTxs` and `getTokenUnspents`) answer for the
+    tokens of Bitcoin Cash.
   - Subscribe to `Store.pub` to receive `StoreEvent`s.
 
   Every module has Haddock documentation; build it with `stack haddock`.
@@ -3492,14 +4370,89 @@ description: |
   ```sh
   stack build --test --no-run-tests
   stack test                     # includes a 6000-block heap-growth test
-  scripts/format                 # ormolu, the code style used here
+  haskell-format                 # ormolu, the code style used here (jprupp/tools)
   scripts/bench-web.sh           # load-test the API with wrk
   stack bench haskoin-store:bench:haskoin-store-bench \
     --ba 'import +RTS -N4 -A64m' # time the import of full blocks
   scripts/heap-profile-summary.py FILE.hp  # what grew in a heap profile
-  scripts/check-local-deps.sh    # what CI checks: no local paths in stack.yaml
+  check-stack-paths              # what CI checks: no local paths in stack.yaml
   scripts/install-system-libraries.sh  # the C libraries, on Ubuntu or Debian
+  haskell-release --dry-run      # build and check a release, upload nothing
   ```
+
+  `haskell-format`, `check-stack-paths`, `haskell-release` and `haskell-dev`
+  are scripts of [jprupp/tools](https://github.com/jprupp/tools), shared by the
+  Haskell packages of this family. Clone that repository once and put its
+  folder on your `PATH`, for example in `~/.bashrc`; a terminal opened before
+  the change needs `source ~/.bashrc`.
+
+  ```sh
+  git clone https://github.com/jprupp/tools.git ~/Source/tools
+  echo 'export PATH="$HOME/Source/tools:$PATH"' >> ~/.bashrc
+  ```
+
+  The Stack commands build the store as it is released, with optimisation,
+  which takes minutes. For the time between two commits there is a faster
+  loop, `haskell-dev`. Run it from the top folder of haskoin-store:
+
+  ```sh
+  haskell-dev test                     # build, then run all the tests
+  haskell-dev test Fleet.Redis         # the specs with Fleet.Redis in their module name
+  haskell-dev test Fleet.Redis Web     # the specs of several modules
+  haskell-dev test --match "/Haskoin.Store.Integration/Regtest Bitcoin Core/"
+                                       # one path, in one process
+  haskell-dev test --seed 12345        # run a failure again
+  haskell-dev test --jobs 4            # fewer processes, to save memory
+  haskell-dev build                    # build without optimisation
+  haskell-dev docs                     # build the documentation and check its comments
+  ```
+
+  `test` builds first, so a separate `build` is not needed. A run of all the
+  tests takes about 70 seconds in eight processes, against about four minutes
+  for `stack test`. `haskell-dev.toml` names the slow spec modules,
+  `Haskoin.Store.Integration` (`test/Haskoin/Store/IntegrationSpec.hs`), whose
+  five environments then run at the same time, each with its own node, Valkey
+  and store in Podman, and `Haskoin.Store.Download`, the downloads of a store
+  from real nodes, one of them frozen with `SIGSTOP` to hang as a bad peer
+  does.
+
+  The tests name no address or port of the machine. The nodes, Valkey, and
+  openssl and curl for the test of HTTPS, run in containers of
+  [podman-test](https://github.com/jprupp/podman-test), reached through Unix
+  sockets of their pods; the web servers of the store listen on Unix sockets
+  of their own, which the tests and the client of haskoin-store-data reach;
+  and what stands for a peer in memory is named by a Unix socket. Nothing in
+  the tests uses a Bitcoin Core or a Bitcoin Cash Node of the machine.
+
+  When a test fails, the output gives the seed: run the
+  test again alone with `--seed` and `--match` on its path, which prints the
+  usual output of hspec.
+
+  The integration tests, and those of the fleet, need rootless Podman (see
+  below); without it they are pending, and the others run. Now and then a test
+  fails with `InsecureConnectionDenied`, an exception of the HTTP client, and
+  passes when run again with the same seed: its cause is not known yet, so run
+  such a failure again before taking it for a fault of a change.
+
+  Do not mix the two kinds of build in one folder. When no source has changed,
+  Stack does not see that the flags have, and keeps the objects of the other
+  build: a plain `stack build` or `stack test` right after `haskell-dev build`
+  uses code without optimisation. Only what runs from this folder uses it, such
+  as the tests and `stack exec haskoin-store`: a package that depends on
+  haskoin-store builds its own copy. After the next change to a source,
+  everything compiles again. `stack bench` configures the package again and
+  compiles it with optimisation. Never time the store with `haskell-dev`: the
+  benchmarks run with `stack bench`.
+
+  A release is made with `haskell-release`, once the version in
+  `package.yaml` is bumped, its CHANGELOG entry written and the commit pushed.
+  It builds and tests the package, builds the source and documentation
+  archives, and only if all of that works tags the commit, pushes the tag and
+  uploads both archives to Hackage. It uploads the documentation itself,
+  because `stack upload --documentation` fails here: the internal library
+  `integration` gets a documentation file named `haskoin-store:integration.txt`,
+  and Hackage refuses a colon in a file name. The script leaves the
+  documentation of the internal libraries out, as they are only for the tests.
 
   `stack.yaml` must pin released versions, or git commits, of every
   dependency. Pointing
@@ -3513,15 +4466,22 @@ description: |
   exact gap, spends and change, mempool order, multiaddr counts, reorganisations,
   and that the cache answers exactly like the database on every xpub endpoint.
 
+  - The containers run through
+    [podman-test](https://github.com/jprupp/podman-test), in a pod for each
+    environment. The store reaches Valkey, the RPC of the node and the node
+    itself through Unix sockets of the pod (`--redis-url unix:PATH`,
+    `--node-rpc-socket` and the peer `unix:PATH`), so the pod has no network,
+    and environments that run at once never meet.
   - They are skipped if Podman cannot run containers, or if
-    `HASKOIN_STORE_NO_PODMAN` is set.
+    `PODMAN_TEST_SKIP` is set.
   - The first run builds the image `localhost/haskoin-store-test`, which needs
     network access: Ubuntu 26.04 pinned by digest, Valkey from a fixed snapshot of
     the Ubuntu archive, and the release tarballs of both nodes, checked against
     SHA-256 hashes pinned in `integration/Haskoin/Store/Integration/Image.hs`. No
     third-party image is used.
-  - Containers are removed when the tests end, data lives in tmpfs mounts and
-    under `/dev/shm`, and every container has a memory limit.
+  - Pods are removed when the tests end, and those of a run that was killed
+    by the next run. Data lives in tmpfs mounts and under `/dev/shm`, and every
+    container has a memory limit.
   - Set `HASKOIN_TEST_LOG=1` to print the log of the store under test.
 
   The test suite runs with at most four cores and a 4 GiB heap, so that a
@@ -3565,11 +4525,54 @@ description: |
   and six, each in a table file of its own, and then the same keys once
   compacted.
 
+  ### Measurements for moving the fleet tip
+
+  `haskoin-store-bench decide [TXS [POOL [INPUTS [OUTPUTS [RIVALS [WATCHED]]]]]]`
+  (`bench/Decide.hs`) times what the move of the fleet tip over a block
+  costs to decide, without Redis: transactions that are offered wait for as
+  long as a move takes (`docs/concurrency.md`, "The floor"). It fills the
+  pure model of Redis with a pool of 20,000 transactions and decides the
+  move over a block of 4,000 of them, some in chains, as on Bitcoin. It
+  prints the time of each pass over
+  the decision, its answers and writes, the time for each of those in a
+  pass, which is the number to compare between two builds, and what was
+  allocated. Run it with `+RTS -T -A64m`: `-T` for the last, and `-A64m`
+  because a store runs with it. Without it the collector runs three
+  hundred times in a move, and each time goes over the model of Redis,
+  which a store does not have in its memory: the move then takes nearly
+  three times as long, and most of what is timed is the collector. With
+  RIVALS, the block
+  is also in conflict with so many transactions of the pool, which leave
+  with what spends from them. With WATCHED, so many transactions in a
+  hundred have their addresses watched by a cached extended public key.
+
+  It times the move twice: taking everything out of the pool in one step,
+  as a move that undoes a block does, and marking what leaves, as every
+  other move does, with the taking out that follows, two hundred
+  transactions at a time (`docs/fleet-mempool.md`, "The tip first").
+
+  On a desktop of 2026 the move over 4,000 transactions of three inputs and
+  three outputs is decided in about 0.8 seconds: four passes, one of which
+  goes through the whole block and takes 0.66 seconds of them, for 94,000
+  answers and 205,000 writes, which is about two microseconds for each in
+  that pass. It took four times as long in
+  eight passes, five of them through the block, before the move named its
+  questions ahead and while the pool worked out which transactions could
+  be replaced by fee (`docs/concurrency.md`, "The floor").
+
+  Marking the same 4,000 transactions is decided in 0.12 seconds, with
+  20,000 answers and 8,000 writes, and the taking out that follows takes
+  0.8 seconds in twenty steps of 45 milliseconds at most. With a cached
+  key at every address, the move in one step takes 2.7 seconds, the
+  marking the same 0.12, and the taking out 1.3 seconds in steps of 65
+  milliseconds, one of 0.2 seconds in three runs: what a block costs the
+  tip no longer grows with the keys that a server has cached.
+
   ### Contributing
 
   Pull requests are welcome.
 
-  - Format the code with `scripts/format` (Ormolu), and keep every line of
+  - Format the code with `haskell-format` (Ormolu, from jprupp/tools), and keep every line of
     code shorter than 120 columns.
   - Put scripts in files of their own rather than embedding them: Lua for
     Redis under `src/Haskoin/Store/Fleet/lua/` or `src/Haskoin/Store/XPub/lua/`,
@@ -3603,9 +4606,9 @@ description: |
 
   Haskoin Store is released under the [MIT License](LICENSE).
 description-type: markdown
-hash: 9de419a6fbc990ffa7938501a847b20c9d5fed12ab3b1ef8cf076bfdac2b2ac5
+hash: 49fac777bac4b029227a72563f426bc2ed6caafeaf8919cb9b75b118a37151ca
 homepage: https://github.com/jprupp/haskoin-store#readme
-latest: 1.16.7
+latest: 2.0.0
 license-name: MIT
 maintainer: jprupp@protonmail.ch
 synopsis: Storage and index for Bitcoin and Bitcoin Cash
@@ -3625,23 +4628,25 @@ test-bench-deps:
   data-default: '>=0.8.0.2 && <0.9'
   deepseq: '>=1.5.1.0 && <1.6'
   directory: '>=1.3.10.1 && <1.4'
-  fast-logger: '>=3.2.9 && <3.3'
+  fast-logger: '>=3.2.9 && <3.4'
   file-embed: '>=0.0.16.0 && <0.1'
   filepath: '>=1.5.5.0 && <1.6'
   hashable: '>=1.5.1.0 && <1.6'
   hashtables: '>=1.4.2 && <1.5'
-  haskoin-core: '>=2.0.1 && <2.1'
-  haskoin-node: '>=2.6.1 && <2.7'
+  haskoin-core: '>=3.0.0 && <3.1'
+  haskoin-node: '>=2.7.0 && <2.8'
   haskoin-store: '>=0'
-  haskoin-store-data: '>=3.0.1 && <3.1'
+  haskoin-store-data: '>=4.0.0 && <4.1'
   hedis: '>=0.16.4 && <0.17'
   hspec: '>=2.11.18 && <2.12'
+  http-client: '>=0.7.19 && <0.8'
   http-types: '>=0.12.6 && <0.13'
   lens: '>=5.3.6 && <5.4'
   monad-control: '>=1.0.3.1 && <1.1'
   mtl: '>=2.3.2 && <2.4'
   network: '>=3.2.12.0 && <3.3'
   nqe: '>=0.7.0 && <0.8'
+  podman-test: '>=0'
   process: '>=1.6.26.1 && <1.7'
   random: '>=1.3.1 && <1.4'
   rocksdb-haskell-jprupp: '>=2.8.0 && <2.9'
