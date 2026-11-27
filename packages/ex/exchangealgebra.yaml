@@ -13,6 +13,7 @@ all-versions:
 - 0.6.0.1
 - 0.6.1.0
 - 0.6.1.1
+- 0.7.0.0
 author: Kaya Akagi
 basic-deps:
   Decimal: '>=0.5 && <0.6'
@@ -24,7 +25,6 @@ basic-deps:
   containers: '>=0.6 && <0.8'
   deepseq: '>=1.4 && <1.6'
   hashable: '>=1.4 && <1.6'
-  numeric-prelude: '>=0.4.4 && <0.5'
   parallel: '>=3.2 && <3.3'
   random: '>=1.2 && <1.3'
   scientific: '>=0.3.7 && <0.4'
@@ -35,6 +35,465 @@ basic-deps:
   vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog for ExchangeAlgebra
+
+  ## 0.7.0.0 - 2026-11-27
+
+  ### Added
+
+  - Import `ExchangeAlgebra.Accounting.Account.Jcci` to use `JcciTitles` in
+    ledgers limited to JCCI account titles. Use `widen` to embed a title in
+    `AccountTitles`, and `narrow` or `narrowAlg` to restrict a title or ledger
+    to the JCCI vocabulary.
+
+  - Closing supports caller-defined account title types through `AccountVocabulary`.
+    `closingEntries` and `settleEntries` close to the vocabulary's `closingTarget`,
+    preserving every non-account coordinate. `ExchangeAlgebra.Accounting.Closing`
+    exports `ClosingTargetViolation`, `closingTargetViolation`, and `ClosingError`.
+    The target check rejects wildcard titles, titles without a specification,
+    non-equity titles, and contra titles before reading the ledger or settlement nets.
+
+  - Journal input accepts caller-defined account names. Build a table with
+    `accountNameTable`, start from `defaultAccountNames` or `vocabularyNames`,
+    and add local names with `extendAccountNames`. Pass `resolveWith table` to
+    `parseJournalCsvBy`, `parseNotedJournalCsvBy`, `checkedEntryTextBy`, or
+    `certifyJournalTextBy`. Shared names report all distinct candidates in insertion order.
+    The checked readers report `MissingPostingSemantics` when a concrete title's
+    vocabulary omits its posting capability.
+
+  - Random-input property tests (`test/Accounting/ProcedureLawSpec.hs`, 200 cases each for
+    `Double` and `MoneyDecimal`, exact `Rational` observation) for two procedures derived from
+    the journal. No library code changed.
+    - `closingEntries`, on ledgers over every account in two units:
+      CL1 the entries have equal exact debit and credit totals;
+      CL2 after adding them, every account with a `closingSide` has net zero;
+      CL3 every other account except `RetainedEarnings` keeps its net and receives no posting;
+      CL4 per unit, the change of `RetainedEarnings` equals the nets of `ClosingKeep` accounts
+      (revenue, contra cost) minus the nets of `ClosingFlip` accounts (cost, contra revenue),
+      that is, the period's net income.
+    - Consolidation worksheet (`validateConsolidationWorksheet`, `combinedWorksheet`):
+      CW1 balanced source trial balances and adjustments are accepted and their combination is
+      balanced; CW2 the combination has the same exact net on every base as the inputs added in
+      reverse order and keeps every input posting; CW3 one unbalanced adjustment or source is
+      rejected with an error naming it.
+    These complement the existing closing laws L2, L3, L5 and C1-C3, C5
+    (`test/Transfer/RuleSpec.hs`), which use three or four accounts.
+
+  - `hatForSide`, `postingForSide`, and `journalForSides` in
+    `ExchangeAlgebra.Accounting.Exchange` construct debit/credit postings for any unmarked base
+    with an `ExBaseClass` instance, including multi-axis bases. The input-conversion helpers keep
+    their account-only types and delegate to these functions. Repeated postings remain separate.
+
+  - `ExchangeAlgebra.Accounting.Audit` provides audits that report one type of
+    accounting anomaly each, without blocking any computation. Every audit
+    returns `AuditResult`: `NoProblem`, `Warning` for findings with legitimate
+    exceptions, or `Error` for findings without one and for structure issues
+    (invalid values and wildcard bases, which every audit checks first).
+    - `impossibleBalances`: credit balance of cash or petty cash, debit balance
+      of capital stock or accumulated depreciation (`Error`).
+    - `abnormalBalances`: balance opposite to a fixed home side, except the
+      accounts above (`Warning`).
+    - `temporaryAccountBalances`: balance of suspense payments, suspense
+      receipts, or the suspense account after adjustment (`Warning`).
+    - `closingResiduals`: balance that closing must clear, in a trial balance
+      after closing (`Error`).
+    - `duplicateTransactions`: notes with identical postings (`Warning`).
+    - `contraryNominalPostings`: revenue or expense posting opposite to its
+      home side, outside closing transactions (`Warning`).
+
+  - `AccountVocabulary` (`ExchangeAlgebra.Accounting.Account`): `vocabSpec`,
+    `vocabSemantics`, `closingTarget`, `vocabDivision`, `vocabContra`, with laws in the Haddock
+    (the closing target is concrete, has an `Equity` spec and is not a contra account). The
+    `AccountTitles` instance reads the existing registry and closes to `RetainedEarnings`.
+
+  ### Changed
+
+  - **Breaking (0.7).** Update imports, uses, and instance definitions for the
+    renamed base element keys, note fields, note periods, and equity projection.
+
+    | Previous name | New name |
+    | --- | --- |
+    | `AxisKey` | `ElementKey` |
+    | `axisIsWildcard` | `elementKeyIsWildcard` |
+    | `AxisDecompose` | `HasElementKeys` |
+    | `toAxisKeys` | `toElementKeys` |
+    | `NoteAxisKey` | `NoteFieldKey` |
+    | `NoteAxisPosting` | `NoteFieldIndex` |
+    | `emptyNoteAxisPosting` | `emptyNoteFieldIndex` |
+    | `insertNoteAxisPosting` | `insertNoteFieldIndex` |
+    | `queryNoteAxisPosting` | `queryNoteFieldIndex` |
+    | `buildNoteAxisPosting` | `buildNoteFieldIndex` |
+    | `toNoteAxisKeys` | `toNoteFieldKeys` |
+    | `filterByAxis` | `filterByNoteField` |
+    | `HasTermAxis` | `HasNotePeriod` |
+    | `TermOf` | `PeriodOf` |
+    | `termOf` | `periodOf` |
+    | `projCapitalStock` | `projNonContraCreditEquity` |
+
+  - **English account names (0.7 output change).** Financial statements
+    in English now show the equity row for `RetainedEarnings` as
+    `Retained earnings brought forward`. For CSV rows that use an old English
+    name to refer to one of these accounts, use the corresponding new name
+    with `vocabularyNames` or use the constructor name.
+
+    | Account | Old English name | New English name |
+    | --- | --- | --- |
+    | `AllowanceForBonuses` | Provision for bonuses | Allowance for bonuses |
+    | `AllowanceForRepairs` | Provision for repairs | Allowance for repairs |
+    | `AllowanceForProductWarranties` | Provision for warranties | Allowance for warranties |
+    | `ReversalOfAllowanceForBonuses` | Reversal of provision for bonuses | Reversal of allowance for bonuses |
+    | `ReversalOfAllowanceForRepairs` | Reversal of provision for repairs | Reversal of allowance for repairs |
+    | `ReversalOfAllowanceForProductWarranties` | Reversal of provision for warranties | Reversal of allowance for warranties |
+    | `SuppliesExpenses` | Supplies | Supplies expense |
+    | `SuppliesOnHand` | Supplies | Supplies on hand |
+    | `CentralBankPaymentExpense` | Central bank payment to treasury | Payment to national treasury |
+    | `CentralBankPaymentIncome` | Central bank payment to treasury | Central bank payment received |
+    | `RetainedEarnings` | Retained earnings | Retained earnings brought forward |
+    | `Building` | Real estate | Buildings |
+
+  - `journalRows` and journal CSV output list each day's debit and credit
+    terms in account-title order, then by hat base. The built-in chart uses
+    the declaration order of `AccountTitles`. Earlier versions left the
+    order within each side of a date unspecified.
+
+  - **Breaking (0.7).** The `Element` and `BaseClass` instances for `Day` and
+    `TimeOfDay` are removed, along with the three built-in `ExBaseClass`
+    instances that used either type directly. Use `Wild Day` and
+    `Wild TimeOfDay` in bases. Wrap concrete dates and times in `Exactly`
+    and use `Wild` where the old value meant a wildcard.
+    For example, change `HatBase (AccountTitles, Day)` to
+    `HatBase (AccountTitles, Wild Day)` and write `Not :< (Cash, Exactly d)`
+    for a cash entry dated `d`. The date 1858-11-17 and midnight (00:00)
+    are ordinary elements when wrapped in `Exactly`.
+
+  - The move of simulation into the separate `exchangealgebra-simulation`
+    package, and the removal of the classic engine (`Simulate`,
+    `Simulate.Engine`, `Simulate.Random`), `Simulate.Lite`, and
+    `Simulate.Policy` without a compatibility module, are postponed from 0.7 to
+    0.8. Version 0.7 keeps the simulation modules of 0.6. The README section
+    "Planned changes to simulation modules" and the module documentation are
+    updated.
+
+  - **Consolidation worksheets (0.7 migration).** `validateConsolidationWorksheet`
+    accepts trial balances and adjustments over a caller-defined account title
+    type. The original worksheet type names specialize to `AccountTitles`
+    and preserve the built-in chart's validation and results.
+    - To import constructors and record fields, change `TrialBalanceSource(..)`,
+      `WorksheetAdjustment(..)`, `WorksheetInput(..)`, and `WorksheetError(..)`
+      to `TrialBalanceSourceOf(..)`, `WorksheetAdjustmentOf(..)`,
+      `WorksheetInputOf(..)`, and `WorksheetErrorOf(..)`, respectively.
+      `ValidatedWorksheetOf` exposes only its type name.
+    - An expression such as
+      `show [DuplicateSourceId (), EmptyAdjustment (), InvalidSourceValue () (1 :: Double)]`
+      now leaves the title type ambiguous. Annotate the list with
+      `:: [WorksheetError () () Double]` to select the built-in chart.
+    - Supply a posting capability through `vocabSemantics` for each concrete
+      title used in an adjustment. Validation rejects a title with missing
+      semantics as `NotPostable`.
+    - The `ExBaseClass` law now states that `whichSide` returns `Debit` or
+      `Credit` for concrete titles under `Hat` or `Not`. Under `Not`, the
+      base's `whatDiv` and `isContra` determine the home side. Under `Hat`,
+      the side is reversed. The default implementation already follows this
+      law. Worksheets total postings by the base's `whichSide`. Use the
+      vocabulary's division and contra flag in the base instance to obtain
+      totals consistent with that vocabulary.
+
+  - **Financial statements and presentation groups (0.7 migration).** Use
+    `present` with a trial balance over your own account titles and
+    `presentGroups` with a grouping for those titles. Supply `vocabSemantics`
+    for each nonzero balance that the report must display. The default is
+    `Nothing`. A statement-eligible title needs a statement division.
+    - Start a context with `reportingContext framework scope profile` or
+      `jcciSecondGradeContext scope`. When constructing `ReportingContext`
+      directly, supply the new field `_labelOverrides` (use an empty map for
+      no overrides). Omitting it can compile with a warning and fail when the
+      field is read. Only `JcciSecondGradeReport` uses these labels.
+    - Keep the original type names in annotations for `AccountTitles`.
+      Import constructors and record fields through the corresponding
+      `XOf(..)`, for example `StatementLineOf(..)`. A standalone expression
+      such as `show (PresentGross :: MaterialityTreatment)` needs a title type
+      annotation to resolve `Show`.
+    - `Combined` eliminates the pairs in `vocabReciprocalPairs` (default
+      `[]`). A wildcard endpoint, an endpoint without the `ReciprocalAccount`
+      role, or a revenue or cost endpoint yields
+      `ConflictingPresentationInstruction`. The built-in branch and head-office
+      accounts satisfy these checks.
+    - Each elimination records `ReciprocalPairEliminated left leftBalance right
+      rightBalance`. The two-argument `ReciprocalAccountsEliminated` pattern
+      still constructs and matches the built-in pair. Its `show` output now uses
+      `ReciprocalPairEliminated BranchCurrentAccount ... HeadOfficeCurrentAccount ...`,
+      including inside `FinancialStatements`. Statement amounts and ledger
+      readouts retain their existing values.
+
+  - Account balances, accounting transfers, journal audits, period results from
+    an algebra, and ledger and trial-balance rows now accept custom account
+    titles. The four trial-balance audits accept a single account axis. A
+    vocabulary can specify impossible balance sides, suspense accounts, and
+    additional accounts that closing must clear. All three lists default to
+    empty. The built-in chart retains its existing checks.
+  - **Breaking (0.7).** The constructors and record fields of
+    `ImpossibleBalance`, `AbnormalBalance`, `TemporaryAccountBalance`,
+    `ClosingResidual`, and `MetricError` now belong to the corresponding
+    `*Of` types. The old type names still specialize to `AccountTitles`.
+    Replace imports such as `ImpossibleBalance(..)` with both names when
+    using the old type in an annotation.
+
+    ```haskell
+    import ExchangeAlgebra.Accounting.Audit (ImpossibleBalance, ImpossibleBalanceOf(..))
+    import ExchangeAlgebra.Accounting.Statements.Metric (MetricError, MetricErrorOf(..))
+    ```
+
+    A constructor without a title argument needs a type when the context
+    leaves the vocabulary open, for example
+    `show (WildcardMetricAccount :: MetricError)`.
+
+  - **Breaking (0.7).** `AccountTitles` has a new constructor
+    `DirectorsCompensations` (役員報酬, remuneration for directors and other
+    officers), a cost account distinct from `WageExpenditure`. The Japanese name
+    `役員報酬` resolves to it on import. A `case` on `AccountTitles` that lists
+    every constructor without a wildcard pattern is no longer exhaustive; add a
+    case for `DirectorsCompensations`. The wildcard `AccountTitle` keeps the last
+    ordinal, so its `fromEnum` value increases by one. The `Binary` encoding
+    writes a fixed code for each title, so the bytes for existing titles do not
+    change.
+
+  - **Breaking.** `closingEntries` returns `Either (ClosingError v b) (Alg v b)`.
+    Match a former transfer failure `Left e` as `Left (ClosingTransferError e)`.
+    For example, change `Left (NonFiniteBalance b)` to
+    `Left (ClosingTransferError (NonFiniteBalance b))` and add a case for
+    `Left (InvalidClosingTarget title violation)`.
+    `closingSide` now has type `AccountVocabulary t => t -> Maybe ClosingSide`.
+    The base constraint on `closingEntries` and `settleEntries` changes from
+    `StandardBase b` to `ExBaseClass b`. `closingEntries` still requires `HatVal v`.
+    `SettleError` adds `InvalidSettleTarget title violation`, so a case that handles
+    only `NonFiniteNet` is no longer exhaustive. Its `Eq` and `Show` instances also
+    require `Eq (TitleOf b)` and `Show (TitleOf b)`, respectively, in addition to
+    the existing constraints on `BasePart b`. Add those constraints to standalone
+    deriving declarations for polymorphic wrappers around `SettleError b`.
+    Include the new `ClosingTargetRejected title violation` case in exhaustive
+    matches on `CatalogExecutionProblem`.
+
+  - **Breaking.** `ConvError`, `EntryError`, `JournalError`, and `JournalCert`
+    are now type synonyms for the built-in chart. A former `T(..)` import leaves
+    the constructors out of scope. Import the corresponding `TOf(..)` alongside
+    the synonym, for example `import ExchangeAlgebra.IO.Input (ConvErrorOf(..), ConvError)`.
+    `scientificAmount` now returns errors of type `ConvErrorOf acct`. When comparing
+    or printing its result in isolation, specify the account type, for example
+    `scientificAmount "10" :: Either ConvError Double`.
+
+  - **Breaking:** `ExBaseClass` has an associated type `TitleOf` (default `AccountTitles`), and
+    `getAccountTitle`, `setAccountTitle`, `(.~)` and `projByAccountTitle` now use `TitleOf b`
+    instead of `AccountTitles`. `ExBaseClass a` has the new superclass
+    `AccountVocabulary (TitleOf a)`. Instances that do not set `TitleOf` keep the default and
+    need no change. Code that names `AccountTitles` where the base type is polymorphic now needs
+    the constraint `StandardBase b` (that is, `(ExBaseClass b, TitleOf b ~ AccountTitles)`); the
+    functions that need the built-in chart (transfers, audit, trial balance, admission
+    and the statement writers) now carry this constraint. GHC reports `-Worphans` for the
+    generated `type instance TitleOf X = AccountTitles` next to an orphan `ExBaseClass` instance;
+    this warning is expected. Behaviour is unchanged for `AccountTitles`.
+
+  - **Breaking:** `(.|)` is now `infix 5` (previously `infixr 2`), so it binds more
+    tightly than `(.+)` (`infixr 3`), as in the mathematical notation where each term
+    carries its note. Several journals can be added without parentheses, and a
+    multi-term algebra needs parentheses before its note:
+
+    ```haskell
+    -- before
+    (10 .@ Not :< Cash .| "a") .+ (20 .@ Hat :< Cash .| "b")
+    10 .@ Not :< Cash .+ 10 .@ Not :< Sales .| "sale"
+    -- after
+    10 .@ Not :< Cash .| "a" .+ 20 .@ Hat :< Cash .| "b"
+    (10 .@ Not :< Cash .+ 10 .@ Not :< Sales) .| "sale"
+    ```
+
+    An expression written for the old fixity that no longer parses as intended is a
+    type error, so the compiler reports every place to change. Code that already
+    parenthesized each `(alg .| note)` keeps working. `Show` for `Journal` follows the
+    new fixity: `(a .+ b) .| "N" .+ c .| "M"`. Code examples published with earlier
+    versions need parentheses around the algebra sum when built against this version.
+  - `(.*)` now has an explicit fixity, `infixr 7` (previously the default `infixl 9`).
+    It still binds more tightly than `(.+)`, `(<>)` and `(.|)`. No operator of this
+    library or of base with precedence 7 to 9 takes and returns an algebra, so an
+    expression that compiled before keeps its meaning unless it mixes `(.*)` with such a
+    user-defined operator without parentheses. `2 .* 3 .* x` now means `2 .* (3 .* x)` instead
+    of a type error. `(.@)` is weaker, so `2 .* (10 .@ Not :< Cash)` still needs the
+    parentheses.
+  - Change the license to MIT alone (previously MIT with Open World License conditions),
+    and rename the license file from `LICENSE` to `LICENSE.txt`.
+  - Reduce allocation in `MoneyDouble` Binary encoding without changing its bytes.
+  - Build the Journal delta note-axis index only when an axis query needs it.
+  - Store one-sided singleton algebra pairs without a `Seq` node, preserving posting order,
+    public APIs, and Binary encodings. `ExchangeAlgebra.Algebra.Internal` (outside the PVP
+    contract) now exports the `HatOne`, `NotOne`, and `PairSeq` constructors of `Pair`; the
+    `Pair hs ns` pattern and its field selectors remain.
+  - Addition now appends terms on the same base and side in input order.
+    In an `Alg`, adding a singleton on the right with `(.+)` or using `fromList`
+    can change `[3,1,2]` to `[1,2,3]`. `sigma` and `unionsMerge` change
+    `[3,2,1]` to `[1,2,3]` for the same three singleton terms. Both
+    associations of `(.+)` now agree under `Eq`. A `Journal` retains the
+    addition order within each note even when other notes trigger compaction.
+    `Journal.sigma` changes `[3,2,1]` to `[1,2,3]` for three singletons on
+    one note. `toAlg` merges each note before traversing the merged note map.
+
+    - `extendBy (.@)` on a term sequence `[1,2,3]` changes its output from
+      `[3,1,2]` to `[1,2,3]`. `Journal.fromList` makes the same change
+      when adding three singleton terms to one note. So does `Journal.sigmaM`
+      when it combines `[1,2]` and `[3]` as algebras or on one note.
+    - `sigma2When`, `sigmaFromMap`, `Journal.sigma2When`, `Journal.sigmaOn`,
+      and `Journal.sigmaOnFromMap` change `[3,2,1]` to `[1,2,3]` when
+      they visit three singleton terms in that order on one base and side
+      and, for the journal functions, on one note.
+    - Reading a note with `toMap` after `filterWithNote` changes
+      `[3,1,2]` to `[1,2,3]` when its original layer holds `[1,2]` and
+      its pending layer holds `[3]`. The same applies when `Journal.map`
+      uses the identity function, `replaceNotes` retains that note, or
+      `projWithNote`, `projWithBase`, `projWithNoteBase`, or
+      `filterByNoteField` selects all three terms. Journal `(.^)` and
+      `1 .*` carry the new order into their results.
+    - `toAlg` and `gather` follow the merged note map's traversal order.
+      If that traversal visits three notes holding same-base singletons
+      `[1,2,3]` in one layer, the result changes from `[3,2,1]` to `[1,2,3]`.
+
+    `Eq` and the encoded `Binary` bytes may change. `Show` displays sorted
+    terms and can hide this difference. Previously encoded bytes still decode.
+    The exact readouts `norm`, `bar`, `projNetNorm`, and closing give the
+    same values for finite terms. `barWithin` sums each side in sequence order, so the last
+    digit can change for `Double`. For example, with zero tolerance,
+    `[2^53,1,1]` gives `2^53` and `[1,1,2^53]` gives `2^53+2`.
+
+  ### Fixed
+
+  - Performance: Building the index on the first wildcard query against an `Alg`,
+    such as with `proj` or `projNetNorm`, took quadratic time in the number of
+    distinct bases because assigning each ID called the linear-time `IntMap.size`.
+    A running counter now assigns the same IDs in the same order and preserves query results.
+    Building an `Alg` with 100,000 distinct bases and running one wildcard query
+    took 9.2 s before the fix and 0.10 s after it (10,000 bases: 92 ms and 6.5 ms).
+
+  - Performance: `kRegular` and `scaleFree` avoid scanning all candidates on each
+    supplier draw. Both generators preserve the edges for a given seed and keys
+    with lawful `Eq` and `Ord` instances. With 10,000 nodes, `kRegular` (k = 10)
+    took 18 s before the fix and 67 ms after it, and `scaleFree` (m = 3) took
+    6.3 s and 21 ms (100,000 nodes after the fix: 1.27 s and 0.32 s).
+
+  - Performance: Wildcard queries in `proj` and `projNetNorm` called the
+    linear-time `IntSet.size` on each candidate set of base IDs to order
+    intersections, so each query took time proportional to the number of bases
+    sharing a concrete element rather than to the matches. The index now supplies
+    each set's size in constant time and preserves query results. Querying the
+    inventory and gross profit of every company in one term of the
+    `sparse-trade-model` benchmark (100,000 companies, 7.5 million postings) took
+    67.5 s before the fix and 5.4 s after it (10,000 companies: 0.79 s and
+    0.37 s). The `Liner` field `_axisPosting` in
+    `ExchangeAlgebra.Algebra.Internal` (outside the PVP contract) now stores each
+    ID set with its cardinality.
+
+  - Journal CSV readers, including the built-in readers, return `BadAmount` with the
+    trimmed amount field when the amount parser returns a negative or non-finite value.
+    Previously the row passed parsing and `(.@)` raised an exception during term construction.
+
+  - `Alg` equality now treats a one-term table returned by `bar`, `(.-)`,
+    `(.*)`, or `filter` as equal to the same term built with `(.@)`.
+    Ordering uses the same rule, so `compare` returns `EQ` exactly when
+    `(==)` returns `True`. One-term tables now sort with singletons.
+    The ordering among singletons and among members with multiple terms
+    is unchanged. The `Binary` encoding is unchanged.
+
+  - `filterWithNote` now applies its predicate to the whole algebra for each
+    note, as returned by `toMap`. Previously, a predicate that read the algebra
+    could retain only some terms for a note stored in both journal layers.
+    Predicates that read only the note produce the same results as before.
+
+  ### Removed
+
+  - **Accounting and algebra compatibility modules.** Replace imports from
+    the following modules. For `AccountTitles`, import
+    `ExchangeAlgebra.Accounting.Account`. For `PeriodResult` and
+    `AccountBalance` formerly supplied by the worksheet module, use
+    `ExchangeAlgebra.Accounting.Statements.Metric` and
+    `ExchangeAlgebra.Accounting.TrialBalance.Balance`.
+
+    | Removed import | Replacement |
+    | --- | --- |
+    | `ExchangeAlgebra.Algebra.Base.Element` | `ExchangeAlgebra.Algebra.Element` |
+    | `ExchangeAlgebra.Value` | `ExchangeAlgebra.Algebra.Value` |
+    | `ExchangeAlgebra.Posting` | `ExchangeAlgebra.Algebra.Posting` |
+    | `ExchangeAlgebra.Algebra.Base.Account.Types` | `ExchangeAlgebra.Accounting.Account` |
+    | `ExchangeAlgebra.Algebra.Base.Account.Registry` | `ExchangeAlgebra.Accounting.Account` |
+    | `ExchangeAlgebra.Algebra.Base.Account.JcciAliases` | `ExchangeAlgebra.Accounting.Account` |
+    | `ExchangeAlgebra.Accounting.PostingPolicy` | `ExchangeAlgebra.Accounting.Account` |
+    | `ExchangeAlgebra.Assist.Descriptions` | `ExchangeAlgebra.Accounting.Account` |
+    | `ExchangeAlgebra.Bookkeeping` | `ExchangeAlgebra.Accounting.Entries` |
+    | `ExchangeAlgebra.TrialBalance.Balance` | `ExchangeAlgebra.Accounting.TrialBalance.Balance` |
+    | `ExchangeAlgebra.TrialBalance.Validation` | `ExchangeAlgebra.Accounting.TrialBalance.Validation` |
+    | `ExchangeAlgebra.Reporting.Group` | `ExchangeAlgebra.Accounting.Statements.Group` |
+    | `ExchangeAlgebra.Reporting.Metric` | `ExchangeAlgebra.Accounting.Statements.Metric` |
+    | `ExchangeAlgebra.Reporting.Presentation` | `ExchangeAlgebra.Accounting.Statements.Presentation` |
+    | `ExchangeAlgebra.Consolidation.Worksheet` | `ExchangeAlgebra.Accounting.Consolidation` |
+    | `ExchangeAlgebra.Convert` | `ExchangeAlgebra.IO.Input` and `ExchangeAlgebra.Accounting.Account` for `concreteAccountTitles` |
+    | `ExchangeAlgebra.Convert.Checked` | `ExchangeAlgebra.IO.Input.Checked` and `ExchangeAlgebra.Accounting.Account` for posting policy |
+    | `ExchangeAlgebra.Convert.Csv` | `ExchangeAlgebra.IO.Input.Csv` |
+    | `ExchangeAlgebra.Assist` | `ExchangeAlgebra.IO.Input.Assist` |
+    | `ExchangeAlgebra.Render.Csv` | `ExchangeAlgebra.IO.Output.Csv` |
+    | `ExchangeAlgebra.Render.Bookkeeping` | `ExchangeAlgebra.IO.Output.Statements` |
+    | `ExchangeAlgebra.Algebra.Transfer.Rule` | `ExchangeAlgebra.Algebra.Transfer` for generic rules and `ExchangeAlgebra.Accounting.Closing` for closing and settlement |
+
+  - **Journal transfers.** Replace
+    `ExchangeAlgebra.Journal.Transfer.Rule.transferEntries` with
+    `ExchangeAlgebra.Accounting.Transfer.transferEntriesBy`, which computes
+    transfers from exact balances grouped by destination note.
+  - **Communication expenses.** Replace `Commutation` with
+    `CommunicationExpenses`. The account name `通信費` resolves to
+    `CommunicationExpenses`. The removal lowers `fromEnum` by one for each
+    account title declared after `Commutation`. The `Binary` codes of surviving
+    titles keep their values, and the decoder rejects the retired code `0x8023`.
+  - **Transfer rules.** Replace `relabel` with `TransferRule from to Relabel`
+    for generic base rules or `from .-> to |% Relabel` for an accounting
+    transfer. Replace `MulBy`, `DivBy`, `scaleBy`, and `divideBy` with
+    `mapPosting` for unit conversion or `Portion n d` for moving an equal
+    share on both sides. Remove branches that match the `InvalidCoefficient`
+    constructor of `TransferRuleError`. The remaining generic transfer
+    operation has no coefficient.
+
+  - `TBFinding`, `trialBalanceFindings`, `TrialBalanceInput`, and
+    `ReclassificationRule` of `ExchangeAlgebra.Accounting.TrialBalance.Validation`
+    have been removed. Use `impossibleBalances`,
+    `abnormalBalances`, `temporaryAccountBalances`, and `closingResiduals` of
+    `ExchangeAlgebra.Accounting.Audit` instead. They take the trial balance
+    directly and return `AuditResult`. Migrate each finding as follows.
+    - `InvalidTrialBalanceValue`, `WildcardTrialBalanceAccount`,
+      `WildcardTrialBalanceSide`: a structure issue, reported as `Error` by
+      every audit.
+    - `UnexplainedAbnormalBalance`: `impossibleBalances` or `abnormalBalances`.
+    - `UnresolvedTemporaryBalance`: `temporaryAccountBalances`. Use
+      `closingResiduals` to check `CashOverShort` after closing.
+    - `ClosingDeviceResidual`, `DerivedCoordinateResidual`,
+      `UnclosedNominalBalance`: `closingResiduals`.
+    - The following have no successor among the audits.
+      `UnbalancedTrialBalance`: `admit` rejects an unbalanced transaction, and
+      `present` fails with `UnbalancedStatementInput`.
+      `ReciprocalMismatch` and `StandaloneReciprocalBalance`: in the combined
+      scope `present` eliminates the head-office and branch current accounts,
+      records both balances in a `ReciprocalAccountsEliminated` audit event, and
+      fails with `UnreconciledPresentation` when the statements do not
+      reconcile. In the standalone scope no audit reports a balance in these
+      accounts: the books of each office normally keep it after closing, and
+      the pair cancels only in combined statements. To keep the old check, pass
+      a trial balance that holds the books of both offices to `present` in the
+      combined scope. `ExplainedTemporaryBalance` and `BlankTemporaryExplanation`:
+      `temporaryAccountBalances` reports eligible balances as a `Warning`
+      with no explanation field. `AbnormalBalanceWithReclassificationRule`,
+      `AmbiguousReclassification`, and `InapplicableReclassificationRule`: a
+      reclassification rule is an instruction for a correction, not an audit;
+      `abnormalBalances` reports the balance and its documentation lists the
+      legitimate exceptions. `MissingMaturityEvidence`: the maturity split is
+      the presentation setting `_maturitySensitiveTitles` (since 0.6.0.0).
+
+  - The source distribution no longer contains
+    `docs/admission-api-design-notes.md`, an internal design note. The behavior
+    of `ExchangeAlgebra.IO.Input.Admission` is documented in its Haddock.
+
+  - The unused dependency on `numeric-prelude`. No module has imported it since the `NN.Double`
+    instances were removed in 0.6.0.0. The public API is unchanged.
 
   ## 0.6.1.1 - 2026-11-20
 
@@ -2189,7 +2648,7 @@ description: |
 
   `exchangealgebra` is a Haskell library for [Exchange Algebra](https://www.springer.com/gp/book/9784431209850),
   an algebraic description of bookkeeping systems developed by Hiroshi Deguchi. It treats bookkeeping entries
-  as elements of a scaled basis algebra, so journaling, closing, transfer, and simulation can be written as
+  as members of a redundant algebra, so journaling, closing, transfer, and simulation can be written as
   function composition and projection.
 
   The library is used in the preprint
@@ -2200,6 +2659,7 @@ description: |
   - Book: <https://www.springer.com/gp/book/9784431209850>
   - Paper: <https://repository.kulib.kyoto-u.ac.jp/dspace/bitstream/2433/82987/1/0809-7.pdf>
   - Haddock: <https://hackage.haskell.org/package/exchangealgebra>
+  - Manual (English and Japanese): <https://yakagika.github.io/ExchangeAlgebra/>
 
   ## Installation
 
@@ -2208,7 +2668,7 @@ description: |
   ```yaml
   # stack.yaml
   extra-deps:
-    - exchangealgebra-0.6.1.0
+    - exchangealgebra-0.6.1.1
   ```
 
   ```yaml
@@ -2292,19 +2752,18 @@ description: |
     balances and findings, financial-statement presentation, CSV and bookkeeping
     output, and value types.
   - `ExchangeAlgebra.Accounting` — re-exports the
-    Definitions 7-9 accounting basis, exchange decomposition, and transfer core.
+    Definitions 7-9 accounting bases, exchange decomposition, and transfer core.
 
   ### Account vocabulary
 
-  These modules define basis elements and the canonical account metadata vocabulary.
+  These modules define element types for bases and the canonical account metadata vocabulary.
 
   - `ExchangeAlgebra.Accounting.Account` — defines account titles, classifications,
     registry metadata, posting eligibility, and PIMO direction helpers.
   - `ExchangeAlgebra.Accounting.Exchange` — defines `ExBaseClass`, `AccountBase`,
     `Exchange`, debit/credit decomposition, balance checks, and account projections.
-  - `ExchangeAlgebra.Algebra.Element` — defines generic wildcard-aware basis components.
-  - `ExchangeAlgebra.Algebra.Base` — defines generic basis classes, Hat/Not bases,
-    and basis display helpers.
+  - `ExchangeAlgebra.Algebra.Element` — defines element types with wildcard matching.
+  - `ExchangeAlgebra.Algebra.Base` — defines base classes, hat bases, and display helpers for bases.
 
   ### Core algebra
 
@@ -2350,70 +2809,6 @@ description: |
   - `ExchangeAlgebra.Journal` — defines metadata-bearing `Journal` values, indexed projections, and journal aggregation.
   - `ExchangeAlgebra.Journal.Transfer` — carries entries across notes and reads
     side totals. Use `Accounting.Transfer.transferEntriesBy` for accounting transfers.
-
-  ### Simulation: `Simulation.*` and `Simulate.*`
-
-  Simulation code lives under two module prefixes with different futures.
-
-  - `ExchangeAlgebra.Simulation.*` holds components that a model uses besides
-    the runner: trade networks, matrix analysis, optimization, and CSV output of
-    results. These modules are kept after 0.6.
-  - `ExchangeAlgebra.Simulate.*` holds the simulation runners and their support:
-    the classic state-space engine, the Lite front-end, ledger policies, spill
-    files, random helpers, and Chart plotting.
-
-  Components (`Simulation.*`):
-
-  - `ExchangeAlgebra.Simulation.Network` — separates sparse trade-network topology from input coefficients;
-    `.Flows`, `.Csv`, and `.Journal` generate industrial flows, read network CSV
-    files, and sum flows into a `Journal`.
-  - `ExchangeAlgebra.Simulation.Analysis` — computes a Leontief inverse and ripple effects.
-  - `ExchangeAlgebra.Simulation.Output` — writes simulation results as CSV
-    without Chart. `writeFuncResults` and `writeFuncResultsWithContext` take the
-    classic engine's `StateTime`.
-  - `ExchangeAlgebra.Simulation.Optimize` — see **Optimization** below.
-
-  Runners (`Simulate.*`):
-
-  - `ExchangeAlgebra.Simulate` — provides the classic state-space engine, spill support, and scenario execution, and re-exports the ripple utilities.
-  - `ExchangeAlgebra.Simulate.Engine` — re-exports the
-    classic state-space protocol and runners without spill configuration or
-    analysis helpers.
-  - `ExchangeAlgebra.Simulate.Lite` — provides the product-HKD, BSP front-end with declarative field rules and stages.
-  - `ExchangeAlgebra.Simulate.Policy` — declares retention, spill, and compaction policy for long simulations.
-  - `ExchangeAlgebra.Simulate.Spill` — provides spill chunk writers, checked readers, and ledger restoration shared by simulation and reporting layers.
-  - `ExchangeAlgebra.Simulate.Random` — re-exports
-    simulation random-number helpers.
-  - `ExchangeAlgebra.Simulate.Visualize` — renders simulation grids and time series with Chart/Cairo.
-
-  ### Planned changes to simulation modules
-
-  The next major version (0.7) is planned to move simulation into a separate
-  package, `exchangealgebra-simulation`, whose runner is a new model evaluator.
-  The plan affects the 0.6 modules as follows:
-
-  - `Simulation.*` and `Simulate.Spill` move to the new package. The writers
-    that take `StateTime` (`writeFuncResults`, `writeFuncResultsWithContext`)
-    are redesigned for the evaluator or removed.
-  - The classic engine (`Simulate`, `Simulate.Engine`, `Simulate.Random`),
-    `Simulate.Lite`, and `Simulate.Policy` are removed and not moved. Their
-    successor is the model evaluator.
-  - `Simulate.Visualize` either moves to the new package behind Chart or is
-    removed; the choice is made in 0.7.
-
-  The 0.6 modules do not emit deprecation warnings, because the successor package
-  has not been released. Changes to this plan will be recorded in the changelog.
-
-  ### Which simulation runner to use in 0.6
-
-  `ExchangeAlgebra.Simulate.Lite` provides `Generic`-derived world records,
-  term-boundary field rules, stages, and `runLite` / `runLiteWithPolicy`.
-  `ExchangeAlgebra.Simulate.Engine` is the lower-level classic state-space API
-  (`StateTime`, `Updatable`, `UpdatePattern`, and the `runSimulation` family),
-  retained for existing models and reproducibility. Both runners are planned for
-  removal in 0.7 (see above). For a new model built on 0.6, Lite needs less code;
-  keep model logic separate from runner code so that it can be moved to the
-  successor evaluator.
 
   ### Bookkeeping and reporting
 
@@ -2467,11 +2862,11 @@ description: |
   | Distinct money type | ✗ — a bare numeric type | ✓ — can't be silently mixed with coefficients / draws | ✓ |
   | Decimal prices / ratios | approximate | approximate | **exact** |
   | Tax / proration (`*`, `/`) | rounding noise | rounding noise | exact intermediates; round explicitly with `bankersRound` / `ceilingRound` |
-  | Construction-order independence | ✗ — addition is non-associative, so the order same-base terms are summed shifts the last-ULP of `norm` / `bar` | ✗ — identical to `Double` | ✓ — addition is exact & associative, so `norm` / `bar` / balance are identical regardless of build order |
-  | Determinism / auditability | not bit-reproducible across reorderings | not bit-reproducible | bit-reproducible |
+  | Construction-order independence | ✓ for `norm` / `bar` / balance on finite terms, which work from exact sums (`norm` and `bar` round once; balance compares the exact sums); ✗ for the sequential sums of `barWithin` / `balanceWithin` / `diffRLWithin`, whose last digit can shift with the order same-base terms were added | identical to `Double` | ✓ — addition is exact & associative, so every readout, including the sequential sums, is identical regardless of build order |
+  | Determinism / auditability | `norm` / `bar` / balance are bit-reproducible across reorderings; the sequential sums are not | identical to `Double` | bit-reproducible |
   | Memory per value | ~16 B | ~16 B (zero-cost wrapper) | ~40 B + indirection (~2.5×) |
   | Speed | fastest | fastest (= `Double`) | slower (boxed `Integer` mantissa arithmetic) |
-  | Typical use | numeric methods (Leontief inverse, optimization), quick ABM | ABM where you want a *typed* money value distinct from raw `Double` | audited ledgers, bookkeeping, anywhere a total must be reproducible |
+  | Typical use | numeric methods (Leontief inverse, optimization), quick ABM | ABM where you want a *typed* money value distinct from raw `Double` | audited ledgers, bookkeeping, anywhere a total must match decimal arithmetic exactly |
 
   ```haskell
   import ExchangeAlgebra
@@ -2512,77 +2907,15 @@ description: |
   on top. For very large simulations weigh exactness against that overhead — or use
   the spill-to-disk path (below) to keep memory constant.
 
-  **`fromList` ordering contract.** `EJ.fromList` is a strict `O(N)` left fold. It
-  preserves the *multiset* of terms exactly. When two terms share the
-  same note **and** base, they land in one ordered sequence; that sequence's order is
-  observable through `Eq` / `Show` / `toAlg` / `Binary`, and for `Double` through the
-  last-ULP of `norm` / `bar`. For `MoneyDecimal` the order never affects
-  `norm` / `bar` / balance. (`Integer` is intentionally not offered — it cannot
-  represent the fractional relative prices the ABM work depends on.)
-
-  ### Migrating to 0.6.0.0
-
-  `0.6.0.0` is a major (breaking) release. Update imports, transfer composition,
-  value instances, and plotting configuration as described here. See the
-  [changelog](https://hackage.haskell.org/package/exchangealgebra/changelog) for the full per-name migration tables.
-
-  - **Transfers add entries.** Transfer and closing functions return additional
-    entries without rewriting the original terms. Add the returned entries
-    with `(.+)`. `ExchangeAlgebra.Algebra.Transfer` and
-    `ExchangeAlgebra.Journal.Transfer` replace their contents under the same
-    module names; see **Removed** in the changelog.
-  - **Root exports are explicit.** `ExchangeAlgebra` has an explicit export
-    list. Import names such as `writeTermIO` from their owning modules; see
-    **Breaking changes without a compatibility shim** in the changelog.
-  - **Accounting names moved.** `ExchangeAlgebra.Algebra`,
-    `ExchangeAlgebra.Algebra.Base`, `ExchangeAlgebra.Algebra.Internal`, and
-    `ExchangeAlgebra.Journal` no longer re-export accounting names. Import their
-    accounting owners, or use `import ExchangeAlgebra`, which still provides
-    all these accounting names.
-  - **Module moves.** Deprecated compatibility modules remain in 0.6 and are
-    removed in 0.7.0.0. See **Deprecated** in the changelog for the new paths.
-  - **Exact variants are merged.** The `*Exact` functions and
-    `ExchangeAlgebra.Algebra.Exact` and `ExchangeAlgebra.Journal.Exact` modules
-    are removed. Ordinary functions provide the same readouts; for example,
-    replace `normExact` with `norm`, which returns the value directly.
-  - **Text instead of String.** Public API fields carrying human-readable text
-    now use `Text`. Enable `OverloadedStrings` or pass text with `Data.Text.pack`;
-    see the changelog for the affected fields and the exceptions.
-  - **Plotting is opt-in.** The `visualize` flag is off by default. Enable it to
-    use `ExchangeAlgebra.Simulate.Visualize` as described in **Installation**.
-  - **Custom `HatVal` instances.** Implement `valueError`, `Accum`, all eight
-    accumulator methods, and `roundRational`. Missing methods fail at run time.
-    See the **Custom `HatVal` instances implement** item in the changelog for
-    the signatures, helper functions, and laws.
-
-  ### Migrating to 0.5.0.0
-
-  `0.5.0.0` is a major (breaking) release. Most users need no changes — `Double`
-  ledgers keep working and render identically. Four things to know:
-
-  - **Custom `HatVal` instances**: `HatVal` dropped its `RealFloat` superclass and
-    added `showValue :: n -> String`. If you defined your own `HatVal` instance, add
-    a `showValue` (how the value prints inside `Alg`'s `Show`). If you relied on
-    `HatVal n => RealFloat n` in a signature, add the `RealFloat` constraint
-    explicitly. The built-in `Double` / `NN.Double` instances are unchanged.
-  - **`fromList` accumulation order**: now a strict left fold. The multiset is
-    preserved, but if you compared `Show` / `Eq` / serialized output of a
-    `fromList`-built journal byte-for-byte, the same-(note,base) sequence order may
-    differ. Switch such ledgers to `MoneyDecimal` for order-independent results, or
-    compare via `norm` / `bar` / `balanceBy` rather than raw structure.
-  - **Abstract `Alg` / `Journal`**: pattern-match `Alg` on `Zero`
-    and `(:@)` only and build values with `(.@)`, `(.+)`, `fromList`, `mkJournal`,
-    and `(.|)`. Code that constructed `Liner` directly must import
-    `ExchangeAlgebra.Algebra.Internal` (the exposed `Alg` representation module,
-    which carries no stability guarantee). Rebuild journals with `mkJournal`,
-    `(.|)`, or `fromList`.
-  - **Spill files are validated**: `readBinarySpillFile` and
-    `restoreJournalFromBinarySpill` now raise on a truncated, stale or gapped
-    file instead of merging a partial ledger; use the `...Checked` variants for an
-    `Either`. `Simulate.Lite` truncates its spill file when a run opens it.
-
-  (`0.5.0.0` also includes the `union` zero-base correctness fix first shipped in
-  `0.4.1.1`; see the changelog.)
+  **`fromList` ordering contract.** `EJ.fromList` is a strict `O(N)` left fold. When
+  two terms share the same note **and** base, they land in one sequence in input
+  order. `Eq` on the results of `toMap` and `toAlg`, `Binary`, and the sequential sums
+  of `barWithin`, `balanceWithin`, and `diffRLWithin` observe that order; `Show`
+  displays sorted terms. For finite terms,
+  `norm`, `bar`, and balance do not depend on the order for any value type. For
+  `MoneyDecimal`, the sequential sums do not depend on it either. (`Integer` is
+  intentionally not offered — it cannot represent the fractional relative prices the
+  ABM work depends on.)
 
   ## Recommended import patterns
 
@@ -2640,7 +2973,99 @@ description: |
   import qualified ExchangeAlgebra.Simulate.Lite   as Lite
   ```
 
-  ## Large-scale simulations (constant memory)
+  ## Examples
+
+  Runnable usage examples are collected in the `examples/` sub-package on GitHub.
+  See the [examples directory](https://github.com/yakagika/ExchangeAlgebra/tree/master/examples)
+  and its [README](https://github.com/yakagika/ExchangeAlgebra/blob/master/examples/README.md) for details.
+
+  ```bash
+  stack build
+  stack exec -- ebex1      # Introductory bookkeeping example
+  stack exec -- fixed-price-io       # 100-term simulation (+ Python visualization)
+  stack exec -- fixed-price-io-spill   # spill-to-disk simulation (constant memory, binary spill + restore)
+  ```
+
+  The repository also keeps short executable samples under `test/api-samples/`; CI compiles and
+  runs each of them and checks their hand-computed results. Two of them show the core accounting
+  features in a few dozen lines:
+
+  - `test/api-samples/Consolidation.hs`: a consolidation worksheet for a parent and its wholly
+    owned subsidiary, with the investment-capital and intercompany-sale eliminations.
+  - `test/api-samples/InvoiceJournal.hs`: a buyer's journal entry from a Japanese qualified invoice
+    with 10% and 8% tax-rate summaries.
+
+  ## Simulation
+
+  The core accounting layers above do not depend on the simulation modules. This section
+  describes the simulation entry points, their planned move in 0.8, and how to run large simulations.
+
+  ### Simulation: `Simulation.*` and `Simulate.*`
+
+  Simulation code lives under two module prefixes with different futures.
+
+  - `ExchangeAlgebra.Simulation.*` holds components that a model uses besides
+    the runner: trade networks, matrix analysis, optimization, and CSV output of
+    results. These modules are kept after 0.6.
+  - `ExchangeAlgebra.Simulate.*` holds the simulation runners and their support:
+    the classic state-space engine, the Lite front-end, ledger policies, spill
+    files, random helpers, and Chart plotting.
+
+  Components (`Simulation.*`):
+
+  - `ExchangeAlgebra.Simulation.Network` — separates sparse trade-network topology from input coefficients;
+    `.Flows`, `.Csv`, and `.Journal` generate industrial flows, read network CSV
+    files, and sum flows into a `Journal`.
+  - `ExchangeAlgebra.Simulation.Analysis` — computes a Leontief inverse and ripple effects.
+  - `ExchangeAlgebra.Simulation.Output` — writes simulation results as CSV
+    without Chart. `writeFuncResults` and `writeFuncResultsWithContext` take the
+    classic engine's `StateTime`.
+  - `ExchangeAlgebra.Simulation.Optimize` — see **Optimization** below.
+
+  Runners (`Simulate.*`):
+
+  - `ExchangeAlgebra.Simulate` — provides the classic state-space engine, spill support, and scenario execution, and re-exports the ripple utilities.
+  - `ExchangeAlgebra.Simulate.Engine` — re-exports the
+    classic state-space protocol and runners without spill configuration or
+    analysis helpers.
+  - `ExchangeAlgebra.Simulate.Lite` — provides the product-HKD, BSP front-end with declarative field rules and stages.
+  - `ExchangeAlgebra.Simulate.Policy` — declares retention, spill, and compaction policy for long simulations.
+  - `ExchangeAlgebra.Simulate.Spill` — provides spill chunk writers, checked readers, and ledger restoration shared by simulation and reporting layers.
+  - `ExchangeAlgebra.Simulate.Random` — re-exports
+    simulation random-number helpers.
+  - `ExchangeAlgebra.Simulate.Visualize` — renders simulation grids and time series with Chart/Cairo.
+
+  ### Planned changes to simulation modules
+
+  Version 0.8 is planned to move simulation into a separate
+  package, `exchangealgebra-simulation`, whose runner is a new model evaluator.
+  The move was planned for 0.7 until November 2026; 0.7 keeps the simulation
+  modules of 0.6. The plan affects these modules as follows:
+
+  - `Simulation.*` and `Simulate.Spill` move to the new package. The writers
+    that take `StateTime` (`writeFuncResults`, `writeFuncResultsWithContext`)
+    are redesigned for the evaluator or removed.
+  - The classic engine (`Simulate`, `Simulate.Engine`, `Simulate.Random`),
+    `Simulate.Lite`, and `Simulate.Policy` are removed and not moved. Their
+    successor is the model evaluator.
+  - `Simulate.Visualize` either moves to the new package behind Chart or is
+    removed; the choice is made in 0.8.
+
+  The simulation modules do not emit deprecation warnings in 0.6 or 0.7, because
+  the successor package has not been released. Changes to this plan will be recorded in the changelog.
+
+  ### Which simulation runner to use in 0.6
+
+  `ExchangeAlgebra.Simulate.Lite` provides `Generic`-derived world records,
+  term-boundary field rules, stages, and `runLite` / `runLiteWithPolicy`.
+  `ExchangeAlgebra.Simulate.Engine` is the lower-level classic state-space API
+  (`StateTime`, `Updatable`, `UpdatePattern`, and the `runSimulation` family),
+  retained for existing models and reproducibility. Both runners are planned for
+  removal in 0.8 (see above). For a new model built on 0.6, Lite needs less code;
+  keep model logic separate from runner code so that it can be moved to the
+  successor evaluator.
+
+  ### Large-scale simulations (constant memory)
 
   For new Lite simulations, set `spillTo` in a `LedgerPolicy` and run with `runLiteWithPolicy`.
 
@@ -2684,13 +3109,13 @@ description: |
   A runnable end-to-end example (multi-scenario run with binary spill, `KeepRecentTerms`, and
   restore) is `examples/basic/fixedPriceIOSpill.hs` (the `fixed-price-io-spill` executable).
 
-  ## A note on visualization
+  ### A note on visualization
 
   `ExchangeAlgebra.Simulate.Visualize` provides Chart-based PNG rendering, but **we recommend
   writing CSV output and visualizing it from a separate Python script** for production-quality
   plotting.
 
-  ### Why
+  #### Why
 
   - Chart / Chart-cairo transitively pull in cairo / pango / freetype system libraries, which
     makes the build environment heavier to set up.
@@ -2698,7 +3123,7 @@ description: |
   - Using CSV as an intermediate format cleanly separates "compute" from "plot".
   - The same CSVs can be reused with R / Julia / Excel if you need them.
 
-  ### Recommended workflow
+  #### Recommended workflow
 
   ```haskell
   -- Haskell side: write the simulation outputs to CSV
@@ -2731,33 +3156,132 @@ description: |
   Concrete runnable examples of this pattern live under the `examples/` sub-package
   (see [the examples directory on GitHub](https://github.com/yakagika/ExchangeAlgebra/tree/master/examples)).
 
-  ### If you still want to plot from Haskell
+  #### If you still want to plot from Haskell
 
   If keeping everything in Haskell is important to your workflow, `plotLineVector`,
   `plotMultiLines`, and `plotWldsDiffLine` in `ExchangeAlgebra.Simulate.Visualize` write PNGs
   directly and work without any Python setup.
 
-  ## Examples
+  ## Migrating between major versions
 
-  Runnable usage examples are collected in the `examples/` sub-package on GitHub.
-  See the [examples directory](https://github.com/yakagika/ExchangeAlgebra/tree/master/examples)
-  and its [README](https://github.com/yakagika/ExchangeAlgebra/blob/master/examples/README.md) for details.
+  ### Migrating to 0.7.0.0
 
-  ```bash
-  stack build
-  stack exec -- ebex1      # Introductory bookkeeping example
-  stack exec -- fixed-price-io       # 100-term simulation (+ Python visualization)
-  stack exec -- fixed-price-io-spill   # spill-to-disk simulation (constant memory, binary spill + restore)
-  ```
+  `0.7.0.0` is a major (breaking) release. It lets closing, audits, financial
+  statements, and consolidation worksheets take your own account title type.
+  Update renamed names, error-type imports, and exhaustive matches as described
+  here. See the
+  [changelog](https://hackage.haskell.org/package/exchangealgebra/changelog) for
+  the full per-name migration tables.
+
+  - **Renamed names.** `AxisKey` becomes `ElementKey`, `filterByAxis` becomes
+    `filterByNoteField`, `HasTermAxis` and `termOf` become `HasNotePeriod` and
+    `periodOf`, and `projCapitalStock` becomes `projNonContraCreditEquity`. The
+    changelog lists all 16 renamed names.
+  - **Account title types.** `ExBaseClass` has an associated type `TitleOf`
+    (default `AccountTitles`). Instances that keep the default need no change.
+    Error, audit, worksheet, and statement types have `*Of` versions over the
+    title type. Import constructors through the `*Of(..)` name next to the old
+    type name, for example `import ExchangeAlgebra.IO.Input (ConvErrorOf(..), ConvError)`.
+  - **Closing errors.** `closingEntries` returns `Either (ClosingError v b) (Alg v b)`.
+    Match a transfer failure as `Left (ClosingTransferError e)` and add a case
+    for `Left (InvalidClosingTarget title violation)`.
+  - **Note operator.** `(.|)` is `infix 5` and binds more tightly than `(.+)`.
+    Put parentheses around an algebra sum before its note, as in
+    `(10 .@ Not :< Cash .+ 10 .@ Not :< Sales) .| "sale"`. An expression written
+    for the old fixity that no longer parses as intended is a type error.
+  - **Dates in bases.** Replace `Day` with `Wild Day` in base types and write a
+    concrete date as `Exactly d`.
+  - **Account titles.** Exhaustive `case` expressions on `AccountTitles` need a
+    case for the new `DirectorsCompensations`. Replace `Commutation` with
+    `CommunicationExpenses`.
+  - **Removed modules and audits.** The deprecated accounting and algebra
+    compatibility modules are removed; the changelog maps each to its
+    replacement. Replace `trialBalanceFindings` with the audits in
+    `ExchangeAlgebra.Accounting.Audit`.
+  - **Output changes.** Twelve English account names change, for example
+    `Retained earnings` becomes `Retained earnings brought forward`. Addition
+    keeps terms on the same base in input order, so `Eq` and the `Binary` bytes
+    can differ from 0.6. `norm`, `bar`, and closing return the same values for
+    finite terms.
+
+  The simulation modules of 0.6 are unchanged in 0.7; see
+  [Planned changes to simulation modules](#planned-changes-to-simulation-modules).
+
+  ### Migrating to 0.6.0.0
+
+  `0.6.0.0` is a major (breaking) release. Update imports, transfer composition,
+  value instances, and plotting configuration as described here. See the
+  [changelog](https://hackage.haskell.org/package/exchangealgebra/changelog) for the full per-name migration tables.
+
+  - **Transfers add entries.** Transfer and closing functions return additional
+    entries without rewriting the original terms. Add the returned entries
+    with `(.+)`. `ExchangeAlgebra.Algebra.Transfer` and
+    `ExchangeAlgebra.Journal.Transfer` replace their contents under the same
+    module names; see **Removed** in the changelog.
+  - **Root exports are explicit.** `ExchangeAlgebra` has an explicit export
+    list. Import names such as `writeTermIO` from their owning modules; see
+    **Breaking changes without a compatibility shim** in the changelog.
+  - **Accounting names moved.** `ExchangeAlgebra.Algebra`,
+    `ExchangeAlgebra.Algebra.Base`, `ExchangeAlgebra.Algebra.Internal`, and
+    `ExchangeAlgebra.Journal` no longer re-export accounting names. Import their
+    accounting owners, or use `import ExchangeAlgebra`, which still provides
+    all these accounting names.
+  - **Module moves.** Version 0.7.0.0 removes the deprecated accounting and
+    algebra compatibility modules. See [Removed in the changelog](ChangeLog.md#removed)
+    for replacement imports. The five deprecated simulation compatibility
+    modules remain until simulation moves to a separate package in 0.8.0.0.
+  - **Exact variants are merged.** The `*Exact` functions and
+    `ExchangeAlgebra.Algebra.Exact` and `ExchangeAlgebra.Journal.Exact` modules
+    are removed. Ordinary functions provide the same readouts; for example,
+    replace `normExact` with `norm`, which returns the value directly.
+  - **Text instead of String.** Public API fields carrying human-readable text
+    now use `Text`. Enable `OverloadedStrings` or pass text with `Data.Text.pack`;
+    see the changelog for the affected fields and the exceptions.
+  - **Plotting is opt-in.** The `visualize` flag is off by default. Enable it to
+    use `ExchangeAlgebra.Simulate.Visualize` as described in **Installation**.
+  - **Custom `HatVal` instances.** Implement `valueError`, `Accum`, all eight
+    accumulator methods, and `roundRational`. Missing methods fail at run time.
+    See the **Custom `HatVal` instances implement** item in the changelog for
+    the signatures, helper functions, and laws.
+
+  ### Migrating to 0.5.0.0
+
+  `0.5.0.0` is a major (breaking) release. Most users need no changes — `Double`
+  ledgers keep working and render identically. Four things to know:
+
+  - **Custom `HatVal` instances**: `HatVal` dropped its `RealFloat` superclass and
+    added `showValue :: n -> String`. If you defined your own `HatVal` instance, add
+    a `showValue` (how the value prints inside `Alg`'s `Show`). If you relied on
+    `HatVal n => RealFloat n` in a signature, add the `RealFloat` constraint
+    explicitly. The built-in `Double` / `NN.Double` instances are unchanged.
+  - **`fromList` accumulation order**: now a strict left fold. The multiset is
+    preserved, but if you compared `Show` / `Eq` / serialized output of a
+    `fromList`-built journal byte-for-byte, the same-(note,base) sequence order may
+    differ. Switch such ledgers to `MoneyDecimal` for order-independent results, or
+    compare via `norm` / `bar` / `balanceBy` rather than raw structure.
+  - **Abstract `Alg` / `Journal`**: pattern-match `Alg` on `Zero`
+    and `(:@)` only and build values with `(.@)`, `(.+)`, `fromList`, `mkJournal`,
+    and `(.|)`. Code that constructed `Liner` directly must import
+    `ExchangeAlgebra.Algebra.Internal` (the exposed `Alg` representation module,
+    which carries no stability guarantee). Rebuild journals with `mkJournal`,
+    `(.|)`, or `fromList`.
+  - **Spill files are validated**: `readBinarySpillFile` and
+    `restoreJournalFromBinarySpill` now raise on a truncated, stale or gapped
+    file instead of merging a partial ledger; use the `...Checked` variants for an
+    `Either`. `Simulate.Lite` truncates its spill file when a run opens it.
+
+  (`0.5.0.0` also includes the `union` zero-base correctness fix first shipped in
+  `0.4.1.1`; see the changelog.)
 
   ## Documentation
 
   - Haddock: <https://hackage.haskell.org/package/exchangealgebra>
-  - A tutorial / guided walkthrough is planned, based on an upcoming paper.
+  - Manual (English and Japanese): <https://yakagika.github.io/ExchangeAlgebra/>. It records a journal entry in exchange algebra
+    step by step and covers the Algebra, Journal, Accounting, and IO layers of the Hackage release named in its title.
 
   ## License
 
-  Dual licensed under MIT and the Open World License (OWL). See `LICENSE` for details.
+  Licensed under the MIT license. See [LICENSE.txt](LICENSE.txt) for the full text.
 
   ## Publications using this library
 
@@ -2784,9 +3308,9 @@ description: |
     DOI: [10.1002/sres.3850030105](https://doi.org/10.1002/sres.3850030105)
 
     The axiomatic origin of Exchange Algebra. This paper formalizes double-entry
-    bookkeeping as an accounting vector space over the extended basis
-    `Γ = Λ ∪ Λ̂` (account titles and their dual hats), introduces the five
-    transaction axioms, and derives the debit/credit partition and the balance
+    bookkeeping as an accounting vector space over `Γ = Λ ∪ Λ̂` (account titles
+    and their dual hats). It introduces the five transaction axioms and derives
+    the debit/credit partition and the balance
     principle (`|y_L| = |y_R|`) purely algebraically.
 
   - Hiroshi Deguchi. *Economics as an Agent-Based Complex System:
@@ -2796,10 +3320,10 @@ description: |
   - Hiroshi Deguchi. Exchange Algebra (PDF).
     <https://repository.kulib.kyoto-u.ac.jp/dspace/bitstream/2433/82987/1/0809-7.pdf>
 description-type: markdown
-hash: 0dc0433d2f8e32737213bb037c763b37f46d096d39487afb8fcc684aa9e810c4
+hash: 68f33bb7aa0ae2ddd497346a882843de34870ca32444ee68bb4197f0c4291cd1
 homepage: https://github.com/yakagika/ExchangeAlgebra#readme
-latest: 0.6.1.1
-license-name: LicenseRef-OtherLicense
+latest: 0.7.0.0
+license-name: MIT
 maintainer: yakagika@icloud.com
 synopsis: Exchange Algebra for bookkeeping and economic simulation
 test-bench-deps:
@@ -2817,7 +3341,6 @@ test-bench-deps:
   exchangealgebra: '>=0'
   hashable: '>=1.4 && <1.6'
   mtl: '>=2.3 && <2.4'
-  numeric-prelude: '>=0.4.4 && <0.5'
   parallel: '>=3.2 && <3.3'
   process: '>=0'
   random: '>=1.2 && <1.3'
