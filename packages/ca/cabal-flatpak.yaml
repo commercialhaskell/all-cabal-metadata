@@ -8,29 +8,32 @@ all-versions:
 - 0.1.1
 - 0.1.2
 - 0.1.3
+- 1.0.0
 author: Henning Thielemann <haskell@henning-thielemann.de>
 basic-deps:
-  aeson: '>=2.0 && <2.4'
-  aeson-pretty: '>=0.8.7 && <0.9'
-  base: '>=4.5 && <5'
-  bytestring: '>=0.9 && <0.13'
-  cabal-plan: '>=0.5 && <0.8'
-  containers: '>=0.5 && <0.9'
-  cryptohash-sha256: '>=0.11 && <0.12'
-  directory: '>=1.2.3 && <1.4'
-  http-client: '>=0.5.12 && <0.8'
-  http-client-tls: '>=0.3.5.3 && <0.5'
-  http-types: '>=0.10 && <0.13'
-  optparse-applicative: '>=0.11 && <0.20'
-  pathtype: '>=0.8 && <0.9'
-  shell-utility: '>=0.1 && <0.2'
-  tar: '>=0.5.0.3 && <0.8'
-  text: '>=1.2 && <2.2'
-  utility-ht: '>=0.0.12 && <0.1'
-  yaml: '>=0.11 && <0.12'
-  zlib: '>=0.5.3 && <0.8'
+  base: '>=4.22 && <5'
+  cabal-flatpak: '>=0'
 changelog: |
   # Change log for the `cabal-flatpak` package
+
+  ## 1.0.0
+
+  cabal-flatpak has changed ownership and now lives at https://codeberg.org/haskell/cabal-flatpak.
+
+  ### Breaking changes
+
+  * The CLI has been completely revamped, please read the README.
+  * GHC comes from the `deb12` binary distributions.
+  * `plan.json` must come from cabal-install 3.18.1.0 or later, to be able to
+    use revisions.
+
+  ### Migration
+
+  1. Install cabal-install 3.18.1.0 or later.
+  2. Run `cabal build --dry-run --disable-tests --disable-benchmarks`.
+  3. Run `cabal-flatpak generate --dependencies`.
+  4. Put `haskell-sources.yaml` in the `modules` list of your manifest,
+     before the module that builds your package.
 
   ## 0.1.1
 
@@ -50,175 +53,179 @@ changelog: |
    * First experimental version inspired by `stackpak`.
 changelog-type: markdown
 description: |
-  ## Scope
+  # cabal-flatpak
 
-  This program generates a large Flatpak manifest in JSON format
-  with the versions of all transitively imported Haskell packages.
-  This is required by Flathub
-  since this platform downloads all source files for you
-  and lets you build only in a sandbox without access to the internet.
-  The detailed version information can also be useful for you
-  for reproducible builds.
-  However, for maintaining your own Flatpak repository
-  or for distributing Flatpak bundles
-  it is not strictly necessary to have such a verbose manifest.
-  You may get results quicker by writing your own manifest
-  which simply runs `cabal-install` or `stack`.
-  `stack` should give you reproducible builds
-  but its package database contains only a subset of Hackage.
-  `cabal-install` gives you access to more Haskell packages,
-  but the build may fail at a later point due to lax version bounds
-  in dependent packages.
-
+  `cabal-flatpak` generates the files necessary for packaging a Haskell
+  application with Flatpak.
+  All the dependencies are explicitly pinned, in order to ensure reproducible
+  builds.
 
   ## Usage
 
-  ### Create a Flatpak manifest
+  ### Generate the files
 
-  The usage is a bit cumbersome,
-  because for Flathub you may only build manifests
-  for released versions of your package,
-  whereas you certainly want to manage manifests
-  in the working copy of your repository.
+  You need cabal-install 3.18.1.0 or later.
 
-  First let `cabal` build a `plan.json` for your released package:
+  Run the command in your project:
 
-  ~~~~
-  $ cd /tmp
-  $ cabal unpack my-package-0.1.2
-  $ cd my-package-0.1.2
-  $ cabal new-build --dry-run --disable-tests --disable-benchmarks
-  ~~~~
-
-  `cabal-flatpak` reads `plan.json` via the `cabal-plan` library.
-
-  Now create a `flatpak.cabal.json` file in your working copy.
-  It contains a custom JSON object with information needed by `cabal-flatpak`
-  and also a template for the generated manifest.
-  For an example see the configuration file for `cabal-flatpak`.
-
-  ~~~~
+  ```bash
   $ cd /path/to/my-package
-  $ cabal-flatpak --directory=/tmp/my-package-0.1.2 flatpak.cabal.json flatpak.json
-  ~~~~
+  $ cabal build --dry-run --disable-tests --disable-benchmarks
+  $ cabal-flatpak generate --arch x86_64 --arch aarch64
+  ```
 
-  The `--arch` option allows you to put build information
-  for one or more architectures into one manifest.
-  Usually, only `ghc` and `cabal-install` binaries depend on the architecture
-  and the whole lot of Haskell packages can be build with the same commands.
+  The command reads the build plan that `cabal` computes
+  (`dist-newstyle/cache/plan.json`) and the `.cabal` file of your package.
 
-  There are two build modes:
-  One builds all modules individually using plain `Cabal`,
-  the other one builds all modules in one go using `cabal-install`.
-  You can enable the second mode using the `--cabal-install` option.
-  These are the differences:
+  The following files are then written in the project's root:
 
-  * `Cabal` mode needs less dependencies.
-    `cabal-install` needs a pre-built binary for your architecture.
+   * `haskell-sources.yaml`: Flatpak modules that build GHC
+     and all dependencies of your package
+     (and `cabal-install`, with `--cabal-install`).
+   * `<id>.yaml`: a stub manifest for your application.
+   * `<id>.metainfo.xml`: a stub MetaInfo file for Flathub.
+   * `<id>.desktop`: a stub desktop entry.
 
-  * `Cabal` mode can pass options to the build of specific packages.
-    `cabal-install` can only pass options to all packages at once.
-    If `-fbuildExamples` means something different to different Haskell packages,
-    then this will fail.
-    Even in `cabal-install` mode we need to preprocess each package
-    and in this stage we could alter flag switches by patching Cabal files.
-    We could also build packages with requested flags in separate stages.
-    Currently, we don't try any of these strategies.
+  The application ID `<id>` comes from the `homepage` field of the `.cabal` file.
+  For example, `https://codeberg.org/haskell/cabal-flatpak`
+  becomes `page.codeberg.haskell.cabal-flatpak`.
+  This works for GitHub, GitLab, Codeberg, Framagit and SourceForge.
+  For any other host, the ID is the reversed domain plus the package name
+  (`https://xmonad.org` becomes `org.xmonad.<package>`),
+  and the stub files have a `FIXME` comment.
+  Without a `homepage`, the ID is `com.example.<package>`.
 
-  * `cabal-install` enables parallel builds.
-    This builds significantly faster.
-    `Cabal` mode on the other hand allows Flatpak to cache build results
-    of individual packages.
-    This can accelerate re-builds.
-    However, Flatpak does not know the dependency graph
-    and thus simply rebuilds anything after a module that must be rebuilt.
 
-  Known issue:
-  If you use the `"main-sources"` list of manually written sources,
-  then the main tarball needs `"type": "archive"` for `Cabal` mode
-  and `"type": "file"` for `cabal-install`.
-  That is you cannot simply switch between both modes only at the command-line.
-  I suggest to not use `"main-sources"` anyway,
-  but stick to versions published at Hackage.
+  #### Options
 
-  For some packages you need to build dependencies on external C packages.
-  `cabal-flatpak` cannot generate according build instructions for you.
-  However, you can re-use build instructions you found useful.
-  Flatpak-builder supports this itself.
-  In the `"modules"` list you cannot only put module JSON objects,
-  but also plain strings.
-  Such a string is interpreted as path to a separate file
-  containing a Flatpak module JSON object.
-  I add such JSON files to the FFI packages I maintain.
+  ##### Files written
 
+  By default, both the stub manifest files and the dependencies file are written.
+  You should only need to generate the manifest once, only re-generate the
+  dependencies.
+
+   * `--dependencies`: write `haskell-sources.yaml` only.
+   * `--manifest`: write the stub files only.
+   * `--force`: overwrite existing files.
+     Without it, the command skips them and prints a message.
+   * `--directory DIR`: where the search for the project root starts.
+     The default is the current directory.
+   * `--local`: build the application from the project directory.
+     The default is its Git repository.
+     The manifest gets a `dir` source with `path: .`,
+     which skips `dist-newstyle` and `.flatpak-builder`.
+     All generated files have `.local` before their extension,
+     for example `haskell-sources.local.yaml` and `<id>.local.yaml`.
+     Add `*.local.*` to `.gitignore`.
+   * `--icon FILE`: the SVG or PNG icon that the manifest installs,
+     relative to the project root.
+     Without it, the manifest installs `<id>.svg` and has a `FIXME` comment.
+   * `--arch ARCH`: an architecture to build for. Repeatable.
+     Usually only the `ghc` and `cabal-install` binaries depend on it.
+   * `--cabal-install`: build all dependencies with `cabal-install`
+     in one module, `haskell-deps` (see below).
+
+  Each module builds its package with
+  `runhaskell Setup build --jobs=$FLATPAK_BUILDER_N_JOBS`.
+
+  ### Build the dependencies with `cabal-install`
+
+  By default each dependency is one Flatpak module,
+  and `flatpak-builder` builds them one after the other.
+  With `--cabal-install` the dependencies are in one module,
+  and `cabal-install` builds them in parallel.
+  Your package is built with `cabal install`.
+
+  ```bash
+  $ cabal build --dry-run --disable-tests --disable-benchmarks
+  $ cabal-flatpak generate --cabal-install --dependencies --force
+  ```
+
+  The `haskell-deps` module stores the build in `/app/lib/cabal-store`.
+  The stub manifest removes the store and the repository `/app/lib/haskell-repo`
+  from the final application:
+
+  ```yaml
+  cleanup:
+    - /lib/haskell-repo
+    - /lib/cabal-store/*/package.db
+    - /lib/cabal-store/*/*/lib
+    - /lib/cabal-store/*/*/bin
+  ```
+
+  `allow-newer` and `allow-older` from `cabal.project` and `cabal.project.local`
+  go into the freeze file.
+
+  Version bound relaxations inside `import:` or `if` are not read yet,
+  you will have to add them by hand.
+
+  If one dependency changes, `flatpak-builder` will rebuild all of them,
+  because they are in one module.
 
   ### Build the Flatpak package
 
-  First you need to install a Flatpak runtime environment and its SDK:
+  Install the Flatpak runtime and its SDK:
 
-  ~~~~
-  $ sudo flatpak install org.freedesktop.Platform org.freedesktop.Sdk org.freedesktop.Platform.Compat.i386 org.freedesktop.Sdk.Compat.i386
-  ~~~~
+  ```bash
+  $ sudo flatpak install org.freedesktop.Platform org.freedesktop.Sdk
+  ```
 
+  Then build:
 
-  You may refer to the `Makefile` that is shipped with `cabal-flatpak`
-  for how to eventually build the Flatpak package.
-  The command line is:
+  ```bash
+  $ flatpak-builder --force-clean --repo=$FLATPAK/repository --state-dir=$FLATPAK/builder/ $FLATPAK/build/my-package <id>.yaml
+  ```
 
-  ~~~~
-  $ flatpak-builder --force-clean --repo=$FLATPAK/repository --state-dir=$FLATPAK/builder/ $FLATPAK/build/my-package $<
-  ~~~~
+  Flatpak uses a lot of storage, so you may want `$FLATPAK` on a separate
+  partition.
 
-  Flatpak consumes pretty much storage
-  thus I set $FLATPAK to a directory on a separate harddisk partition.
-  The `--repo` option points to your Flatpak repository.
-  This is where `flatpak-builder` stores the compiled package.
-  The Flatpak repository contains all versions of all your Flatpak packages.
-  If another user has access to it,
-  she can easily install and update Flatpak packages.
-  The `--state-dir` option points to a directory
-  that caches all downloads and build artifacts of Flatpak.
-  You may share it between different projects.
-  The `DIRECTORY` argument names the path
-  to where Flatpak builds your project.
-  It may not be shared between projects,
-  but you can safely delete it after a build
-  and the `--force-clean` option triggers exactly this
-  when you re-build your project.
-  The directories specified by `--state-dir` and `DIRECTORY`
-  must reside on the same file system.
+   * `--repo` is your Flatpak repository, where `flatpak-builder` stores the result.
+     It holds all versions of all your Flatpak packages.
+     Anyone with access to it can install and update them.
+   * `--state-dir` caches all downloads and build artifacts.
+     Projects can share it.
+   * The `DIRECTORY` argument is where Flatpak builds your project.
+     Projects cannot share it. You can delete it after a build.
+     `--force-clean` deletes it at the start of the next build.
 
-  You may also extract a single package file
-  for a certain version of your package from the repository.
-  This can be handy for a one-time install
-  but disallows the user to easily get updates of your program.
+  `--state-dir` and `DIRECTORY` must be on the same file system.
 
-  ~~~~
+  You can also export one version of your package to a single file,
+  for a one-time install (However, users of the bundle do not get updates).
+
+  ```bash
   $ flatpak build-bundle $FLATPAK/repository \
       my-package-0.1.2.flatpak com.my_domain.my-package \
       --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
-  ~~~~
-
+  ```
 
   ## Known issues
 
   ### Cabal revisions
 
-  Cabal package description files can be updated on Hackage
-  without altering the package version.
-  Every update increases the Cabal file revision.
-  Unfortunately, `plan.json` does not contain the revision number,
-  it just refers to the currently most recent Cabal file for each Haskell package.
-  This is a fundamental problem since Flatpak builds must be reproducible.
-  We currently solve this problem
-  by scanning Cabal's local package database
-  below `.cabal/packages/hackage.haskell.org`.
-  This has not optimal performance but it is acceptable.
+  For reproducible builds, every *module* pins the revision of its
+  Haskell dependency, read from the `pkg-revision` field
+  of `plan.json`.
+
+  For this reason, cabal-install 3.18.1.0 or later is required.
+
+  ### Dependencies outside Hackage
+
+  Only Hackage dependencies are supported for now.
+
+  Contributions that add support for `source-repository-package`,
+  local tarball or remote tarball packages are welcome.
+
+  ### C dependencies
+
+  `cabal-flatpak` does not generate build instructions for C dependencies.
+  Write them yourself. `flatpak-builder` accepts a path to a module file
+  as an entry of `modules`.
 description-type: markdown
-hash: 4127e6d5b63f0853a8bce35bcdcd60f1cfdee4e0176d3905d26bc7c230eae340
-homepage: https://hub.darcs.net/thielema/cabal-flatpak/
-latest: 0.1.3
-license-name: BSD-3-Clause
-maintainer: Henning Thielemann <haskell@henning-thielemann.de>
-synopsis: Generate a FlatPak manifest from a Cabal package description
+hash: ce423a77a9b15bc24737833baaefcd4d32f3d8acef2591181492afca09e5460b
+homepage: https://codeberg.org/haskell/cabal-flatpak
+latest: 1.0.0
+license-name: BSD-3-Clause AND GPL-2.0-or-later
+maintainer: Hécate
+synopsis: Generate FlatPak modules from a Cabal package description
 test-bench-deps: {}
