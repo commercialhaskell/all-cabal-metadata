@@ -5,22 +5,85 @@ all-versions:
 - 0.3.0.0
 - 0.4.0.0
 - 0.5.0.0
+- 0.6.0.0
 author: Simon Marlow <marlowsd@gmail.com>
 basic-deps:
   Cabal: '>=3.18 && <3.19'
   Cabal-syntax: '>=3.18 && <3.19'
   async: '>=2.2.6 && <2.3'
   base: '>=4.17 && <4.24'
-  bytestring: '>=0.11.5 && <0.12'
+  bytestring: '>=0.11.5 && <0.13'
   cabal-buck2: '>=0'
   cabal-install: ==3.18.1.0
   cabal-install-solver: '>=3.18 && <3.19'
-  containers: '>=0.6.7 && <0.7'
+  containers: '>=0.6.7 && <0.9'
   directory: '>=1.3.8 && <1.4'
-  filepath: '>=1.4 && <1.5'
+  filepath: '>=1.4 && <1.6'
   process: '>=1.6 && <1.7'
   stm: '>=2.5.1 && <2.6'
 changelog: |
+  # 0.6.0.0
+
+    * For `cabal-install` version 3.18
+    * **New features**
+      * There is now support for per-module compilation using a GHC
+        worker. For details see the section on "Per-module compilation" in
+        the README.
+      * The Buck2 support code now comes with `cabal-buck2` and is
+        unpacked into `buck2/` automatically if it doesn't exist. The
+        contents of `buck2/` will be upgraded if you switch to a newer
+        version of `cabal-buck2` later. A git checkout of haskell-buck2
+        in `buck2/` still works as before.
+      * A package's `data-files` are now found by `getDataFileName` when
+        its code runs in the buck2 build. This includes the data files of
+        the packages it depends on that buck2 builds. Haskell rules have a
+        `data_dirs` attribute for this, and `cabal-buck2/packages.bzl` has
+        `DATA_PACKAGES`.
+      * `--source-deps` supports cabal.project `source-repository-package`s.
+      * A project's `cabal-buck2.bzl` can give `DEFAULTS` for the generated
+        targets, for every package or for one package, as well as
+        `OVERRIDES` for individual components
+        (see https://github.com/simonmar/cabal-buck2/issues/18).
+      * A test-suite, benchmark or executable that only runs a tool of its
+        `build-tool-depends` can say so with
+        `x-buck2-ignore-build-tool-depends` and
+        `x-buck2-run-tool-depends`, so that buck2 builds the tool once
+        rather than again for the execution platform
+        (see https://github.com/simonmar/haskell-buck2/issues/62).
+      * A component can list the libraries whose code its Template Haskell
+        splices run in `x-buck2-splice-depends`, so that buck2
+        can compile a Template Haskell module without waiting for the rest
+        of its libraries to be linked.
+    * **Changes**
+      * `cabal buck2 --cache` writes its settings to `.buckconfig.local`
+        rather than `.buckconfig`, which is usually committed. A block that
+        an earlier version wrote to `.buckconfig` is moved out the next time
+        `--cache` or `--no-cache` is given.
+      * The way the C/C++ compiler is chosen has changed. Previously it
+        always defaulted to `clang`/`clang++` because those are the Buck2
+        toolchain defaults. Now we use the `--with-gcc` option to Cabal if
+        supplied, or GHC's "C compiler command" if it uses an absolute path,
+        or otherwise the `clang`/`clang++` default as before.
+      * The path to GHC, its tools and the C/C++ compilers are now fixed
+        when you run `cabal buck2` rather than being found via `PATH`
+        (see https://github.com/simonmar/haskell-buck2/issues/29)
+    * **Fixes**
+      * An executable with `enable_profiling = True` now links its libraries'
+        profiled archives whatever the build mode, rather than their
+        non-profiled shared libraries in a dev build
+        (see https://github.com/simonmar/haskell-buck2/issues/30)
+      * The mode flags (-O etc.) now come before the package-specific
+        flags (from `ghc-options` etc.) on the GHC command line.
+      * C and C++ targets are rebuilt when `cabal buck2` finds a different
+        C toolchain, with or without an action cache: the C tools are now run
+        from a directory named by the C toolchain's fingerprint
+        (`third-party/haskell/toolchain/<role>/<fingerprint>/`).
+      * What is compiled against a library sees only the headers in its
+        `install-includes`, as it would with the library installed by Cabal.
+        Previously it saw all of the `include-dirs` of a library with C or
+        C++ sources, and none of those of other libraries. A library's
+        own C, C++ and Haskell code still sees all of them.
+
   # 0.5.0.0
 
     * For `cabal-install` version 3.18
@@ -118,516 +181,382 @@ changelog: |
 
     * For `cabal-install` version 3.18
 changelog-type: markdown
-description: |
-  # Buck2 build system for Haskell projects
-
-  Short summary: this is a [cabal external command][ext] `cabal buck2`
-  that allows you to use [Buck2](https://buck2.build) as the build
-  system for your Cabal project.
-
-  # Quick start
-
-  First [download a buck2
-  binary](https://buck2.build/docs/getting_started/install/), unpack it
-  and put it on your `PATH`.
-
-  Then
-
-  ```
-  cabal install cabal-buck2
-  ```
-
-  Then in the root of your project or package:
-
-  ```
-  git clone https://github.com/simonmar/haskell-buck2.git buck2 -b <version>
-  cabal buck2 --enable-tests
-  ```
-
-  Where `<version>` is the version of `cabal-buck`,
-  e.g. `0.2.0.0`. Checking out the branch ensures that you get a
-  compatible copy of the Buck2 support code. `cabal buck2` checks that
-  `buck2/` is for its release (the `CABAL_BUCK2_VERSION` in
-  `buck2/version.bzl`), and so does buck2 when it reads the files that
-  `cabal buck2` generated, and the error says which branch to switch to.
-
-  Then you can use `buck2` as the build tool, e.g.
-
-  ```
-  buck2 build //...
-  ```
-
-  To build all the components, or
-
-  ```
-  buck2 test //...
-  ```
-
-  To run your tests.
-
-  Note that you need to re-run `cabal buck2 --enable-tests` if you
-  modify the `cabal.project` or any of the `.cabal` files.
-
-  Not all Cabal features are supported - see [limitations](#limitations).
-
-  # Why?
-
-  (skip this section if you know why you want buck2)
-
-  Why might you want to use `buck2` as the build system compared with
-  just using `cabal`? Well, first off let me be clear that you *still
-  need Cabal*, because the Buck2 support doesn't know how to solve
-  package dependencies or build them. So the workflow consists of first
-  running `cabal buck2` to solve and build the dependencies, but once you've
-  done that you can switch to `buck2` for building. The idea is that
-  `buck2` is a more pleasant experience because:
-
-  * It's [faster than Cabal, particularly for rebuilds](#performance).
-
-  * It supports different build modes out of the box: the default is to
-    build in `dev` mode (unoptimised with dynamic linking) but adding
-    `-m opt` gives you optimisation and static linking. Note that Cabal
-    doesn't have a purely dynamic build mode: it always uses `-dynamic-too`
-    for libraries, which has a significant built-time performance cost.
-
-  * The Buck2 build is extensible. If you have anything that needs to be
-    generated as part of your build, or any non-standard tooling, then
-    hooking that up using Buck2 is far easier than Cabal.  Furthermore
-    Buck2 knows how to rebuild things correctly when either the build
-    system or the code generator components change.
-
-  * It works a lot better than Cabal when you have non-Haskell code (e.g. C/C++ or Rust) in your project, because
-    * Buck2 understands dependencies between C/C++ source files and header files (Cabal doesn't: [issue #4306](https://github.com/haskell/cabal/issues/4306)), so when you modify a C/C++ header the correct things are rebuilt.
-    * Buck2 builds C/C++ files in parallel, while Cabal doesn't ([issue #7127](https://github.com/haskell/cabal/issues/7127))
-
-  * You can use [remote execution and caching](https://buck2.build/docs/users/remote_execution/). There is built-in support for using a build cache, see [Sharing build results (a build cache)](#sharing-build-results-a-build-cache) below.
-
-  Finally, if you have an existing codebase using Buck2 then this is the
-  basis of something that could "buckify" Cabal packages to integrate
-  into your build system. It needs a bit of work to be suitable for that
-  use case, though: `cabal buck2` builds all the external dependencies
-  and installs them in the Cabal store, whereas to integrate with an
-  existing build system you would want to satisfy those external
-  dependencies from the build system itself.
-
-  # How complete is it?
-
-  I've used it to build a few large projects, in particular the Cabal
-  project itself which consists of about 16 packages and a few hundred
-  source files. It can also build [Glean](https://glean.software), which
-  has some complex build requirements including custom codegen, FFI &
-  hsc2hs.
-
-  There are a few [limitations](#limitations), however.
-
-  # What `cabal buck2` does
-
-  You can run `cabal buck2` in a project or a single Cabal package. It
-  does the following:
-
-  1. Solves the `build-depends` constraints of your package(s) and
-     builds all the dependencies, much like `cabal build all --only-dependencies`
-     would.
-
-  2. Generates some files, notably:
-
-     * `BUCK` and `BUCK.cabal.bzl` in each package, these are the Buck2
-       build targets
-
-     * `cabal-buck2/autogen` in each package, this is where we put the
-       files that Cabal autogenerates, such as `cabal_macros.h` and
-       `Paths_<pkg>.hs`.
-
-     * `cabal-buck2/packages.bzl` in the root of the project, which says
-       where each of your packages is. Nothing in a package's
-       `BUCK.cabal.bzl` says where it is or where the packages it depends
-       on are, so moving a package, or building it as part of a bigger
-       project, only changes this file. (All the packages have to be in
-       the one Buck2 cell, the root.)
-
-     * `third-party/haskell`: tells Buck2 about all the prebuilt package
-       dependencies, either in the Cabal store or in GHC's package
-       DB (unless you build the dependencies from source, see below). In here we also record the GHC version you're using, and the
-       paths to any tool dependencies.
-
-  A component that can't be built with buck2 (e.g. `build-type: Custom`)
-  is an error: `cabal buck2` lists them and aborts, unless you give the
-  `--keep-going` flag in which case it will translate everything it
-  can and warn about the missing components.
-
-  # Buck2 quick start
-
-  To build your code:
-
-  ```
-  buck2 build //...
-  ```
-
-  The `//...` is Buck2's syntax for "all targets recursively below the
-  current directory". You can also build specific target(s), for example
-  `buck2 build cabal-install:cabal` would build the `cabal` target in
-  the `cabal-install` package. For more details see [Target
-  Pattern](https://buck2.build/docs/concepts/target_pattern/) in the
-  Buck2 docs.
-
-  Next you can run your tests:
-
-  ```
-  buck2 test //...
-  ```
-
-  # Customising the build
-
-  `cabal buck2` will generate all the `BUCK` files if they don't exist,
-  but you can also write your own if you want (`cabal buck2` won't
-  overwrite them).
-
-  The `BUCK` file usually goes in the same directory as your source
-  files. The targets that `cabal buck2` produces go in the
-  `BUCK.cabal.bzl` file, and are generated by a call to
-  `generated_targets()` from the `BUCK` file. This call takes some
-  arguments that you can use to override or transform the generated
-  targets - take a look at the comments in the generated code to see
-  how.
-
-  The overrides can also go in a `cabal-buck2.bzl` file in the root of
-  the project, for all of its packages at once, which is useful when a
-  package's directory isn't yours to add files to (a git submodule, say):
-
-  ```
-  OVERRIDES = {
-      # package name -> component name -> extra attributes
-      "my-package": {
-          "my-package": {"compiler_flags": ["-O2"]},
-      },
-  }
-  ```
-
-  Re-run `cabal buck2` after adding or removing `cabal-buck2.bzl`.
-
-  You can also completely override the generated targets and write a
-  `BUCK` file with your own rules, while still making use of the
-  pre-built dependencies that `cabal buck2` produces.  For example, the
-  `BUCK` file for a simple Haskell library might look something like
-
-  ```
-  load("//buck2:haskell.bzl", "haskell_library")
-
-  haskell_library(
-      name = "my-package",
-      srcs = [
-          "Some/Module.hs",
-      ],
-      packages = [
-          "unordered-containers",
-      ],
-      visibility = ["PUBLIC"],
-  )
-  ```
-
-  and the `BUCK` file for a test might look like
-
-  ```
-  load("//buck2:haskell.bzl", "haskell_test")
-
-  haskell_test(
-      name = "my-test",
-      srcs = {
-          "Main.hs" : "my-test.hs",
-      },
-      deps = [
-          "//:my-package",
-      ],
-      packages = [
-          "test-framework",
-          "test-framework-hunit",
-          "HUnit",
-      ],
-  )
-  ```
-
-  You can find docs on how to write `BUCK` files in the Buck2 docs, e.g. [haskell_library](https://buck2.build/docs/prelude/rules/haskell/haskell_library/).
-
-  # Build modes
-
-  The Buck2 build system has the following build mode options, which can
-  be selected using `-m` on the Buck2 command line (e.g. `-m opt`)
-
-    * Optimisation:
-      * `dev`: (default) no optimisation, `-g` for C/C++.
-      * `opt`: adds `-O` for Haskell, `-O3 -DNDEBUG` for C/C++, and also enables
-        `static` unless overridden by `shared`.
-    * Linking:
-      * `shared`: (default) shared libraries, dynamic linking
-      * `static`: static linking, but also builds shared libraries using
-      `-dynamic-too` because those are required for Template Haskell.
-    * Profiling:
-      * `prof`: enables Haskell profiling; also forces `static`.
-
-  To use any of these modes, add them using `-m` on the command line:
-
-  ```
-  buck2 build my-package:my-program -m opt
-  ```
-
-  # Sharing build results (a build cache)
-
-  By default buck2 keeps nothing between runs of its daemon, nor between
-  checkouts: after `buck2 kill`, or in a new worktree, everything is built again.
-  A cache of build results fixes that. Buck2 can use any server that implements
-  the Bazel remote execution API's action cache and CAS, **only to look results
-  up and store them: nothing is run remotely**. For example
-  [bazel-remote](https://github.com/buchgr/bazel-remote):
-
-  ```
-  bazel-remote --dir ~/.cache/buck2 --max_size 20 --grpc_address 127.0.0.1:9092 --http_address 127.0.0.1:8080
-  cabal buck2 --cache=grpc://127.0.0.1:9092
-  ```
-
-  `--cache` adds a block to `.buckconfig` (between `# >>> cabal buck2: cache`
-  and `# <<< cabal buck2: cache <<<`; anything else in the file is left alone),
-  which later runs keep. `cabal buck2 --no-cache` removes it. **Run
-  `buck2 kill` after changing it**: buck2 reads the cache's address when its
-  daemon starts, and a daemon that was already running keeps the old settings.
-
-  Things to know:
-
-  * **The server has to be running.** When it isn't, buck2 retries connecting
-    for about 45 seconds on each build before carrying on without the cache.
-    Re-run `cabal buck2` with `--no-cache` to stop using the cache.
-  * The key of a cached result includes the command line, the environment and
-    the contents of the inputs. It includes the exact packages from the Cabal
-    store (their unit ids), a fingerprint of the GHC installation (its version,
-    platform, source commit and the interface hashes of its boot packages) and
-    a fingerprint of the C toolchain (the versions of the C compiler, `ld`, the
-    C library and `libstdc++`). It does **not** include other files that are
-    found on the system, such as headers and libraries that are not part of
-    those. That is fine on one machine; **sharing a cache between machines with
-    different system software is not safe yet**.
-  * Compiling and linking C/C++ code is cached, `pkg-config` queries are not.
-  * **buck2 only downloads what is needed.** A result that is found in the cache
-    is not downloaded until something needs its files: a local action that has
-    it as an input, `buck2 run` or `buck2 test`, or it is what you asked to
-    build. So most intermediate results (the compiled modules of a library
-    that was cached as a whole, say) are never fetched. `buck2 build -M none
-    //...` goes further and does not download what you asked for either, which
-    is a fast way to find out whether everything is already in the cache: the
-    summary line shows how many actions were cache hits.
-
-  # Building the dependencies with buck2
-
-  By default the dependencies of your packages are built by `cabal`, into its
-  store, and Buck2 uses them from there. With `--source-deps` Buck2 builds them
-  too:
-
-  ```
-  cabal buck2 --source-deps
-  ```
-
-  The source of each dependency is unpacked under `dist-newstyle/src` and the
-  package gets a `BUCK` and `BUCK.cabal.bzl` like those of your own packages.
-  Only the packages that come with GHC are used from its package database; the
-  build then doesn't depend on the Cabal store at all. Together with a
-  [build cache](#sharing-build-results-a-build-cache) that means a dependency is
-  built once, and then found in the cache by every other checkout, which is the
-  job the store does for `cabal`.
-
-  Things to know:
-
-  * If any dependency package isn't supported by `cabal buck2`,
-    `--source-deps` will fail. The most common cause of this is a
-    package that uses `build-type: Custom` (see
-    [Custom build type](#custom-build-type)). In case of failure you can
-    either fall back to not using `--source-deps` or use `--keep-going`
-    to continue without the unsupported dependencies.
-  * Running `cabal buck2` again without `--source-deps` goes back to the store,
-    and removes the packages that were unpacked for the previous run.
-  * The tools that dependencies need to preprocess sources (`alex` and `happy`)
-    are built by buck2 too, when the project needs them.
-  * The build plan can only have one version of each package, because a package
-    in a `.cabal` file is referred to by its name. `cabal buck2` stops and lists
-    the packages that need more than one.
-
-  # Performance
-
-  I ran some experiments building the Cabal project itself - 16 packages
-  and 641 source files (one package, `hackage-security`, is not part of
-  the project but has to be built locally nonetheless because it depends
-  on `Cabal-syntax` which *is* part of the project).
-
-  Buck2 shines when it comes to rebuilds: the dependency graph is cached
-  in memory, and it knows when build steps can be omitted because the
-  inputs haven't changed.
-
-  ![Buck2 vs Cabal build times](https://raw.githubusercontent.com/simonmar/cabal-buck2/refs/heads/master/perf-chart.svg)
-
-  **Caveats**
-
-  * Results tend to be +/- a few seconds from run to run
-  * I didn't dig into the results in any detail
-  * It's just one set of data points. Different projects and different choices of edits could give different results. However, I did perform a similar
-  experiment with the [persistent](https://github.com/yesodweb/persistent)
-  project, and got similar results.
-
-  ## Raw results and details
-
-  ### Clean build
-
-  * Optimised:
-    * Default Cabal build: **280s**
-      * `cabal build all --enable-tests --enable-benchmarks -j`
-    * Buck2 build (opt mode, including `cabal buck2`): **259s**
-      * `cabal buck2 --enable-tests --enable-benchmarks && buck2 build //... -m opt`
-      * Not much difference here, as we expect.
-
-  * Unoptimised / dynamic:
-    * Cabal build with -O0 -dynamic: **136s**
-      * `cabal build all --enable-tests --enable-benchmarks -j --disable-optimisation --enable-executable-dynamic`
-    * Buck2 build (dev mode, including `cabal buck2`): **78s**
-      * `cabal buck2 --enable-tests --enable-benchmarks && buck2 build //... -m dev`
-      * Cabal is using `-dynamic-too` for libraries, while Buck2 is building everything purely dynamic.
-
-  ### Edit + rebuild
-
-  Next I made a single edit (added an extension to
-  `Language.Haskell.Extension`) and rebuilt everything:
-
-  * Optimised:
-    * Cabal: **197s**
-    * Buck2: **179s**
-
-  * Unoptimised / dynamic:
-    * Cabal: **85s**
-    * Buck2: **55s**
-
-  # Limitations
-
-  ## It's an external command, not builtin to `cabal-install`
-
-  This has some implications:
-
-  * `cabal` passes only the arguments after `buck2`, so global flags
-    given before it (`cabal --store-dir=... buck2`) don't reach the
-    tool. Use the environment (`CABAL_DIR`) instead.
-
-  * Nothing checks that your `cabal` binary matches the version of the
-    `cabal-install` library that `cabal-buck2` was built against. Try to
-    make sure they match, or confusion will undoubtedly ensue.
-
-  ## Builds currently use `--make`
-
-  The current Buck2 prelude uses `ghc --make` to build each component
-  (library, executable). Ideally we should expose the full per-module
-  dependencies to Buck2 so that it can exploit parallelism across
-  packages for faster builds/rebuilds. It's entirely possible to do
-  this, indeed the functionality already exists in [Tweag's Haskell/Buck2
-  integration](https://github.com/tweag/buck2-haskell).
-
-  ## Custom build type
-
-  Build-type `Custom` isn't supported, and can't be in general, so
-  `cabal buck2` will fail if any package requires it. Note that this
-  also applies to dependencies when `--source-deps` is being used.  As
-  with other unsupported features, you can use `--keep-going` to just
-  skip all the affected packages.
-
-  If a package's `Setup.hs` isn't needed by your build, or what it
-  does can be done some other way, `--enable-custom-setup` builds it as
-  if it had `build-type: Simple` (or `Configure`, if it has a
-  `configure` script). The modules that its `Setup.hs` would generate
-  (its `autogen-modules`) must then be given by the project, in the
-  overrides of the component (see [Customising the build](#customising-the-build)),
-  for example
-
-  ```
-  OVERRIDES = {
-      "my-package": {
-          "my-package": {"srcs": {"My.Generated.Module": "//gen:my-module"}},
-      },
-  }
-  ```
-
-  ## Hooks build type
-
-  There is partial support for `build-type: Hooks`: only configure hooks
-  are supported so far; files generated by pre-build rules are not.
-
-  The `SetupHooks` executable is built (by cabal) during `cabal buck2`,
-  including the package's `setup-depends`. It has to be built with the
-  same Cabal version as `cabal-buck2`, so `cabal-buck2` injects a
-  solver constraint to ensure that.
-
-  ## No support for Cabal's `foreign-library`
-
-  Nothing fundamental blocking this, it's just a TODO.
-
-  ## Preprocessors like `hspec-discover`
-
-  The `hspec-discover` preprocessor is designed to be invoked by GHC via
-  the `-pgmF` flag to specify a custom preprocessor. The problem is that
-  `hspec-discover` searches the filesystem to find other source files;
-  these other source files amount to implicit inputs to the compilation,
-  but when using Buck2 all inputs must be explicit (this is so that
-  compilation steps can be executed remotely).
-
-  To build an `hspec-discover` test with Buck2, you have to run the
-  preprocessor using a `genrule()` that takes all the source files as an
-  input. For example, if your test is in `test/Spec.hs`:
-
-  ```
-  filegroup(
-      name = "srcs",
-      srcs = glob(["**/*.hs"])
-  )
-
-  genrule(
-      name = 'spec-gen',
-      cmd = "$(location third-party-haskell//:hspec-discover-exe) $(location :srcs)/test/Spec.hs test/Spec.hs ${OUT}",
-      out = "test/Spec.hs"
-  )
-
-  haskell_test(
-      name = 'spec',
-      srcs = {
-          'Main.hs': ':spec-gen',
-          ...
-      },
-      ...
-  )
-  ```
-
-  # Acknowledgments
-
-  Most of the code and modifications to the standard Buck2 prelude were
-  developed with the help of Claude Code using Claude Sonnet 5/5.5.
-
-  The Haskell support already in the Buck2 prelude was developed by Meta
-  and is in production use internally for building
-  [Glean](https://glean.software). This project just fixes a few things
-  and adds some functionality needed to support building Cabal projects.
-
-  # Related projects
-
-  [Tweag](https://tweag.io) also worked on a [Haskell integration for
-  Buck2](https://www.youtube.com/watch?v=bbFnrTAIK9Q). This project has
-  no code in common with theirs, except for the shared upstream prelude
-  code. Tweag's integration is more sophisticated and was aimed at using
-  Buck2's improved scalability to build large Haskell projects.
-
-  [ext]: https://cabal.readthedocs.io/en/stable/external-commands.html
+description: "# Buck2 build system for Haskell projects\n\nShort summary: this is
+  a [cabal external command][ext] `cabal buck2`\nthat allows you to use [Buck2](https://buck2.build)
+  as the build\nsystem for your Cabal project.\n\n# Quick start\n\nFirst [download
+  a buck2\nbinary](https://buck2.build/docs/getting_started/install/), unpack it\nand
+  put it on your `PATH`.\n\nThen\n\n```\ncabal install cabal-buck2\n```\n\nThen in
+  the root of your project or package:\n\n```\ncabal buck2 --enable-tests\n```\n\nThen
+  you can use `buck2` as the build tool, e.g.\n\n```\nbuck2 build //...\n```\n\nTo
+  build all the components, or\n\n```\nbuck2 test //...\n```\n\nTo run your tests.\n\nNote
+  that you need to re-run `cabal buck2 --enable-tests` if you\nmodify the `cabal.project`
+  or any of the `.cabal` files.\n\nMost Cabal features are supported but not all -
+  see [limitations](#limitations).\n\n# Why?\n\n(skip this section if you know why
+  you want buck2)\n\nWhy might you want to use `buck2` as the build system compared
+  with\njust using `cabal`? Well, first off let me be clear that you *still\nneed
+  Cabal*, because the Buck2 support doesn't know how to solve\npackage dependencies
+  or build them. So the workflow consists of first\nrunning `cabal buck2` to solve
+  and build the dependencies, but once\nyou've done that you can switch to `buck2`
+  for building and running\ntests. The idea is that `buck2` is a more pleasant experience
+  because:\n\n* It's [faster than Cabal, particularly for rebuilds](#performance).\n\n*
+  It supports different build modes out of the box: the default is to\n  build in
+  `dev` mode (unoptimised with dynamic linking) but adding\n  `-m opt` gives you optimisation
+  and static linking. Note that Cabal\n  doesn't have a purely dynamic build mode:
+  it always uses `-dynamic-too`\n  for libraries, which has a significant build-time
+  performance cost.\n\n* It works a lot better than Cabal when you have non-Haskell
+  code (e.g. C/C++ or Rust) in your project, because\n  * Buck2 understands dependencies
+  between C/C++ source files and header files (Cabal doesn't: [issue #4306](https://github.com/haskell/cabal/issues/4306)),
+  so when you modify a C/C++ header the correct things are rebuilt.\n  * Buck2 builds
+  C/C++ files in parallel, while Cabal doesn't ([issue #7127](https://github.com/haskell/cabal/issues/7127))\n\n*
+  There is support for using a build cache; see [Sharing build results\n  (a build
+  cache)](#sharing-build-results-a-build-cache). A build\n  cache means that if you
+  need to quickly create a new worktree to\n  work on a new feature or bugfix, for
+  example, the build in the new\n  worktree is mostly fetched from the cache instead
+  of being rebuilt.\n\n* The Buck2 build is extensible. If you have anything that
+  needs to be\n  generated as part of your build, or any non-standard tooling, then\n
+  \ hooking that up using Buck2 is far easier than Cabal.  Furthermore\n  Buck2 knows
+  how to rebuild things correctly when either the build\n  system or the code generator
+  components change.\n\nFinally, if you have an existing codebase using Buck2 then
+  this is the\nbasis of something that could \"buckify\" Cabal packages to integrate\ninto
+  your build system. It needs a bit of work to be suitable for that\nuse case, though:
+  `cabal buck2` builds all the external dependencies\nand installs them in the Cabal
+  store, whereas to integrate with an\nexisting build system you would want to satisfy
+  those external\ndependencies from the build system itself.\n\n# How complete is
+  it?\n\nWe've used it to build a few large projects, for instance the Cabal\nproject
+  itself, the Haskell Language Server, and\n[Amazonka](https://github.com/brendanhay/amazonka).
+  It can also\nbuild [Glean](https://glean.software), which has some complex build\nrequirements
+  including custom codegen, FFI & hsc2hs.\n\nThere are a few [limitations](#limitations),
+  however.\n\n# What `cabal buck2` does\n\nYou can run `cabal buck2` in a project
+  or a single Cabal package. It\ndoes the following:\n\n1. Solves the `build-depends`
+  constraints of your package(s) and\n   builds all the dependencies, much like `cabal
+  build all --only-dependencies`\n   would.\n\n2. Generates some files, notably:\n\n
+  \  * The `buck2/` directory containing the Buck2 support code;\n\n   * `.buckconfig`,
+  containing build-wide configuration options, and\n     `PACKAGE`, which sets the
+  default build mode. `cabal buck2` only\n     creates these two files if they don't
+  exist, so you can edit\n     them;\n\n   * `.buckconfig.local`, if you use a [build\n
+  \    cache](#sharing-build-results-a-build-cache);\n\n   * `BUCK` and `BUCK.cabal.bzl`
+  in each package, these are the Buck2\n     build targets;\n\n   * `cabal-buck2/autogen`
+  in each package, this is where we put the\n     files that Cabal autogenerates,
+  such as `cabal_macros.h` and\n     `Paths_<pkg>.hs`;\n\n   * `cabal-buck2/packages.bzl`
+  in the root of the project, which says\n     where each of your packages is. The
+  `BUCK.cabal.bzl` files don't\n     say where any package is, so moving a package,
+  or building it as\n     part of a bigger project, only changes this file. (All the\n
+  \    packages have to be in the one Buck2 cell, the root.)\n\n   * `third-party/haskell`:
+  tells Buck2 about all the prebuilt package\n     dependencies, either in GHC's package
+  DB or the Cabal store\n     (unless you [build the dependencies from\n     source](#building-the-dependencies-with-buck2)).
+  In here we also\n     record the GHC version you're using, and the paths to any
+  tool\n     dependencies.\n\nA component that can't be built with buck2 (e.g. `build-type:
+  Custom`)\nis an error: `cabal buck2` lists them and aborts, unless you give the\n`--keep-going`
+  flag in which case it will translate everything it\ncan and warn about the missing
+  components.\n\n# Using Buck2\n\n## Quick start\n\nTo build your code:\n\n```\nbuck2
+  build //...\n```\n\nThe `//...` is Buck2's syntax for \"all targets recursively
+  below the\nroot of the project\". You can also build specific target(s), for example\n`buck2
+  build cabal-install:cabal` would build the `cabal` target in\nthe `cabal-install`
+  package. For more details see [Target\nPattern](https://buck2.build/docs/concepts/target_pattern/)
+  in the\nBuck2 docs.\n\nTo see the targets that a package has, run:\n\n```\nbuck2
+  targets //<package>/...\n```\n\nNext you can run your tests:\n\n```\nbuck2 test
+  //...\n```\n\n## Build modes\n\nThe Buck2 build system has the following build mode
+  options, which can\nbe selected using `-m` on the Buck2 command line (e.g. `-m opt`)\n\n
+  \ * Optimisation:\n    * `dev`: (default) no optimisation, `-g` for C/C++.\n    *
+  `opt`: adds `-O` for Haskell, `-O3 -DNDEBUG` for C/C++, and also enables\n      `static`
+  unless overridden by `shared`.\n  * Linking:\n    * `shared`: (default) shared libraries,
+  dynamic linking\n    * `static`: static linking, but also builds shared libraries
+  using\n    `-dynamic-too` because those are required for Template Haskell.\n  *
+  Profiling:\n    * `prof`: enables Haskell profiling; also forces `static`.\n\nTo
+  use any of these modes, add them using `-m` on the command line:\n\n```\nbuck2 build
+  my-package:my-program -m opt\n```\n\n# Buck2-specific features in `.cabal`\n\n`cabal
+  buck2` recognises some extra fields in your `.cabal` file which affect how Buck2
+  builds the package; these are described in the sections below.\n\n## Runtime tool
+  dependencies\n\nCabal provides a way to indicate build-time tool dependencies with\n`build-tool-depends`,
+  but it also treats these as _runtime_ tool dependencies\n(i.e. it puts them on the
+  `PATH` for test runs and `cabal run`s of executables).\n\nIf we don't distinguish
+  these, then all `build-tool-depends` must be\nbuilt in both the build and target
+  configurations, which means they\nwill be built twice.\n\nFor this reason we provide
+  a way to fill in the \"missing\" Cabal `run-tool-depends` \nfield (proposed in [haskell/cabal#5411](https://github.com/haskell/cabal/issues/5411)).\n\nThis
+  works as follows:\n\n```\ntest-suite tests\n  -- So `cabal test` continues to work.\n
+  \ build-tool-depends: my-package:my-exe\n  -- Not truly needed to _build_ the test-suite...\n
+  \ x-buck2-ignore-build-tool-depends: my-package:my-exe\n  -- Needed when the test
+  suite runs \n  x-buck2-run-tool-depends: my-package:my-exe\n```\n\nIf `x-buck2-run-tool-depends`
+  is present, we assume that it is accurate, and \nso do not consider `build-tool-depends`
+  to be runtime dependencies. If \n`x-buck2-run-tool-depends` is not present, we assume
+  that we have to mimic \nCabal's behaviour, and so `build-tool-depends` will also
+  be considered runtime dependencies.\n\n## Splice dependencies\n\nWith [Per-module
+  compilation](#using-per-module-compilation), modules using Template Haskell\ncan
+  only compile once the libraries that they use are linked.\nCabal's `build-depends`
+  doesn't say which libraries are actually used in TH,\nso by default a Template Haskell
+  module has to wait for all of them.\n\nA component can list the libraries whose
+  code its splices run in\n`x-buck2-splice-depends`. This fills in a \"missing\" Cabal
+  field, proposed in\n[haskell/cabal#12583](https://github.com/haskell/cabal/issues/12583).\n\n```\nlibrary\n
+  \ build-depends: base, aeson, my-codegen\n  -- Only my-codegen's code runs in the
+  splices.\n  x-buck2-splice-depends: my-codegen\n```\n\nThe libraries must also be
+  in `build-depends` so that cabal can link them.\n\nIf `x-buck2-splice-depends` is
+  present, we assume that it is\naccurate. If the field is not present, we are pessimistic
+  and assume that\na Template Haskell module may use any of the component's libraries.\n\n\n#
+  Customising the build\n\n`cabal buck2` sets up the project so that Buck2 will build
+  it exactly as Cabal would. However, it also provides various hooks that let you
+  modify and customise the build, and these hooks are designed to survive re-running
+  `cabal buck2` so you can have permanent Buck2-specific customisations in your project
+  if you want.\n\n## Configuring the build\n\nThe `.buckconfig` file has the build-wide
+  configuration settings. Some of these are specific to Haskell targets; see the comments
+  in the file for details. Typically this file will be checked-in and contain options
+  that everyone building the project with Buck2 needs, so to set options for your
+  local build only you can use `.buckconfig.local`. \n\n## Customising the rules\n\n`cabal
+  buck2` will generate all the `BUCK` files if they don't exist,\nbut you can also
+  write your own if you want (`cabal buck2` won't\noverwrite them).\n\nThe `BUCK`
+  file usually goes in the same directory as your source\nfiles. The targets that
+  `cabal buck2` produces go in the\n`BUCK.cabal.bzl` file, and are generated by a
+  call to\n`generated_targets()` from the `BUCK` file. This call takes some\narguments
+  that you can use to override or transform the generated\ntargets - take a look at
+  the comments in the generated code to see\nhow.\n\nThe overrides can also go in
+  a `cabal-buck2.bzl` file in the root of\nthe project, for all of its packages at
+  once, which is useful when a\npackage's directory isn't yours to add files to (a
+  git submodule, say):\n\n```\nOVERRIDES = {\n    # package name -> component name
+  -> extra attributes\n    \"my-package\": {\n        \"my-package\": {\"compiler_flags\":
+  [\"-O2\"]},\n    },\n}\n```\n\n`cabal-buck2.bzl` can also give defaults for the
+  generated targets,\nfor every package (`\"*\"`) or for one package. Each package's
+  defaults\nare keyed by the kind of target (`\"library\"`, `\"executable\"`,\n`\"test-suite\"`
+  or `\"benchmark\"`), or by `\"*\"` for every kind. For\nexample, to compile every
+  target of the project module by module:\n\n```\nDEFAULTS = {\n    # package name
+  or \"*\" -> kind or \"*\" -> extra attributes\n    \"*\": {\n        \"*\": {\"per_module\":
+  True},\n    },\n}\n```\n\nThe attributes are merged into the generated ones: lists
+  are appended\nto, dicts are merged, and anything else is replaced. The overrides
+  of\na component win over all of the defaults, and the defaults for a\npackage win
+  over the defaults for every package. See\n`cabal_targets()` in `buck2/cabal.bzl`
+  for the details.\n\nRe-run `cabal buck2` after adding or removing `cabal-buck2.bzl`,
+  or\nadding or removing its `OVERRIDES` or `DEFAULTS`.\n\nYou can also completely
+  override the generated targets and write a\n`BUCK` file with your own rules, while
+  still making use of the\npre-built dependencies that `cabal buck2` produces.  For
+  example, the\n`BUCK` file for a simple Haskell library might look something like\n\n```\nload(\"//buck2:haskell.bzl\",
+  \"haskell_library\")\n\nhaskell_library(\n    name = \"my-package\",\n    srcs =
+  [\n        \"Some/Module.hs\",\n    ],\n    packages = [\n        \"unordered-containers\",\n
+  \   ],\n    visibility = [\"PUBLIC\"],\n)\n```\n\nand the `BUCK` file for a test
+  might look like\n\n```\nload(\"//buck2:haskell.bzl\", \"haskell_test\")\n\nhaskell_test(\n
+  \   name = \"my-test\",\n    srcs = {\n        \"Main.hs\" : \"my-test.hs\",\n    },\n
+  \   deps = [\n        \"//:my-package\",\n    ],\n    packages = [\n        \"test-framework\",\n
+  \       \"test-framework-hunit\",\n        \"HUnit\",\n    ],\n)\n```\n\nYou can
+  find docs on how to write `BUCK` files in the Buck2 docs, e.g. [haskell_library](https://buck2.build/docs/prelude/rules/haskell/haskell_library/).\n\n##
+  Modifying the support code under `buck2/`\n\nIf you want to change the support code,
+  or use a version of it that\nisn't released yet, you can use a git checkout of the
+  corresponding\nbranch of [haskell-buck2](https://github.com/simonmar/haskell-buck2)\ninstead:\n\n```\ngit
+  clone https://github.com/simonmar/haskell-buck2.git buck2 -b <version>\n```\n\nWhere
+  `<version>` is the version of `cabal-buck2`, e.g. `0.6.0.0`.\n`cabal buck2` never
+  replaces a `buck2/` that it didn't create\nitself. Instead it checks that `buck2/`
+  is for its release (the\n`CABAL_BUCK2_VERSION` in `buck2/version.bzl`), and so does
+  buck2 when\nit reads the files that `cabal buck2` generated. If they don't match,\nthe
+  error says which branch to switch to.\n\n## The compilers\n\nBuck2 builds with the
+  tools that `cabal buck2` found when it last ran, not\nwith whatever is on the `PATH`
+  of the shell you run `buck2` in. So after\nchanging your tools (a different GHC,
+  or a different Nix shell), re-run\n`cabal buck2`; restarting buck2 isn't needed.
+  (`cabal buck2` puts a symlink to\neach of them in `third-party/haskell/toolchain`.)\n\n*
+  GHC is the one that `cabal` uses (`-w` chooses another), and `ghc-pkg`,\n  `hsc2hs`
+  and `haddock` are those that `cabal` finds (normally next to\n  GHC; use `--with-hsc2hs`
+  and so on choose different ones).\n* The C and C++ compilers, for your packages'
+  C and C++ sources, are:\n  * the C compiler you give `cabal` for `gcc`, with `--with-gcc`,
+  or in\n    `cabal.project` (or `cabal.project.local`):\n    ```\n    program-locations\n
+  \     gcc-location: clang\n    ```\n    and the C++ compiler of the same name next
+  to it (`clang++` for `clang`,\n    `g++` for `gcc`, `clang++-18` for `clang-18`...).
+  `cabal` uses the C\n    compiler for the C of the packages it builds too.\n  * otherwise
+  GHC's, if it has an absolute path for \"C compiler\n    command\" in `ghc --info`
+  (as a GHC built by Nix\n    does);\n  * otherwise `clang` and `clang++`, linking
+  with `g++`. These are the\n    Buck2 toolchain defaults.\n\n# Using per-module compilation\n\nBy
+  default Buck2 builds each library and executable using a single `ghc --make`, just
+  as Cabal does. However, it can also compile each module separately which has significant
+  advantages:\n\n* The build can use more parallelism (Buck2 doesn't currently use
+  `--make -j` and it doesn't use GHC's `-jsem`; while it would be easy to support
+  `--make -j` there's no easy way to integrate `-jsem` with Buck2 so each compile
+  would consume a fixed number of cores regardless of how many it actually needed.)\n*
+  Module dependencies ignore package boundaries, so a module's compile can begin as
+  soon as the modules it depends on have been built. This can significantly increase
+  the available parallelism beyond what `--make` could do.\n* Incremental compiles
+  are typically much faster, because a `--make` compile has to re-read interfaces
+  for the whole library.\n* We provide a persistent GHC worker to improve the performance
+  of module-by-module compilation compared with using bare `ghc -c`. This is built
+  automatically by Buck2 and used for per-module compilation unless you say otherwise
+  in `.buckconfig`.\n\nWe currently consider per-module compilation as experimental
+  so it has to be enabled explicitly: in your `.buckconfig` add\n\n```\n[haskell]\n
+  \   compile_granularity = module\n```\n\nto enable per-module compilation for every
+  target. It can also be enabled on a target-by-target basis using `cabal-buck2.bzl`:
+  see [Customising the rules](#customising-the-rules).\n\nThe worker is built and
+  used automatically; to disable it, add this to `.buckconfig`:\n\n```\n[haskell]\n
+  \   per_module_worker = none\n```\n\nFor more details, see [Per-module compilation](https://github.com/simonmar/haskell-buck2/tree/0.6.0.0#per-module-compilation-experimental)
+  in the `haskell-buck2` docs.\n\n# Sharing build results (a build cache)\n\nBy default
+  buck2 keeps nothing between runs of its daemon, nor between\ncheckouts: after `buck2
+  kill`, or in a new worktree, everything is built again.\nA cache of build results
+  fixes that. Buck2 can use any server that implements\nthe Bazel remote execution
+  API's action cache and CAS, **only to look results\nup and store them: nothing is
+  run remotely**. For example\n[bazel-remote](https://github.com/buchgr/bazel-remote):\n\n```\nbazel-remote
+  --dir ~/.cache/buck2 --max_size 20 --grpc_address 127.0.0.1:9092 --http_address
+  127.0.0.1:8080\ncabal buck2 --cache=grpc://127.0.0.1:9092\n```\n\n`--cache` adds
+  a block to `.buckconfig.local` (between\n`# >>> cabal buck2: cache` and `# <<< cabal
+  buck2: cache <<<`; anything else in\nthe file is left alone), which later runs keep.
+  `cabal buck2 --no-cache` removes\nit. `.buckconfig.local` is for the settings of
+  one checkout and isn't usually\ncommitted (add it to `.gitignore`); a project that
+  wants everyone to use the\nsame cache can copy the block into `.buckconfig` instead.
+  **Run\n`buck2 kill` after changing it**: buck2 reads the cache's address when its\ndaemon
+  starts, and a daemon that was already running keeps the old settings.\n\nThings
+  to know:\n\n* **The server has to be running.** When it isn't, buck2 retries connecting\n
+  \ for about 45 seconds on each build before carrying on without the cache.\n  Re-run
+  `cabal buck2` with `--no-cache` to stop using the cache.\n* The key of a cached
+  result includes the command line, the environment and\n  the contents of the inputs.
+  It includes the exact packages from the Cabal\n  store (their unit ids), a fingerprint
+  of the GHC installation (its version,\n  platform, source commit and the interface
+  hashes of its boot packages) and\n  a fingerprint of the C toolchain (the versions
+  of the C compiler, `ld`, the\n  C library and `libstdc++`). It does **not** include
+  other files that are\n  found on the system, such as headers and libraries that
+  are not part of\n  those. That is fine on one machine; **sharing a cache between
+  machines with\n  different system software is not safe yet**.\n* Compiling and linking
+  C/C++ code is cached, `pkg-config` queries are not.\n* **buck2 only downloads what
+  is needed.** A result that is found in the cache\n  is not downloaded until something
+  needs its files: a local action that has\n  it as an input, `buck2 run` or `buck2
+  test`, or it is what you asked to\n  build. So most intermediate results (the compiled
+  modules of a library\n  that was cached as a whole, say) are never fetched. `buck2
+  build -M none\n  //...` goes further and does not download what you asked for either,
+  which\n  is a fast way to find out whether everything is already in the cache: the\n
+  \ summary line shows how many actions were cache hits.\n\n# Building the dependencies
+  with buck2\n\nBy default the dependencies of your packages are built by `cabal`,
+  into its\nstore, and Buck2 uses them from there. With `--source-deps` Buck2 builds
+  them\ntoo:\n\n```\ncabal buck2 --source-deps\n```\n\nThe source of each dependency
+  is unpacked under `dist-newstyle/src` and the\npackage gets a `BUCK` and `BUCK.cabal.bzl`
+  like those of your own packages.\nOnly the packages that come with GHC are used
+  from its package database; the\nbuild then doesn't depend on the Cabal store at
+  all. Together with a\n[build cache](#sharing-build-results-a-build-cache) that means
+  a dependency is\nbuilt once, and then found in the cache by every other checkout,
+  which is the\njob the store does for `cabal`.\n\nThings to know:\n\n* If any dependency
+  package isn't supported by `cabal buck2`,\n  `--source-deps` will fail. The most
+  common cause of this is a\n  package that uses `build-type: Custom` (see\n  [Custom
+  build type](#custom-build-type)). In case of failure you can\n  either fall back
+  to not using `--source-deps` or use `--keep-going`\n  to continue without the unsupported
+  dependencies.\n* Running `cabal buck2` again without `--source-deps` goes back to
+  the store,\n  and removes the packages that were unpacked for the previous run.\n*
+  The tools that dependencies need to preprocess sources (`alex` and `happy`)\n  are
+  built by buck2 too, when the project needs them.\n* The build plan can only have
+  one version of each package, because a package\n  in a `.cabal` file is referred
+  to by its name. `cabal buck2` stops and lists\n  the packages that need more than
+  one.\n\n# Performance\n\nWe compared cabal and buck2 on three open-source projects:\n\n*
+  **The [Cabal](https://github.com/haskell/cabal) project** itself\n  (without `cabal-testsuite`,
+  which has `build-type: Custom`).\n* **[haskell-language-server](https://github.com/haskell/haskell-language-server)**,\n
+  \ with about 240 library modules in some 35 libraries. It is a chain of\n  libraries
+  from `hls-graph` through `ghcide` to `hls-plugin-api`, and\n  then a library for
+  each plugin.\n* **A subset of [amazonka](https://github.com/brendanhay/amazonka)**\n
+  \ with about 4,500 modules. It is `amazonka-core`, `amazonka`, the SSO\n  and STS
+  services that `amazonka` needs, and five of the largest\n  generated services: EC2,
+  SageMaker, QuickSight, S3 and DynamoDB.\n\nEach project was built in four ways,
+  all without optimisation and with 8\njobs at once:\n\n* **cabal**: `cabal build`,
+  with GHC's `-jsem` semaphore, so that the\n  modules of a package compile in parallel
+  too.\n* **buck2, per component**: buck2 compiling each component with one\n  `ghc
+  --make`, which is the default.\n* **buck2, per module**: buck2 compiling each module
+  in a build step of\n  its own, in the persistent worker.\n* **cabal repl**: `cabal
+  repl --enable-multi-repl` of the project's\n  components, with `:reload` after each
+  edit. A repl loads bytecode and\n  links nothing, so it does less work than the
+  other three. It is here\n  to show how buck2 compares with an edit-and-reload loop.\n\nFor
+  each way, the benchmark timed these builds:\n\n* **clean**: a build from nothing.
+  For buck2, this doesn't include\n  `cabal buck2`, which took about 3 to 15 seconds.\n*
+  **noop**: building again with nothing changed.\n* **hub-comment**: a comment added
+  to a module that most of the project\n  imports. Nothing that imports it should
+  have to compile again.\n* **hub-abi**: a new export added to the same module. Everything
+  that\n  imports it compiles again.\n* **leaf**: a new definition added to a module
+  that nothing imports.\n\n![Build times for the Cabal project](https://raw.githubusercontent.com/simonmar/cabal-buck2/refs/heads/master/perf/cabal.svg)\n\n![Build
+  times for haskell-language-server](https://raw.githubusercontent.com/simonmar/cabal-buck2/refs/heads/master/perf/hls.svg)\n\n![Build
+  times for amazonka](https://raw.githubusercontent.com/simonmar/cabal-buck2/refs/heads/master/perf/amazonka.svg)\n\nWhat
+  the results show:\n\n* Per-module buck2 is the fastest of the three ways that build\n
+  \ everything, in every scenario but one. The exception is the Cabal\n  project's
+  leaf edit, where both buck2 builds take a fraction of a\n  second. Per-module buck2
+  does best on haskell-language-server,\n  whose long chain of libraries is where
+  compiling module by module lets\n  a library start before the libraries it depends
+  on are finished.\n* amazonka is buck2's worst case. It has a few large packages,
+  and cabal\n  already compiles the modules of each package in parallel with `-jsem`.\n
+  \ Per-module buck2 does about the same work as cabal there, but keeps\n  more CPUs
+  busy, so it is ahead by 10-15% on clean and hub-abi.\n  Per-component buck2 is slower
+  than cabal on amazonka's clean build,\n  because `ghc --make` compiles a component's
+  modules one at a time.\n* cabal's noop and hub-comment times on haskell-language-server
+  are\n  mostly its fixed cost for each of the project's ~70 components, since\n  only
+  one module changes.\n\nDetails of the measurements:\n\n* They were made on a laptop
+  with an 8-core AMD Ryzen 7 7840U and 60 GB\n  of memory, with GHC 9.12.4, cabal-install
+  3.18.1.0, buck2 2026-10-14\n  and an earlier version of the 0.6.0.0 support code.
+  The projects'\n  `.cabal` files were patched to use `x-buck2-run-tool-depends` and\n
+  \ `x-buck2-splice-depends` (see [Customising the\n  build](#customising-the-build))
+  where appropriate.\n* The dependencies of each project were built first and shared
+  by all\n  the ways, so their build isn't timed.\n* The scenarios that take seconds
+  (noop, hub-comment and leaf) ran three\n  times, and the charts show the median.
+  clean and hub-abi ran once,\n  since they vary by only a few percent from run to
+  run. The exception\n  is amazonka's hub-abi, which varied a lot with the laptop's
+  clock speed:\n  cabal took between 167s and 246s for the same work. Its cabal and\n
+  \ per-module times are the mean of two runs of each.\n* The repl times for haskell-language-server
+  and the Cabal project come\n  from a later run. Five of haskell-language-server's
+  74 components are\n  left out of its repl, because they run an executable of the
+  project as\n  a build tool, and a multi-repl can't build that executable while it\n
+  \ loads the executable's library.\n\n<details>\n<summary>The results as tables (wall-clock
+  seconds)</summary>\n\nThe Cabal project:\n\n| | cabal | buck2, per component | buck2,
+  per module | cabal repl |\n|---|---|---|---|---|\n| `cabal buck2` | | 4.5 | 2.7
+  | |\n| clean | 108.6 | 90.9 | 70.0 | 39.7 |\n| noop | 2.8 | 0.0 | 0.0 | 0.9 |\n|
+  hub-comment | 22.7 | 7.0 | 2.4 | 1.7 |\n| hub-abi | 47.3 | 30.5 | 20.2 | 5.7 |\n|
+  leaf | 5.9 | 0.2 | 0.3 | 0.9 |\n\nhaskell-language-server:\n\n| | cabal | buck2,
+  per component | buck2, per module | cabal repl |\n|---|---|---|---|---|\n| `cabal
+  buck2` | | 14.9 | 15.2 | |\n| clean | 255.4 | 95.3 | 71.3 | 73.5 |\n| noop | 16.1
+  | 0.0 | 0.0 | 3.6 |\n| hub-comment | 116.4 | 13.1 | 3.1 | 4.6 |\n| hub-abi | 212.8
+  | 62.9 | 45.6 | 8.0 |\n| leaf | 23.0 | 2.8 | 1.1 | 3.5 |\n\namazonka:\n\n| | cabal
+  | buck2, per component | buck2, per module | cabal repl |\n|---|---|---|---|---|\n|
+  `cabal buck2` | | 5.7 | 5.6 | |\n| clean | 139.5 | 182.2 | 118.0 | 89.6 |\n| noop
+  | 3.3 | 0.0 | 0.0 | 1.6 |\n| hub-comment | 17.9 | 9.4 | 2.4 | 1.7 |\n| hub-abi |
+  246.0 | 238.6 | 217.5 | 69.7 |\n| leaf | 6.9 | 0.5 | 0.4 | 1.6 |\n\n</details>\n\n#
+  Limitations\n\n## It's an external command, not builtin to `cabal-install`\n\nThis
+  has some implications:\n\n* `cabal` passes only the arguments after `buck2`, so
+  global flags\n  given before it (`cabal --store-dir=... buck2`) don't reach the\n
+  \ tool. Use the environment (`CABAL_DIR`) instead.\n\n* Nothing checks that your
+  `cabal` binary matches the version of the\n  `cabal-install` library that `cabal-buck2`
+  was built against. Try to\n  make sure they match, or confusion will undoubtedly
+  ensue.\n\n## Custom build type\n\nBuild-type `Custom` isn't supported, and can't
+  be in general, so\n`cabal buck2` will fail if any package requires it. Note that
+  this\nalso applies to dependencies when `--source-deps` is being used.  As\nwith
+  other unsupported features, you can use `--keep-going` to just\nskip all the affected
+  packages.\n\nIf a package's `Setup.hs` isn't needed by your build, or what it\ndoes
+  can be done some other way, `--enable-custom-setup` builds it as\nif it had `build-type:
+  Simple` (or `Configure`, if it has a\n`configure` script). The modules that its
+  `Setup.hs` would generate\n(its `autogen-modules`) must then be given by the project,
+  in the\noverrides of the component (see [Customising the build](#customising-the-build)),\nfor
+  example\n\n```\nOVERRIDES = {\n    \"my-package\": {\n        \"my-package\": {\"srcs\":
+  {\"My.Generated.Module\": \"//gen:my-module\"}},\n    },\n}\n```\n\n## Hooks build
+  type\n\nThere is partial support for `build-type: Hooks`: only configure hooks\nare
+  supported so far; files generated by pre-build rules are not.\n\nThe `SetupHooks`
+  executable is built (by cabal) during `cabal buck2`,\nincluding the package's `setup-depends`.
+  It has to be built with the\nsame Cabal version as `cabal-buck2`, so `cabal-buck2`
+  injects a\nsolver constraint to ensure that.\n\n## No support for Cabal's `foreign-library`\n\nNothing
+  fundamental blocking this, it's just a TODO.\n\n## Preprocessors like `hspec-discover`\n\nThe
+  `hspec-discover` preprocessor is designed to be invoked by GHC via\nthe `-pgmF`
+  flag to specify a custom preprocessor. The problem is that\n`hspec-discover` searches
+  the filesystem to find other source files;\nthese other source files amount to implicit
+  inputs to the compilation,\nbut when using Buck2 all inputs must be explicit (this
+  is so that\ncompilation steps can be executed remotely).\n\nTo build an `hspec-discover`
+  test with Buck2, you have to run the\npreprocessor using a `genrule()` that takes
+  all the source files as an\ninput. For example, if your test is in `test/Spec.hs`:\n\n```\nfilegroup(\n
+  \   name = \"srcs\",\n    srcs = glob([\"**/*.hs\"])\n)\n\ngenrule(\n    name =
+  'spec-gen',\n    cmd = \"$(location third-party-haskell//:hspec-discover-exe) $(location
+  :srcs)/test/Spec.hs test/Spec.hs ${OUT}\",\n    out = \"test/Spec.hs\"\n)\n\nhaskell_test(\n
+  \   name = 'spec',\n    srcs = {\n        'Main.hs': ':spec-gen',\n        ...\n
+  \   },\n    ...\n)\n```\n\n# Acknowledgments\n\nThanks to [Michael Peyton-Lebed](https://github.com/michaelpj)
+  who added support for per-module compilation and the worker, and many other improvements.\n\nMost
+  of the code and modifications to the standard Buck2 prelude were\ndeveloped with
+  the help of Claude Code.\n\nThe Haskell support in the Buck2 prelude was originally
+  developed by Meta\nand is in production use internally for building\n[Glean](https://glean.software).
+  This project just fixes a few things\nand adds some functionality needed to support
+  building Cabal projects.\n\n# Related projects\n\n[Tweag](https://tweag.io) also
+  worked on a [Haskell integration for\nBuck2](https://www.youtube.com/watch?v=bbFnrTAIK9Q).
+  This project has\nno code in common with theirs, except for the shared upstream
+  prelude\ncode. Tweag's integration is more sophisticated and was aimed at using\nBuck2's
+  improved scalability to build large Haskell projects.\n\n[ext]: https://cabal.readthedocs.io/en/stable/external-commands.html\n"
 description-type: markdown
-hash: 89c1d9bd898620b46c88dd3467e39d91bb6e012ed3f77a1bc7f57bd723520619
+hash: 2e0da9aa0939d67397e3ce156e9188db63e77bad8de2039ccce17fe047e88cbe
 homepage: https://github.com/simonmar/cabal-buck2
-latest: 0.5.0.0
+latest: 0.6.0.0
 license-name: BSD-3-Clause
 maintainer: Simon Marlow <marlowsd@gmail.com>
 synopsis: Build a Cabal project with buck2 (the `cabal buck2` external command)
 test-bench-deps:
   Cabal: '>=0'
   base: '>=4.17 && <4.24'
-  bytestring: '>=0.11.5 && <0.12'
+  bytestring: '>=0.11.5 && <0.13'
   cabal-buck2: '>=0'
-  containers: '>=0.6.7 && <0.7'
+  containers: '>=0.6.7 && <0.9'
   directory: '>=0'
   filepath: '>=0'
   process: '>=0'
