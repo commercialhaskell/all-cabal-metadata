@@ -1,0 +1,285 @@
+all-versions:
+- 0.1.0.2
+author: Cypress Reed
+basic-deps:
+  aeson: '>=2.1.2 && <2.4'
+  base: '>=4.18 && <4.23'
+  bytestring: '>=0.11.5 && <0.13'
+  containers: '>=0.6.7 && <0.9'
+  directory: '>=1.3.8 && <1.4'
+  file-embed: '>=0.0.15 && <0.1'
+  filepath: '>=1.4.300 && <1.6'
+  optparse-applicative: '>=0.18.1 && <0.20'
+  process: '>=1.6.17 && <1.7'
+  template-haskell: '>=2.20 && <2.25'
+  text: '>=2.0.2 && <2.2'
+  unordered-containers: '>=0.2.19 && <0.3'
+  vector: '>=0.13.1 && <0.14'
+changelog: |
+  # changelog
+
+  ## 0.1.0.0 - 11/27/2026
+
+  first release.
+
+  - matches files against the SPDX license list's templates, following the
+    SPDX license matching guidelines and Spdx-Java-Library
+  - whole-file matches, licenses inside a file, and standard license headers
+    in source files, with the lines they're on
+  - `--explain` says where a file stops matching a license
+  - text and json output, directories walked, binary files and files over
+    10 MiB in them skipped
+  - license list 3.29.0 built in, `--data` for a license-list-data checkout
+  - `--cabal` lists the licenses of the Hackage packages a cabal project links
+    into its executables, from its build plan, with `--summary` and
+    `--preamble` shaped like Terra's `%cargo_license_summary_online` and
+    `%cargo_license_preamble_online`. license files are checked against the
+    declared licenses
+  - `--preamble` always gives a valid SPDX expression (LicenseRef- for
+    licenses that aren't SPDX), and fails when a package has no license
+  - `--stack` does the same for stack projects, from `stack ls dependencies`,
+    following installed libraries through the package databases
+  - `--submodules` lists the licenses of a git checkout's submodules, nested
+    ones too, from the license files at each one's top
+changelog-type: markdown
+description: |
+  # tavro
+
+  tavro reads a file and tells you which [SPDX](https://spdx.org/licenses/)
+  licenses are in it, going by the actual text (filenames and metadata lie).
+  "тавро" is Ukrainian for a brand, like the mark burned into livestock to
+  show who owns it
+
+  ```sh
+  tavro LICENSE                     # LICENSE: MIT
+  tavro COPYING src/                # files and whole directories
+  tavro --json LICENSE              # for scripts
+  tavro -i COPYING                  # also look inside, like for an exception after a GPL
+  tavro --explain MIT LICENSE       # where LICENSE stops being MIT
+  cat LICENSE | tavro               # stdin works too
+  ```
+
+  ```
+  COPYING: GPL-2.0-only, GPL-2.0-or-later
+  vendor/LICENSE: MIT (lines 6-22), Apache-2.0 (lines 168-368), BSD-2-Clause (lines 685-705)
+  src/main.c: Apache-2.0 (header, lines 2-14)
+  README.md: NOASSERTION
+  ```
+
+  exit status is 0 if every file matched something, 1 if one didn't, and 2 if
+  a file couldn't be read or the arguments were wrong
+
+  in a directory, hidden files, symlinked directories, binary files, and
+  files over 10 MiB get skipped (big ones with a note on stderr, since
+  they're almost always generated code or data). name a file on the command
+  line to check it anyway
+
+  to work on it, `cabal run tavro -- <args>` and `cabal test` from a checkout
+
+  ## Hackage packages
+
+  `--cabal` is basically `%cargo_license_online` but for Haskell. it lists the
+  license of every Hackage package that ends up linked into your executables
+
+  ```sh
+  cabal build --dry-run             # or a real build, tavro just needs the plan
+  tavro --cabal                     # BSD-3-Clause: aeson-2.3.3.0, one line per package
+  tavro --cabal --summary           # each license once: # BSD-3-Clause
+  tavro --cabal --preamble          # BSD-2-Clause AND BSD-3-Clause AND ISC AND MIT, for License:
+  tavro --cabal -c exe:foo          # one component instead of every executable
+  tavro --cabal --json              # declared license, license files, and notes per package
+  ```
+
+  the package list comes from cabal's build plan in
+  `dist-newstyle/cache/plan.json`. tavro only follows library dependencies
+  since build tools, setup scripts, and test suites never get linked in (same
+  idea as cargo's `--edges no-build,no-dev`). ghc's boot packages like `base`
+  and `rts` do get linked, so they're in the list
+
+  each package's license is whatever it declares. tavro gets that from the
+  cabal store's package database, ghc's own database for boot packages, or
+  Hackage's index for anything that isn't built yet. old Cabal names like
+  `BSD3` get converted to SPDX ids the same way Cabal does it
+
+  after that it reads the license files each package installed and complains
+  on stderr if they don't match what the package declared:
+
+  ```
+  tavro: bifunctors-5.6.3: declares BSD-3-Clause, but LICENSE reads as BSD-2-Clause
+  ```
+
+  if a package declares something that isn't SPDX (like `OtherLicense`),
+  tavro goes by its license file instead. it won't guess between things the
+  text can't tell apart though, like `MIT OR Apache-2.0` vs
+  `MIT AND Apache-2.0` or `GPL-2.0-only` vs `GPL-2.0-or-later`. it keeps the
+  declared license and leaves a note. a declared license that isn't SPDX comes
+  out as a `LicenseRef-`, the same way Cabal converts it (`OtherLicense` is
+  `LicenseRef-OtherLicense`, `AllRightsReserved` is `NONE`), and deprecated
+  ids like `GPL-2.0+` turn into `GPL-2.0-or-later`
+
+  `--preamble` always prints a valid SPDX expression. if a package has no
+  license at all (`NONE` or `NOASSERTION`), there's nothing honest to put in
+  `License:`, so it says which ones on stderr and exits 1
+
+  ### stack
+
+  `--stack` does the same thing as `--cabal` for stack projects. `--summary`,
+  `--preamble`, and `--json` work the same way
+
+  ```sh
+  tavro --stack                     # BSD-3-Clause: aeson-2.3.3.0
+  tavro --stack --summary
+  tavro --stack --test              # count the project's test suites too
+  tavro --stack --stack-option=--system-ghc
+  ```
+
+  the project's packages and their direct deps come from
+  `stack ls dependencies json`. past that, stack's graph lists what every
+  component of a package needs, test suites included, which is how vector
+  ends up dragging in tasty. the package databases only list what a library
+  actually links against, so tavro follows installed packages through those
+  and only uses stack's graph for stuff that isn't built yet
+
+  licenses come from the package databases and the Hackage index here too,
+  because stack's license field is kinda cursed. it turns SPDX back into
+  Cabal's old names and squashes `GPL-3.0-or-later AND CC-BY-3.0` into
+  `GPL30orlaterANDCCBY30`. stack also lists packages, not components, so
+  `--component` only works with `--cabal`
+
+  ### rpm macros
+
+  Terra's [anda-srpm-macros](https://github.com/terrapkg/srpm-macros) has
+  `%cabal_license_online`, `%cabal_license_summary_online`, and
+  `%cabal_license_preamble_online`, which run `tavro --cabal` for packages
+  built with its cabal macros
+
+  ## git submodules
+
+  `--submodules` lists the licenses of a git checkout's submodules (nested
+  ones too), for packages that ship their submodules as extra sources. it
+  reads the license files at the top of each submodule, plus anything in a
+  [REUSE](https://reuse.software) `LICENSES/` dir. `--summary`, `--preamble`,
+  and `--json` work like they do for `--cabal`
+
+  ```sh
+  git submodule update --init --recursive
+  tavro --submodules                # MIT: vendor/foo, one line per submodule
+  tavro --submodules --preamble     # Apache-2.0 AND ISC AND MIT, for License:
+  ```
+
+  the submodules have to be checked out. anything that isn't gets skipped
+  with a note on stderr
+
+  submodules don't declare a license anywhere so the files are all tavro has
+  to go on. one with both `LICENSE-MIT` and `LICENSE-APACHE` comes out as
+  `Apache-2.0 AND MIT`, with a note that it's probably dual licensed and
+  should be `OR`. a license exception goes with its license, so LLVM's
+  `LICENSE.TXT` is `Apache-2.0 WITH LLVM-exception`. no license file, text
+  that matches more than one license, or an exception that could go with
+  more than one license, comes out as `NOASSERTION`
+
+  ## how it matches
+
+  tavro follows the SPDX
+  [license matching guidelines](https://spdx.github.io/spdx-spec/v2.3/license-matching-guidelines-and-templates/)
+  the way [Spdx-Java-Library](https://github.com/spdx/Spdx-Java-Library)
+  implements them. every template in the license list gets compiled into a
+  matcher, and text matches if it's the template's text give or take what the
+  guidelines allow:
+
+  - case, whitespace, and which kind of quotes and dashes (B.4–B.6)
+  - comment markers at the start and end of lines, and separator lines like
+    `-----` (B.7)
+  - varietal spellings like `licence`/`license` and `copyright
+    owner`/`copyright holder`, plus the rest of
+    [equivalentwords.txt](https://spdx.org/licenses/equivalentwords.txt) (B.9)
+  - `©`, `(c)`, and `Copyright` (B.10), and `http://` vs `https://` (B.14)
+  - the template's `<<var>>` parts (like the copyright line), which match
+    their regex, and its `<<beginOptional>>` parts (like the title), which can
+    be missing
+
+  if a file doesn't match a license as a whole (`MIT`), tavro looks for
+  licenses inside it (`MIT (lines 6-22)`) and for the standard license headers
+  people put in source files (`Apache-2.0 (header, lines 2-14)`). `-w` only
+  reports whole-file matches and `-i` looks inside even when the whole file
+  already matched
+
+  the license list is built into the binary. to match against a newer one
+  without rebuilding, point `--data` at a
+  [license-list-data](https://github.com/spdx/license-list-data) checkout. to
+  update the copy in `data/`, run `scripts/fetch-license-data.sh [TAG]`
+
+  ### differences from Spdx-Java-Library
+
+  - the Java matcher is greedy. each var and optional grabs the first spot
+    where the next 15 words line up and never looks back. tavro compiles the
+    template into a small program and tries every path through it (keeping
+    track of where it's been so it doesn't try anything twice), so a var
+    whose next words also show up inside it can't send the match off the
+    rails. the exception is a var that matches anything (`.+`): with at
+    least 3 words after it, it takes the first spot they line up like Java
+    does, and otherwise it can't run past a blank line. that way it can't
+    stretch over a whole file of concatenated licenses to the same words at
+    the end of the last one
+  - some templates put an optional in the middle of a word
+    (`license<<beginOptional>>s<<endOptional>>`) or leave out the space next
+    to one (NTP-0's `name<<beginOptional>>s<<endOptional>>of`). Java handles
+    the first case for one-word optionals at the end of a text piece, tavro
+    tries both joinings for any short optional touching a word
+  - runs of separators like `=====` get dropped anywhere, not just at the end
+    of a line, so a title underline inside an optional doesn't turn into a
+    stray dash
+  - a literal `^L` page break is ignored (some old copies of the GPL have
+    them, for some reason)
+  - standard license headers get matched too
+  - a match inside a bigger text starts at the copyright line closest to the
+    license, not the first `Copyright` anywhere above it
+
+  the test suite checks that every license's reference text in the license
+  list matches its own template
+
+  ### what doesn't match
+
+  matching is strict on purpose. different words means a different license.
+  some real copies differ from the template in ways the templates don't allow
+  yet, mostly the Free Software Foundation's address. a GPL or LGPL with the
+  old `59 Temple Place` address, or `<https://fsf.org/>` instead, is
+  NOASSERTION here (and in Spdx-Java-Library too). `--explain` shows exactly
+  where a file and a license split:
+
+  ```
+  $ tavro --explain LGPL-2.1-only COPYING
+  COPYING: doesn't match LGPL-2.1-only, it's missing words the license needs: 02110-1301, 51, fifth, floor, franklin, street
+  ```
+
+  the real fix for those goes upstream in
+  [license-list-XML](https://github.com/spdx/license-list-XML)
+
+  ## license
+
+  tavro is GPL-3.0-or-later. the SPDX license list in `data/` gets compiled
+  into the binary, it's from
+  [license-list-data](https://github.com/spdx/license-list-data) under
+  CC-BY-3.0 (see `data/LICENSE`)
+description-type: markdown
+hash: da2b5a0bb52bd3a5e7fe69659d7dc939154235fbb351dc1625d03cf5af6cb68d
+homepage: https://github.com/terrapkg/tavro
+latest: 0.1.0.2
+license-name: GPL-3.0-or-later
+maintainer: cypress@fyralabs.com
+synopsis: identify SPDX licenses by their text
+test-bench-deps:
+  QuickCheck: '>=2.14.3 && <2.20'
+  aeson: '>=2.1.2 && <2.4'
+  base: '>=4.18 && <4.23'
+  bytestring: '>=0.11.5 && <0.13'
+  containers: '>=0.6.7 && <0.9'
+  directory: '>=1.3.8 && <1.4'
+  file-embed: '>=0.0.15 && <0.1'
+  filepath: '>=1.4.300 && <1.6'
+  hspec: '>=2.11.9 && <2.12'
+  process: '>=1.6.17 && <1.7'
+  template-haskell: '>=2.20 && <2.25'
+  text: '>=2.0.2 && <2.2'
+  unordered-containers: '>=0.2.19 && <0.3'
+  vector: '>=0.13.1 && <0.14'
