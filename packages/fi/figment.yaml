@@ -1,9 +1,10 @@
 all-versions:
 - 0.2.0.0
+- 0.3.0.0
 author: Sabrinathan Nair
 basic-deps:
   aeson: '>=2.2 && <2.3'
-  base: '>=4.20 && <4.22'
+  base: '>=4.20 && <4.23'
   bytestring: '>=0.11 && <0.13'
   conduit: '>=1.3 && <1.4'
   containers: '>=0.6.7 && <0.8'
@@ -19,6 +20,67 @@ basic-deps:
   vector: '>=0.13 && <0.14'
 changelog: |
   # Changelog
+
+  ## 0.3.0.0 — 2026-11-28
+
+  Hardening release. It follows 0.2.0.0 and contains everything merged after
+  the `v0.2.0.0` tag. It is a major version under the PVP because the public
+  `ErrorKind` type gained a constructor (`TooManyBytes`), which breaks
+  exhaustive pattern matches in user code.
+
+  ### Hardening (source)
+
+  - Error rendering now escapes control, bidirectional and zero-width characters
+    in every message, hint and type description, not just keys and file names.
+  - A leading byte-order mark is ignored in JSON and TOML input.
+  - TOML: the linear pre-scan also counts structural tokens and rejects a
+    document with more than `5 * maxNodes` of them as `TooManyNodes`, before
+    toml-parser builds its whole syntax tree.
+
+  ### Fixed (Windows)
+
+  - `Figment.Jail`: a rooted path such as `/x` (not "absolute" on Windows, but
+    one that makes `</>` discard the jail directory) is now refused.
+
+  ### Added
+  - `Secret a`: a wrapper whose decode errors never quote the value and whose
+    `Show` prints `Secret <redacted>`. Use it for passwords and tokens.
+  - `FromConfigKey` instances for `Int` and `Integer`, so `Map Int a` decodes.
+  - Environment and CLI values: structured values obey `maxBytes` and
+    `maxNodes`; duplicate keys in an inline table are reported; `\uXXXX`
+    escapes decode and unknown escapes are no longer silently dropped.
+  - Date-time decoders accept a space between date and time (RFC 3339).
+  - The CLI provider names options as mapped by a custom `keyMap`.
+  - `base` upper bound widened to `< 4.23` (GHC 9.14). Dependencies may not
+    support GHC 9.14 yet; it is tested in CI as an experimental job only.
+  - `TooManyBytes` error kind and a per-source size limit: `maxBytes`,
+    `withMaxBytes`, `defaultMaxBytes` (32 MiB by default). Files larger than
+    the limit are never opened for reading; other sources are checked before
+    parsing.
+  - A linear pre-scan that rejects deeply bracketed TOML before the parser
+    builds it.
+  - Error text escaping: control characters, line and paragraph separators
+    and bidirectional overrides in keys, file names and messages can no
+    longer forge report lines; reports show at most 100 errors.
+  - Handle guards in `Figment.Jail`: nested jails, use after the jail ends
+    and paths that escape the jail are errors instead of hangs or silent
+    misbehaviour.
+  - `SECURITY.md`, `CONTRIBUTING.md`, issue and pull request templates,
+    `.hlint.yaml`, and ADR 026 (the `unsafePerformIO` in `Figment.Jail`).
+
+  ### Changed
+  - `load` now evaluates each provider's result inside its exception
+    handler, so an exception hidden in a lazily built value becomes an
+    `IoError` instead of escaping later.
+  - A YAML mapping may contain at most one merge key (`<<`); a second is a
+    `DuplicateKey` error.
+  - YAML parsing gives up as soon as the event stream exceeds the node or
+    depth limit instead of buffering all of it.
+  - Unreadable locations during the upward search for a file are reported
+    instead of being treated as an absent file.
+  - Suggestions for unknown fields are computed with bounded work.
+  - `ENGINEERING_STANDARD.md` is no longer shipped in the source
+    distribution (it remains in the repository).
 
   ## 0.2.0.0 — 2026-10-22
 
@@ -270,9 +332,22 @@ description: |
 
   ## Safety
 
-  * **Limits** (`F.defaultLimits`: depth 64, one million values; override
-    with `F.withLimits`) are enforced inside every parser, so a hostile
-    `[[[[...` megabyte is rejected at depth 65 without being built.
+  * **Limits** (`F.defaultLimits`: depth 64, one million values, 32 MiB per
+    source; override with `F.withLimits` and `F.withMaxBytes`) are enforced
+    inside the JSON and YAML parsers and on structured environment and
+    command-line values, so a hostile `[[[[...` megabyte is rejected at
+    depth 65 without being built. TOML is the exception: its parser builds
+    the whole document before figment sees a value, so TOML is guarded by a
+    linear pre-scan (bracket depth and a token count) and the size limit
+    rather than a per-value budget. Lower `maxBytes` if you read TOML you do
+    not trust.
+  * **Secrets**: wrap a field in `F.Secret` (`password :: Secret Text`) and a
+    decode failure never quotes the value; `show` prints
+    `Secret <redacted>`. Other fields' errors do quote the offending value
+    (truncated), so do not decode a password into an `Int`.
+  * **Reports are escaped**: control, bidirectional and zero-width characters
+    in keys, file names, messages and hints are rendered as `\u{...}`, so a
+    hostile name cannot forge extra lines in an error report.
   * No exception escapes `load`: I/O and parse failures are errors, and a
     synchronous exception thrown by a third-party provider becomes an
     `IoError` (asynchronous exceptions are re-thrown, as they must be).
@@ -316,18 +391,20 @@ description: |
   cabal bench
   ```
 
-  Supported compilers: GHC 9.10 and 9.12.
+  Supported compilers: GHC 9.10 and 9.12, tested in CI on Linux, macOS and
+  Windows. GHC 9.14 is tried in CI as an experimental job; it will be
+  supported once the dependencies (notably `scientific`) allow it.
 
-  Version 0.2.0.0 is a breaking redesign of 0.1; see the changelog. The
+  Version 0.2.0.0 was a breaking redesign of 0.1; 0.3.0.0 is a hardening release (see the changelog). The
   source distribution also contains the design record: `ADRs/` (decisions
   016 onwards apply to 0.2) and `docs/audit-remediation.md` (each problem
   found in 0.1, how it was fixed, and the test that pins it).
 
   License: BSD-3-Clause.
 description-type: markdown
-hash: 09a983d37f3f3375c4032025079c831fa7520813cdf23f77191ae6ef2ed4cc49
+hash: df3ea7c85c7062c65b91db40e312ea3a2917e67821715d3b337922e980555104
 homepage: https://github.com/Bombay-Boyz/Figment
-latest: 0.2.0.0
+latest: 0.3.0.0
 license-name: BSD-3-Clause
 maintainer: bombay.boyz@hotmail.com
 synopsis: Layered configuration with provenance, profiles and complete error reports
@@ -339,6 +416,7 @@ test-bench-deps:
   containers: '>=0'
   criterion: '>=1.6 && <1.7'
   deepseq: '>=0'
+  directory: '>=0'
   figment: '>=0'
   filepath: '>=0'
   tasty: '>=1.4 && <1.6'
